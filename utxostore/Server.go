@@ -12,6 +12,7 @@ import (
 	"github.com/TAAL-GmbH/ubs/utxostore/utxostore_api"
 	"github.com/TAAL-GmbH/ubs/validator/validator_api"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -21,7 +22,7 @@ import (
 )
 
 var (
-	empty = [32]byte{}
+	empty = &chainhash.Hash{}
 )
 
 // Server type carries the logger within it
@@ -30,14 +31,14 @@ type Server struct {
 	logger     utils.Logger
 	grpcServer *grpc.Server
 	mu         sync.Mutex
-	store      map[[32]byte][32]byte
+	store      map[chainhash.Hash]chainhash.Hash
 }
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
 	return &Server{
 		logger: logger,
-		store:  make(map[[32]byte][32]byte),
+		store:  make(map[chainhash.Hash]chainhash.Hash),
 	}
 }
 
@@ -90,12 +91,17 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.Hea
 }
 
 func (s *Server) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
+	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	spendingTxID, found := s.store[[32]byte(req.UxtoHash)]
+	spendingTxid, found := s.store[*utxoHash]
 	if found {
-		if compareHash(spendingTxID, empty) {
+		if spendingTxid.IsEqual(empty) {
 			return &utxostore_api.StoreResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
@@ -107,7 +113,7 @@ func (s *Server) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utx
 
 	}
 
-	s.store[[32]byte(req.UxtoHash)] = empty
+	s.store[*utxoHash] = *empty
 
 	return &utxostore_api.StoreResponse{
 		Status: utxostore_api.Status_OK,
@@ -115,20 +121,30 @@ func (s *Server) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utx
 }
 
 func (s *Server) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
+	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	if err != nil {
+		return nil, err
+	}
+
+	spendingHash, err := chainhash.NewHash(req.SpendingTxid)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	spendingTxID, found := s.store[[32]byte(req.UxtoHash)]
+	existingHash, found := s.store[*utxoHash]
 	if found {
-		if compareHash(spendingTxID, empty) {
-			s.store[[32]byte(req.UxtoHash)] = [32]byte(req.SpendingTxid)
+		if existingHash.IsEqual(empty) {
+			s.store[*utxoHash] = *spendingHash
 
 			return &utxostore_api.SpendResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
 		}
 
-		if compareHash(spendingTxID, [32]byte(req.SpendingTxid)) {
+		if existingHash.IsEqual(spendingHash) {
 			return &utxostore_api.SpendResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
@@ -136,18 +152,23 @@ func (s *Server) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utx
 	}
 	return &utxostore_api.SpendResponse{
 		Status:       utxostore_api.Status_SPENT,
-		SpendingTxid: spendingTxID[:],
+		SpendingTxid: existingHash.CloneBytes(),
 	}, nil
 }
 
 func (s *Server) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
+	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	spendingTxID, found := s.store[[32]byte(req.UxtoHash)]
+	spendingHash, found := s.store[*utxoHash]
 	if found {
-		if !compareHash(spendingTxID, empty) {
-			s.store[[32]byte(req.UxtoHash)] = empty
+		if !spendingHash.IsEqual(empty) {
+			s.store[*utxoHash] = *empty
 		}
 
 		return &utxostore_api.ResetResponse{
@@ -158,14 +179,4 @@ func (s *Server) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*utx
 	return &utxostore_api.ResetResponse{
 		Status: utxostore_api.Status_NOT_FOUND,
 	}, nil
-}
-
-func compareHash(a, b [32]byte) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-
-	return true
 }

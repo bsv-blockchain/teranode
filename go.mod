@@ -2,9 +2,12 @@ module github.com/TAAL-GmbH/ubs
 
 go 1.20
 
+replace github.com/libsv/go-p2p => ../go-p2p
+
 require (
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
+	github.com/libsv/go-p2p v0.0.10
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.34
 	github.com/ordishs/gocore v1.0.35
