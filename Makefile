@@ -33,10 +33,19 @@ gen:
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	validator/validator_api/validator_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	utxostore/utxostore_api/utxostore_api.proto
 	
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./validator/validator_api/*.pb.go
+	rm -f ./utxostore/utxostore_api/*.pb.go
 	
 .PHONY: clean
 clean:

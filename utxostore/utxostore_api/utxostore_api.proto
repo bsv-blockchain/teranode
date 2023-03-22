@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+option go_package = ".;utxostore_api";
+
+package utxostore_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service ValidatorAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc Store (StoreRequest) returns (StoreResponse) {}
+  rpc Spend (SpendRequest) returns (SpendResponse) {}
+  rpc Reset (ResetRequest) returns (ResetResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:enum Status
+enum Status {
+  OK = 0;
+  SPENT = 1;
+  NOT_FOUND = 2;
+}
+
+// swagger:model StoreRequest
+message StoreRequest {
+  bytes uxto_hash = 1;
+}
+
+// swagger:model StoreResponse
+message StoreResponse {
+  Status status = 1;
+}
+
+// swagger:model SpendRequest
+message SpendRequest {
+  bytes uxto_hash = 1;
+  bytes spending_txid = 2;
+}
+
+// swagger:model SpendResponse
+message SpendResponse {
+  Status status = 1;
+  bytes spending_txid = 2;
+}
+
+// swagger:model ResetRequest
+message ResetRequest {
+  bytes uxto_hash = 1;
+}
+
+// swagger:model ResetResponse
+message ResetResponse {
+  Status status = 1;
+}
+
