@@ -7,7 +7,7 @@ package utxostore_api;
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-service ValidatorAPI {
+service UtxoStoreAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Store (StoreRequest) returns (StoreResponse) {}

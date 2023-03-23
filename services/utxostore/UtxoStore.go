@@ -8,9 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TAAL-GmbH/ubs/services/utxostore/utxostore_api"
 	"github.com/TAAL-GmbH/ubs/tracing"
-	"github.com/TAAL-GmbH/ubs/utxostore/utxostore_api"
-	"github.com/TAAL-GmbH/ubs/validator/validator_api"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -25,29 +24,34 @@ var (
 	empty = &chainhash.Hash{}
 )
 
-// Server type carries the logger within it
-type Server struct {
-	validator_api.UnsafeValidatorAPIServer
+// UTXOStore type carries the logger within it
+type UTXOStore struct {
+	utxostore_api.UnsafeUtxoStoreAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
 	mu         sync.Mutex
 	store      map[chainhash.Hash]chainhash.Hash
 }
 
-// NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger) *Server {
-	return &Server{
+func Enabled() bool {
+	_, found := gocore.Config().Get("utxostore_grpcAddress")
+	return found
+}
+
+// New will return a server instance with the logger stored within it
+func New(logger utils.Logger) *UTXOStore {
+	return &UTXOStore{
 		logger: logger,
 		store:  make(map[chainhash.Hash]chainhash.Hash),
 	}
 }
 
-// StartGRPCServer function
-func (s *Server) StartGRPCServer() error {
+// Start function
+func (u *UTXOStore) Start() error {
 
-	address, ok := gocore.Config().Get("validator_grpcAddress") //, "localhost:8001")
+	address, ok := gocore.Config().Get("utxostore_grpcAddress") //, "localhost:8001")
 	if !ok {
-		return errors.New("no validator_grpcAddress setting found")
+		return errors.New("no utxostore_grpcAddress setting found")
 	}
 
 	// LEVEL 0 - no security / no encryption
@@ -60,7 +64,7 @@ func (s *Server) StartGRPCServer() error {
 		)
 	}
 
-	s.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
+	u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 
 	gocore.SetAddress(address)
 
@@ -69,37 +73,44 @@ func (s *Server) StartGRPCServer() error {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
 
-	validator_api.RegisterValidatorAPIServer(s.grpcServer, s)
+	utxostore_api.RegisterUtxoStoreAPIServer(u.grpcServer, u)
 
 	// Register reflection service on gRPC server.
-	reflection.Register(s.grpcServer)
+	reflection.Register(u.grpcServer)
 
-	s.logger.Infof("GRPC server listening on %s", address)
+	u.logger.Infof("GRPC server listening on %s", address)
 
-	if err = s.grpcServer.Serve(lis); err != nil {
+	if err = u.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}
 
 	return nil
 }
 
-func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.HealthResponse, error) {
-	return &validator_api.HealthResponse{
+func (u *UTXOStore) Stop(ctx context.Context) {
+	_, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	u.grpcServer.GracefulStop()
+}
+
+func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
+	return &utxostore_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (s *Server) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
+func (u *UTXOStore) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	u.mu.Lock()
+	defer u.mu.Unlock()
 
-	spendingTxid, found := s.store[*utxoHash]
+	spendingTxid, found := u.store[*utxoHash]
 	if found {
 		if spendingTxid.IsEqual(empty) {
 			return &utxostore_api.StoreResponse{
@@ -113,14 +124,14 @@ func (s *Server) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utx
 
 	}
 
-	s.store[*utxoHash] = *empty
+	u.store[*utxoHash] = *empty
 
 	return &utxostore_api.StoreResponse{
 		Status: utxostore_api.Status_OK,
 	}, nil
 }
 
-func (s *Server) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
+func (u *UTXOStore) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
@@ -131,13 +142,13 @@ func (s *Server) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utx
 		return nil, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	u.mu.Lock()
+	defer u.mu.Unlock()
 
-	existingHash, found := s.store[*utxoHash]
+	existingHash, found := u.store[*utxoHash]
 	if found {
 		if existingHash.IsEqual(empty) {
-			s.store[*utxoHash] = *spendingHash
+			u.store[*utxoHash] = *spendingHash
 
 			return &utxostore_api.SpendResponse{
 				Status: utxostore_api.Status_OK,
@@ -156,19 +167,19 @@ func (s *Server) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utx
 	}, nil
 }
 
-func (s *Server) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
+func (u *UTXOStore) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	u.mu.Lock()
+	defer u.mu.Unlock()
 
-	spendingHash, found := s.store[*utxoHash]
+	spendingHash, found := u.store[*utxoHash]
 	if found {
 		if !spendingHash.IsEqual(empty) {
-			s.store[*utxoHash] = *empty
+			u.store[*utxoHash] = *empty
 		}
 
 		return &utxostore_api.ResetResponse{

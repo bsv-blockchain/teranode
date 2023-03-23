@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.3.0
 // - protoc             v3.21.12
-// source: validator/validator_api/validator_api.proto
+// source: services/validator/validator_api/validator_api.proto
 
 package validator_api
 
@@ -20,7 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ValidatorAPI_Health_FullMethodName = "/validator_api.ValidatorAPI/Health"
+	ValidatorAPI_Health_FullMethodName              = "/validator_api.ValidatorAPI/Health"
+	ValidatorAPI_ValidateTransaction_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransaction"
 )
 
 // ValidatorAPIClient is the client API for ValidatorAPI service.
@@ -29,6 +30,7 @@ const (
 type ValidatorAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	ValidateTransaction(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionClient, error)
 }
 
 type validatorAPIClient struct {
@@ -48,12 +50,47 @@ func (c *validatorAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts
 	return out, nil
 }
 
+func (c *validatorAPIClient) ValidateTransaction(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ValidatorAPI_ServiceDesc.Streams[0], ValidatorAPI_ValidateTransaction_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &validatorAPIValidateTransactionClient{stream}
+	return x, nil
+}
+
+type ValidatorAPI_ValidateTransactionClient interface {
+	Send(*ValidateTransactionRequest) error
+	CloseAndRecv() (*ValidateTransactionResponse, error)
+	grpc.ClientStream
+}
+
+type validatorAPIValidateTransactionClient struct {
+	grpc.ClientStream
+}
+
+func (x *validatorAPIValidateTransactionClient) Send(m *ValidateTransactionRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *validatorAPIValidateTransactionClient) CloseAndRecv() (*ValidateTransactionResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(ValidateTransactionResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ValidatorAPIServer is the server API for ValidatorAPI service.
 // All implementations must embed UnimplementedValidatorAPIServer
 // for forward compatibility
 type ValidatorAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	ValidateTransaction(ValidatorAPI_ValidateTransactionServer) error
 	mustEmbedUnimplementedValidatorAPIServer()
 }
 
@@ -63,6 +100,9 @@ type UnimplementedValidatorAPIServer struct {
 
 func (UnimplementedValidatorAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedValidatorAPIServer) ValidateTransaction(ValidatorAPI_ValidateTransactionServer) error {
+	return status.Errorf(codes.Unimplemented, "method ValidateTransaction not implemented")
 }
 func (UnimplementedValidatorAPIServer) mustEmbedUnimplementedValidatorAPIServer() {}
 
@@ -95,6 +135,32 @@ func _ValidatorAPI_Health_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ValidatorAPI_ValidateTransaction_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ValidatorAPIServer).ValidateTransaction(&validatorAPIValidateTransactionServer{stream})
+}
+
+type ValidatorAPI_ValidateTransactionServer interface {
+	SendAndClose(*ValidateTransactionResponse) error
+	Recv() (*ValidateTransactionRequest, error)
+	grpc.ServerStream
+}
+
+type validatorAPIValidateTransactionServer struct {
+	grpc.ServerStream
+}
+
+func (x *validatorAPIValidateTransactionServer) SendAndClose(m *ValidateTransactionResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *validatorAPIValidateTransactionServer) Recv() (*ValidateTransactionRequest, error) {
+	m := new(ValidateTransactionRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ValidatorAPI_ServiceDesc is the grpc.ServiceDesc for ValidatorAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -107,6 +173,12 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ValidatorAPI_Health_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "validator/validator_api/validator_api.proto",
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ValidateTransaction",
+			Handler:       _ValidatorAPI_ValidateTransaction_Handler,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "services/validator/validator_api/validator_api.proto",
 }

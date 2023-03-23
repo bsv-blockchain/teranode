@@ -2,11 +2,10 @@ module github.com/TAAL-GmbH/ubs
 
 go 1.20
 
-replace github.com/libsv/go-p2p => ../go-p2p
-
 require (
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
+	github.com/libsv/go-bt/v2 v2.1.1
 	github.com/libsv/go-p2p v0.0.10
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.34
@@ -14,6 +13,7 @@ require (
 	github.com/prometheus/client_golang v1.14.0
 	github.com/stretchr/testify v1.8.1
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	google.golang.org/grpc v1.53.0
 	google.golang.org/protobuf v1.28.1
 )
@@ -24,6 +24,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/libsv/go-bk v0.1.6 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.16 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
@@ -36,6 +37,7 @@ require (
 	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	go.uber.org/atomic v1.10.0 // indirect
+	golang.org/x/crypto v0.3.0 // indirect
 	golang.org/x/net v0.5.0 // indirect
 	golang.org/x/sys v0.4.0 // indirect
 	golang.org/x/text v0.6.0 // indirect
