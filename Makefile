@@ -49,7 +49,7 @@ clean_gen:
 	
 .PHONY: clean
 clean:
-	rm -f ./ubs_*.tar.gz
+	rm -f ./ubsv_*.tar.gz
 	rm -rf build/
 
 .PHONY: install

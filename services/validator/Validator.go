@@ -10,8 +10,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/TAAL-GmbH/ubs/services/validator/validator_api"
-	"github.com/TAAL-GmbH/ubs/tracing"
+	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"

@@ -1,4 +1,4 @@
-module github.com/TAAL-GmbH/ubs
+module github.com/TAAL-GmbH/ubsv
 
 go 1.20
 

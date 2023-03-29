@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubs/services/validator/validator_api"
+	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

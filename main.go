@@ -9,15 +9,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/TAAL-GmbH/ubs/services/propagation"
-	"github.com/TAAL-GmbH/ubs/services/utxostore"
-	"github.com/TAAL-GmbH/ubs/services/validator"
+	"github.com/TAAL-GmbH/ubsv/services/propagation"
+	"github.com/TAAL-GmbH/ubsv/services/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
-const progname = "ubs"
+const progname = "ubsv"
 
 // // Version & commit strings injected at build with -ldflags -X...
 var version string
