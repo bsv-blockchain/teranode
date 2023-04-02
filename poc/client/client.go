@@ -34,6 +34,8 @@ func main() {
 		return
 	}
 
+	defer conn.Close()
+
 	// Join the multicast group on the connection
 	p := ipv6.NewPacketConn(conn)
 
