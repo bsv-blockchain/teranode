@@ -73,7 +73,7 @@ func main() {
 
 	var validatorService *validator.Validator
 	var utxoStore *utxostore.UTXOStore
-	var propagationServer *propagation.PropagationServer
+	var propagationServer *propagation.Server
 
 	// validator
 	if _, found := gocore.Config().Get("validator_grpcAddress"); found {
@@ -101,7 +101,7 @@ func main() {
 	g.Go(func() error {
 		logger.Infof("Starting Propagation")
 
-		propagationServer = propagation.NewPropagationServer(gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel)))
+		propagationServer = propagation.NewServer(gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel)))
 
 		return propagationServer.Start(ctx)
 	})

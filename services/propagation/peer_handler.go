@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -69,8 +70,13 @@ func (ph *PeerHandler) HandleBlockAnnouncement(invMsg *wire.InvVect, peer p2p.Pe
 	return nil
 }
 
-func (ph *PeerHandler) HandleBlock(msg *p2p.BlockMessage, peer p2p.PeerI) error {
+func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	start := time.Now()
+
+	msg, ok := wireMsg.(*wire.MsgBlock)
+	if !ok {
+		return fmt.Errorf("could not convert wire.Message to BlockMessage")
+	}
 
 	blockHash := msg.Header.BlockHash()
 
@@ -78,11 +84,16 @@ func (ph *PeerHandler) HandleBlock(msg *p2p.BlockMessage, peer p2p.PeerI) error 
 
 	merkleRoot := msg.Header.MerkleRoot
 
-	transactionHashes := make([][]byte, len(msg.TransactionHashes))
-	for i, hash := range msg.TransactionHashes {
-		transactionHashes[i] = hash[:]
-
-		peer.RequestTransaction(hash)
+	transactionHashes := make([][]byte, len(msg.Transactions))
+	for i, tx := range msg.Transactions {
+		var buff bytes.Buffer
+		_ = tx.Serialize(&buff)
+		btTx, err := bt.NewTxFromBytes(buff.Bytes())
+		if err != nil {
+			return err
+		}
+		// bt returns the tx id bytes in reverse order :-/
+		transactionHashes[i] = bt.ReverseBytes(btTx.TxIDBytes())
 	}
 
 	calculatedMerkleRoot := blockchain.BuildMerkleTreeStore(transactionHashes)
@@ -90,7 +101,7 @@ func (ph *PeerHandler) HandleBlock(msg *p2p.BlockMessage, peer p2p.PeerI) error 
 		return fmt.Errorf("merkle root mismatch for block %s", blockHash.String())
 	}
 
-	ph.logger.Infof("Processed block %s, %d transactions in %0.2f seconds", blockHash.String(), len(msg.TransactionHashes), time.Since(start).Seconds())
+	ph.logger.Infof("Processed block %s, %d transactions in %0.2f seconds", blockHash.String(), len(msg.Transactions), time.Since(start).Seconds())
 
 	return nil
 }

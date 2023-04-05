@@ -18,19 +18,19 @@ import (
 // 6. Announce transaction or block to other peers (INV)
 // 7. Repeat
 
-type PropagationServer struct {
+type Server struct {
 	logger      utils.Logger
 	peerHandler p2p.PeerHandlerI
 }
 
-func NewPropagationServer(logger utils.Logger) *PropagationServer {
-	return &PropagationServer{
+func NewServer(logger utils.Logger) *Server {
+	return &Server{
 		logger:      logger,
 		peerHandler: NewPeerHandler(),
 	}
 }
 
-func (s *PropagationServer) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context) error {
 	pm := p2p.NewPeerManager(s.logger, wire.TestNet)
 
 	peer, err := p2p.NewPeer(s.logger, "localhost:18333", s.peerHandler, wire.TestNet)
@@ -47,7 +47,7 @@ func (s *PropagationServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PropagationServer) Stop(ctx context.Context) {
+func (s *Server) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 }

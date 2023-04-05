@@ -8,7 +8,7 @@ require (
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt/v2 v2.1.1
-	github.com/libsv/go-p2p v0.0.10
+	github.com/libsv/go-p2p v0.1.0
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.34
 	github.com/ordishs/gocore v1.0.35
