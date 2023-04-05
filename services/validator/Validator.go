@@ -91,7 +91,7 @@ func (v *Validator) Stop(ctx context.Context) {
 	v.grpcServer.GracefulStop()
 }
 
-func (s *Validator) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.HealthResponse, error) {
+func (v *Validator) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.HealthResponse, error) {
 	return &validator_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
