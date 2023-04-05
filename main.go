@@ -71,14 +71,14 @@ func main() {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	var validatorService *validator.Validator
+	var validatorService *validator.Server
 	var utxoStore *utxostore.UTXOStore
 	var propagationServer *propagation.Server
 
 	// validator
 	if _, found := gocore.Config().Get("validator_grpcAddress"); found {
 		g.Go(func() error {
-			logger.Infof("Starting Validator")
+			logger.Infof("Starting Server")
 
 			validatorService = validator.NewServer(gocore.Log("valid", gocore.NewLogLevelFromString(logLevel)))
 

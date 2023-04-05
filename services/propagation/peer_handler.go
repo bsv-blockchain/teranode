@@ -129,6 +129,15 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 		if err != nil {
 			return err
 		}
+
+		hash := tx.TxHash()
+		txExists, _ := ph.txStore.Get(context.Background(), hash[:])
+		if txExists != nil {
+			if err = ph.txStore.Set(context.Background(), hash[:], buff.Bytes()); err != nil {
+				return fmt.Errorf("could not store transaction %s: %w", hash.String(), err)
+			}
+		}
+
 		// bt returns the tx id bytes in reverse order :-/
 		transactionHashes[i] = bt.ReverseBytes(btTx.TxIDBytes())
 	}
