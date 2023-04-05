@@ -3,6 +3,7 @@ package propagation
 import (
 	"context"
 
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/file"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
@@ -24,9 +25,19 @@ type Server struct {
 }
 
 func NewServer(logger utils.Logger) *Server {
+	txStore, err := file.New("./data/txStore")
+	if err != nil {
+		logger.Fatalf("error creating transaction store: %v", err)
+	}
+
+	blockStore, err := file.New("./data/blockStore")
+	if err != nil {
+		logger.Fatalf("error creating block store: %v", err)
+	}
+
 	return &Server{
 		logger:      logger,
-		peerHandler: NewPeerHandler(),
+		peerHandler: NewPeerHandler(txStore, blockStore),
 	}
 }
 
