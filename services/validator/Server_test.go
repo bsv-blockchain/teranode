@@ -50,7 +50,7 @@ func TestGRPCStreaming(t *testing.T) {
 
 	logger := NewTestLogger(t)
 
-	// Start the Validator server
+	// Start the Server server
 	validator := NewServer(logger)
 
 	go func() {
