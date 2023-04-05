@@ -3,6 +3,7 @@ package propagation
 import (
 	"context"
 
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/file"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
@@ -18,19 +19,29 @@ import (
 // 6. Announce transaction or block to other peers (INV)
 // 7. Repeat
 
-type PropagationServer struct {
+type Server struct {
 	logger      utils.Logger
 	peerHandler p2p.PeerHandlerI
 }
 
-func NewPropagationServer(logger utils.Logger) *PropagationServer {
-	return &PropagationServer{
+func NewServer(logger utils.Logger) *Server {
+	txStore, err := file.New("./data/txStore")
+	if err != nil {
+		logger.Fatalf("error creating transaction store: %v", err)
+	}
+
+	blockStore, err := file.New("./data/blockStore")
+	if err != nil {
+		logger.Fatalf("error creating block store: %v", err)
+	}
+
+	return &Server{
 		logger:      logger,
-		peerHandler: NewPeerHandler(),
+		peerHandler: NewPeerHandler(txStore, blockStore),
 	}
 }
 
-func (s *PropagationServer) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context) error {
 	pm := p2p.NewPeerManager(s.logger, wire.TestNet)
 
 	peer, err := p2p.NewPeer(s.logger, "localhost:18333", s.peerHandler, wire.TestNet)
@@ -47,7 +58,7 @@ func (s *PropagationServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PropagationServer) Stop(ctx context.Context) {
+func (s *Server) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 }

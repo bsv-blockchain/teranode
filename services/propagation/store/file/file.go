@@ -1,0 +1,72 @@
+package file
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+
+	"github.com/libsv/go-bt/v2"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
+)
+
+type File struct {
+	path   string
+	logger utils.Logger
+	mu     sync.RWMutex
+}
+
+func New(dir string) (*File, error) {
+	logLevel, _ := gocore.Config().Get("logLevel")
+	logger := gocore.Log("file", gocore.NewLogLevelFromString(logLevel))
+
+	// create directory if not exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	fileStore := &File{
+		path:   dir,
+		logger: logger,
+	}
+
+	return fileStore, nil
+}
+
+func (s *File) Close(_ context.Context) error {
+	// noop
+	return nil
+}
+
+func (s *File) Set(_ context.Context, hash []byte, value []byte) error {
+	fileName := s.filename(hash)
+
+	// write bytes to file
+	if err := os.WriteFile(fileName, value, 0644); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
+	fileName := s.filename(hash)
+
+	bytes, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data from file: %w", err)
+	}
+
+	return bytes, err
+}
+
+func (s *File) Del(_ context.Context, hash []byte) error {
+	fileName := s.filename(hash)
+
+	return os.Remove(fileName)
+}
+
+func (s *File) filename(hash []byte) string {
+	return fmt.Sprintf("%s/%x", s.path, bt.ReverseBytes(hash))
+}
