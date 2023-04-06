@@ -2,8 +2,9 @@ package propagation
 
 import (
 	"context"
+	"net"
 
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/file"
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -29,12 +30,12 @@ type Server struct {
 }
 
 func NewServer(logger utils.Logger) *Server {
-	txStore, err := file.New("./data/txStore")
+	txStore, err := badger.New("./data/txStore")
 	if err != nil {
 		logger.Fatalf("error creating transaction store: %v", err)
 	}
 
-	blockStore, err := file.New("./data/blockStore")
+	blockStore, err := badger.New("./data/blockStore")
 	if err != nil {
 		logger.Fatalf("error creating block store: %v", err)
 	}
@@ -65,7 +66,45 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// wait for all blocks to be downloaded
 	// this is only in testing on Regtest and should be removed in production
-	s.ibd(pm)
+	err = s.ibd(pm)
+	if err != nil {
+		s.logger.Fatalf("error during initial block download: %v", err)
+	}
+
+	listen := "localhost:8833"
+	s.logger.Infof("Listening on %s", listen)
+	conn, err := net.Listen("tcp", listen)
+	if err != nil {
+		s.logger.Fatalf("Error listening: %v", err)
+	}
+
+	// TODO improve this listener
+	go func() {
+		var c net.Conn
+		for {
+			// Listen for an incoming connection.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				c, err = conn.Accept()
+				if err != nil {
+					s.logger.Fatalf("Error accepting: %v", err)
+				}
+
+				s.logger.Infof("Received incoming connection from %s", c.RemoteAddr().String())
+
+				peer, err = p2p.NewPeer(s.logger, c.RemoteAddr().String(), s.peerHandler, wire.TestNet, p2p.WithIncomingConnection(c))
+				if err != nil {
+					s.logger.Errorf("Error creating peer: %v", err)
+				}
+
+				if err = pm.AddPeer(peer); err != nil {
+					s.logger.Errorf("Error adding peer: %v", err)
+				}
+			}
+		}
+	}()
 
 	<-ctx.Done()
 
