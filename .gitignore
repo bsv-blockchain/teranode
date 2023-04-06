@@ -5,3 +5,4 @@ data/
 *.key
 *.run
 .DS_Store
+*.pprof
