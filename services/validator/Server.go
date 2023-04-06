@@ -76,6 +76,7 @@ func (v *Server) Start() error {
 		opts = append(opts,
 			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
 			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+			grpc.MaxRecvMsgSize(100*1024*1024), // 100 MB, TODO make configurable
 		)
 	}
 
@@ -116,7 +117,7 @@ func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.Hea
 	}, nil
 }
 
-func (v *Server) ValidateTransaction(stream validator_api.ValidatorAPI_ValidateTransactionServer) error {
+func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
 	transactionData := bytes.Buffer{}
 
 	for {
@@ -147,6 +148,25 @@ func (v *Server) ValidateTransaction(stream validator_api.ValidatorAPI_ValidateT
 	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
 		Valid: true,
 	})
+}
+
+func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	tx, err := bt.NewTxFromBytes(req.TransactionData)
+	if err != nil {
+		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
+	}
+
+	err = v.validator.Validate(tx)
+	if err != nil {
+		return &validator_api.ValidateTransactionResponse{
+			Valid:  false,
+			Reason: err.Error(),
+		}, nil
+	}
+
+	return &validator_api.ValidateTransactionResponse{
+		Valid: true,
+	}, nil
 }
 
 func (v *Server) logError(err error) error {

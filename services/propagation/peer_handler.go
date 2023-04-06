@@ -81,6 +81,16 @@ func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error 
 		return err
 	}
 
+	// Do not allow propagation of coinbase transactions
+	if btTx.IsCoinbase() {
+		return fmt.Errorf("received coinbase transaction: %s", msg.TxHash().String())
+	}
+
+	err = ph.extendTransaction(btTx)
+	if err != nil {
+		return err
+	}
+
 	if err = ph.validator.Validate(btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		ph.logger.Errorf("received invalid transaction: %s", err.Error())
@@ -143,6 +153,14 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 			return err
 		}
 
+		// extend the transaction with input data
+		if !btTx.IsCoinbase() {
+			err = ph.extendTransaction(btTx)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Validate the transaction
 		if err = ph.validator.Validate(btTx); err != nil {
 			// send REJECT message to peer if invalid tx
@@ -178,4 +196,37 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	// TODO announce block to other peers
 
 	return ph.blockStore.Set(context.Background(), blockHash[:], buf.Bytes())
+}
+
+func (ph *PeerHandler) extendTransaction(transaction *bt.Tx) (err error) {
+	parentTxBytes := make(map[[32]byte][]byte)
+	var btParentTx *bt.Tx
+
+	// get the missing input data for the transaction
+	for _, input := range transaction.Inputs {
+		parentTxID := [32]byte(bt.ReverseBytes(input.PreviousTxID()))
+		b, ok := parentTxBytes[parentTxID]
+		if !ok {
+			b, err = ph.txStore.Get(context.Background(), parentTxID[:])
+			if err != nil {
+				return err
+			}
+			parentTxBytes[parentTxID] = b
+		}
+
+		btParentTx, err = bt.NewTxFromBytes(b)
+		if err != nil {
+			return err
+		}
+
+		if len(btParentTx.Outputs) < int(input.PreviousTxOutIndex) {
+			return fmt.Errorf("output %d not found in transaction %x", input.PreviousTxOutIndex, bt.ReverseBytes(parentTxID[:]))
+		}
+		output := btParentTx.Outputs[input.PreviousTxOutIndex]
+
+		input.PreviousTxScript = output.LockingScript
+		input.PreviousTxSatoshis = output.Satoshis
+	}
+
+	return nil
 }

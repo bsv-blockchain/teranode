@@ -12,44 +12,40 @@ import (
 )
 
 type Client struct {
-	client         validator_api.ValidatorAPIClient
-	validateStream validator_api.ValidatorAPI_ValidateTransactionClient
+	client validator_api.ValidatorAPIClient
 }
 
 func NewClient() (*Client, error) {
+	opts := []grpc.DialOption{
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	}
+
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	conn, err := grpc.Dial(validator_grpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(validator_grpcAddress, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	client := validator_api.NewValidatorAPIClient(conn)
 
-	validateStream, err := client.ValidateTransaction(context.Background())
-
 	return &Client{
-		client:         client,
-		validateStream: validateStream,
+		client: client,
 	}, nil
 }
 
 func (c *Client) Stop() {
-	_ = c.validateStream.CloseSend()
+	// TODO
 }
 
 func (c *Client) Validate(tx *bt.Tx) error {
-	// TODO is this how this streaming works?
-	err := c.validateStream.Send(&validator_api.ValidateTransactionRequest{
-		TransactionData: tx.Bytes(),
+	resp, err := c.client.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{
+		TransactionData: tx.ExtendedBytes(),
 	})
 	if err != nil {
 		return err
 	}
 
-	resp, err := c.validateStream.CloseAndRecv()
-	if err != nil {
-		return err
-	}
 	if !resp.Valid {
 		return fmt.Errorf("invalid transaction: %s", resp.Reason)
 	}
