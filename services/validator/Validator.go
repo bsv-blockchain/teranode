@@ -27,6 +27,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	// TODO this is using the ARC validator, but should be moved into a separate package or imported to this one
 	validator := defaultvalidator.New(&bitcoin.Settings{})
 	// this will also check whether the transaction is in extended format
+	// TODO check for coinbase transactions
 	if err := validator.ValidateTransaction(tx); err != nil {
 		return err
 	}

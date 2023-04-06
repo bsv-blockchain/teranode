@@ -38,6 +38,7 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) Validate(tx *bt.Tx) error {
+	// TODO is this how this streaming works?
 	err := c.validateStream.Send(&validator_api.ValidateTransactionRequest{
 		TransactionData: tx.Bytes(),
 	})
