@@ -23,11 +23,28 @@ func New(store store.UTXOStore) Interface {
 }
 
 func (v *Validator) Validate(tx *bt.Tx) error {
+	if tx.IsCoinbase() {
+		// TODO what checks do we need to do on a coinbase tx?
+		hash, err := getOutputUtxoHash(tx.TxIDBytes(), tx.Outputs[0], 0)
+		if err != nil {
+			return err
+		}
+
+		// store the coinbase utxo
+		// TODO this should be marked as spendable only after 100 blocks
+		_, err = v.store.Store(context.Background(), hash)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
 	// check all the basic stuff
 	// TODO this is using the ARC validator, but should be moved into a separate package or imported to this one
 	validator := defaultvalidator.New(&bitcoin.Settings{})
 	// this will also check whether the transaction is in extended format
-	// TODO check for coinbase transactions
+
 	if err := validator.ValidateTransaction(tx); err != nil {
 		return err
 	}
@@ -42,7 +59,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	var hash *chainhash.Hash
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	for _, input := range tx.Inputs {
-		hash, err = getUtxoHash(input)
+		hash, err = getInputUtxoHash(input)
 		if err != nil {
 			return err
 		}
@@ -67,7 +84,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	return nil
 }
 
-func getUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
+func getInputUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
 	voutBytes := bt.VarInt(input.PreviousTxOutIndex).Bytes()
 
 	if input.PreviousTxScript == nil || len(*input.PreviousTxScript) == 0 {
@@ -83,6 +100,32 @@ func getUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
 	utxoHashBytes := append(input.PreviousTxID(), voutBytes...)
 	utxoHashBytes = append(utxoHashBytes, previousScript...)
 	utxoHashBytes = append(utxoHashBytes, previousSatoshis...)
+
+	hash := crypto.Sha256(utxoHashBytes)
+	chHash, err := chainhash.NewHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return chHash, nil
+}
+
+func getOutputUtxoHash(txID []byte, output *bt.Output, vOut uint64) (*chainhash.Hash, error) {
+	voutBytes := bt.VarInt(vOut).Bytes()
+
+	if output.LockingScript == nil || len(*output.LockingScript) == 0 {
+		return nil, fmt.Errorf("output script is nil")
+	}
+	outputScript := []byte(*output.LockingScript)
+
+	if output.Satoshis == 0 {
+		return nil, fmt.Errorf("satoshis is 0")
+	}
+	satoshiBytes := bt.VarInt(output.Satoshis).Bytes()
+
+	utxoHashBytes := append(txID, voutBytes...)
+	utxoHashBytes = append(utxoHashBytes, outputScript...)
+	utxoHashBytes = append(utxoHashBytes, satoshiBytes...)
 
 	hash := crypto.Sha256(utxoHashBytes)
 	chHash, err := chainhash.NewHash(hash)

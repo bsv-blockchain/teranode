@@ -143,6 +143,14 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 			return err
 		}
 
+		// Validate the transaction
+		if err = ph.validator.Validate(btTx); err != nil {
+			// send REJECT message to peer if invalid tx
+			ph.logger.Errorf("received invalid transaction: %s", err.Error())
+			_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
+			return err
+		}
+
 		hash := tx.TxHash()
 		txExists, _ := ph.txStore.Get(context.Background(), hash[:])
 		if txExists == nil {
