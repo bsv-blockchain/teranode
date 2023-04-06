@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/file"
+	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
@@ -20,8 +21,9 @@ import (
 // 7. Repeat
 
 type Server struct {
-	logger      utils.Logger
-	peerHandler p2p.PeerHandlerI
+	logger          utils.Logger
+	peerHandler     p2p.PeerHandlerI
+	validatorClient *validator.Client
 }
 
 func NewServer(logger utils.Logger) *Server {
@@ -35,9 +37,15 @@ func NewServer(logger utils.Logger) *Server {
 		logger.Fatalf("error creating block store: %v", err)
 	}
 
+	validatorClient, err := validator.NewClient()
+	if err != nil {
+		logger.Fatalf("error creating validator client: %v", err)
+	}
+
 	return &Server{
-		logger:      logger,
-		peerHandler: NewPeerHandler(txStore, blockStore),
+		logger:          logger,
+		peerHandler:     NewPeerHandler(txStore, blockStore, validatorClient),
+		validatorClient: validatorClient,
 	}
 }
 
@@ -61,4 +69,6 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	s.validatorClient.Stop()
 }

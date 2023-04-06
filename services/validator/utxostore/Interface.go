@@ -1,15 +1,17 @@
 package store
 
 import (
+	"context"
+
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
 type UTXOResponse struct {
-	status int
+	Status int
 }
 
 type UTXOStore interface {
-	Store(hash *chainhash.Hash) (UTXOResponse, error)
-	Spend(hash *chainhash.Hash, txID *chainhash.Hash) (UTXOResponse, error)
-	Reset(hash *chainhash.Hash) (UTXOResponse, error)
+	Store(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
+	Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*UTXOResponse, error)
+	Reset(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
 }

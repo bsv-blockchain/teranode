@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
+	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
@@ -21,14 +22,16 @@ type PeerHandler struct {
 	logger                utils.Logger
 	txStore               store.TransactionStore
 	blockStore            store.TransactionStore
+	validator             validator.Interface
 	getTransactionBatcher *batcher.Batcher[chainhash.Hash]
 }
 
-func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore) p2p.PeerHandlerI {
+func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore, v validator.Interface) p2p.PeerHandlerI {
 	ph := &PeerHandler{
 		logger:     gocore.Log("p2p"),
 		txStore:    txStore,
 		blockStore: blockStore,
+		validator:  v,
 	}
 
 	return ph
@@ -66,12 +69,22 @@ func (ph *PeerHandler) HandleTransactionRejection(rejMsg *wire.MsgReject, peer p
 	return nil
 }
 
-func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, _ p2p.PeerI) error {
-	// TODO validate transaction
-	// send REJECT message to peer if invalid tx
-
+func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error {
+	ph.logger.Infof("received transaction: %s", msg.TxHash().String())
 	var buf bytes.Buffer
 	if err := msg.Serialize(&buf); err != nil {
+		return err
+	}
+
+	btTx, err := bt.NewTxFromBytes(buf.Bytes())
+	if err != nil {
+		return err
+	}
+
+	if err = ph.validator.Validate(btTx); err != nil {
+		// send REJECT message to peer if invalid tx
+		ph.logger.Errorf("received invalid transaction: %s", err.Error())
+		_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
 		return err
 	}
 
@@ -132,7 +145,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 		hash := tx.TxHash()
 		txExists, _ := ph.txStore.Get(context.Background(), hash[:])
-		if txExists != nil {
+		if txExists == nil {
 			if err = ph.txStore.Set(context.Background(), hash[:], buff.Bytes()); err != nil {
 				return fmt.Errorf("could not store transaction %s: %w", hash.String(), err)
 			}
