@@ -10,6 +10,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore/utxostore"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
@@ -18,6 +20,7 @@ import (
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -27,6 +30,7 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
+	validator  Interface
 	logger     utils.Logger
 	grpcServer *grpc.Server
 }
@@ -38,8 +42,22 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
+	//s := foundationdb.New()
+	//validator := New(s)
+
+	utxostore_grpcAddress, _ := gocore.Config().Get("utxostore_grpcAddress")
+	conn, err := grpc.Dial(utxostore_grpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		panic(err)
+	}
+
+	db := utxostore_api.NewUtxoStoreAPIClient(conn)
+	s := utxostore.New(db)
+	validator := New(s)
+
 	return &Server{
-		logger: logger,
+		logger:    logger,
+		validator: validator,
 	}
 }
 
@@ -58,6 +76,7 @@ func (v *Server) Start() error {
 		opts = append(opts,
 			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
 			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+			grpc.MaxRecvMsgSize(100*1024*1024), // 100 MB, TODO make configurable
 		)
 	}
 
@@ -98,7 +117,7 @@ func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.Hea
 	}, nil
 }
 
-func (v *Server) ValidateTransaction(stream validator_api.ValidatorAPI_ValidateTransactionServer) error {
+func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
 	transactionData := bytes.Buffer{}
 
 	for {
@@ -129,6 +148,25 @@ func (v *Server) ValidateTransaction(stream validator_api.ValidatorAPI_ValidateT
 	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
 		Valid: true,
 	})
+}
+
+func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	tx, err := bt.NewTxFromBytes(req.TransactionData)
+	if err != nil {
+		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
+	}
+
+	err = v.validator.Validate(tx)
+	if err != nil {
+		return &validator_api.ValidateTransactionResponse{
+			Valid:  false,
+			Reason: err.Error(),
+		}, nil
+	}
+
+	return &validator_api.ValidateTransactionResponse{
+		Valid: true,
+	}, nil
 }
 
 func (v *Server) logError(err error) error {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
+	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
@@ -21,14 +22,16 @@ type PeerHandler struct {
 	logger                utils.Logger
 	txStore               store.TransactionStore
 	blockStore            store.TransactionStore
+	validator             validator.Interface
 	getTransactionBatcher *batcher.Batcher[chainhash.Hash]
 }
 
-func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore) p2p.PeerHandlerI {
+func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore, v validator.Interface) p2p.PeerHandlerI {
 	ph := &PeerHandler{
 		logger:     gocore.Log("p2p"),
 		txStore:    txStore,
 		blockStore: blockStore,
+		validator:  v,
 	}
 
 	return ph
@@ -66,12 +69,32 @@ func (ph *PeerHandler) HandleTransactionRejection(rejMsg *wire.MsgReject, peer p
 	return nil
 }
 
-func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, _ p2p.PeerI) error {
-	// TODO validate transaction
-	// send REJECT message to peer if invalid tx
-
+func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error {
+	ph.logger.Infof("received transaction: %s", msg.TxHash().String())
 	var buf bytes.Buffer
 	if err := msg.Serialize(&buf); err != nil {
+		return err
+	}
+
+	btTx, err := bt.NewTxFromBytes(buf.Bytes())
+	if err != nil {
+		return err
+	}
+
+	// Do not allow propagation of coinbase transactions
+	if btTx.IsCoinbase() {
+		return fmt.Errorf("received coinbase transaction: %s", msg.TxHash().String())
+	}
+
+	err = ph.extendTransaction(btTx)
+	if err != nil {
+		return err
+	}
+
+	if err = ph.validator.Validate(btTx); err != nil {
+		// send REJECT message to peer if invalid tx
+		ph.logger.Errorf("received invalid transaction: %s", err.Error())
+		_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
 		return err
 	}
 
@@ -130,9 +153,25 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 			return err
 		}
 
+		// extend the transaction with input data
+		if !btTx.IsCoinbase() {
+			err = ph.extendTransaction(btTx)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Validate the transaction
+		if err = ph.validator.Validate(btTx); err != nil {
+			// send REJECT message to peer if invalid tx
+			ph.logger.Errorf("received invalid transaction: %s", err.Error())
+			_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
+			return err
+		}
+
 		hash := tx.TxHash()
 		txExists, _ := ph.txStore.Get(context.Background(), hash[:])
-		if txExists != nil {
+		if txExists == nil {
 			if err = ph.txStore.Set(context.Background(), hash[:], buff.Bytes()); err != nil {
 				return fmt.Errorf("could not store transaction %s: %w", hash.String(), err)
 			}
@@ -157,4 +196,37 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	// TODO announce block to other peers
 
 	return ph.blockStore.Set(context.Background(), blockHash[:], buf.Bytes())
+}
+
+func (ph *PeerHandler) extendTransaction(transaction *bt.Tx) (err error) {
+	parentTxBytes := make(map[[32]byte][]byte)
+	var btParentTx *bt.Tx
+
+	// get the missing input data for the transaction
+	for _, input := range transaction.Inputs {
+		parentTxID := [32]byte(bt.ReverseBytes(input.PreviousTxID()))
+		b, ok := parentTxBytes[parentTxID]
+		if !ok {
+			b, err = ph.txStore.Get(context.Background(), parentTxID[:])
+			if err != nil {
+				return err
+			}
+			parentTxBytes[parentTxID] = b
+		}
+
+		btParentTx, err = bt.NewTxFromBytes(b)
+		if err != nil {
+			return err
+		}
+
+		if len(btParentTx.Outputs) < int(input.PreviousTxOutIndex) {
+			return fmt.Errorf("output %d not found in transaction %x", input.PreviousTxOutIndex, bt.ReverseBytes(parentTxID[:]))
+		}
+		output := btParentTx.Outputs[input.PreviousTxOutIndex]
+
+		input.PreviousTxScript = output.LockingScript
+		input.PreviousTxSatoshis = output.Satoshis
+	}
+
+	return nil
 }

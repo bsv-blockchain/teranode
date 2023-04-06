@@ -4,8 +4,11 @@ import (
 	"context"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/file"
+	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-p2p"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/wire"
+	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 )
 
@@ -20,8 +23,9 @@ import (
 // 7. Repeat
 
 type Server struct {
-	logger      utils.Logger
-	peerHandler p2p.PeerHandlerI
+	logger          utils.Logger
+	peerHandler     p2p.PeerHandlerI
+	validatorClient *validator.Client
 }
 
 func NewServer(logger utils.Logger) *Server {
@@ -35,9 +39,15 @@ func NewServer(logger utils.Logger) *Server {
 		logger.Fatalf("error creating block store: %v", err)
 	}
 
+	validatorClient, err := validator.NewClient()
+	if err != nil {
+		logger.Fatalf("error creating validator client: %v", err)
+	}
+
 	return &Server{
-		logger:      logger,
-		peerHandler: NewPeerHandler(txStore, blockStore),
+		logger:          logger,
+		peerHandler:     NewPeerHandler(txStore, blockStore, validatorClient),
+		validatorClient: validatorClient,
 	}
 }
 
@@ -53,6 +63,10 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Fatalf("error adding peer %s: %v", "localhost:18333", err)
 	}
 
+	// wait for all blocks to be downloaded
+	// this is only in testing on Regtest and should be removed in production
+	s.ibd(pm)
+
 	<-ctx.Done()
 
 	return nil
@@ -61,4 +75,59 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	s.validatorClient.Stop()
+}
+
+func (s *Server) ibd(pm p2p.PeerManagerI) error {
+	// initial block download
+	s.logger.Infof("Starting Initial Block Download")
+
+	btc, err := bitcoin.New("localhost", 18332, "bitcoin", "bitcoin", false)
+	if err != nil {
+		panic(err)
+	}
+
+	info, err := btc.GetBlockchainInfo()
+	if err != nil {
+		panic(err)
+	}
+
+	nextBlockHash := info.BestBlockHash
+
+	blockHeaders := make([]string, 0)
+	blockHeaders = append(blockHeaders, nextBlockHash)
+
+	s.logger.Infof("Getting Block headers from Bitcoin node")
+	var blockHeader *bitcoin.BlockHeader
+	for {
+		blockHeader, err = btc.GetBlockHeader(nextBlockHash)
+		if err != nil {
+			panic(err)
+		}
+
+		blockHeaders = append(blockHeaders, blockHeader.PreviousBlockHash)
+		nextBlockHash = blockHeader.PreviousBlockHash
+
+		if blockHeader.Height == 0 {
+			break
+		}
+	}
+
+	// reverse the order in the block headers slice
+	for i, j := 0, len(blockHeaders)-1; i < j; i, j = i+1, j-1 {
+		blockHeaders[i], blockHeaders[j] = blockHeaders[j], blockHeaders[i]
+	}
+
+	s.logger.Infof("Requesting Blocks through p2p")
+	var blockHash *chainhash.Hash
+	for _, blockHeaderHash := range blockHeaders {
+		blockHash, err = chainhash.NewHashFromStr(blockHeaderHash)
+		if err != nil {
+			return err
+		}
+		pm.RequestBlock(blockHash)
+	}
+
+	return nil
 }

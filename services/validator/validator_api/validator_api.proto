@@ -10,7 +10,8 @@ import "google/protobuf/empty.proto";
 service ValidatorAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc ValidateTransaction(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+  rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+  rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
 }
 
 // swagger:model HealthResponse
