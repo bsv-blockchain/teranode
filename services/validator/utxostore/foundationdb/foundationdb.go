@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	store "github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
@@ -15,17 +15,17 @@ type Store struct {
 	db fdb.Database
 }
 
-func New() *Store {
+func New(host string, port int, user, password string) (*Store, error) {
 	fdb.MustAPIVersion(720)
 	// TODO add connection options etc.
 	db := fdb.MustOpenDefault()
 
 	return &Store{
 		db: db,
-	}
+	}, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	if _, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		utxo, err := tr.Get(fdb.Key(hash[:])).Get()
@@ -44,10 +44,10 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 		return nil, err
 	}
 
-	return &store.UTXOResponse{}, nil
+	return &utxostore.UTXOResponse{}, nil
 }
 
-func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		utxo := tr.Get(fdb.Key(hash[:])).MustGet()
@@ -63,10 +63,10 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		return nil, err
 	}
 
-	return &store.UTXOResponse{}, nil
+	return &utxostore.UTXOResponse{}, nil
 }
 
-func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.Set(fdb.Key(hash[:]), emptyHash[:])
@@ -76,5 +76,5 @@ func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 		return nil, err
 	}
 
-	return &store.UTXOResponse{}, nil
+	return &utxostore.UTXOResponse{}, nil
 }

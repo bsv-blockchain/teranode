@@ -21,7 +21,8 @@ func getInputUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
 	}
 	previousSatoshis := bt.VarInt(input.PreviousTxSatoshis).Bytes()
 
-	utxoHashBytes := append(input.PreviousTxID(), voutBytes...)
+	// input.PreviousTxID() is in bytes, but not reversed FFS
+	utxoHashBytes := append(bt.ReverseBytes(input.PreviousTxID()), voutBytes...)
 	utxoHashBytes = append(utxoHashBytes, previousScript...)
 	utxoHashBytes = append(utxoHashBytes, previousSatoshis...)
 

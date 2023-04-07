@@ -39,11 +39,11 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) *UTXOStore {
+func New(logger utils.Logger) (*UTXOStore, error) {
 	return &UTXOStore{
 		logger: logger,
 		store:  make(map[chainhash.Hash]chainhash.Hash),
-	}
+	}, nil
 }
 
 // Start function

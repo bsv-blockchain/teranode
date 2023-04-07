@@ -10,8 +10,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore/utxostore"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
@@ -20,7 +18,6 @@ import (
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -42,17 +39,16 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
-	//s := foundationdb.New()
-	//validator := New(s)
+	utxostoreUri, found := gocore.Config().Get("utxostore")
+	if !found {
+		panic("no utxostore setting found")
+	}
 
-	utxostore_grpcAddress, _ := gocore.Config().Get("utxostore_grpcAddress")
-	conn, err := grpc.Dial(utxostore_grpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	s, err := NewUTXOStore(logger, utxostoreUri)
 	if err != nil {
 		panic(err)
 	}
 
-	db := utxostore_api.NewUtxoStoreAPIClient(conn)
-	s := utxostore.New(db)
 	validator := New(s)
 
 	return &Server{
@@ -160,7 +156,7 @@ func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.Valid
 	if err != nil {
 		return &validator_api.ValidateTransactionResponse{
 			Valid:  false,
-			Reason: err.Error(),
+			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),
 		}, nil
 	}
 

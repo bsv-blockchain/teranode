@@ -2,19 +2,21 @@ package validator
 
 import (
 	"context"
+	"fmt"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
-	store "github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-bitcoin"
 )
 
 type Validator struct {
-	store store.UTXOStore
+	store utxostore.UTXOStore
 }
 
-func New(store store.UTXOStore) Interface {
+func New(store utxostore.UTXOStore) Interface {
 	return &Validator{
 		store: store,
 	}
@@ -24,7 +26,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	if tx.IsCoinbase() {
 		// TODO what checks do we need to do on a coinbase tx?
 		// not just anyone should be able to send a coinbase tx through the system
-		hash, err := getOutputUtxoHash(tx.TxIDBytes(), tx.Outputs[0], 0)
+		hash, err := getOutputUtxoHash(bt.ReverseBytes(tx.TxIDBytes()), tx.Outputs[0], 0)
 		if err != nil {
 			return err
 		}
@@ -56,6 +58,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	}
 
 	var hash *chainhash.Hash
+	var utxoResponse *utxostore.UTXOResponse
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	for _, input := range tx.Inputs {
 		hash, err = getInputUtxoHash(input)
@@ -64,10 +67,15 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 		}
 
 		// TODO Should we be doing this in a batch?
-		_, err = v.store.Spend(context.Background(), hash, txIDChainHash)
+		utxoResponse, err = v.store.Spend(context.Background(), hash, txIDChainHash)
 		if err != nil {
 			break
 		}
+		if utxoResponse.Status != int(utxostore_api.Status_OK) {
+			err = fmt.Errorf("utxo %x is not spendable", bt.ReverseBytes(hash[:]))
+			break
+		}
+
 		reservedUtxos = append(reservedUtxos, hash)
 	}
 
@@ -78,6 +86,21 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 		}
 
 		return err
+	}
+
+	// process the outputs of the transaction into new spendable outputs
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 {
+			hash, err = getOutputUtxoHash(txIDBytes, output, uint64(i))
+			if err != nil {
+				return err
+			}
+
+			_, err = v.store.Store(context.Background(), hash)
+			if err != nil {
+				break
+			}
+		}
 	}
 
 	return nil

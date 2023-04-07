@@ -88,10 +88,13 @@ func main() {
 
 	// utxostore
 	if _, found := gocore.Config().Get("utxostore_grpcAddress"); found {
-		g.Go(func() error {
+		g.Go(func() (err error) {
 			logger.Infof("Starting UTXOStore")
 
-			utxoStore = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+			utxoStore, err = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+			if err != nil {
+				panic(err)
+			}
 
 			return utxoStore.Start()
 		})

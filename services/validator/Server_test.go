@@ -69,7 +69,7 @@ func TestGRPCStreaming(t *testing.T) {
 
 	client := validator_api.NewValidatorAPIClient(conn)
 
-	stream, err := client.ValidateTransaction(context.Background())
+	stream, err := client.ValidateTransactionStream(context.Background())
 	require.NoError(t, err)
 
 	err = stream.Send(&validator_api.ValidateTransactionRequest{
