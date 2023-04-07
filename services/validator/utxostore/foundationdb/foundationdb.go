@@ -1,3 +1,5 @@
+//go:build foundationdb
+
 package foundationdb
 
 import (
