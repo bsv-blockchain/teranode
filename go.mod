@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go v4.5.2+incompatible
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230404213121-c5b8908828d7
+	github.com/apple/foundationdb/bindings/go v0.0.0-20230406011225-625eb00d369d
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
@@ -52,7 +52,7 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/flatbuffers v2.0.0+incompatible // indirect
-	github.com/google/pprof v0.0.0-20221118152302-e6195bd50e26 // indirect
+	github.com/google/pprof v0.0.0-20211214055906-6f57359322fd // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/invopop/yaml v0.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect

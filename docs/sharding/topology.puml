@@ -1,0 +1,26 @@
+@startuml
+
+package "Node 1" {
+    [Stateless Proxy]
+    [Storage Server]
+}
+
+package "Node 2" {
+    [Stateless Proxy]
+    [Storage Server]
+}
+
+package "Node 3" {
+    [Stateless Proxy]
+    [Storage Server]
+}
+
+package "Node 4" {
+    [Stateless Proxy]
+    [Storage Server]
+}
+
+[Stateless Proxy] -> [Storage Server] : Read/Write Requests
+[Storage Server] -> [Storage Server] : Data Replication
+
+@enduml

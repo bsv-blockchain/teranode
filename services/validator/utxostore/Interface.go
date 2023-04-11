@@ -11,6 +11,7 @@ type UTXOResponse struct {
 }
 
 type UTXOStore interface {
+	Get(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error
 	Store(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
 	Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*UTXOResponse, error)
 	Reset(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
