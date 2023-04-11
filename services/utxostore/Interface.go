@@ -2,17 +2,18 @@ package utxostore
 
 import (
 	"time"
+
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-import github.com/Taal
 type UtxoEntry struct {
-	timeSpent    time.Time
-	spendingTxid *chaincfg.Hash
+	TimeSpent    time.Time
+	SpendingTxid *chainhash.Hash
 }
 
 type UtxoStore interface {
-	GetUTXO(xtxoHash *chaincfg.Hash) (*UtxoEntry, error)
-	AddNewUTXO(xtxoHash *chaincfg.Hash) error
-	SpendUTXO(xtxoHash *chaincfg.Hash, spendingTxid *chaincfg.Hash) error
-	ResetUTXO(xtxoHash *chaincfg.Hash) error
+	GetUTXO(xtxoHash *chainhash.Hash) (*UtxoEntry, error)
+	AddNewUTXO(xtxoHash *chainhash.Hash) error
+	SpendUTXO(xtxoHash *chainhash.Hash, spendingTxid *chainhash.Hash) error
+	ResetUTXO(xtxoHash *chainhash.Hash) error
 }

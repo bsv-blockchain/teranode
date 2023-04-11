@@ -1,4 +1,4 @@
-@startuml
+@startuml TXFlow
 hide footbox
 skinparam ParticipantPadding 15
 skinparam BoxPadding 10

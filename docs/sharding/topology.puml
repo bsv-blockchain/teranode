@@ -1,4 +1,4 @@
-@startuml
+@startuml Architecture
 
 package "Node 1" {
     [Stateless Proxy]

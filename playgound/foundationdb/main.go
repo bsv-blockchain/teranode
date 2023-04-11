@@ -10,11 +10,13 @@ func main() {
 	fdb.MustAPIVersion(720)
 
 	// Set up the client configuration with client locality
-	opts := []fdb.Option{
-		fdb.DataCenterId("dc1"),
-		fdb.MachineId("machine1"),
-	}
-	db := fdb.MustOpen(opts...)
+	// opts := []fdb.Option{
+	// 	fdb.DataCenterId("dc1"),
+	// 	fdb.MachineId("machine1"),
+	// }
+	// db := fdb.MustOpen(opts...)
+
+	db := fdb.MustOpenDefault()
 
 	// Perform a read operation
 	_, err := db.Transact(func(tr fdb.Transaction) (interface{}, error) {

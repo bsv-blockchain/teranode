@@ -29,6 +29,7 @@ func NewUTXOStore(logger utils.Logger, uri string) (store.UTXOStore, error) {
 	case "aerospike":
 		logger.Infof("[UTXOStore] connecting to aerospike at %s:%d", parsedUri.Hostname(), port)
 		return aerospike.New(parsedUri.Hostname(), port, parsedUri.Path[1:])
+
 	case "utxostore":
 		logger.Infof("[UTXOStore] connecting to utxostore service at %s:%d", parsedUri.Hostname(), port)
 		conn, err := grpc.Dial(parsedUri.Hostname()+":"+parsedUri.Port(), grpc.WithTransportCredentials(insecure.NewCredentials()))

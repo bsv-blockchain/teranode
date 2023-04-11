@@ -27,6 +27,10 @@ func New(host string, port int, namespace string) (*Store, error) {
 	}, nil
 }
 
+func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	return nil, nil
+}
+
 func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(0, 0)
 	policy.RecordExistsAction = aero.CREATE_ONLY

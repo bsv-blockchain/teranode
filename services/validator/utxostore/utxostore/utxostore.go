@@ -18,6 +18,10 @@ func New(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	}, nil
 }
 
+func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	return nil, nil
+}
+
 func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
 		UxtoHash: hash[:],
