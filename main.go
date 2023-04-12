@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -12,7 +14,10 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/utxostore"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,6 +36,33 @@ func main() {
 	logLevel, _ := gocore.Config().Get("logLevel")
 	logger := gocore.Log(progname, gocore.NewLogLevelFromString(logLevel))
 
+	startValidator := flag.Bool("validator", false, "start validator service")
+	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
+	startPropagation := flag.Bool("propagation", false, "start propagation service")
+	useTracer := flag.Bool("tracer", false, "start tracer")
+	help := flag.Bool("help", false, "Show help")
+
+	flag.Parse()
+
+	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation) {
+		fmt.Println("usage: main [options]")
+		fmt.Println("where options are:")
+		fmt.Println("")
+		fmt.Println("    -validator=<1|0>")
+		fmt.Println("          whether to start the validator service")
+		fmt.Println("")
+		fmt.Println("    -propagation=<1|0>")
+		fmt.Println("          whether to start the propagation service")
+		fmt.Println("")
+		fmt.Println("    -utxostore=<1|0>")
+		fmt.Println("          whether to start the utxo store service")
+		fmt.Println("")
+		fmt.Println("    -tracer=<1|0>")
+		fmt.Println("          whether to start the Jaeger tracer (default=false)")
+		fmt.Println("")
+		return
+	}
+
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
@@ -42,24 +74,24 @@ func main() {
 		}
 	}()
 
-	// prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
-	// if ok && prometheusEndpoint != "" {
-	// 	logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
-	// 	http.Handle(prometheusEndpoint, promhttp.Handler())
-	// }
+	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
+	if ok && prometheusEndpoint != "" {
+		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+		http.Handle(prometheusEndpoint, promhttp.Handler())
+	}
 
 	// tracingOn := gocore.Config().GetBool("tracing")
-	// if tracingOn {
-	// 	logger.Infof("Starting tracer")
-	// 	// Start the tracer
-	// 	tracer, closer := tracing.InitTracer(logger, progname)
-	// 	defer closer.Close()
+	if *useTracer {
+		logger.Infof("Starting tracer")
+		// Start the tracer
+		tracer, closer := tracing.InitTracer(logger, progname)
+		defer closer.Close()
 
-	// 	if tracer != nil {
-	// 		// set the global tracer to use in all services
-	// 		opentracing.SetGlobalTracer(tracer)
-	// 	}
-	// }
+		if tracer != nil {
+			// set the global tracer to use in all services
+			opentracing.SetGlobalTracer(tracer)
+		}
+	}
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -76,38 +108,49 @@ func main() {
 	var propagationServer *propagation.Server
 
 	// validator
-	if _, found := gocore.Config().Get("validator_grpcAddress"); found {
-		g.Go(func() error {
-			logger.Infof("Starting Server")
+	if *startValidator {
+		if _, found := gocore.Config().Get("validator_grpcAddress"); found {
+			g.Go(func() error {
+				logger.Infof("Starting Server")
 
-			validatorService = validator.NewServer(gocore.Log("valid", gocore.NewLogLevelFromString(logLevel)))
+				validatorService = validator.NewServer(gocore.Log("valid", gocore.NewLogLevelFromString(logLevel)))
 
-			return validatorService.Start()
-		})
+				return validatorService.Start()
+			})
+		}
 	}
 
 	// utxostore
-	if _, found := gocore.Config().Get("utxostore_grpcAddress"); found {
-		g.Go(func() (err error) {
-			logger.Infof("Starting UTXOStore")
+	if *startUtxoStore {
+		utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+		if err != nil {
+			panic(err)
+		}
 
-			utxoStore, err = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
-			if err != nil {
-				panic(err)
-			}
+		if found {
+			g.Go(func() (err error) {
+				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
 
-			return utxoStore.Start()
-		})
+				utxoStore, err = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+				if err != nil {
+					panic(err)
+				}
+
+				return utxoStore.Start()
+			})
+		}
 	}
 
 	// propagation
-	g.Go(func() error {
-		logger.Infof("Starting Propagation")
+	if *startPropagation {
+		g.Go(func() error {
+			logger.Infof("Starting Propagation")
 
-		propagationServer = propagation.NewServer(gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel)))
+			propagationServer = propagation.NewServer(gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel)))
 
-		return propagationServer.Start(ctx)
-	})
+			return propagationServer.Start(ctx)
+		})
+	}
 
 	select {
 	case <-interrupt:

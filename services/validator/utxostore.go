@@ -28,6 +28,9 @@ func NewUTXOStore(logger utils.Logger, uri string) (store.UTXOStore, error) {
 	switch parsedUri.Scheme {
 	case "aerospike":
 		logger.Infof("[UTXOStore] connecting to aerospike at %s:%d", parsedUri.Hostname(), port)
+		if len(parsedUri.Path) < 1 {
+			return nil, fmt.Errorf("aerospike namespace not found")
+		}
 		return aerospike.New(parsedUri.Hostname(), port, parsedUri.Path[1:])
 
 	case "utxostore":

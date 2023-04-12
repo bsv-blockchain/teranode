@@ -49,7 +49,7 @@ func New(logger utils.Logger) (*UTXOStore, error) {
 // Start function
 func (u *UTXOStore) Start() error {
 
-	address, ok := gocore.Config().Get("utxostore_grpcAddress") //, "localhost:8001")
+	address, _, ok := gocore.Config().GetURL("utxostore") //, "localhost:8001")
 	if !ok {
 		return errors.New("no utxostore_grpcAddress setting found")
 	}
@@ -66,9 +66,9 @@ func (u *UTXOStore) Start() error {
 
 	u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 
-	gocore.SetAddress(address)
+	gocore.SetAddress(address.Host)
 
-	lis, err := net.Listen("tcp", address)
+	lis, err := net.Listen("tcp", address.Host)
 	if err != nil {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}

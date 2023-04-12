@@ -2,7 +2,9 @@ package propagation
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
@@ -11,6 +13,7 @@ import (
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 // The plan.
@@ -55,18 +58,31 @@ func NewServer(logger utils.Logger) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	pm := p2p.NewPeerManager(s.logger, wire.TestNet)
 
-	peer, err := p2p.NewPeer(s.logger, "localhost:18333", s.peerHandler, wire.TestNet)
-	if err != nil {
-		s.logger.Fatalf("error creating peer %s: %v", "localhost:18333", err)
-	}
+	peerCount, ok := gocore.Config().GetInt("peerCount")
+	if ok {
+		for i := 1; i <= peerCount; i++ {
+			p2pURL, err, found := gocore.Config().GetURL(fmt.Sprintf("peer_%d_p2p", i))
+			if !found {
+				s.logger.Fatalf("peer_%d_p2p must be set", i)
+			}
+			if err != nil {
+				s.logger.Fatalf("error reading peer_%d_p2p: %v", i, err)
+			}
 
-	if err = pm.AddPeer(peer); err != nil {
-		s.logger.Fatalf("error adding peer %s: %v", "localhost:18333", err)
+			peer, err := p2p.NewPeer(s.logger, p2pURL.Host, s.peerHandler, wire.TestNet)
+			if err != nil {
+				s.logger.Fatalf("error creating peer %s: %v", p2pURL.Host, err)
+			}
+
+			if err = pm.AddPeer(peer); err != nil {
+				s.logger.Fatalf("error adding peer %s: %v", p2pURL.Host, err)
+			}
+		}
 	}
 
 	// wait for all blocks to be downloaded
 	// this is only in testing on Regtest and should be removed in production
-	err = s.ibd(pm)
+	err := s.ibd(pm)
 	if err != nil {
 		s.logger.Fatalf("error during initial block download: %v", err)
 	}
@@ -94,7 +110,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 				s.logger.Infof("Received incoming connection from %s", c.RemoteAddr().String())
 
-				peer, err = p2p.NewPeer(s.logger, c.RemoteAddr().String(), s.peerHandler, wire.TestNet, p2p.WithIncomingConnection(c))
+				peer, err := p2p.NewPeer(s.logger, c.RemoteAddr().String(), s.peerHandler, wire.TestNet, p2p.WithIncomingConnection(c))
 				if err != nil {
 					s.logger.Errorf("Error creating peer: %v", err)
 				}
@@ -122,7 +138,20 @@ func (s *Server) ibd(pm p2p.PeerManagerI) error {
 	// initial block download
 	s.logger.Infof("Starting Initial Block Download")
 
-	btc, err := bitcoin.New("localhost", 18332, "bitcoin", "bitcoin", false)
+	p2pURL, err, found := gocore.Config().GetURL(fmt.Sprintf("peer_%d_rpc", 1))
+	if !found {
+		s.logger.Fatalf("peer_%d_rpc must be set", 1)
+	}
+	if err != nil {
+		s.logger.Fatalf("error reading peer_%d_rpc: %v", 1, err)
+	}
+
+	port, err := strconv.Atoi(p2pURL.Port())
+	if err != nil {
+		panic(err)
+	}
+	password, _ := p2pURL.User.Password()
+	btc, err := bitcoin.New(p2pURL.Hostname(), port, p2pURL.User.Username(), password, false)
 	if err != nil {
 		panic(err)
 	}
