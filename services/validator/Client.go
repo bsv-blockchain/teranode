@@ -16,11 +16,13 @@ type Client struct {
 }
 
 func NewClient() (*Client, error) {
+    grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"pick_first":{}},{"random":{}}]}`)
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`), // This sets the initial balancing policy.
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}},{"random":{}}]}`)
 	}
+
     validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
     address := fmt.Sprintf("%s:///%s", "dns", validator_grpcAddress)
 	conn, err := grpc.Dial(address, opts...)
