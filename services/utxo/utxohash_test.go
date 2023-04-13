@@ -1,4 +1,4 @@
-package validator
+package utxo
 
 import (
 	"encoding/hex"
@@ -44,13 +44,13 @@ func Test_getInputUtxoHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := getInputUtxoHash(tt.args.input)
+			got, err := GetInputUtxoHash(tt.args.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getInputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("GetInputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("getInputUtxoHash() got = %v, want %v", got, tt.want)
+				t.Errorf("GetInputUtxoHash() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -87,13 +87,13 @@ func Test_getOutputUtxoHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := getOutputUtxoHash(tt.args.txID, tt.args.output, tt.args.vOut)
+			got, err := GetOutputUtxoHash(tt.args.txID, tt.args.output, tt.args.vOut)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getOutputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("GetOutputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("getOutputUtxoHash() got = %v, want %v", got, tt.want)
+				t.Errorf("GetOutputUtxoHash() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

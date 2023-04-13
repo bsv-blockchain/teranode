@@ -1,4 +1,4 @@
-package utxostore
+package utxo
 
 import (
 	"time"
@@ -6,13 +6,13 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-type UtxoEntry struct {
+type Entry struct {
 	TimeSpent    time.Time
 	SpendingTxid *chainhash.Hash
 }
 
 type UtxoStore interface {
-	GetUTXO(xtxoHash *chainhash.Hash) (*UtxoEntry, error)
+	GetUTXO(xtxoHash *chainhash.Hash) (*Entry, error)
 	AddNewUTXO(xtxoHash *chainhash.Hash) error
 	SpendUTXO(xtxoHash *chainhash.Hash, spendingTxid *chainhash.Hash) error
 	ResetUTXO(xtxoHash *chainhash.Hash) error

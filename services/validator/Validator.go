@@ -5,18 +5,19 @@ import (
 	"fmt"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxo"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-bitcoin"
 )
 
 type Validator struct {
-	store utxostore.UTXOStore
+	store store.UTXOStore
 }
 
-func New(store utxostore.UTXOStore) Interface {
+func New(store store.UTXOStore) Interface {
 	return &Validator{
 		store: store,
 	}
@@ -26,7 +27,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	if tx.IsCoinbase() {
 		// TODO what checks do we need to do on a coinbase tx?
 		// not just anyone should be able to send a coinbase tx through the system
-		hash, err := getOutputUtxoHash(bt.ReverseBytes(tx.TxIDBytes()), tx.Outputs[0], 0)
+		hash, err := utxo.GetOutputUtxoHash(bt.ReverseBytes(tx.TxIDBytes()), tx.Outputs[0], 0)
 		if err != nil {
 			return err
 		}
@@ -58,10 +59,10 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	}
 
 	var hash *chainhash.Hash
-	var utxoResponse *utxostore.UTXOResponse
+	var utxoResponse *store.UTXOResponse
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	for _, input := range tx.Inputs {
-		hash, err = getInputUtxoHash(input)
+		hash, err = utxo.GetInputUtxoHash(input)
 		if err != nil {
 			return err
 		}
@@ -91,7 +92,7 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 	// process the outputs of the transaction into new spendable outputs
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 {
-			hash, err = getOutputUtxoHash(txIDBytes, output, uint64(i))
+			hash, err = utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
 			if err != nil {
 				return err
 			}

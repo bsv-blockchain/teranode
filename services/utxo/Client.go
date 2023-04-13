@@ -1,10 +1,10 @@
-package utxostore
+package utxo
 
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -12,17 +12,17 @@ type Store struct {
 	db utxostore_api.UtxoStoreAPIClient
 }
 
-func New(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
+func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	return &Store{
 		db: db,
 	}, nil
 }
 
-func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	return nil, nil
 }
 
-func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
 		UxtoHash: hash[:],
 	})
@@ -30,12 +30,12 @@ func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXO
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &store.UTXOResponse{
 		Status: int(response.Status),
 	}, nil
 }
 
-func (s Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Spend(ctx, &utxostore_api.SpendRequest{
 		UxtoHash:     hash[:],
 		SpendingTxid: txID[:],
@@ -44,12 +44,12 @@ func (s Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &store.UTXOResponse{
 		Status: int(response.Status),
 	}, nil
 }
 
-func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Reset(ctx, &utxostore_api.ResetRequest{
 		UxtoHash: hash[:],
 	})
@@ -57,7 +57,7 @@ func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXO
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &store.UTXOResponse{
 		Status: int(response.Status),
 	}, nil
 }

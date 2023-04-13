@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
@@ -27,7 +27,7 @@ func New(host string, port int, user, password string) (*Store, error) {
 	}, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	if _, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		utxo, err := tr.Get(fdb.Key(hash[:])).Get()
@@ -46,10 +46,10 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{}, nil
+	return &store.UTXOResponse{}, nil
 }
 
-func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		utxo := tr.Get(fdb.Key(hash[:])).MustGet()
@@ -65,10 +65,10 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{}, nil
+	return &store.UTXOResponse{}, nil
 }
 
-func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.Set(fdb.Key(hash[:]), emptyHash[:])
@@ -78,5 +78,5 @@ func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{}, nil
+	return &store.UTXOResponse{}, nil
 }

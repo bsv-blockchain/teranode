@@ -13,7 +13,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
-	"github.com/TAAL-GmbH/ubsv/services/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/opentracing/opentracing-go"
@@ -105,7 +105,7 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	var validatorService *validator.Server
-	var utxoStore *utxostore.UTXOStore
+	var utxoStore *utxo.UTXOStore
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
 
@@ -133,7 +133,7 @@ func main() {
 			g.Go(func() (err error) {
 				logger.Infof("Starting PropagationServer on: %s", utxostoreURL.Host)
 
-				utxoStore, err = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+				utxoStore, err = utxo.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
 				if err != nil {
 					panic(err)
 				}
