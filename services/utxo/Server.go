@@ -14,6 +14,8 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -21,8 +23,67 @@ import (
 )
 
 var (
-	empty = &chainhash.Hash{}
+	empty                    = &chainhash.Hash{}
+	prometheusUtxoGet        prometheus.Counter
+	prometheusUtxoStore      prometheus.Counter
+	prometheusUtxoReStore    prometheus.Counter
+	prometheusUtxoStoreSpent prometheus.Counter
+	prometheusUtxoSpend      prometheus.Counter
+	prometheusUtxoReSpend    prometheus.Counter
+	prometheusUtxoSpendSpent prometheus.Counter
+	prometheusUtxoReset      prometheus.Counter
 )
+
+func init() {
+	prometheusUtxoGet = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_get",
+			Help: "Number of utxo get calls done to utxostore",
+		},
+	)
+	prometheusUtxoStore = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_store",
+			Help: "Number of utxo store calls done to utxostore",
+		},
+	)
+	prometheusUtxoStoreSpent = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_store_spent",
+			Help: "Number of utxo store calls that were already spent to utxostore",
+		},
+	)
+	prometheusUtxoReStore = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_restore",
+			Help: "Number of utxo restore calls done to utxostore",
+		},
+	)
+	prometheusUtxoSpend = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_spend",
+			Help: "Number of utxo spend calls done to utxostore",
+		},
+	)
+	prometheusUtxoReSpend = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_respend",
+			Help: "Number of utxo respend calls done to utxostore",
+		},
+	)
+	prometheusUtxoSpendSpent = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_spend_spent",
+			Help: "Number of utxo spend calls that were already spent done to utxostore",
+		},
+	)
+	prometheusUtxoReset = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "utxostore_utxo_reset",
+			Help: "Number of utxo reset calls done to utxostore",
+		},
+	)
+}
 
 // UTXOStore type carries the logger within it
 type UTXOStore struct {
@@ -113,11 +174,13 @@ func (u *UTXOStore) Store(_ context.Context, req *utxostore_api.StoreRequest) (*
 	spendingTxid, found := u.store[*utxoHash]
 	if found {
 		if spendingTxid.IsEqual(empty) {
+			prometheusUtxoReStore.Inc()
 			return &utxostore_api.StoreResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
 		}
 
+		prometheusUtxoStoreSpent.Inc()
 		return &utxostore_api.StoreResponse{
 			Status: utxostore_api.Status_SPENT,
 		}, nil
@@ -125,6 +188,8 @@ func (u *UTXOStore) Store(_ context.Context, req *utxostore_api.StoreRequest) (*
 	}
 
 	u.store[*utxoHash] = *empty
+
+	prometheusUtxoStore.Inc()
 
 	return &utxostore_api.StoreResponse{
 		Status: utxostore_api.Status_OK,
@@ -150,17 +215,22 @@ func (u *UTXOStore) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*
 		if existingHash.IsEqual(empty) {
 			u.store[*utxoHash] = *spendingHash
 
+			prometheusUtxoSpend.Inc()
 			return &utxostore_api.SpendResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
 		}
 
 		if existingHash.IsEqual(spendingHash) {
+			prometheusUtxoReSpend.Inc()
 			return &utxostore_api.SpendResponse{
 				Status: utxostore_api.Status_OK,
 			}, nil
 		}
 	}
+
+	prometheusUtxoSpendSpent.Inc()
+
 	return &utxostore_api.SpendResponse{
 		Status:       utxostore_api.Status_SPENT,
 		SpendingTxid: existingHash.CloneBytes(),
@@ -186,6 +256,8 @@ func (u *UTXOStore) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*
 			Status: utxostore_api.Status_OK,
 		}, nil
 	}
+
+	prometheusUtxoReset.Inc()
 
 	return &utxostore_api.ResetResponse{
 		Status: utxostore_api.Status_NOT_FOUND,
