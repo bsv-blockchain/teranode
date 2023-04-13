@@ -1,0 +1,100 @@
+name: deploy-to-gke
+on:
+  push:
+    branches:
+      - master
+jobs:
+  build-go-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.19
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        run: staticcheck ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: v1.50.1
+          args: --skip-dirs p2p/wire
+
+      - name: Run tests
+        run: go test -race -vet=off ./...
+
+  build-docker-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Setup gcloud CLI
+      - id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      # setup docker build tools
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Authorize Docker push
+        run: gcloud auth configure-docker
+
+      # build and push docker image
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: eu.gcr.io/${{ secrets.GCR_PROJECT_ID }}/ubsv-go:${{github.sha}}
+          build-args: |
+            GITHUB_SHA=${{github.sha}}
+            GITHUB_REF=${{github.ref_name}}
+
+      # authenticate to k8s cluster using private ip
+      - name: 'get-gke-credentials'
+        uses: 'google-github-actions/get-gke-credentials@v1'
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: 'europe-north1'
+          use_internal_ip: true
+          project_id: ${{ secrets.GCR_PROJECT_ID }}  # Deploy to GKE using kubectl
+
+      # install kustomize for deployment
+      - name: Install Kustomize
+        run: |-
+          # Set up kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+          chmod u+x ./kustomize
+          cp ./kustomize /usr/local/bin
+
+      # Deploy the Docker image to the GKE cluster
+      - name: Build k8s files
+        run: |-
+          # Setting Image
+          cd ./deploy/
+          echo "Setting image"
+          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/${{ secrets.GCR_PROJECT_ID }}/ubsv-go:$GITHUB_SHA
+
+          # kustomize render & apply
+          echo "Building kustomize build in $(pwd)"
+          kustomize build . | kubectl apply -f -
+

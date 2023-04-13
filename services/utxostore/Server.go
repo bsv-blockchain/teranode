@@ -49,7 +49,7 @@ func New(logger utils.Logger) (*UTXOStore, error) {
 // Start function
 func (u *UTXOStore) Start() error {
 
-	address, _, ok := gocore.Config().GetURL("utxostore") //, "localhost:8001")
+	address, _, ok := gocore.Config().GetURL("utxostore")
 	if !ok {
 		return errors.New("no utxostore_grpcAddress setting found")
 	}

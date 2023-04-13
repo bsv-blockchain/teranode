@@ -60,7 +60,7 @@ func NewServer(logger utils.Logger) *Server {
 // Start function
 func (v *Server) Start() error {
 
-	address, ok := gocore.Config().Get("validator_grpcAddress") //, "localhost:8001")
+	address, ok := gocore.Config().Get("validator_grpcAddress")
 	if !ok {
 		return errors.New("no validator_grpcAddress setting found")
 	}
