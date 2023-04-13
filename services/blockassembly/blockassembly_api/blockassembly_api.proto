@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+option go_package = ".;blockassembly_api";
+
+package blockassembly_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service BlockAssemblyAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc AddTxID (AddTxIDRequest) returns (AddTxIDResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model StoreRequest
+message AddTxIDRequest {
+  bytes txid = 1;
+}
+
+// swagger:model StoreResponse
+message AddTxIDResponse {
+  bool ok = 1;
+}
