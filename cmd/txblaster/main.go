@@ -31,6 +31,10 @@ func init() {
 
 	bitcoinRpcUri := os.Getenv("BITCOIN_RPC_URI")
 
+	if bitcoinRpcUri == "" {
+		panic("You must set BITCOIN_RPC_URI environment variable")
+	}
+
 	var err error
 	rpcURL, err = url.Parse(bitcoinRpcUri)
 	if err != nil {
