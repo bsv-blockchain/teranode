@@ -7,7 +7,7 @@ metadata:
 #    monitor: prometheus
     app: tx-blaster
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: tx-blaster

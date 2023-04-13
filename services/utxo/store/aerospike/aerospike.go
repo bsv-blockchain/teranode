@@ -2,7 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"log"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -152,10 +151,6 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 }
 
 func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
-	log.Printf("Spend %#v %#v", hash, txID)
-	log.Printf("Spend %#v clone", txID.CloneBytes())
-	log.Printf("Spend %#v slice", txID[:])
-
 	policy := aero.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aero.UPDATE_ONLY
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
