@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+option go_package = ".;propagation_api";
+
+package propagation_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service PropagationAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc Get (GetRequest) returns (GetResponse) {}
+  rpc Set (SetRequest) returns (google.protobuf.Empty) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model GetRequest
+message GetRequest {
+  bytes txid = 1;
+}
+
+// swagger:model GetResponse
+message GetResponse {
+  bytes tx = 1;
+}
+
+// swagger:model SetRequest
+message SetRequest {
+  bytes tx = 1;
+}

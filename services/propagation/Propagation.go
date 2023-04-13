@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-p2p"
@@ -32,20 +33,10 @@ type Server struct {
 	validatorClient *validator.Client
 }
 
-func NewServer(logger utils.Logger) *Server {
-	txStore, err := badger.New("./data/txStore")
-	if err != nil {
-		logger.Fatalf("error creating transaction store: %v", err)
-	}
-
+func NewServer(logger utils.Logger, txStore store.TransactionStore, validatorClient *validator.Client) *Server {
 	blockStore, err := badger.New("./data/blockStore")
 	if err != nil {
 		logger.Fatalf("error creating block store: %v", err)
-	}
-
-	validatorClient, err := validator.NewClient()
-	if err != nil {
-		logger.Fatalf("error creating validator client: %v", err)
 	}
 
 	return &Server{
@@ -80,11 +71,14 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// wait for all blocks to be downloaded
-	// this is only in testing on Regtest and should be removed in production
-	err := s.ibd(pm)
-	if err != nil {
-		s.logger.Fatalf("error during initial block download: %v", err)
+	doRegtestSync := gocore.Config().GetBool("regtestSync")
+	if doRegtestSync {
+		// wait for all blocks to be downloaded from Regtest
+		// this is only in testing on Regtest and should be removed in production
+		err := s.regtestSync(pm)
+		if err != nil {
+			s.logger.Fatalf("error during regtest sync: %v", err)
+		}
 	}
 
 	listen := "localhost:8833"
@@ -134,9 +128,8 @@ func (s *Server) Stop(ctx context.Context) {
 	s.validatorClient.Stop()
 }
 
-func (s *Server) ibd(pm p2p.PeerManagerI) error {
-	// initial block download
-	s.logger.Infof("Starting Initial Block Download")
+func (s *Server) regtestSync(pm p2p.PeerManagerI) error {
+	s.logger.Infof("Starting Regtest sync (not Initial Block Download)")
 
 	p2pURL, err, found := gocore.Config().GetURL(fmt.Sprintf("peer_%d_rpc", 1))
 	if !found {

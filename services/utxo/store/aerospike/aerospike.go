@@ -3,8 +3,8 @@ package aerospike
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	aero "github.com/aerospike/aerospike-client-go"
 	"github.com/aerospike/aerospike-client-go/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -27,11 +27,11 @@ func New(host string, port int, namespace string) (*Store, error) {
 	}, nil
 }
 
-func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	return nil, nil
 }
 
-func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(0, 0)
 	policy.RecordExistsAction = aero.CREATE_ONLY
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
@@ -49,13 +49,13 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORe
 		// check whether we already set this utxo
 		value, getErr := s.client.Get(nil, key, "txid")
 		if value != nil && getErr == nil {
-			return &utxostore.UTXOResponse{
+			return &store.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
 
 		if getErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
-			return &utxostore.UTXOResponse{
+			return &store.UTXOResponse{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil
 		}
@@ -63,12 +63,12 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORe
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &store.UTXOResponse{
 		Status: int(utxostore_api.Status_OK), // should be created, we need this for the block assembly
 	}, nil
 }
 
-func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aero.UPDATE_ONLY
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
@@ -92,7 +92,7 @@ func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Ha
 		valueBytes, ok := value.Bins["txid"].([]byte)
 		if ok {
 			if [32]byte(valueBytes) == [32]byte(txID[:]) {
-				return &utxostore.UTXOResponse{
+				return &store.UTXOResponse{
 					Status: int(utxostore_api.Status_OK),
 				}, nil
 			}
@@ -100,12 +100,12 @@ func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Ha
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &store.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
 }
 
-func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(2, 0)
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency

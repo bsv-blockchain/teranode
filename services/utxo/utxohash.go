@@ -1,4 +1,4 @@
-package validator
+package utxo
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-func getInputUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
+func GetInputUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
 	voutBytes := bt.VarInt(input.PreviousTxOutIndex).Bytes()
 
 	if input.PreviousTxScript == nil || len(*input.PreviousTxScript) == 0 {
@@ -35,7 +35,7 @@ func getInputUtxoHash(input *bt.Input) (*chainhash.Hash, error) {
 	return chHash, nil
 }
 
-func getOutputUtxoHash(txID []byte, output *bt.Output, vOut uint64) (*chainhash.Hash, error) {
+func GetOutputUtxoHash(txID []byte, output *bt.Output, vOut uint64) (*chainhash.Hash, error) {
 	voutBytes := bt.VarInt(vOut).Bytes()
 
 	if output.LockingScript == nil || len(*output.LockingScript) == 0 {

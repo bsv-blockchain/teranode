@@ -39,12 +39,15 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
-	utxostoreUri, found := gocore.Config().Get("utxostore")
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
 	if !found {
 		panic("no utxostore setting found")
 	}
 
-	s, err := NewUTXOStore(logger, utxostoreUri)
+	s, err := NewUTXOStore(logger, utxostoreURL)
 	if err != nil {
 		panic(err)
 	}
@@ -60,7 +63,7 @@ func NewServer(logger utils.Logger) *Server {
 // Start function
 func (v *Server) Start() error {
 
-	address, ok := gocore.Config().Get("validator_grpcAddress") //, "localhost:8001")
+	address, ok := gocore.Config().Get("validator_grpcAddress")
 	if !ok {
 		return errors.New("no validator_grpcAddress setting found")
 	}

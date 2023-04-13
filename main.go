@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
-	"github.com/TAAL-GmbH/ubsv/services/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
+	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/opentracing/opentracing-go"
@@ -104,8 +105,9 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	var validatorService *validator.Server
-	var utxoStore *utxostore.UTXOStore
+	var utxoStore *utxo.UTXOStore
 	var propagationServer *propagation.Server
+	var propagationGRPCServer *propagation.PropagationServer
 
 	// validator
 	if *startValidator {
@@ -129,9 +131,9 @@ func main() {
 
 		if found {
 			g.Go(func() (err error) {
-				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
+				logger.Infof("Starting PropagationServer on: %s", utxostoreURL.Host)
 
-				utxoStore, err = utxostore.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+				utxoStore, err = utxo.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
 				if err != nil {
 					panic(err)
 				}
@@ -143,13 +145,38 @@ func main() {
 
 	// propagation
 	if *startPropagation {
+		txStore, err := badger.New("./data/txStore")
+		if err != nil {
+			logger.Fatalf("error creating transaction store: %v", err)
+		}
+
+		validatorClient, err := validator.NewClient()
+		if err != nil {
+			logger.Fatalf("error creating validator client: %v", err)
+		}
+
 		g.Go(func() error {
 			logger.Infof("Starting Propagation")
 
-			propagationServer = propagation.NewServer(gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel)))
+			p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
+			propagationServer = propagation.NewServer(p2pLogger, txStore, validatorClient)
 
 			return propagationServer.Start(ctx)
 		})
+
+		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+		if ok && propagationGrpcAddress != "" {
+			g.Go(func() error {
+				logger.Infof("Starting Propagation GRPC Server on: %s", propagationGrpcAddress)
+
+				propagationGRPCServer, err = propagation.New(logger, txStore, validatorClient)
+				if err != nil {
+					panic(err)
+				}
+
+				return propagationGRPCServer.Start()
+			})
+		}
 	}
 
 	select {
@@ -168,6 +195,10 @@ func main() {
 
 	if propagationServer != nil {
 		propagationServer.Stop(shutdownCtx)
+	}
+
+	if propagationGRPCServer != nil {
+		propagationGRPCServer.Stop(shutdownCtx)
 	}
 
 	if utxoStore != nil {

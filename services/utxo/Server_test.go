@@ -1,4 +1,4 @@
-package utxostore
+package utxo
 
 import (
 	"context"

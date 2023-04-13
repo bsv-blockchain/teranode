@@ -6,3 +6,4 @@ data/
 *.run
 .DS_Store
 *.pprof
+.idea/

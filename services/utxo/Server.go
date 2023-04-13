@@ -1,4 +1,4 @@
-package utxostore
+package utxo
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -49,7 +49,7 @@ func New(logger utils.Logger) (*UTXOStore, error) {
 // Start function
 func (u *UTXOStore) Start() error {
 
-	address, _, ok := gocore.Config().GetURL("utxostore") //, "localhost:8001")
+	address, _, ok := gocore.Config().GetURL("utxostore")
 	if !ok {
 		return errors.New("no utxostore_grpcAddress setting found")
 	}

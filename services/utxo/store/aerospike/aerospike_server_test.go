@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxostore"
+	"github.com/TAAL-GmbH/ubsv/services/validator/store"
 	aero "github.com/aerospike/aerospike-client-go"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	var resp *utxostore.UTXOResponse
+	var resp *store.UTXOResponse
 	var value *aero.Record
 	t.Run("aerospike store", func(t *testing.T) {
 		resp, err = db.Store(context.Background(), hash)
