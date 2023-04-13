@@ -7,7 +7,8 @@ import (
 )
 
 type UTXOResponse struct {
-	Status int
+	Status       int
+	SpendingTxID *chainhash.Hash
 }
 
 type UTXOStore interface {

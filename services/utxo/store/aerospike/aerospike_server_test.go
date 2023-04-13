@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	aero "github.com/aerospike/aerospike-client-go"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
@@ -42,9 +43,10 @@ func TestAerospike(t *testing.T) {
 	var resp *store.UTXOResponse
 	var value *aero.Record
 	t.Run("aerospike store", func(t *testing.T) {
+		cleanDB(t, client, key)
 		resp, err = db.Store(context.Background(), hash)
 		require.NoError(t, err)
-		require.Equal(t, resp.Status, 201)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 		value, err = client.Get(aero.NewPolicy(), key)
 		require.NoError(t, err)
@@ -52,13 +54,22 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Store(context.Background(), hash)
 		require.NoError(t, err)
-		require.Equal(t, resp.Status, 200)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		resp, err = db.Store(context.Background(), hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {
+		cleanDB(t, client, key)
 		resp, err = db.Store(context.Background(), hash)
 		require.NoError(t, err)
-		require.Equal(t, resp.Status, 200)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
@@ -70,13 +81,15 @@ func TestAerospike(t *testing.T) {
 
 		// try to spend with different txid
 		resp, err = db.Spend(context.Background(), hash, hash2)
-		require.Equal(t, "Generation error", err.Error())
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
+		cleanDB(t, client, key)
 		resp, err = db.Store(context.Background(), hash)
 		require.NoError(t, err)
-		require.Equal(t, resp.Status, 200)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
@@ -90,4 +103,10 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, []byte{}, value.Bins["txid"].([]byte))
 		require.Equal(t, uint32(1), value.Generation)
 	})
+}
+
+func cleanDB(t *testing.T, client *aero.Client, key *aero.Key) {
+	policy := aero.NewWritePolicy(0, 0)
+	_, err := client.Delete(policy, key)
+	require.NoError(t, err)
 }

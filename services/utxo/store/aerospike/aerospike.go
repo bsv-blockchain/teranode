@@ -114,7 +114,20 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 		// check whether we already set this utxo
 		prometheusUtxoGet.Inc()
 		value, getErr := s.client.Get(nil, key, "txid")
-		if value != nil && getErr == nil {
+		if getErr == nil && value != nil {
+			txid, ok := value.Bins["txid"].([]byte)
+			if ok && len(txid) != 0 {
+				prometheusUtxoStoreSpent.Inc()
+				spendingTxHash, err := chainhash.NewHash(txid)
+				if err != nil {
+					return nil, err
+				}
+				return &store.UTXOResponse{
+					Status:       int(utxostore_api.Status_SPENT),
+					SpendingTxID: spendingTxHash,
+				}, nil
+			}
+
 			prometheusUtxoReStore.Inc()
 			return &store.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
@@ -168,8 +181,13 @@ func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Ha
 				}, nil
 			} else {
 				prometheusUtxoSpendSpent.Inc()
+				spendingTxHash, err := chainhash.NewHash(valueBytes)
+				if err != nil {
+					return nil, err
+				}
 				return &store.UTXOResponse{
-					Status: int(utxostore_api.Status_SPENT),
+					Status:       int(utxostore_api.Status_SPENT),
+					SpendingTxID: spendingTxHash,
 				}, nil
 			}
 		}
