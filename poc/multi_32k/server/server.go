@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	maxDatagramSize = 1024
-	netInterface    *net.Interface
+	// maxDatagramSize = 1024
+	netInterface *net.Interface
 )
 
 func init() {

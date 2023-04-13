@@ -195,10 +195,12 @@ func removeObject(svc *s3.S3, bucket string, filename string) {
 		exitErrorf("Unable to delete object %q from bucket %q, %v", filename, bucket, err)
 	}
 
-	err = svc.WaitUntilObjectNotExists(&s3.HeadObjectInput{
+	if err := svc.WaitUntilObjectNotExists(&s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(filename),
-	})
+	}); err != nil {
+		exitErrorf("Error occurred while waiting for object to be deleted, %v", err)
+	}
 
 	fmt.Printf("Object %q successfully deleted\n", filename)
 }
@@ -209,9 +211,11 @@ func deleteBucket(svc *s3.S3, bucket string) {
 		exitErrorf("Unable to delete bucket %q, %v", bucket, err)
 	}
 
-	err = svc.WaitUntilBucketNotExists(&s3.HeadBucketInput{
+	if err := svc.WaitUntilBucketNotExists(&s3.HeadBucketInput{
 		Bucket: aws.String(bucket),
-	})
+	}); err != nil {
+		exitErrorf("Error occurred while waiting for bucket to be deleted, %v", err)
+	}
 
 	fmt.Printf("Bucket %q successfully deleted\n", bucket)
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -22,9 +21,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var (
-	empty = &chainhash.Hash{}
-)
+// var (
+// 	empty = &chainhash.Hash{}
+// )
 
 // PropagationServer type carries the logger within it
 type PropagationServer struct {

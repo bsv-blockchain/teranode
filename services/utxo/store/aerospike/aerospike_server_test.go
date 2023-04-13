@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	aero "github.com/aerospike/aerospike-client-go"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"

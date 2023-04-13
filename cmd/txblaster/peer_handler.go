@@ -11,19 +11,17 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 )
 
 type PeerHandler struct {
-	logger                utils.Logger
-	txStore               store.TransactionStore
-	blockStore            store.TransactionStore
-	validator             validator.Interface
-	getTransactionBatcher *batcher.Batcher[chainhash.Hash]
+	logger     utils.Logger
+	txStore    store.TransactionStore
+	blockStore store.TransactionStore
+	validator  validator.Interface
+	// getTransactionBatcher *batcher.Batcher[chainhash.Hash]
 }
 
 func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore, v validator.Interface) p2p.PeerHandlerI {

@@ -3,7 +3,6 @@ package badger
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/dgraph-io/badger/v3"
 	"github.com/opentracing/opentracing-go"
@@ -37,7 +36,7 @@ func init() {
 type Badger struct {
 	store  *badger.DB
 	logger utils.Logger
-	mu     sync.RWMutex
+	// mu     sync.RWMutex
 }
 
 type loggerWrapper struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -14,7 +13,7 @@ import (
 type File struct {
 	path   string
 	logger utils.Logger
-	mu     sync.RWMutex
+	// mu     sync.RWMutex
 }
 
 func New(dir string) (*File, error) {

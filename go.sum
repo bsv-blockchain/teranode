@@ -49,6 +49,8 @@ github.com/alecthomas/units v0.0.0-20190717042225-c3de453c63f4/go.mod h1:ybxpYRF
 github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d/go.mod h1:rBZYJk541a8SKzHPHnH3zbiI+7dagKZ0cgpgrD7Fyho=
 github.com/apple/foundationdb/bindings/go v0.0.0-20230406011225-625eb00d369d h1:gVQisYYDFAY8+vxv+5uVdMAAsGMUtTNjUU6ErLLIF/0=
 github.com/apple/foundationdb/bindings/go v0.0.0-20230406011225-625eb00d369d/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
+github.com/apple/foundationdb/bindings/go v0.0.0-20230412212931-fe0a4df06a90 h1:xYeWb3HmKcHUE2jJhMYyadXK6aNOMX4Xhd7WE3ZlKbQ=
+github.com/apple/foundationdb/bindings/go v0.0.0-20230412212931-fe0a4df06a90/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
 github.com/armon/consul-api v0.0.0-20180202201655-eb2c6b5be1b6/go.mod h1:grANhF5doyWs3UAsr3K4I6qtAmlQcZDesFNEHPZAzj8=
 github.com/aws/aws-sdk-go v1.44.235 h1:5MS1ZW1Pr27mmHFqqjuXYwGMlNTW/g6DqU5ekamPMeU=
 github.com/aws/aws-sdk-go v1.44.235/go.mod h1:aVsgQcEevwlmQ7qHE9I3h+dtQgpqhFB+i8Phjh7fkwI=

@@ -76,7 +76,7 @@ func main() {
 		}
 	}
 
-	select {}
+	// select {}
 }
 
 func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
@@ -123,7 +123,7 @@ func sendTransaction(tx *bt.Tx) error {
 	if _, err := propagationServer.Set(context.Background(), &propagation_api.SetRequest{
 		Tx: tx.Bytes(),
 	}); err != nil {
-		return errors.New(fmt.Sprintf("error sending transaction to propagation server: %v", err))
+		return fmt.Errorf("error sending transaction to propagation server: %v", err)
 	}
 
 	counterLoad := counter.Load()

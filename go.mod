@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go v4.5.2+incompatible
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230406011225-625eb00d369d
+	github.com/apple/foundationdb/bindings/go v0.0.0-20230412212931-fe0a4df06a90
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
