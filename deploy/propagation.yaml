@@ -1,11 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  labels:
+    app: propagation
+    monitor: prometheus
   name: propagation
   namespace: propagation-service
-  labels:
-    monitor: prometheus
-    app: propagation
 spec:
   replicas: 1
   selector:
@@ -13,67 +13,64 @@ spec:
       app: propagation
   template:
     metadata:
+      annotations:
+        linkerd.io/inject: enabled
       labels:
         app: propagation
         monitor: prometheus
-      annotations:
-        linkerd.io/proxy-init: "linkerd-sidecar"
-        linkerd.io/inject: "enabled"
     spec:
       containers:
-        - name: propagation
-          image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-propagation=1", "-tracer=1"]
-          env:
-            - name: peerCount
-              value: "1"
-            - name: validator_grpcAddress
-              value: validation-service.validation-service.svc.cluster.local:8081
-            - name: peer_1_p2p
-              value: p2p://regtest.regtest.svc.cluster.local:18333
-            - name: peer_1_rpc
-              value: rpc://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
-            - name: profilerAddr
-              value: 0.0.0.0:9091
-            - name: GRPC_PROXY_EXPAND_ENV_VARS
-              value: True
-            - name: HTTP_PROXY
-              value: "http://localhost:4140"
-          ports:
-            - containerPort: 8833
-              protocol: TCP
-          resources:
-            requests:
-              memory: 2Gi
-              cpu: "0.2"
-            limits:
-              memory: 4Gi
-              cpu: "1"
+      - args:
+        - -propagation=1
+        - -tracer=1
+        env:
+        - name: peerCount
+          value: "1"
+        - name: validator_grpcAddress
+          value: validation-service.validation-service.svc.cluster.local:8081
+        - name: peer_1_p2p
+          value: p2p://regtest.regtest.svc.cluster.local:18333
+        - name: peer_1_rpc
+          value: rpc://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
+        - name: profilerAddr
+          value: 0.0.0.0:9091
+        image: eu.gcr.io/PROJECT/IMAGE:TAG
+        name: propagation
+        ports:
+        - containerPort: 8833
+          protocol: TCP
+        resources:
+          limits:
+            cpu: "1"
+            memory: 4Gi
+          requests:
+            cpu: 200m
+            memory: 2Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: propagation-service
-  namespace: propagation-service
   labels:
     app: propagation
     monitor: prometheus
+  name: propagation-service
+  namespace: propagation-service
 spec:
-  ipFamilyPolicy: SingleStack
   ipFamilies:
   - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 8833
+    protocol: TCP
+    targetPort: 8833
+  - name: grpc
+    port: 8084
+    protocol: TCP
+    targetPort: 8084
+  - name: profiler
+    port: 9091
+    protocol: TCP
+    targetPort: 9091
   selector:
     app: propagation
-  ports:
-    - name: http
-      port: 8833
-      targetPort: 8833
-      protocol: TCP
-    - name: grpc
-      port: 8084
-      targetPort: 8084
-      protocol: TCP
-    - name: profiler
-      port: 9091
-      targetPort: 9091
-      protocol: TCP
