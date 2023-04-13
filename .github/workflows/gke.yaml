@@ -11,13 +11,13 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update &&\
-          sudo apt-get install curl -y  &&\
-          curl -O https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-clients_7.1.31-1_amd64.deb && \
-          curl -O https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-server_7.1.31-1_amd64.deb \
+          sudo apt-get install wget -y  &&\
+          wget https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-clients_7.1.31-1_amd64.deb && \
+          wget https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-server_7.1.31-1_amd64.deb 
           
       - name: Install FoundationDB
         run: |
-          sudo dpkg -i foundationdb-clients_7.1.31-1_amd64.deb foundationdb-server_7.1.31-1_amd64.deb
+           sudo dpkg -i foundationdb-clients_7.1.31-1_amd64.deb foundationdb-server_7.1.31-1_amd64.deb
 
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -67,6 +67,15 @@ jobs:
       - name: Authorize Docker push
         run: gcloud auth configure-docker
 
+      # authenticate to k8s cluster using private ip
+      - name: 'get-gke-credentials'
+        uses: 'google-github-actions/get-gke-credentials@v1'
+        with:
+          cluster_name: ubsv-playground
+          location: 'europe-north1'
+          use_internal_ip: true
+          project_id: ubsv-383015  # Deploy to GKE using kubectl
+
       # build and push docker image
       - name: Build and push
         uses: docker/build-push-action@v4
@@ -78,15 +87,6 @@ jobs:
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
-
-      # authenticate to k8s cluster using private ip
-      - name: 'get-gke-credentials'
-        uses: 'google-github-actions/get-gke-credentials@v1'
-        with:
-          cluster_name: ubsv-playground
-          location: 'europe-north1'
-          use_internal_ip: true
-          project_id: ubsv-383015  # Deploy to GKE using kubectl
 
       # install kustomize for deployment
       - name: Install Kustomize
