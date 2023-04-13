@@ -10,9 +10,9 @@ jobs:
       - uses: actions/checkout@v3
       - name: Install Dependencies
         run: |
-          sudo apt-get update\
-          sudo apt-get install curl -y \
-          curl -O https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-clients_7.1.31-1_amd64.deb \
+          sudo apt-get update &&\
+          sudo apt-get install curl -y  &&\
+          curl -O https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-clients_7.1.31-1_amd64.deb && \
           curl -O https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-server_7.1.31-1_amd64.deb \
           
       - name: Install FoundationDB
@@ -74,7 +74,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: eu.gcr.io/${{ vars.GCR_PROJECT_ID }}/ubsv-go:${{github.sha}}
+          tags: eu.gcr.io/ubsv-383015/ubsv-go:${{github.sha}}
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
@@ -83,10 +83,10 @@ jobs:
       - name: 'get-gke-credentials'
         uses: 'google-github-actions/get-gke-credentials@v1'
         with:
-          cluster_name: ${{ vars.GKE_CLUSTER }}
+          cluster_name: ubsv-playground
           location: 'europe-north1'
           use_internal_ip: true
-          project_id: ${{ vars.GCR_PROJECT_ID }}  # Deploy to GKE using kubectl
+          project_id: ubsv-383015  # Deploy to GKE using kubectl
 
       # install kustomize for deployment
       - name: Install Kustomize
@@ -102,7 +102,7 @@ jobs:
           # Setting Image
           cd ./deploy/
           echo "Setting image"
-          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/${{ vars.GCR_PROJECT_ID }}/ubsv-go:$GITHUB_SHA
+          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/ubsv-383015/ubsv-go:$GITHUB_SHA
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
