@@ -16,7 +16,6 @@ type Client struct {
 }
 
 func NewClient() (*Client, error) {
-    grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"pick_first":{}},{"random":{}}]}`)
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
