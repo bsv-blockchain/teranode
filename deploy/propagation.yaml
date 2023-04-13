@@ -7,7 +7,7 @@ metadata:
     monitor: prometheus
     app: propagation
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: propagation
@@ -16,6 +16,9 @@ spec:
       labels:
         app: propagation
         monitor: prometheus
+      annotations:
+        linkerd.io/proxy-init: "linkerd-sidecar"
+        linkerd.io/inject: "enabled"
     spec:
       containers:
         - name: propagation
@@ -32,6 +35,10 @@ spec:
               value: rpc://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
             - name: profilerAddr
               value: 0.0.0.0:9091
+            - name: GRPC_PROXY_EXPAND_ENV_VARS
+              value: True
+            - name: HTTP_PROXY
+              value: "http://localhost:4140"
           ports:
             - containerPort: 8833
               protocol: TCP
