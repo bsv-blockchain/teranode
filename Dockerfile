@@ -13,5 +13,8 @@ COPY . .
 # Build the Go library
 RUN go build -o ubsv.run main.go
 
+# Build TX Blaster
+RUN go build -o blaster.run ./cmd/txblaster/
+
 # Set the entrypoint to the library
 ENTRYPOINT ["./ubsv.run"]

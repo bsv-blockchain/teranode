@@ -15,6 +15,7 @@ spec:
     metadata:
       labels:
         app: validation
+        monitor: prometheus
     spec:
       containers:
         - name: validation
@@ -27,6 +28,8 @@ spec:
             value: aerospike://aerospike-aerospike.aerospike.svc.cluster.local:3000/test
           - name: validator_grpcAddress
             value: 0.0.0.0:8081
+          - name: profilerAddr
+            value: 0.0.0.0:9091
           ports:
             - containerPort: 8081
               protocol: TCP

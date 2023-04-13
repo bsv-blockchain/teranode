@@ -4,7 +4,7 @@ metadata:
   name: tx-blaster
   namespace: tx-blaster-service
   labels:
-    monitor: prometheus
+#    monitor: prometheus
     app: tx-blaster
 spec:
   replicas: 1
@@ -15,14 +15,20 @@ spec:
     metadata:
       labels:
         app: tx-blaster
+#        monitor: prometheus
     spec:
       containers:
         - name: tx-blaster
           image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-validator=1", "-tracer=1"]
+          command:
+            - ./blaster.run
           env:
-          - name: BITCOIN_RPC_URI="bitcoin://bitcoin:bitcoin@localhost:18332" go run .
-            value: bitcoin://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
+            - name: propagation_grpcAddress
+              value: propagation-service.propagation-service.svc.cluster.local:8084
+            - name: BITCOIN_RPC_URI
+              value: bitcoin://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
+            - name: profilerAddr
+              value: 0.0.0.0:9091
           ports:
             - containerPort: 8081
               protocol: TCP
@@ -43,7 +49,7 @@ metadata:
   namespace: tx-blaster-service
   labels:
     app: tx-blaster
-    monitor: prometheus
+#    monitor: prometheus
 spec:
   ipFamilyPolicy: SingleStack
   ipFamilies:
