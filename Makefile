@@ -40,7 +40,7 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/utxostore/utxostore_api/utxostore_api.proto
+	services/utxo/utxostore_api/utxostore_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -53,7 +53,7 @@ gen:
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/validator/validator_api/*.pb.go
-	rm -f ./services/utxostore/utxostore_api/*.pb.go
+	rm -f ./services/utxo/utxostore_api/*.pb.go
 	rm -f ./services/propagation/propagation_api/*.pb.go
 
 .PHONY: clean
