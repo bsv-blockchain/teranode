@@ -64,7 +64,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: eu.gcr.io/${{ variables.GCR_PROJECT_ID }}/ubsv-go:${{github.sha}}
+          tags: eu.gcr.io/$GCR_PROJECT_ID/ubsv-go:${{github.sha}}
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
@@ -73,10 +73,10 @@ jobs:
       - name: 'get-gke-credentials'
         uses: 'google-github-actions/get-gke-credentials@v1'
         with:
-          cluster_name: ${{ variables.GKE_CLUSTER }}
+          cluster_name: $GKE_CLUSTER
           location: 'europe-north1'
           use_internal_ip: true
-          project_id: ${{ variables.GCR_PROJECT_ID }}  # Deploy to GKE using kubectl
+          project_id: $GCR_PROJECT_ID  # Deploy to GKE using kubectl
 
       # install kustomize for deployment
       - name: Install Kustomize
@@ -92,7 +92,7 @@ jobs:
           # Setting Image
           cd ./deploy/
           echo "Setting image"
-          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/${{ variables.GCR_PROJECT_ID }}/ubsv-go:$GITHUB_SHA
+          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/$GCR_PROJECT_ID/ubsv-go:$GITHUB_SHA
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
