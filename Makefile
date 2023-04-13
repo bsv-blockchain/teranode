@@ -41,12 +41,21 @@ gen:
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	services/utxostore/utxostore_api/utxostore_api.proto
-	
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/propagation/propagation_api/propagation_api.proto
+
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/validator/validator_api/*.pb.go
 	rm -f ./services/utxostore/utxostore_api/*.pb.go
-	
+	rm -f ./services/propagation/propagation_api/*.pb.go
+
 .PHONY: clean
 clean:
 	rm -f ./ubsv_*.tar.gz
@@ -60,4 +69,4 @@ install:
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-	
+

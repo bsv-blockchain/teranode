@@ -199,34 +199,5 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 }
 
 func (ph *PeerHandler) extendTransaction(transaction *bt.Tx) (err error) {
-	parentTxBytes := make(map[[32]byte][]byte)
-	var btParentTx *bt.Tx
-
-	// get the missing input data for the transaction
-	for _, input := range transaction.Inputs {
-		parentTxID := [32]byte(bt.ReverseBytes(input.PreviousTxID()))
-		b, ok := parentTxBytes[parentTxID]
-		if !ok {
-			b, err = ph.txStore.Get(context.Background(), parentTxID[:])
-			if err != nil {
-				return err
-			}
-			parentTxBytes[parentTxID] = b
-		}
-
-		btParentTx, err = bt.NewTxFromBytes(b)
-		if err != nil {
-			return err
-		}
-
-		if len(btParentTx.Outputs) < int(input.PreviousTxOutIndex) {
-			return fmt.Errorf("output %d not found in transaction %x", input.PreviousTxOutIndex, bt.ReverseBytes(parentTxID[:]))
-		}
-		output := btParentTx.Outputs[input.PreviousTxOutIndex]
-
-		input.PreviousTxScript = output.LockingScript
-		input.PreviousTxSatoshis = output.Satoshis
-	}
-
-	return nil
+	return ExtendTransaction(transaction, ph.txStore)
 }

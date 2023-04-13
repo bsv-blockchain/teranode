@@ -10,27 +10,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var logger utils.Logger
 var rpcURL *url.URL
 var startTime time.Time
-var validatorClient *validator.Client
-var limit chan bool
+var propagationServer propagation_api.PropagationAPIClient
 
 func init() {
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
 
 	bitcoinRpcUri := os.Getenv("BITCOIN_RPC_URI")
-
-	limit = make(chan bool, 16)
 
 	var err error
 	rpcURL, err = url.Parse(bitcoinRpcUri)
@@ -38,10 +37,20 @@ func init() {
 		panic(err)
 	}
 
-	validatorClient, err = validator.NewClient()
-	if err != nil {
-		logger.Fatalf("error creating validator client: %v", err)
+	opts := []grpc.DialOption{
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
+
+	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+	if !ok {
+		panic("no propagation_grpcAddress setting found")
+	}
+	conn, err := grpc.Dial(propagationGrpcAddress, opts...)
+	if err != nil {
+		panic(err)
+	}
+	propagationServer = propagation_api.NewPropagationAPIClient(conn)
 }
 
 func main() {
@@ -111,14 +120,17 @@ var counter atomic.Uint64
 func sendTransaction(tx *bt.Tx) error {
 	counter.Add(1)
 
-	if err := validatorClient.Validate(tx); err != nil {
-		return err
+	if _, err := propagationServer.Set(context.Background(), &propagation_api.SetRequest{
+		Tx: tx.Bytes(),
+	}); err != nil {
+		return errors.New(fmt.Sprintf("error sending transaction to propagation server: %v", err))
 	}
 
 	counterLoad := counter.Load()
 	if counterLoad%1000 == 0 {
 		fmt.Printf("Time for %d transactions: %s\n", counterLoad, time.Since(startTime))
 	}
+
 	return nil
 }
 
