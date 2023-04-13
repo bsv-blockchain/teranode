@@ -52,6 +52,7 @@ metadata:
     app: validation
     monitor: prometheus
 spec:
+  clusterIP: None
   ipFamilyPolicy: SingleStack
   ipFamilies:
   - IPv4
