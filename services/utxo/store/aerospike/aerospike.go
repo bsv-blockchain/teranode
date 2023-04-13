@@ -152,7 +152,9 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 }
 
 func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
-	log.Printf("Spend %#v %#v %#v %#v", hash, txID, txID[:], hash.CloneBytes())
+	log.Printf("Spend %#v %#v", hash, txID)
+	log.Printf("Spend %#v clone", txID.CloneBytes())
+	log.Printf("Spend %#v slice", txID[:])
 
 	policy := aero.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aero.UPDATE_ONLY
