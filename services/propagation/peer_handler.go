@@ -14,7 +14,92 @@ import (
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var (
+	prometheusPeerAnnouncedTransactions prometheus.Counter
+	prometheusPeerGetTransactions       prometheus.Counter
+	prometheusPeerSentTransactions      prometheus.Counter
+	prometheusPeerReceivedTransactions  prometheus.Counter
+	prometheusPeerInvalidTransactions   prometheus.Counter
+	prometheusPeerAnnouncedBlock        prometheus.Counter
+	prometheusPeerHandleBlock           prometheus.Counter
+	prometheusPeerTransactionDuration   prometheus.Histogram
+	prometheusPeerTransactionSize       prometheus.Histogram
+	prometheusPeerBlockDuration         prometheus.Histogram
+	prometheusPeerBlockSize             prometheus.Histogram
+)
+
+func init() {
+	prometheusPeerAnnouncedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_processed_transactions",
+			Help: "Number of transactions announced to the peer handler",
+		},
+	)
+	prometheusPeerGetTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_get_transactions",
+			Help: "Number of transactions get request to the peer handler",
+		},
+	)
+	prometheusPeerSentTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_sent_transactions",
+			Help: "Number of transactions sent by the peer handler",
+		},
+	)
+	prometheusPeerReceivedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_received_transactions",
+			Help: "Number of transactions received by the peer handler",
+		},
+	)
+	prometheusPeerInvalidTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_invalid_transactions",
+			Help: "Number of transactions found invalid by the peer handler",
+		},
+	)
+	prometheusPeerAnnouncedBlock = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_announced_block",
+			Help: "Number of blocks announced by the peer handler",
+		},
+	)
+	prometheusPeerHandleBlock = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "peer_handle_block",
+			Help: "Number of blocks handled by the peer handler",
+		},
+	)
+	prometheusPeerTransactionDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "peer_transactions_duration",
+			Help: "Duration of transaction processing",
+		},
+	)
+	prometheusPeerTransactionSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "peer_transactions_size",
+			Help: "Size of transactions processed",
+		},
+	)
+	prometheusPeerBlockDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "peer_block_duration",
+			Help: "Duration of block processing",
+		},
+	)
+	prometheusPeerBlockSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "peer_block_size",
+			Help: "Size of block processed",
+		},
+	)
+}
 
 type PeerHandler struct {
 	logger     utils.Logger
@@ -38,11 +123,16 @@ func NewPeerHandler(txStore store.TransactionStore, blockStore store.Transaction
 func (ph *PeerHandler) HandleTransactionGet(msg *wire.InvVect, peer p2p.PeerI) ([]byte, error) {
 	ph.logger.Infof("received transaction get for %s", msg.Hash.String())
 
+	prometheusPeerGetTransactions.Inc()
+
 	return ph.txStore.Get(context.Background(), msg.Hash[:])
 }
 
 func (ph *PeerHandler) HandleTransactionSent(_ *wire.MsgTx, _ p2p.PeerI) error {
 	// do nothing with this for now
+
+	prometheusPeerSentTransactions.Inc()
+
 	return nil
 }
 
@@ -56,6 +146,8 @@ func (ph *PeerHandler) HandleTransactionAnnouncement(msg *wire.InvVect, peer p2p
 		return nil
 	}
 
+	prometheusPeerAnnouncedTransactions.Inc()
+
 	// request transaction from peer
 	peer.RequestTransaction(&msg.Hash)
 
@@ -68,26 +160,35 @@ func (ph *PeerHandler) HandleTransactionRejection(rejMsg *wire.MsgReject, peer p
 }
 
 func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error {
+	timeStart := time.Now()
 	ph.logger.Infof("received transaction: %s", msg.TxHash().String())
 	var buf bytes.Buffer
 	if err := msg.Serialize(&buf); err != nil {
+		prometheusPeerInvalidTransactions.Inc()
 		return err
 	}
 
-	btTx, err := bt.NewTxFromBytes(buf.Bytes())
+	txBytes := buf.Bytes()
+	btTx, err := bt.NewTxFromBytes(txBytes)
 	if err != nil {
+		prometheusPeerInvalidTransactions.Inc()
 		return err
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
+		prometheusPeerInvalidTransactions.Inc()
 		return fmt.Errorf("received coinbase transaction: %s", msg.TxHash().String())
 	}
 
 	err = ph.extendTransaction(btTx)
 	if err != nil {
+		prometheusPeerInvalidTransactions.Inc()
 		return err
 	}
+
+	prometheusPeerTransactionSize.Observe(float64(len(txBytes)))
+	prometheusPeerReceivedTransactions.Inc()
 
 	if err = ph.validator.Validate(btTx); err != nil {
 		// send REJECT message to peer if invalid tx
@@ -97,13 +198,15 @@ func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error 
 	}
 
 	txHash := msg.TxHash()
-	if err := ph.txStore.Set(context.Background(), txHash[:], buf.Bytes()); err != nil {
+	if err = ph.txStore.Set(context.Background(), txHash[:], buf.Bytes()); err != nil {
 		return err
 	}
 
 	// TODO broadcast transaction to other peers
 
 	// TODO add transaction to the block assembly service
+
+	prometheusPeerTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return nil
 }
@@ -123,6 +226,7 @@ func (ph *PeerHandler) HandleBlockAnnouncement(invMsg *wire.InvVect, peer p2p.Pe
 		return err
 	}
 
+	prometheusPeerAnnouncedBlock.Inc()
 	ph.logger.Infof("ProcessBlock: %s", invMsg.Hash.String())
 
 	return nil
@@ -193,7 +297,13 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	// TODO announce block to other peers
 
-	return ph.blockStore.Set(context.Background(), blockHash[:], buf.Bytes())
+	blockBytes := buf.Bytes()
+
+	prometheusPeerHandleBlock.Inc()
+	prometheusPeerBlockSize.Observe(float64(len(blockBytes)))
+	prometheusPeerBlockDuration.Observe(float64(time.Since(start).Microseconds()))
+
+	return ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
 }
 
 func (ph *PeerHandler) extendTransaction(transaction *bt.Tx) (err error) {

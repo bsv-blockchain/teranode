@@ -16,6 +16,8 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -30,6 +32,40 @@ type Server struct {
 	validator  Interface
 	logger     utils.Logger
 	grpcServer *grpc.Server
+}
+
+var (
+	prometheusProcessedTransactions prometheus.Counter
+	prometheusInvalidTransactions   prometheus.Counter
+	prometheusTransactionDuration   prometheus.Histogram
+	prometheusTransactionSize       prometheus.Histogram
+)
+
+func init() {
+	prometheusProcessedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "validator_processed_transactions",
+			Help: "Number of transactions processed by the validator service",
+		},
+	)
+	prometheusInvalidTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "validator_invalid_transactions",
+			Help: "Number of transactions found invalid by the validator service",
+		},
+	)
+	prometheusTransactionDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "validator_transactions_duration",
+			Help: "Duration of transaction processing by the validator service",
+		},
+	)
+	prometheusTransactionSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "validator_transactions_size",
+			Help: "Size of transactions processed by the validator service",
+		},
+	)
 }
 
 func Enabled() bool {
@@ -128,6 +164,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 			break
 		}
 		if err != nil {
+			prometheusInvalidTransactions.Inc()
 			return v.logError(status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err))
 		}
 
@@ -135,14 +172,19 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 
 		_, err = transactionData.Write(chunk)
 		if err != nil {
+			prometheusInvalidTransactions.Inc()
 			return v.logError(status.Errorf(codes.Internal, "cannot write chunk data: %v", err))
 		}
 	}
 
 	var tx bt.Tx
 	if _, err := tx.ReadFrom(bytes.NewReader(transactionData.Bytes())); err != nil {
+		prometheusInvalidTransactions.Inc()
 		return v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
 	}
+
+	// increment prometheus counter
+	prometheusProcessedTransactions.Inc()
 
 	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
 		Valid: true,
@@ -150,18 +192,26 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 }
 
 func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	timeStart := time.Now()
 	tx, err := bt.NewTxFromBytes(req.TransactionData)
 	if err != nil {
+		prometheusInvalidTransactions.Inc()
 		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
 	}
 
 	err = v.validator.Validate(tx)
 	if err != nil {
+		prometheusInvalidTransactions.Inc()
 		return &validator_api.ValidateTransactionResponse{
 			Valid:  false,
 			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),
 		}, nil
 	}
+
+	// increment prometheus counter
+	prometheusProcessedTransactions.Inc()
+	prometheusTransactionSize.Observe(float64(len(req.TransactionData)))
+	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,

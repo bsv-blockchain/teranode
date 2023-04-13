@@ -15,15 +15,47 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// var (
-// 	empty = &chainhash.Hash{}
-// )
+var (
+	prometheusProcessedTransactions prometheus.Counter
+	prometheusInvalidTransactions   prometheus.Counter
+	prometheusTransactionDuration   prometheus.Histogram
+	prometheusTransactionSize       prometheus.Histogram
+)
+
+func init() {
+	prometheusProcessedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "propagation_processed_transactions",
+			Help: "Number of transactions processed by the propagation service",
+		},
+	)
+	prometheusInvalidTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "propagation_invalid_transactions",
+			Help: "Number of transactions found invalid by the propagation service",
+		},
+	)
+	prometheusTransactionDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "propagation_transactions_duration",
+			Help: "Duration of transaction processing by the propagation service",
+		},
+	)
+	prometheusTransactionSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "propagation_transactions_size",
+			Help: "Size of transactions processed by the propagation service",
+		},
+	)
+}
 
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
@@ -115,8 +147,10 @@ func (u *PropagationServer) Get(_ context.Context, req *propagation_api.GetReque
 }
 
 func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetRequest) (*emptypb.Empty, error) {
+	timeStart := time.Now()
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
 
@@ -124,23 +158,31 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, fmt.Errorf("received coinbase transaction: %s", btTx.TxID())
 	}
 
 	err = ExtendTransaction(btTx, u.txStore)
 	if err != nil {
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
 
 	if err = u.validator.Validate(btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		u.logger.Errorf("received invalid transaction: %s", err.Error())
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
 
 	if err = u.txStore.Set(context.Background(), bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
+
+	prometheusProcessedTransactions.Inc()
+	prometheusTransactionSize.Observe(float64(len(req.Tx)))
+	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &emptypb.Empty{}, nil
 }
