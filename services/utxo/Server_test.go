@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxostore/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
