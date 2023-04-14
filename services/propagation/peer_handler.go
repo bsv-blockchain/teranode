@@ -11,6 +11,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -102,19 +103,21 @@ func init() {
 }
 
 type PeerHandler struct {
-	logger     utils.Logger
-	txStore    store.TransactionStore
-	blockStore store.TransactionStore
-	validator  validator.Interface
+	logger       utils.Logger
+	txStore      store.TransactionStore
+	blockStore   store.TransactionStore
+	validator    validator.Interface
+	blockBacklog map[chainhash.Hash]*chainhash.Hash
 	// getTransactionBatcher *batcher.Batcher[chainhash.Hash]
 }
 
 func NewPeerHandler(txStore store.TransactionStore, blockStore store.TransactionStore, v validator.Interface) p2p.PeerHandlerI {
 	ph := &PeerHandler{
-		logger:     gocore.Log("p2p"),
-		txStore:    txStore,
-		blockStore: blockStore,
-		validator:  v,
+		logger:       gocore.Log("p2p"),
+		txStore:      txStore,
+		blockStore:   blockStore,
+		validator:    v,
+		blockBacklog: make(map[chainhash.Hash]*chainhash.Hash),
 	}
 
 	return ph
@@ -243,7 +246,15 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	blockHash := msg.Header.BlockHash()
 
-	// previousBlockHash := msg.Header.PrevBlock
+	previousBlockHash := msg.Header.PrevBlock
+	_, err := ph.blockStore.Get(context.Background(), previousBlockHash[:])
+	if err != nil {
+		// get previous block from peer
+		ph.logger.Infof("received block %s, but previous block %s is not known, requesting it from peer", blockHash.String(), previousBlockHash.String())
+		ph.blockBacklog[previousBlockHash] = &blockHash
+		peer.RequestBlock(&previousBlockHash)
+		return nil
+	}
 
 	merkleRoot := msg.Header.MerkleRoot
 
@@ -304,7 +315,20 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	prometheusPeerBlockSize.Observe(float64(len(blockBytes)))
 	prometheusPeerBlockDuration.Observe(float64(time.Since(start).Microseconds()))
 
-	return ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
+	err = ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
+	if err != nil {
+		return err
+	}
+
+	// do we need to request the next block after processing this one?
+	nextBlockHash, ok := ph.blockBacklog[blockHash]
+	if ok {
+		ph.logger.Infof("requesting next block %s", nextBlockHash.String())
+		peer.RequestBlock(nextBlockHash)
+		delete(ph.blockBacklog, blockHash)
+	}
+
+	return nil
 }
 
 func (ph *PeerHandler) extendTransaction(transaction *bt.Tx) (err error) {
