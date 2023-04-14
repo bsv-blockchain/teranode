@@ -16,7 +16,7 @@ import (
 var bitcoinClient *bitcoin.Bitcoind
 
 func init() {
-	bitcoinRpcUri := os.Getenv("BITCOIN_RPC_URI")
+	bitcoinRpcUri := os.Getenv("peer_1_rpc")
 	if bitcoinRpcUri != "" {
 		rpcURL, err := url.Parse(bitcoinRpcUri)
 		if err == nil {
