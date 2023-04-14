@@ -192,7 +192,6 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 }
 
 func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
-    v.logger.Infof("Received tx")
 	timeStart := time.Now()
 	tx, err := bt.NewTxFromBytes(req.TransactionData)
 	if err != nil {
