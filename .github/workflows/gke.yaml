@@ -117,7 +117,7 @@ jobs:
               fi
           
               # Get filename without extension
-              FILE_NAME=$(basename "${file%.*}")
+              FILE_NAME=$(basename "$***file%.****")
           
               # Run kubectl commands
               kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME.yaml"
