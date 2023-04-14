@@ -1,5 +1,6 @@
 # Set the base image
 FROM golang:1.20.3-bullseye
+ARG GITHUB_SHA
 
 RUN apt-get update && apt-get install -y vim htop curl wget lsof iputils-ping telnet net-tools iptables
 
