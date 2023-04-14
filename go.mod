@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go v4.5.2+incompatible
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230412212931-fe0a4df06a90
+	github.com/apple/foundationdb/bindings/go v0.0.0-20230406170925-94e42d5c64f5
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
@@ -82,6 +82,7 @@ require (
 	golang.org/x/crypto v0.3.0 // indirect
 	golang.org/x/sys v0.6.0 // indirect
 	golang.org/x/text v0.8.0 // indirect
+	golang.org/x/xerrors v0.0.0-20220411194840-2f41105eb62f // indirect
 	google.golang.org/genproto v0.0.0-20230110181048-76db0878b65f // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
