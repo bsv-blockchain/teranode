@@ -9,12 +9,14 @@ WORKDIR /app
 # Copy the source code from the current directory to the working directory inside the container
 COPY . .
 
+ENV CGO_ENABLED=1
+RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
-RUN CGO_ENABLED=1 go build -o ubsv.run main.go --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
+RUN go build -o ubsv.run main.go --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
 
 # Build TX Blaster
-RUN CGO_ENABLED=1 go build -o blaster.run ./cmd/txblaster/ --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
+RUN go build -o blaster.run ./cmd/txblaster/ --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./ubsv.run"]
