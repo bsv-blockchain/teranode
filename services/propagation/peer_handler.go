@@ -246,14 +246,16 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	blockHash := msg.Header.BlockHash()
 
-	previousBlockHash := msg.Header.PrevBlock
-	_, err := ph.blockStore.Get(context.Background(), previousBlockHash[:])
-	if err != nil {
-		// get previous block from peer
-		ph.logger.Infof("received block %s, but previous block %s is not known, requesting it from peer", blockHash.String(), previousBlockHash.String())
-		ph.blockBacklog[previousBlockHash] = &blockHash
-		peer.RequestBlock(&previousBlockHash)
-		return nil
+	if !blockHash.IsEqual(&chainhash.Hash{}) { // genesis block
+		previousBlockHash := msg.Header.PrevBlock
+		_, err := ph.blockStore.Get(context.Background(), previousBlockHash[:])
+		if err != nil {
+			// get previous block from peer
+			ph.logger.Infof("received block %s, but previous block %s is not known, requesting it from peer", blockHash.String(), previousBlockHash.String())
+			ph.blockBacklog[previousBlockHash] = &blockHash
+			peer.RequestBlock(&previousBlockHash)
+			return nil
+		}
 	}
 
 	merkleRoot := msg.Header.MerkleRoot
