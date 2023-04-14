@@ -19,11 +19,11 @@ func NewClient() (*Client, error) {
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}},{"random":{}}]}`)
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`)
 	}
 
     validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-    address := fmt.Sprintf("%s:///%s", "dns", validator_grpcAddress)
+    address := fmt.Sprintf("dns:///%s", validator_grpcAddress)
 	conn, err := grpc.Dial(address, opts...)
 	if err != nil {
 		return nil, err
