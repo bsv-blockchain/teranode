@@ -317,7 +317,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	prometheusPeerBlockSize.Observe(float64(len(blockBytes)))
 	prometheusPeerBlockDuration.Observe(float64(time.Since(start).Microseconds()))
 
-	err = ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
+	err := ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
 	if err != nil {
 		return err
 	}
