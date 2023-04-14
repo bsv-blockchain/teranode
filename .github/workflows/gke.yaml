@@ -109,6 +109,7 @@ jobs:
       - name: Validate Deployment Healthy
         run: |-
           # kubectl rollout
+          cd ./deploy/
           for file in *; do
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
