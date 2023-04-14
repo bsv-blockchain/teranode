@@ -106,3 +106,19 @@ jobs:
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
           kustomize build . | kubectl apply -f -
+      - name: Validate Deployment Healthy
+        run: |-
+          # kubectl rollout
+          for file in *; do
+              # Skip kustomization.yaml file
+              if [ "$file" == "kustomization.yaml" ]; then
+                  continue
+              fi
+          
+              # Get filename without extension
+              FILE_NAME=$(basename "${file%.*}")
+          
+              # Run kubectl commands
+              kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME.yaml"
+              kubectl get services -o wide -n "$FILE_NAME-service"
+          done
