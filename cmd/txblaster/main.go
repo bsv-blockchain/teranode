@@ -125,7 +125,7 @@ func sendTransaction(tx *bt.Tx) error {
 	counter.Add(1)
 
 	if _, err := propagationServer.Set(context.Background(), &propagation_api.SetRequest{
-		Tx: tx.Bytes(),
+		Tx: tx.ExtendedBytes(),
 	}); err != nil {
 		return fmt.Errorf("error sending transaction to propagation server: %v", err)
 	}
