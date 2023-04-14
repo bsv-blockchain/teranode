@@ -69,15 +69,9 @@ func main() {
 	address := keySet.Address(false)
 
 	txChan = make(chan *bt.UTXO, 1_000_000)
-	go func() {
-		for {
-			utxo := <-txChan
-			err = fireTransactions(utxo, keySet)
-			if err != nil {
-				fmt.Printf("ERROR in fire transactions: %v", err)
-			}
-		}
-	}()
+	for i := 0; i < 1000; i++ {
+		go txWorker(keySet)
+	}
 
 	var u *bt.UTXO
 	u, err = sendToAddress(address, 50_000_000)
@@ -92,6 +86,16 @@ func main() {
 	}
 
 	select {}
+}
+
+func txWorker(keySet *KeySet) {
+	for {
+		utxo := <-txChan
+		err := fireTransactions(utxo, keySet)
+		if err != nil {
+			fmt.Printf("ERROR in fire transactions: %v", err)
+		}
+	}
 }
 
 func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
