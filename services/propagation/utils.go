@@ -40,6 +40,7 @@ func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
 			b, err = txStore.Get(context.Background(), parentTxID[:])
 			if err != nil {
 				if bitcoinClient != nil {
+					fmt.Printf("tx %x not found in store, trying bitcoin node\n", bt.ReverseBytes(parentTxID[:]))
 					txHex, txErr := bitcoinClient.GetRawTransactionHex(input.PreviousTxIDStr())
 					if txErr != nil {
 						return txErr
