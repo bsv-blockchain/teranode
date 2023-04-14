@@ -103,7 +103,7 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 		nrOutputs = 1000
 	}
 
-	fmt.Printf("Firing %d outputs, Satoshis: %d - %d\n", nrOutputs, u.Satoshis, u.Satoshis/nrOutputs)
+	//fmt.Printf("Firing %d outputs, Satoshis: %d - %d\n", nrOutputs, u.Satoshis, u.Satoshis/nrOutputs)
 	for i := uint64(0); i < nrOutputs; i++ {
 		_ = tx.PayTo(keyset.Script, u.Satoshis/nrOutputs) // add 1 satoshi to allow for our longer OP_RETURN
 	}
