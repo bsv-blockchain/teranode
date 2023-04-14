@@ -167,10 +167,12 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 		return &emptypb.Empty{}, fmt.Errorf("received coinbase transaction: %s", btTx.TxID())
 	}
 
-	err = ExtendTransaction(btTx, u.txStore)
-	if err != nil {
-		prometheusInvalidTransactions.Inc()
-		return &emptypb.Empty{}, err
+	if !IsExtended(btTx) {
+		err = ExtendTransaction(btTx, u.txStore)
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			return &emptypb.Empty{}, err
+		}
 	}
 
 	if err = u.validator.Validate(btTx); err != nil {
@@ -185,4 +187,18 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &emptypb.Empty{}, nil
+}
+
+func IsExtended(tx *bt.Tx) bool {
+	if tx == nil || tx.Inputs == nil {
+		return false
+	}
+
+	for _, input := range tx.Inputs {
+		if input.PreviousTxScript == nil || (input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData()) {
+			return false
+		}
+	}
+
+	return true
 }
