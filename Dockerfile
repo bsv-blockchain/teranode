@@ -14,10 +14,10 @@ ENV CGO_ENABLED=1
 RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
-RUN go build -o ubsv.run main.go --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
+RUN go build  --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -o ubsv.run main.go
 
 # Build TX Blaster
-RUN go build -o blaster.run ./cmd/txblaster/ --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
+RUN go build --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -o blaster.run ./cmd/txblaster/ 
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./ubsv.run"]
