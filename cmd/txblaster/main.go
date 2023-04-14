@@ -25,6 +25,7 @@ var logger utils.Logger
 var rpcURL *url.URL
 var startTime time.Time
 var propagationServer propagation_api.PropagationAPIClient
+var txChan chan *bt.UTXO
 
 func init() {
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
@@ -67,21 +68,30 @@ func main() {
 
 	address := keySet.Address(false)
 
-	for {
-		var u *bt.UTXO
-		u, err = sendToAddress(address, 50_000_000)
-		if err != nil {
-			panic(err)
+	txChan = make(chan *bt.UTXO, 1_000_000)
+	go func() {
+		for {
+			utxo := <-txChan
+			err = fireTransactions(utxo, keySet)
+			if err != nil {
+				fmt.Printf("ERROR in fire transactions: %v", err)
+			}
 		}
+	}()
 
-		startTime = time.Now()
-		err = fireTransactions(u, keySet)
-		if err != nil {
-			fmt.Printf("ERROR in fire transactions: %v", err)
-		}
+	var u *bt.UTXO
+	u, err = sendToAddress(address, 50_000_000)
+	if err != nil {
+		panic(err)
 	}
 
-	// select {}
+	startTime = time.Now()
+	err = fireTransactions(u, keySet)
+	if err != nil {
+		fmt.Printf("ERROR in fire transactions: %v", err)
+	}
+
+	select {}
 }
 
 func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
@@ -93,6 +103,7 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 		nrOutputs = 1000
 	}
 
+	fmt.Printf("Firing %d outputs, Satoshis: %d - %d\n", nrOutputs, u.Satoshis, u.Satoshis/nrOutputs)
 	for i := uint64(0); i < nrOutputs; i++ {
 		_ = tx.PayTo(keyset.Script, u.Satoshis/nrOutputs) // add 1 satoshi to allow for our longer OP_RETURN
 	}
@@ -106,16 +117,16 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 		return err
 	}
 
-	for vout, output := range tx.Outputs {
-		go func(vout int, output bt.Output) {
-			err = fireTransactions(&bt.UTXO{
+	go func(txOutputs []*bt.Output) {
+		for vout, output := range txOutputs {
+			txChan <- &bt.UTXO{
 				TxID:          tx.TxIDBytes(),
 				Vout:          uint32(vout),
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
-			}, keyset)
-		}(vout, *output)
-	}
+			}
+		}
+	}(tx.Outputs)
 
 	return nil
 }
