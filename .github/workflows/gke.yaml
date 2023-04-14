@@ -120,6 +120,6 @@ jobs:
               FILE_NAME=$(basename "$***file%.****")
           
               # Run kubectl commands
-              kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME.yaml"
+              kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME"
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
