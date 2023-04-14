@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/tracing"
@@ -145,9 +144,16 @@ func main() {
 
 	// propagation
 	if *startPropagation {
-		txStore, err := badger.New("./data/txStore")
+		txStoreUrl, err, found := gocore.Config().GetURL("txstore")
 		if err != nil {
-			logger.Fatalf("error creating transaction store: %v", err)
+			panic(err)
+		}
+		if !found {
+			panic("txstore config not found")
+		}
+		txStore, err := propagation.NewStore(txStoreUrl)
+		if err != nil {
+			panic(err)
 		}
 
 		validatorClient, err := validator.NewClient()

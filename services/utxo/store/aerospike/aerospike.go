@@ -151,12 +151,17 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 	}, nil
 }
 
-func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *store.UTXOResponse, err error) {
 	defer func() {
-		if err := recover(); err != nil {
-			fmt.Printf("ERROR panic in aerospike Spend: %v", err)
+		if recoverErr := recover(); recoverErr != nil {
+			fmt.Printf("ERROR panic in aerospike Spend: %v", recoverErr)
 		}
 	}()
+
+	// set the default we return when we recover from a panic
+	utxoResponse = &store.UTXOResponse{
+		Status: int(utxostore_api.Status_NOT_FOUND),
+	}
 
 	policy := aero.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aero.UPDATE_ONLY
