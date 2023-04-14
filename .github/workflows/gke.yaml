@@ -33,12 +33,6 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Install static check
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Run static check
-        run: staticcheck ./...
-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
