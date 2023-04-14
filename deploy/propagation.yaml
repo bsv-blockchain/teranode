@@ -25,7 +25,7 @@ spec:
             - name: peerCount
               value: "1"
             - name: validator_grpcAddress
-              value: validation-service.validation-service.svc.cluster.local:8081
+              value: dns:///validation-service.validation-service.svc.cluster.local:8081
             - name: peer_1_p2p
               value: p2p://regtest.regtest.svc.cluster.local:18333
             - name: peer_1_rpc

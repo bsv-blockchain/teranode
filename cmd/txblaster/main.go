@@ -44,6 +44,7 @@ func init() {
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
 	}
 
 	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")

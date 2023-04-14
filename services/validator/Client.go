@@ -23,8 +23,7 @@ func NewClient() (*Client, error) {
 	}
 
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	address := fmt.Sprintf("dns:///%s", validator_grpcAddress)
-	conn, err := grpc.Dial(address, opts...)
+	conn, err := grpc.Dial(validator_grpcAddress, opts...)
 	if err != nil {
 		return nil, err
 	}

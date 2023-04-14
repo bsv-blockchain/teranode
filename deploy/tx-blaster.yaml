@@ -24,7 +24,7 @@ spec:
             - ./blaster.run
           env:
             - name: propagation_grpcAddress
-              value: propagation-service.propagation-service.svc.cluster.local:8084
+              value: dns:///propagation-service.propagation-service.svc.cluster.local:8084
             - name: BITCOIN_RPC_URI
               value: bitcoin://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
             - name: profilerAddr
