@@ -11,10 +11,10 @@ COPY . .
 
 
 # Build the Go library
-RUN go build -o ubsv.run main.go
+RUN CGO_ENABLED=1 go build -o ubsv.run main.go --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
 
 # Build TX Blaster
-RUN go build -o blaster.run ./cmd/txblaster/
+RUN CGO_ENABLED=1 go build -o blaster.run ./cmd/txblaster/ --trimpath -ldflags="-s -w -X main.commit=${GITHUB_SHA} -X main.version=MANUAL"
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./ubsv.run"]

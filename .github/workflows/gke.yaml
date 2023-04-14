@@ -117,8 +117,11 @@ jobs:
               fi
           
               # Get filename without extension
-              FILE_NAME=$(basename "$***file%.****")
-          
+              # Loop over all files in the directory
+              # Remove everything after the first dot in the file name
+              FILE_NAME="${file%%.*}"
+              echo "$FILE_NAME"
+              
               # Run kubectl commands
               kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME"
               kubectl get services -o wide -n "$FILE_NAME-service"
