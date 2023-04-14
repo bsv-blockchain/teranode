@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -151,6 +152,12 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 }
 
 func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Printf("ERROR panic in aerospike Spend: %v", err)
+		}
+	}()
+
 	policy := aero.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aero.UPDATE_ONLY
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
@@ -161,7 +168,7 @@ func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Ha
 		return nil, err
 	}
 	bins := aero.BinMap{
-		"txid": txID[:],
+		"txid": txID.CloneBytes(),
 	}
 
 	err = s.client.Put(policy, key, bins)

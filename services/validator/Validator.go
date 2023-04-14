@@ -72,6 +72,10 @@ func (v *Validator) Validate(tx *bt.Tx) error {
 		if err != nil {
 			break
 		}
+		if utxoResponse == nil {
+			err = fmt.Errorf("utxoResponse %x is empty, recovered", bt.ReverseBytes(hash[:]))
+			break
+		}
 		if utxoResponse.Status != int(utxostore_api.Status_OK) {
 			err = fmt.Errorf("utxo %x is not spendable", bt.ReverseBytes(hash[:]))
 			break
