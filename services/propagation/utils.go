@@ -5,25 +5,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"net/url"
-	"os"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-bitcoin"
+	"github.com/ordishs/gocore"
 )
 
 var bitcoinClient *bitcoin.Bitcoind
 
 func init() {
-	bitcoinRpcUri := os.Getenv("peer_1_rpc")
-	if bitcoinRpcUri != "" {
-		rpcURL, err := url.Parse(bitcoinRpcUri)
-		if err == nil {
-			bitcoinClient, err = bitcoin.NewFromURL(rpcURL, false)
-			if err != nil {
-				log.Printf("ERROR could not create bitcoin bitcoinClient: %v", err)
-			}
+	bitcoinRpcUri, err, ok := gocore.Config().GetURL("peer_1_rpc")
+	if err == nil && ok {
+		bitcoinClient, err = bitcoin.NewFromURL(bitcoinRpcUri, false)
+		if err != nil {
+			log.Printf("ERROR could not create bitcoin bitcoinClient: %v", err)
 		}
 	}
 }
