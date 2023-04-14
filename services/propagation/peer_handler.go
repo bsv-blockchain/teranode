@@ -161,10 +161,16 @@ func (ph *PeerHandler) HandleTransactionRejection(rejMsg *wire.MsgReject, peer p
 
 func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error {
 	timeStart := time.Now()
+
 	ph.logger.Infof("received transaction: %s", msg.TxHash().String())
 	var buf bytes.Buffer
 	if err := msg.Serialize(&buf); err != nil {
 		prometheusPeerInvalidTransactions.Inc()
+		return err
+	}
+
+	txHash := msg.TxHash()
+	if err := ph.txStore.Set(context.Background(), txHash[:], buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -194,11 +200,6 @@ func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error 
 		// send REJECT message to peer if invalid tx
 		ph.logger.Errorf("received invalid transaction: %s", err.Error())
 		_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
-		return err
-	}
-
-	txHash := msg.TxHash()
-	if err = ph.txStore.Set(context.Background(), txHash[:], buf.Bytes()); err != nil {
 		return err
 	}
 

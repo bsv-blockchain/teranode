@@ -154,6 +154,11 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 		return &emptypb.Empty{}, err
 	}
 
+	if err = u.txStore.Set(context.Background(), bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
+		prometheusInvalidTransactions.Inc()
+		return &emptypb.Empty{}, err
+	}
+
 	// u.logger.Debugf("received transaction on propagation GRPC server: %s", btTx.TxID())
 
 	// Do not allow propagation of coinbase transactions
@@ -171,11 +176,6 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 	if err = u.validator.Validate(btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		u.logger.Errorf("received invalid transaction: %s", err.Error())
-		prometheusInvalidTransactions.Inc()
-		return &emptypb.Empty{}, err
-	}
-
-	if err = u.txStore.Set(context.Background(), bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
