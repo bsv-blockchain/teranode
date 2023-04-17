@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/getsentry/sentry-go"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -36,6 +36,16 @@ func init() {
 func main() {
 	logLevel, _ := gocore.Config().Get("logLevel")
 	logger := gocore.Log(progname, gocore.NewLogLevelFromString(logLevel))
+
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn: "https://dcad1ec4c60a4a2e80a7f8599e86ec4b@o4505013263466496.ingest.sentry.io/4505013264449536",
+		// Set TracesSampleRate to 1.0 to capture 100% of transactions for performance monitoring.
+		// We recommend adjusting this value in production,
+		TracesSampleRate: 1.0,
+	})
+	if err != nil {
+		logger.Fatalf("sentry.Init: %s", err)
+	}
 
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
@@ -145,9 +155,16 @@ func main() {
 
 	// propagation
 	if *startPropagation {
-		txStore, err := badger.New("./data/txStore")
+		txStoreUrl, err, found := gocore.Config().GetURL("txstore")
 		if err != nil {
-			logger.Fatalf("error creating transaction store: %v", err)
+			panic(err)
+		}
+		if !found {
+			panic("txstore config not found")
+		}
+		txStore, err := propagation.NewStore(txStoreUrl)
+		if err != nil {
+			panic(err)
 		}
 
 		validatorClient, err := validator.NewClient()
