@@ -1,0 +1,9 @@
+.git
+.history
+.vscode
+data
+deploy
+docs
+playground
+poc
+scripts

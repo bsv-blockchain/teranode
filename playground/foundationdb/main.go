@@ -16,7 +16,7 @@ func main() {
 	// }
 	// db := fdb.MustOpen(opts...)
 
-	db := fdb.MustOpenDefault()
+	db := fdb.MustOpenDatabase("fdb.cluster")
 
 	// Perform a read operation
 	_, err := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
