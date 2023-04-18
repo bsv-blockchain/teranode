@@ -56,9 +56,6 @@ metadata:
   labels:
     app: regtest
 spec:
-  #ipFamilyPolicy: RequireDualStack
-  #ipFamilies:
-  #- IPv4
   selector:
     app: regtest
   ports:

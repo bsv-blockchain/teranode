@@ -104,7 +104,7 @@ jobs:
         run: |-
           # kubectl rollout
           cd ./deploy/
-          for file in *; do
+          for file in *.yaml; do
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
                   continue

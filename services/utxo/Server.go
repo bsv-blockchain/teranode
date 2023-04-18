@@ -156,6 +156,8 @@ func (u *UTXOStore) Stop(ctx context.Context) {
 }
 
 func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
+	prometheusUtxoGet.Inc()
+
 	return &utxostore_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
