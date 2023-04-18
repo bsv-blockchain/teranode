@@ -13,7 +13,6 @@ require (
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.1.1
 	github.com/libsv/go-p2p v0.1.1
 	github.com/opentracing/opentracing-go v1.2.0
@@ -26,6 +25,7 @@ require (
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	golang.org/x/net v0.8.0
 	golang.org/x/sync v0.1.0
+	golang.org/x/time v0.3.0
 	google.golang.org/api v0.114.0
 	google.golang.org/grpc v1.53.0
 	google.golang.org/protobuf v1.29.1

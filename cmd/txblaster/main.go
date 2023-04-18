@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +21,7 @@ import (
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -57,9 +62,20 @@ func init() {
 		panic(err)
 	}
 	propagationServer = propagation_api.NewPropagationAPIClient(conn)
+
+	txChan = make(chan *bt.UTXO, 10_000)
 }
 
 func main() {
+	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
+	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
+
+	flag.Parse()
+
+	go func() {
+		_ = http.ListenAndServe(":9099", nil)
+	}()
+
 	// create new private key
 	keySet, err := New()
 	if err != nil {
@@ -68,9 +84,17 @@ func main() {
 
 	address := keySet.Address(false)
 
-	txChan = make(chan *bt.UTXO, 1_000_000)
-	for i := 0; i < 1000; i++ {
-		go txWorker(keySet)
+	if *rateLimit > 1 {
+		rateLimitDuration := (time.Duration(*workers) * time.Second) / (time.Duration(*rateLimit))
+		fmt.Printf("Starting %d workers with rate limit of %d tx/s (%s)\n", *workers, *rateLimit, rateLimitDuration)
+		for i := 0; i < *workers; i++ {
+			go txWorkerLimited(keySet, rateLimitDuration, txChan)
+		}
+	} else {
+		fmt.Printf("Starting %d workers\n", *workers)
+		for i := 0; i < *workers; i++ {
+			go txWorker(keySet, txChan)
+		}
 	}
 
 	var u *bt.UTXO
@@ -88,9 +112,19 @@ func main() {
 	select {}
 }
 
-func txWorker(keySet *KeySet) {
-	for {
-		utxo := <-txChan
+func txWorker(keySet *KeySet, txChan <-chan *bt.UTXO) {
+	for utxo := range txChan {
+		err := fireTransactions(utxo, keySet)
+		if err != nil {
+			fmt.Printf("ERROR in fire transactions: %v", err)
+		}
+	}
+}
+
+func txWorkerLimited(keySet *KeySet, rateLimitDuration time.Duration, txChan <-chan *bt.UTXO) {
+	limiter := rate.NewLimiter(rate.Every(rateLimitDuration), 1)
+	for utxo := range txChan {
+		_ = limiter.Wait(context.Background())
 		err := fireTransactions(utxo, keySet)
 		if err != nil {
 			fmt.Printf("ERROR in fire transactions: %v", err)
@@ -138,17 +172,20 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 var counter atomic.Uint64
 
 func sendTransaction(tx *bt.Tx) error {
-	counter.Add(1)
-
 	if _, err := propagationServer.Set(context.Background(), &propagation_api.SetRequest{
 		Tx: tx.ExtendedBytes(),
 	}); err != nil {
 		return fmt.Errorf("error sending transaction to propagation server: %v", err)
 	}
 
-	counterLoad := counter.Load()
-	if counterLoad%1000 == 0 {
-		fmt.Printf("Time for %d transactions: %s\n", counterLoad, time.Since(startTime))
+	counterLoad := counter.Add(1)
+	if counterLoad%100 == 0 {
+		txPs := float64(0)
+		ts := time.Since(startTime).Seconds()
+		if ts > 0 {
+			txPs = float64(counterLoad) / ts
+		}
+		fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(startTime).Seconds(), int(txPs))
 	}
 
 	return nil
