@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -35,6 +38,21 @@ var printProgress uint64
 
 func init() {
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
+}
+
+func main() {
+	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
+	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
+	printFlag := flag.Int("print", 0, "print out progress every x transactions")
+	useTracer := flag.Bool("tracer", false, "start tracer")
+
+	flag.Parse()
+
+	printProgress = uint64(*printFlag)
+
+	go func() {
+		_ = http.ListenAndServe(":9099", nil)
+	}()
 
 	bitcoinRpcUri := os.Getenv("BITCOIN_RPC_URI")
 
@@ -54,6 +72,19 @@ func init() {
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
 	}
 
+	if *useTracer {
+		tracer, closer := tracing.InitTracer(logger, "txblaster")
+		defer closer.Close()
+
+		if tracer != nil {
+			// set the global tracer to use in all services
+			opentracing.SetGlobalTracer(tracer)
+		}
+
+		opts = append(opts, grpc.WithUnaryInterceptor(otgrpc.OpenTracingClientInterceptor(tracer)))
+		opts = append(opts, grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer)))
+	}
+
 	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
 	if !ok {
 		panic("no propagation_grpcAddress setting found")
@@ -65,20 +96,6 @@ func init() {
 	propagationServer = propagation_api.NewPropagationAPIClient(conn)
 
 	txChan = make(chan *bt.UTXO, 10_000)
-}
-
-func main() {
-	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
-	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
-	printFlag := flag.Int("print", 0, "print out progress every x transactions")
-
-	flag.Parse()
-
-	printProgress = uint64(*printFlag)
-
-	go func() {
-		_ = http.ListenAndServe(":9099", nil)
-	}()
 
 	// create new private key
 	keySet, err := New()
