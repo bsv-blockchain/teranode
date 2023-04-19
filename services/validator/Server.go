@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -112,6 +113,10 @@ func (v *Server) Start() error {
 			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
 			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
 			grpc.MaxRecvMsgSize(100*1024*1024), // 100 MB, TODO make configurable
+			grpc.KeepaliveParams(keepalive.ServerParameters{
+				MaxConnectionAge:      30 * time.Second, // for re-polling dns
+				MaxConnectionAgeGrace: 30 * time.Second,
+			}),
 		)
 	}
 

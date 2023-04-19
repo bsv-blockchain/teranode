@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -117,6 +118,10 @@ func (u *BlockAssembly) Start() error {
 		opts = append(opts,
 			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
 			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+			grpc.KeepaliveParams(keepalive.ServerParameters{
+				MaxConnectionAge:      30 * time.Second, // for re-polling dns
+				MaxConnectionAgeGrace: 30 * time.Second,
+			}),
 		)
 	}
 
