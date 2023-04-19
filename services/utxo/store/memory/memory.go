@@ -49,7 +49,9 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.m[*hash] = *txID
+	// m.m[*hash] = *txID
+	// delete entry when spending output
+	delete(m.m, *hash)
 
 	return &store.UTXOResponse{
 		Status: 1,
