@@ -5,3 +5,4 @@ resources:
 - propagation.yaml
 - validation.yaml
 - tx-blaster.yaml
+- utxostore.yaml
