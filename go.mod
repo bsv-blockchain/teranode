@@ -2,6 +2,8 @@ module github.com/TAAL-GmbH/ubsv
 
 go 1.20
 
+replace github.com/libsv/go-bt/v2 => github.com/icellan/go-bt/v2 v2.1.0-beta.4.0.20230419082430-8281ffeaa9d7
+
 require (
 	cloud.google.com/go/storage v1.30.1
 	github.com/TAAL-GmbH/arc v1.0.32
@@ -15,6 +17,7 @@ require (
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt/v2 v2.1.1
 	github.com/libsv/go-p2p v0.1.1
+	github.com/minio/minio-go/v7 v7.0.52
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
 	github.com/ordishs/go-utils v1.0.34
@@ -32,6 +35,18 @@ require (
 )
 
 require (
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.4 // indirect
+	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/minio/sha256-simd v1.0.0 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/rs/xid v1.4.0 // indirect
+	github.com/sirupsen/logrus v1.9.0 // indirect
+	gopkg.in/ini.v1 v1.67.0 // indirect
+)
+
+require (
 	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	cloud.google.com/go v0.110.0 // indirect
 	cloud.google.com/go/compute v1.18.0 // indirect
@@ -45,7 +60,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/deepmap/oapi-codegen v1.11.0 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
-	github.com/dustin/go-humanize v1.0.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/fgprof v0.9.3 // indirect
 	github.com/getkin/kin-openapi v0.103.0 // indirect
 	github.com/getsentry/sentry-go v0.20.0

@@ -268,14 +268,14 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 		_ = tx.Serialize(&buff)
 		btTx, err := bt.NewTxFromBytes(buff.Bytes())
 		if err != nil {
-			return err
+			return fmt.Errorf("could not convert transaction to bt.Tx: %w", err)
 		}
 
 		// extend the transaction with input data
 		if !btTx.IsCoinbase() {
 			err = ph.extendTransaction(btTx)
 			if err != nil {
-				return err
+				return fmt.Errorf("could not extend transaction %s: %w", btTx.TxID(), err)
 			}
 		}
 
@@ -308,7 +308,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	var buf bytes.Buffer
 	if err := msg.Serialize(&buf); err != nil {
-		return err
+		return fmt.Errorf("could not serialize block: %w", err)
 	}
 
 	// TODO announce block to other peers
@@ -321,7 +321,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	err := ph.blockStore.Set(context.Background(), blockHash[:], blockBytes)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not store block %s: %w", blockHash.String(), err)
 	}
 
 	// do we need to request the next block after processing this one?

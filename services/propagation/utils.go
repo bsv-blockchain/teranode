@@ -39,7 +39,7 @@ func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
 					fmt.Printf("tx %x not found in store, trying bitcoin node\n", bt.ReverseBytes(parentTxID[:]))
 					txHex, txErr := bitcoinClient.GetRawTransactionHex(input.PreviousTxIDStr())
 					if txErr != nil {
-						return txErr
+						return fmt.Errorf("error getting tx %x from bitcoin node: %v", bt.ReverseBytes(parentTxID[:]), txErr)
 					}
 					if txHex == nil {
 						return fmt.Errorf("tx %x not found", bt.ReverseBytes(parentTxID[:]))
@@ -47,16 +47,16 @@ func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
 
 					b, txErr = hex.DecodeString(*txHex)
 					if txErr != nil {
-						return txErr
+						return fmt.Errorf("error decoding tx %x: %v", bt.ReverseBytes(parentTxID[:]), txErr)
 					}
 
 					if b != nil {
 						fmt.Printf("tx %x not found in store, but found in bitcoin node\n", bt.ReverseBytes(parentTxID[:]))
 					} else {
-						return err
+						return fmt.Errorf("tx %x not found in store", bt.ReverseBytes(parentTxID[:]))
 					}
 				} else {
-					return err
+					return fmt.Errorf("tx %x not found in store", bt.ReverseBytes(parentTxID[:]))
 				}
 			}
 			parentTxBytes[parentTxID] = b
@@ -64,7 +64,7 @@ func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
 
 		btParentTx, err = bt.NewTxFromBytes(b)
 		if err != nil {
-			return err
+			return fmt.Errorf("error decoding tx %x: %v", bt.ReverseBytes(parentTxID[:]), err)
 		}
 
 		if len(btParentTx.Outputs) < int(input.PreviousTxOutIndex) {

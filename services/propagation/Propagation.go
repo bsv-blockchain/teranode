@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -33,12 +32,7 @@ type Server struct {
 	validatorClient *validator.Client
 }
 
-func NewServer(logger utils.Logger, txStore store.TransactionStore, validatorClient *validator.Client) *Server {
-	blockStore, err := badger.New("./data/blockStore")
-	if err != nil {
-		logger.Fatalf("error creating block store: %v", err)
-	}
-
+func NewServer(logger utils.Logger, txStore store.TransactionStore, blockStore store.TransactionStore, validatorClient *validator.Client) *Server {
 	return &Server{
 		logger:          logger,
 		peerHandler:     NewPeerHandler(txStore, blockStore, validatorClient),

@@ -167,6 +167,18 @@ func main() {
 			panic(err)
 		}
 
+		blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("blockstore config not found")
+		}
+		blockStore, err := propagation.NewStore(blockStoreUrl)
+		if err != nil {
+			panic(err)
+		}
+
 		validatorClient, err := validator.NewClient()
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)
@@ -176,7 +188,7 @@ func main() {
 			logger.Infof("Starting Propagation")
 
 			p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
-			propagationServer = propagation.NewServer(p2pLogger, txStore, validatorClient)
+			propagationServer = propagation.NewServer(p2pLogger, txStore, blockStore, validatorClient)
 
 			return propagationServer.Start(ctx)
 		})

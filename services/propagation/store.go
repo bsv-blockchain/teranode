@@ -8,6 +8,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/gcs"
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/minio"
 )
 
 func NewStore(storeUrl *url.URL) (propagationStore store.TransactionStore, err error) {
@@ -21,6 +22,13 @@ func NewStore(storeUrl *url.URL) (propagationStore store.TransactionStore, err e
 		propagationStore, err = gcs.New(strings.Replace(storeUrl.Path, "/", "", 1))
 		if err != nil {
 			return nil, fmt.Errorf("error creating gcs block store: %v", err)
+		}
+	case "minio":
+		fallthrough
+	case "minios":
+		propagationStore, err = minio.New(storeUrl)
+		if err != nil {
+			return nil, fmt.Errorf("error creating minio block store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
