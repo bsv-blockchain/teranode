@@ -31,6 +31,7 @@ var rpcURL *url.URL
 var startTime time.Time
 var propagationServer propagation_api.PropagationAPIClient
 var txChan chan *bt.UTXO
+var printProgress uint64
 
 func init() {
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
@@ -69,8 +70,11 @@ func init() {
 func main() {
 	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
+	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 
 	flag.Parse()
+
+	printProgress = uint64(*printFlag)
 
 	go func() {
 		_ = http.ListenAndServe(":9099", nil)
@@ -179,7 +183,7 @@ func sendTransaction(tx *bt.Tx) error {
 	}
 
 	counterLoad := counter.Add(1)
-	if counterLoad%100 == 0 {
+	if printProgress > 0 && counterLoad%printProgress == 0 {
 		txPs := float64(0)
 		ts := time.Since(startTime).Seconds()
 		if ts > 0 {
