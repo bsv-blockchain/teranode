@@ -23,7 +23,7 @@ spec:
           args: ["-utxostore=1", "-tracer=1"]
           env:
           - name: utxostore
-            value: memory://localhost:8082
+            value: memory://:8082
           - name: profilerAddr
             value: 0.0.0.0:9091
           ports:
