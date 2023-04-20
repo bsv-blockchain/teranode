@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
@@ -47,6 +48,7 @@ func main() {
 		logger.Fatalf("sentry.Init: %s", err)
 	}
 
+	startBlockAssembly := flag.Bool("blockassembly", false, "start blockassembly service")
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
@@ -55,7 +57,7 @@ func main() {
 
 	flag.Parse()
 
-	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation) {
+	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -67,6 +69,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -utxostore=<1|0>")
 		fmt.Println("          whether to start the utxo store service")
+		fmt.Println("")
+		fmt.Println("    -blockassembly=<1|0>")
+		fmt.Println("          whether to start the blockassembly service")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
@@ -118,6 +123,20 @@ func main() {
 	var utxoStore *utxo.UTXOStore
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
+	var blockAssemblyService *blockassembly.BlockAssembly
+
+	// blockAssembly
+	if *startBlockAssembly {
+		if _, found := gocore.Config().Get("blockAssembly_grpcAddress"); found {
+			g.Go(func() error {
+				logger.Infof("Starting Server")
+
+				blockAssemblyService = blockassembly.New(gocore.Log("block", gocore.NewLogLevelFromString(logLevel)))
+
+				return blockAssemblyService.Start()
+			})
+		}
+	}
 
 	// validator
 	if *startValidator {
@@ -236,6 +255,10 @@ func main() {
 
 	if validatorService != nil {
 		validatorService.Stop(shutdownCtx)
+	}
+
+	if blockAssemblyService != nil {
+		blockAssemblyService.Stop(shutdownCtx)
 	}
 
 	if err := g.Wait(); err != nil {

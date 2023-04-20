@@ -1,7 +1,6 @@
 package blockassembly
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,11 +9,9 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
-	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,53 +51,13 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore store.TransactionStore) (*BlockAssembly, error) {
+func New(logger utils.Logger) *BlockAssembly {
 	bAss := &BlockAssembly{
 		logger: logger,
 		txIDs:  make([]*chainhash.Hash, 0),
 	}
 
-	go func() {
-		for {
-			time.Sleep(2 * time.Minute)
-			bAss.mu.Lock()
-
-			if len(bAss.txIDs) > 0 {
-				bAss.logger.Infof("Mining block for %d txs", len(bAss.txIDs))
-
-				// get previous block header
-
-				blockHeader := wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 0, 0)
-
-				blockMsg := wire.NewMsgBlock(blockHeader)
-				for _, txID := range bAss.txIDs {
-					tx, err := txStore.Get(context.Background(), txID[:])
-					if err != nil {
-						bAss.logger.Errorf("Failed to get tx %s from store: %v", txID, err)
-						continue
-					}
-					msgTx := wire.NewMsgTx(1)
-					err = msgTx.Deserialize(bytes.NewReader(tx))
-					if err != nil {
-						bAss.logger.Errorf("Failed to deserialize tx %s: %v", txID, err)
-						continue
-					}
-					err = blockMsg.AddTransaction(msgTx)
-					if err != nil {
-						bAss.logger.Errorf("Failed to add tx %s to block: %v", txID, err)
-						continue
-					}
-				}
-
-				// broadcast the block
-
-				bAss.txIDs = make([]*chainhash.Hash, 0)
-			}
-			bAss.mu.Unlock()
-		}
-	}()
-
-	return bAss, nil
+	return bAss
 }
 
 // Start function
@@ -173,7 +130,9 @@ func (u *BlockAssembly) AddTxID(_ context.Context, req *blockassembly_api.AddTxI
 		return nil, err
 	}
 
-	u.txIDs = append(u.txIDs, hash)
+	_ = hash
+	// TODO Don't do anything as we don't have a mempool yet
+	// u.txIDs = append(u.txIDs, hash)
 
 	return &blockassembly_api.AddTxIDResponse{
 		Ok: true,
