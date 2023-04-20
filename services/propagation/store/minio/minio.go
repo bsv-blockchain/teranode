@@ -42,7 +42,9 @@ func New(minioURL *url.URL) (*Minio, error) {
 		location = minioURL.Query().Get("location")
 	}
 
-	err = client.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{Region: location})
+	err = client.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{
+		Region: location,
+	})
 	if err != nil {
 		exists, errBucketExists := client.BucketExists(context.Background(), bucketName)
 		if errBucketExists == nil && exists {
@@ -108,8 +110,8 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	}
 	defer object.Close()
 
-	b := make([]byte, 0)
-	_, err = object.Read(b)
+	var b []byte
+	b, err = io.ReadAll(object)
 	if err != nil && err != io.EOF {
 		span.SetTag(string(ext.Error), true)
 		span.LogFields(log.Error(err))
