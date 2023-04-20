@@ -25,7 +25,10 @@ func InitOtelTracer() func() {
 		switch tracerURL.Scheme {
 		case "jaeger":
 			exp, err = jaeger.New(
-				jaeger.WithAgentEndpoint(jaeger.WithAgentPort(tracerURL.Port())),
+				jaeger.WithAgentEndpoint(
+					jaeger.WithAgentHost(tracerURL.Hostname()),
+					jaeger.WithAgentPort(tracerURL.Port()),
+				),
 			)
 			if err != nil {
 				panic(err)
