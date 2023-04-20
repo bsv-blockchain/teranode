@@ -26,7 +26,7 @@ spec:
             value: p2p://regtest.regtest.svc.cluster.local:18333
           - name: utxostore
             #value: aerospike://aerospike-aerospike.aerospike.svc.cluster.local:3000/test
-            value: memory://utxostore-service.utxostore.svc.cluster.local:8082
+            value: memory://utxostore-service.utxostore-service.svc.cluster.local:8082
           - name: validator_grpcAddress
             value: 0.0.0.0:8081
           - name: profilerAddr
