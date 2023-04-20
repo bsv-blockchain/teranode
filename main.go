@@ -17,7 +17,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/getsentry/sentry-go"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
@@ -99,14 +98,8 @@ func main() {
 	// tracingOn := gocore.Config().GetBool("tracing")
 	if *useTracer {
 		logger.Infof("Starting tracer")
-		// Start the tracer
-		tracer, closer := tracing.InitTracer(logger, progname)
-		defer closer.Close()
-
-		if tracer != nil {
-			// set the global tracer to use in all services
-			opentracing.SetGlobalTracer(tracer)
-		}
+		closeTracer := tracing.InitOtelTracer()
+		defer closeTracer()
 	}
 
 	ctx := context.Background()

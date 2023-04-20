@@ -15,17 +15,7 @@ type Client struct {
 }
 
 func NewClient() (*Client, error) {
-	// opts := []grpc.DialOption{
-	// 	grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
-	// 	grpc.WithTransportCredentials(insecure.NewCredentials()),
-	// 	grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
-	// }
-
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	// conn, err := grpc.Dial(validator_grpcAddress, opts...)
-	// if err != nil {
-	// 	return nil, err
-	// }
 	conn, err := utils.GetGRPCClient(context.Background(), validator_grpcAddress, &utils.ConnectionOptions{
 		Tracer: gocore.Config().GetBool("tracing_enabled", true),
 	})
@@ -44,8 +34,8 @@ func (c *Client) Stop() {
 	// TODO
 }
 
-func (c *Client) Validate(tx *bt.Tx) error {
-	resp, err := c.client.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
+	resp, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 		TransactionData: tx.ExtendedBytes(),
 	})
 	if err != nil {

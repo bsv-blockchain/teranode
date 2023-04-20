@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
@@ -16,14 +18,15 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
-	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -35,6 +38,9 @@ var startTime time.Time
 var propagationServer propagation_api.PropagationAPIClient
 var txChan chan *bt.UTXO
 var printProgress uint64
+var useHTTP bool
+var httpURL string
+var httpClient *http.Client
 
 func init() {
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
@@ -43,12 +49,34 @@ func init() {
 func main() {
 	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
+	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 	useTracer := flag.Bool("tracer", false, "start tracer")
 
 	flag.Parse()
 
 	printProgress = uint64(*printFlag)
+
+	if *useTracer {
+		logger.Infof("Starting tracer")
+		closeTracer := tracing.InitOtelTracer()
+		defer closeTracer()
+	}
+
+	if *useHTTPFlag {
+		useHTTP = *useHTTPFlag
+		propagationHTTPAddress, ok := gocore.Config().Get("propagation_httpAddress")
+		if !ok {
+			panic("propagation_httpAddress not found in config")
+		}
+		httpURL = propagationHTTPAddress
+
+		tr := &http.Transport{
+			MaxConnsPerHost:   99999,
+			DisableKeepAlives: false,
+		}
+		httpClient = &http.Client{Transport: tr}
+	}
 
 	go func() {
 		_ = http.ListenAndServe(":9099", nil)
@@ -70,19 +98,6 @@ func main() {
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
-	}
-
-	if *useTracer {
-		tracer, closer := tracing.InitTracer(logger, "txblaster")
-		defer closer.Close()
-
-		if tracer != nil {
-			// set the global tracer to use in all services
-			opentracing.SetGlobalTracer(tracer)
-		}
-
-		opts = append(opts, grpc.WithUnaryInterceptor(otgrpc.OpenTracingClientInterceptor(tracer)))
-		opts = append(opts, grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer)))
 	}
 
 	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
@@ -193,10 +208,36 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 var counter atomic.Uint64
 
 func sendTransaction(tx *bt.Tx) error {
-	if _, err := propagationServer.Set(context.Background(), &propagation_api.SetRequest{
-		Tx: tx.ExtendedBytes(),
-	}); err != nil {
-		return fmt.Errorf("error sending transaction to propagation server: %v", err)
+	if useHTTP {
+		req, err := http.NewRequest("POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
+		if err != nil {
+			return fmt.Errorf("error creating http request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("error sending transaction: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			var body []byte
+			if body, err = io.ReadAll(resp.Body); err != nil {
+				return fmt.Errorf("error sending transaction: %v", resp.Status)
+			}
+			return fmt.Errorf("error sending transaction: %v - %s", resp.Status, body)
+		}
+	} else {
+		ctx, span := otel.Tracer("").Start(context.Background(), "txBlaster:sendTransaction")
+		defer span.End()
+
+		span.SetAttributes(attribute.String("progname", "txblaster"))
+		span.AddEvent("sendTransaction", trace.WithAttributes(attribute.String("txid", tx.TxID())))
+		if _, err := propagationServer.Set(ctx, &propagation_api.SetRequest{
+			Tx: tx.ExtendedBytes(),
+		}); err != nil {
+			return fmt.Errorf("error sending transaction to propagation server: %v", err)
+		}
 	}
 
 	counterLoad := counter.Add(1)

@@ -24,7 +24,7 @@ func init() {
 	}
 }
 
-func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
+func ExtendTransaction(ctx context.Context, tx *bt.Tx, txStore store.TransactionStore) (err error) {
 	parentTxBytes := make(map[[32]byte][]byte)
 	var btParentTx *bt.Tx
 
@@ -33,7 +33,7 @@ func ExtendTransaction(tx *bt.Tx, txStore store.TransactionStore) (err error) {
 		parentTxID := [32]byte(bt.ReverseBytes(input.PreviousTxID()))
 		b, ok := parentTxBytes[parentTxID]
 		if !ok {
-			b, err = txStore.Get(context.Background(), parentTxID[:])
+			b, err = txStore.Get(ctx, parentTxID[:])
 			if err != nil {
 				if bitcoinClient != nil {
 					fmt.Printf("tx %x not found in store, trying bitcoin node\n", bt.ReverseBytes(parentTxID[:]))

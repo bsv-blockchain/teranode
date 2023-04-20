@@ -16,6 +16,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -102,28 +103,12 @@ func (v *Server) Start() error {
 		return errors.New("no validator_grpcAddress setting found")
 	}
 
-	// // LEVEL 0 - no security / no encryption
-	// var opts []grpc.ServerOption
-	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	// if prometheusOn {
-	// 	opts = append(opts,
-	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-	// 		grpc.MaxRecvMsgSize(100*1024*1024), // 100 MB, TODO make configurable
-	// 		grpc.KeepaliveParams(keepalive.ServerParameters{
-	// 			MaxConnectionAge:      30 * time.Second, // for re-polling dns
-	// 			MaxConnectionAgeGrace: 30 * time.Second,
-	// 		}),
-	// 	)
-	// }
-
-	// v.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 	var err error
 	v.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		Tracer: gocore.Config().GetBool("tracing_enabled", true),
 	})
 	if err != nil {
-		return fmt.Errorf("Could not create GRPC server [%w]", err)
+		return fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
 	gocore.SetAddress(address)
@@ -200,17 +185,22 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 	})
 }
 
-func (v *Server) ValidateTransaction(_ context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	timeStart := time.Now()
+	ctx, span := otel.Tracer("").Start(ctx, "Validator:ValidateTransaction")
+	defer span.End()
+
 	tx, err := bt.NewTxFromBytes(req.TransactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+		span.RecordError(err)
 		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
 	}
 
-	err = v.validator.Validate(tx)
+	err = v.validator.Validate(ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+		span.RecordError(err)
 		return &validator_api.ValidateTransactionResponse{
 			Valid:  false,
 			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),

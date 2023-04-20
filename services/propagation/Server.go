@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
@@ -15,6 +18,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -86,27 +90,12 @@ func (u *PropagationServer) Start() error {
 		return errors.New("no propagation_grpcAddress setting found")
 	}
 
-	// // LEVEL 0 - no security / no encryption
-	// var opts []grpc.ServerOption
-	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	// if prometheusOn {
-	// 	opts = append(opts,
-	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-	// 		grpc.KeepaliveParams(keepalive.ServerParameters{
-	// 			MaxConnectionAge:      30 * time.Second, // for re-polling dns
-	// 			MaxConnectionAgeGrace: 30 * time.Second,
-	// 		}),
-	// 	)
-	// }
-
-	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 	var err error
 	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		Tracer: gocore.Config().GetBool("tracing_enabled", true),
 	})
 	if err != nil {
-		return fmt.Errorf("Could not create GRPC server [%w]", err)
+		return fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
 	gocore.SetAddress(address)
@@ -121,11 +110,50 @@ func (u *PropagationServer) Start() error {
 	// Register reflection service on gRPC server.
 	reflection.Register(u.grpcServer)
 
-	u.logger.Infof("GRPC server listening on %s", address)
+	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
+	if ok {
+		var serverURL *url.URL
+		serverURL, err = url.Parse(httpAddress)
+		if err != nil {
+			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
+		}
+		err = u.StartHTTPServer(context.Background(), serverURL)
+		if err != nil {
+			return fmt.Errorf("HTTP server failed [%w]", err)
+		}
+	}
 
+	u.logger.Infof("GRPC server listening on %s", address)
 	if err = u.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}
+
+	return nil
+}
+
+func (u *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
+	// start a simple http listener that handles incoming transaction requests
+	http.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(err.Error()))
+			return
+		}
+		if _, err = u.Set(ctx, &propagation_api.SetRequest{
+			Tx: body,
+		}); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(err.Error()))
+			return
+		}
+	})
+
+	go func() {
+		if err := http.ListenAndServe(serverURL.Host, nil); err != nil {
+			u.logger.Errorf("HTTP server failed [%s]", err)
+		}
+	}()
 
 	return nil
 }
@@ -144,8 +172,8 @@ func (u *PropagationServer) Health(_ context.Context, _ *emptypb.Empty) (*propag
 	}, nil
 }
 
-func (u *PropagationServer) Get(_ context.Context, req *propagation_api.GetRequest) (*propagation_api.GetResponse, error) {
-	tx, err := u.txStore.Get(context.Background(), req.Txid)
+func (u *PropagationServer) Get(ctx context.Context, req *propagation_api.GetRequest) (*propagation_api.GetResponse, error) {
+	tx, err := u.txStore.Get(ctx, req.Txid)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +183,10 @@ func (u *PropagationServer) Get(_ context.Context, req *propagation_api.GetReque
 	}, nil
 }
 
-func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetRequest) (*emptypb.Empty, error) {
+func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetRequest) (*emptypb.Empty, error) {
+	ctx, span := otel.Tracer("").Start(ctx, "PropagationServer:Set")
+	defer span.End()
+
 	timeStart := time.Now()
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
@@ -163,7 +194,7 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 		return &emptypb.Empty{}, err
 	}
 
-	if err = u.txStore.Set(context.Background(), bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
+	if err = u.txStore.Set(ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
@@ -177,19 +208,23 @@ func (u *PropagationServer) Set(_ context.Context, req *propagation_api.SetReque
 	}
 
 	if !IsExtended(btTx) {
-		err = ExtendTransaction(btTx, u.txStore)
+		extendCtx, extendSpan := otel.Tracer("").Start(ctx, "PropagationServer:ExtendTransaction")
+		err = ExtendTransaction(extendCtx, btTx, u.txStore)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return &emptypb.Empty{}, err
 		}
+		extendSpan.End()
 	}
 
-	if err = u.validator.Validate(btTx); err != nil {
+	validateCtx, validateSpan := otel.Tracer("").Start(ctx, "PropagationServer:Validate")
+	if err = u.validator.Validate(validateCtx, btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		u.logger.Errorf("received invalid transaction: %s", err.Error())
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
+	validateSpan.End()
 
 	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))

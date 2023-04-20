@@ -6,12 +6,11 @@ import (
 
 	"github.com/dgraph-io/badger/v3"
 	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/ext"
-	"github.com/opentracing/opentracing-go/log"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	"go.opentelemetry.io/otel"
 )
 
 func init() {
@@ -84,14 +83,13 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "badger:Set")
-	defer span.Finish()
+	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Set")
+	defer span.End()
 
 	if err := s.store.Update(func(tx *badger.Txn) error {
 		return tx.Set(key, value)
 	}); err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		span.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 
@@ -103,8 +101,8 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Get").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "badger:Get")
-	defer span.Finish()
+	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Get")
+	defer span.End()
 
 	var result []byte
 	err := s.store.View(func(tx *badger.Txn) error {
@@ -113,8 +111,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 			if err == badger.ErrKeyNotFound {
 				return fmt.Errorf("key not found: %w", err)
 			}
-			span.SetTag(string(ext.Error), true)
-			span.LogFields(log.Error(err))
+			span.RecordError(err)
 			return err
 		}
 
@@ -122,8 +119,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 			result = val
 			return nil
 		}); err != nil {
-			span.SetTag(string(ext.Error), true)
-			span.LogFields(log.Error(err))
+			span.RecordError(err)
 			return fmt.Errorf("failed to decode data: %w", err)
 		}
 
@@ -138,10 +134,16 @@ func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Del").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "badger:Del")
-	defer span.Finish()
+	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Del")
+	defer span.End()
 
-	return s.store.Update(func(tx *badger.Txn) error {
+	err := s.store.Update(func(tx *badger.Txn) error {
 		return tx.Delete(hash)
 	})
+
+	if err != nil {
+		span.RecordError(err)
+	}
+
+	return err
 }
