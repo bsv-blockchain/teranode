@@ -17,6 +17,9 @@ func InitTracer(logger utils.Logger, serviceName string) (opentracing.Tracer, io
 		return nil, nil
 	}
 
+	//cfg.Reporter.CollectorEndpoint = "http://jaeger:14268/api/traces"
+	cfg.Reporter.CollectorEndpoint = "http://jaeger-cluster-collector.jaeger.svc.cluster.local:14250/api/traces"
+
 	cfg.ServiceName = serviceName
 	cfg.Sampler.Type = jaeger.SamplerTypeConst
 	cfg.Sampler.Param = 100
