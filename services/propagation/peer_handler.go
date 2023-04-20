@@ -256,10 +256,13 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 		if !previousBlockHash.IsEqual(&chainhash.Hash{}) { // genesis block
 			_, err := ph.blockStore.Get(ctx, previousBlockHash[:])
 			if err != nil {
-				// get previous block from peer
-				ph.logger.Infof("received block %s, but previous block %s is not known, requesting it from peer", blockHash.String(), previousBlockHash.String())
-				ph.blockBacklog[previousBlockHash] = &blockHash
-				peer.RequestBlock(&previousBlockHash)
+				_, ok := ph.blockBacklog[previousBlockHash]
+				if !ok {
+					// get previous block from peer
+					ph.logger.Infof("received block %s, but previous block %s is not known, requesting it from peer", blockHash.String(), previousBlockHash.String())
+					ph.blockBacklog[previousBlockHash] = &blockHash
+					peer.RequestBlock(&previousBlockHash)
+				}
 				return nil
 			}
 		}

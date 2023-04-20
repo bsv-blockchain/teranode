@@ -217,14 +217,12 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		extendSpan.End()
 	}
 
-	validateCtx, validateSpan := otel.Tracer("").Start(ctx, "PropagationServer:Validate")
-	if err = u.validator.Validate(validateCtx, btTx); err != nil {
+	if err = u.validator.Validate(ctx, btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		u.logger.Errorf("received invalid transaction: %s", err.Error())
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
-	validateSpan.End()
 
 	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))

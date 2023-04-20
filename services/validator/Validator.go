@@ -74,23 +74,27 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	var hash *chainhash.Hash
 	var utxoResponse *store.UTXOResponse
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
-	for _, input := range tx.Inputs {
+	for idx, input := range tx.Inputs {
 		hash, err = utxo.GetInputUtxoHash(input)
 		if err != nil {
+			utxoSpan.RecordError(err)
 			return err
 		}
 
 		// TODO Should we be doing this in a batch?
 		utxoResponse, err = v.store.Spend(utxoCtx, hash, txIDChainHash)
 		if err != nil {
+			utxoSpan.RecordError(err)
 			break
 		}
 		if utxoResponse == nil {
-			err = fmt.Errorf("utxoResponse %x is empty, recovered", bt.ReverseBytes(hash[:]))
+			err = fmt.Errorf("utxoResponse %s is empty, recovered", hash.String())
+			utxoSpan.RecordError(err)
 			break
 		}
 		if utxoResponse.Status != int(utxostore_api.Status_OK) {
-			err = fmt.Errorf("utxo %x is not spendable", bt.ReverseBytes(hash[:]))
+			err = fmt.Errorf("utxo %d of %s is not spendable", idx, input.PreviousTxIDStr())
+			utxoSpan.RecordError(err)
 			break
 		}
 
@@ -98,15 +102,19 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if err != nil {
-		_, reverseUtxoSpan := otel.Tracer("").Start(ctx, "Validator:Validate:ReverseUtxos")
-		defer reverseUtxoSpan.End()
+		reverseUtxoCtx, reverseUtxoSpan := otel.Tracer("").Start(ctx, "Validator:Validate:ReverseUtxos")
+		defer func() {
+			reverseUtxoSpan.End()
+			utxoSpan.End()
+		}()
 
 		// Revert all the spends
 		for _, hash = range reservedUtxos {
-			_, err = v.store.Reset(utxoCtx, hash)
+			if _, err = v.store.Reset(reverseUtxoCtx, hash); err != nil {
+				reverseUtxoSpan.RecordError(err)
+			}
 		}
 
-		utxoSpan.End()
 		return err
 	}
 	utxoSpan.End()
