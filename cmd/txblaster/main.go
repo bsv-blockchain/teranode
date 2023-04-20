@@ -208,8 +208,16 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 var counter atomic.Uint64
 
 func sendTransaction(tx *bt.Tx) error {
+	ctx, span := otel.Tracer("").Start(context.Background(), "txBlaster:sendTransaction")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("progname", "txblaster"))
+	span.AddEvent("sendTransaction", trace.WithAttributes(attribute.String("txid", tx.TxID())))
+
 	if useHTTP {
-		req, err := http.NewRequest("POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
+		span.SetAttributes(attribute.String("transport", "http"))
+
+		req, err := http.NewRequestWithContext(ctx, "POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
 		if err != nil {
 			return fmt.Errorf("error creating http request: %v", err)
 		}
@@ -228,11 +236,8 @@ func sendTransaction(tx *bt.Tx) error {
 			return fmt.Errorf("error sending transaction: %v - %s", resp.Status, body)
 		}
 	} else {
-		ctx, span := otel.Tracer("").Start(context.Background(), "txBlaster:sendTransaction")
-		defer span.End()
+		span.SetAttributes(attribute.String("transport", "grpc"))
 
-		span.SetAttributes(attribute.String("progname", "txblaster"))
-		span.AddEvent("sendTransaction", trace.WithAttributes(attribute.String("txid", tx.TxID())))
 		if _, err := propagationServer.Set(ctx, &propagation_api.SetRequest{
 			Tx: tx.ExtendedBytes(),
 		}); err != nil {
