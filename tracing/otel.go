@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 
+	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
@@ -14,36 +15,56 @@ import (
 func InitOtelTracer() func() {
 	// set the tracer provider
 	// TODO get from config
-	exp, err := jaeger.New(
-		jaeger.WithAgentEndpoint(jaeger.WithAgentPort("6831")),
-	)
+	tracerURL, err, found := gocore.Config().GetURL("tracing_collector_url")
 	if err != nil {
 		panic(err)
 	}
 
-	// TODO get from K8s
-	service := "ubsv"
-	environment := "dev"
-	pod := "pod-1"
+	if found {
+		var exp *jaeger.Exporter
+		switch tracerURL.Scheme {
+		case "jaeger":
+			exp, err = jaeger.New(
+				jaeger.WithAgentEndpoint(jaeger.WithAgentPort(tracerURL.Port())),
+			)
+			if err != nil {
+				panic(err)
+			}
+		case "http":
+			exp, err = jaeger.New(
+				jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(tracerURL.String())),
+			)
+			if err != nil {
+				panic(err)
+			}
+		}
 
-	// setup a jaeger trace provider
-	tp := tracesdk.NewTracerProvider(
-		// Always be sure to batch in production.
-		tracesdk.WithBatcher(exp),
-		// Record information about this application in a Resource.
-		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(service),
-			attribute.String("environment", environment),
-			attribute.String("pod", pod),
-		)),
-	)
+		// TODO get from K8s
+		service := "ubsv"
+		environment := "dev"
+		pod := "pod-1"
 
-	otel.SetTracerProvider(tp)
+		// setup a jaeger trace provider
+		tp := tracesdk.NewTracerProvider(
+			// Always be sure to batch in production.
+			tracesdk.WithBatcher(exp),
+			// Record information about this application in a Resource.
+			tracesdk.WithResource(resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceName(service),
+				attribute.String("environment", environment),
+				attribute.String("pod", pod),
+			)),
+		)
 
-	return func() {
-		if err = tp.Shutdown(context.Background()); err != nil {
-			panic(err)
+		otel.SetTracerProvider(tp)
+
+		return func() {
+			if err = tp.Shutdown(context.Background()); err != nil {
+				panic(err)
+			}
 		}
 	}
+
+	return nil
 }
