@@ -19,7 +19,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
-	github.com/ordishs/go-utils v1.0.36
+	github.com/ordishs/go-utils v1.0.38
 	github.com/ordishs/gocore v1.0.35
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.14.0
