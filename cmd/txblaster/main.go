@@ -28,8 +28,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var logger utils.Logger
@@ -94,17 +92,14 @@ func main() {
 		panic(err)
 	}
 
-	opts := []grpc.DialOption{
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
-	}
-
 	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
 	if !ok {
 		panic("no propagation_grpcAddress setting found")
 	}
-	conn, err := grpc.Dial(propagationGrpcAddress, opts...)
+
+	conn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
+		Tracer: *useTracer,
+	})
 	if err != nil {
 		panic(err)
 	}
