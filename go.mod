@@ -11,7 +11,6 @@ require (
 	github.com/apple/foundationdb/bindings/go v0.0.0-20230406170925-94e42d5c64f5
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
-	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6

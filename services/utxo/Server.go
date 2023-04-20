@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/tracing"
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -115,17 +113,24 @@ func (u *UTXOStore) Start() error {
 		return errors.New("no utxostore_grpcAddress setting found")
 	}
 
-	// LEVEL 0 - no security / no encryption
-	var opts []grpc.ServerOption
-	_, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	if prometheusOn {
-		opts = append(opts,
-			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-		)
-	}
+	// // LEVEL 0 - no security / no encryption
+	// var opts []grpc.ServerOption
+	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
+	// if prometheusOn {
+	// 	opts = append(opts,
+	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
+	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+	// 	)
+	// }
 
-	u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
+	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
+	var err error
+	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
+		Tracer: gocore.Config().GetBool("tracing_enabled", true),
+	})
+	if err != nil {
+		return fmt.Errorf("Could not create GRPC server [%w]", err)
+	}
 
 	gocore.SetAddress(address.Host)
 

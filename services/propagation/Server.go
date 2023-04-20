@@ -10,15 +10,12 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
-	"github.com/TAAL-GmbH/ubsv/tracing"
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -89,21 +86,28 @@ func (u *PropagationServer) Start() error {
 		return errors.New("no propagation_grpcAddress setting found")
 	}
 
-	// LEVEL 0 - no security / no encryption
-	var opts []grpc.ServerOption
-	_, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	if prometheusOn {
-		opts = append(opts,
-			grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-			grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-			grpc.KeepaliveParams(keepalive.ServerParameters{
-				MaxConnectionAge:      30 * time.Second, // for re-polling dns
-				MaxConnectionAgeGrace: 30 * time.Second,
-			}),
-		)
-	}
+	// // LEVEL 0 - no security / no encryption
+	// var opts []grpc.ServerOption
+	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
+	// if prometheusOn {
+	// 	opts = append(opts,
+	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
+	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+	// 		grpc.KeepaliveParams(keepalive.ServerParameters{
+	// 			MaxConnectionAge:      30 * time.Second, // for re-polling dns
+	// 			MaxConnectionAgeGrace: 30 * time.Second,
+	// 		}),
+	// 	)
+	// }
 
-	u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
+	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
+	var err error
+	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
+		Tracer: gocore.Config().GetBool("tracing_enabled", true),
+	})
+	if err != nil {
+		return fmt.Errorf("Could not create GRPC server [%w]", err)
+	}
 
 	gocore.SetAddress(address)
 

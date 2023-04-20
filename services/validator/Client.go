@@ -6,9 +6,8 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/libsv/go-bt/v2"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Client struct {
@@ -16,14 +15,20 @@ type Client struct {
 }
 
 func NewClient() (*Client, error) {
-	opts := []grpc.DialOption{
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
-	}
+	// opts := []grpc.DialOption{
+	// 	grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100 * 1024 * 1024)), // 100MB, TODO make configurable
+	// 	grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// 	grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
+	// }
 
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	conn, err := grpc.Dial(validator_grpcAddress, opts...)
+	// conn, err := grpc.Dial(validator_grpcAddress, opts...)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	conn, err := utils.GetGRPCClient(context.Background(), validator_grpcAddress, &utils.ConnectionOptions{
+		Tracer: gocore.Config().GetBool("tracing_enabled", true),
+	})
 	if err != nil {
 		return nil, err
 	}

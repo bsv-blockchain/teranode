@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -10,8 +11,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store/aerospike"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/ordishs/go-utils"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"github.com/ordishs/gocore"
 )
 
 func NewUTXOStore(logger utils.Logger, url *url.URL) (store.UTXOStore, error) {
@@ -30,10 +30,18 @@ func NewUTXOStore(logger utils.Logger, url *url.URL) (store.UTXOStore, error) {
 
 	case "memory":
 		logger.Infof("[UTXOStore] connecting to utxostore service at %s:%d", url.Hostname(), port)
-		conn, err := grpc.Dial(url.Host, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		// conn, err := grpc.Dial(url.Host, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		// if err != nil {
+		// 	return nil, err
+		// }
+
+		conn, err := utils.GetGRPCClient(context.Background(), url.Host, &utils.ConnectionOptions{
+			Tracer: gocore.Config().GetBool("tracing_enabled", true),
+		})
 		if err != nil {
 			return nil, err
 		}
+
 		apiClient := utxostore_api.NewUtxoStoreAPIClient(conn)
 		return utxo.NewClient(apiClient)
 
