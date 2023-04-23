@@ -74,7 +74,7 @@ func main() {
 	start := time.Now()
 
 	for i := 0; i < 1_000_000; i++ {
-		if err := v.Validate(tx); err != nil {
+		if err := v.Validate(context.Background(), tx); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		}
 	}

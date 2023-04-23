@@ -14,9 +14,9 @@ type Client struct {
 	client validator_api.ValidatorAPIClient
 }
 
-func NewClient() (*Client, error) {
+func NewClient(ctx context.Context) (*Client, error) {
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	conn, err := utils.GetGRPCClient(context.Background(), validator_grpcAddress, &utils.ConnectionOptions{
+	conn, err := utils.GetGRPCClient(ctx, validator_grpcAddress, &utils.ConnectionOptions{
 		Tracer: gocore.Config().GetBool("tracing_enabled", true),
 	})
 	if err != nil {

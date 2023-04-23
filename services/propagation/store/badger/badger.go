@@ -83,7 +83,8 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
 	}()
-	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Set")
+
+	_, span := otel.Tracer("").Start(ctx, "Badger:Set")
 	defer span.End()
 
 	if err := s.store.Update(func(tx *badger.Txn) error {
@@ -101,7 +102,8 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Get").AddTime(start)
 	}()
-	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Get")
+
+	_, span := otel.Tracer("").Start(ctx, "Badger:Get")
 	defer span.End()
 
 	var result []byte
@@ -134,7 +136,8 @@ func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Del").AddTime(start)
 	}()
-	ctx, span := otel.Tracer("").Start(context.Background(), "Badger:Del")
+
+	_, span := otel.Tracer("").Start(ctx, "Badger:Del")
 	defer span.End()
 
 	err := s.store.Update(func(tx *badger.Txn) error {

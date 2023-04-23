@@ -191,7 +191,7 @@ func main() {
 			panic(err)
 		}
 
-		validatorClient, err := validator.NewClient()
+		validatorClient, err := validator.NewClient(context.Background())
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)
 		}
