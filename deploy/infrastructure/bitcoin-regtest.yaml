@@ -14,39 +14,48 @@ spec:
       labels:
         app: regtest
     spec:
-      containers:
-        - name: regtest
-          image: eu.gcr.io/ubsv-383015/bitcoin-regtest:1.0.14
-          ports:
-            - containerPort: 18332
-              protocol: TCP
-            - containerPort: 18333
-              protocol: TCP
-            - containerPort: 28332
-              protocol: TCP
-          resources:
-            requests:
-              memory: 2Gi
-              cpu: "0.2"
-            limits:
-              memory: 4Gi
-              cpu: "1"
-          volumeMounts:
-            - name: root-volume
-              mountPath: /bitcoin
-      volumes:
+      initContainers:
+      - name: init-copy-data
+        image: eu.gcr.io/ubsv-383015/bitcoin-regtest:1.0.14
+        command: ["sh", "-c", "cp -R /bitcoin/* /persistent-bitcoin/"]
+        volumeMounts:
         - name: root-volume
-          emptyDir:
-            sizeLimit: 10Gi
-  volumeClaimTemplates:
-    - metadata:
-        name: root-volume
-      spec:
-        accessModes:
-          - ReadWriteOnce
+          mountPath: /persistent-bitcoin
+      containers:
+      - name: regtest
+        image: eu.gcr.io/ubsv-383015/bitcoin-regtest:1.0.14
+        ports:
+          - containerPort: 18332
+            protocol: TCP
+          - containerPort: 18333
+            protocol: TCP
+          - containerPort: 28332
+            protocol: TCP
         resources:
           requests:
-            storage: 10Gi
+            memory: 2Gi
+            cpu: "0.2"
+          limits:
+            memory: 4Gi
+            cpu: "1"
+        volumeMounts:
+          - name: root-volume
+            mountPath: /bitcoin
+      volumes:
+      - name: root-volume
+        persistentVolumeClaim:
+          claimName: root-volume
+        emptyDir:
+          sizeLimit: 10Gi
+  volumeClaimTemplates:
+  - metadata:
+      name: root-volume
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
