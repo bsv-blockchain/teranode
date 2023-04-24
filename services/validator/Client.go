@@ -17,7 +17,7 @@ type Client struct {
 func NewClient(ctx context.Context) (*Client, error) {
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
 	conn, err := utils.GetGRPCClient(ctx, validator_grpcAddress, &utils.ConnectionOptions{
-		Tracer: gocore.Config().GetBool("tracing_enabled", true),
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 	})
 	if err != nil {
 		return nil, err

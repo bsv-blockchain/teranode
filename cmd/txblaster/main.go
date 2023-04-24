@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
-	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
@@ -49,16 +48,20 @@ func main() {
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
-	useTracer := flag.Bool("tracer", false, "start tracer")
 
 	flag.Parse()
 
 	printProgress = uint64(*printFlag)
 
-	if *useTracer {
-		logger.Infof("Starting tracer")
-		closeTracer := tracing.InitOtelTracer()
-		defer closeTracer()
+	if gocore.Config().GetBool("use_open_tracing", true) {
+		logger.Infof("Starting open tracing")
+		// closeTracer := tracing.InitOtelTracer()
+		_, closer, err := utils.InitGlobalTracer("tx-blaster")
+		if err != nil {
+			panic(err)
+		}
+
+		defer closer.Close()
 	}
 
 	if *useHTTPFlag {
@@ -98,7 +101,7 @@ func main() {
 	}
 
 	conn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
-		Tracer: *useTracer,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 	})
 	if err != nil {
 		panic(err)

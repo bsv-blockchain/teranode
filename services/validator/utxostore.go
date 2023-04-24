@@ -36,7 +36,7 @@ func NewUTXOStore(logger utils.Logger, url *url.URL) (store.UTXOStore, error) {
 		// }
 
 		conn, err := utils.GetGRPCClient(context.Background(), url.Host, &utils.ConnectionOptions{
-			Tracer: gocore.Config().GetBool("tracing_enabled", true),
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		})
 		if err != nil {
 			return nil, err

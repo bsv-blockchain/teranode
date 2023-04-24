@@ -126,7 +126,7 @@ func (u *UTXOStore) Start() error {
 	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 	var err error
 	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		Tracer: gocore.Config().GetBool("tracing_enabled", true),
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 	})
 	if err != nil {
 		return fmt.Errorf("Could not create GRPC server [%w]", err)

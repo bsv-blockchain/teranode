@@ -15,8 +15,8 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
-	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/getsentry/sentry-go"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
@@ -51,7 +51,6 @@ func main() {
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
-	useTracer := flag.Bool("tracer", false, "start tracer")
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
@@ -96,10 +95,15 @@ func main() {
 	}
 
 	// tracingOn := gocore.Config().GetBool("tracing")
-	if *useTracer {
+	if gocore.Config().GetBool("use_open_tracing", true) {
 		logger.Infof("Starting tracer")
-		closeTracer := tracing.InitOtelTracer()
-		defer closeTracer()
+		// closeTracer := tracing.InitOtelTracer()
+		// defer closeTracer()
+		_, closer, err := utils.InitGlobalTracer("ubsv")
+		if err != nil {
+			logger.Fatalf("failed to initialize tracer: %v", err)
+		}
+		defer closer.Close()
 	}
 
 	ctx := context.Background()
