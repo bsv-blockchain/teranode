@@ -137,7 +137,7 @@ func main() {
 	startTime = time.Now()
 	err = fireTransactions(u, keySet)
 	if err != nil {
-		fmt.Printf("ERROR in fire transactions: %v", err)
+		fmt.Printf("ERROR in fire transactions: %v\n", err)
 	}
 
 	select {}
@@ -147,7 +147,7 @@ func txWorker(keySet *KeySet, txChan <-chan *bt.UTXO) {
 	for utxo := range txChan {
 		err := fireTransactions(utxo, keySet)
 		if err != nil {
-			fmt.Printf("ERROR in fire transactions: %v", err)
+			fmt.Printf("ERROR in fire transactions: %v\n", err)
 		}
 	}
 }
@@ -158,7 +158,7 @@ func txWorkerLimited(keySet *KeySet, rateLimitDuration time.Duration, txChan <-c
 		_ = limiter.Wait(context.Background())
 		err := fireTransactions(utxo, keySet)
 		if err != nil {
-			fmt.Printf("ERROR in fire transactions: %v", err)
+			fmt.Printf("ERROR in fire transactions: %v\n", err)
 		}
 	}
 }
