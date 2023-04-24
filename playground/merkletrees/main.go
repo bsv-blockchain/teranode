@@ -14,6 +14,7 @@ import (
 )
 
 func main() {
+	runtime.GC()
 	printAlloc()
 
 	keySlice := make([]string, 1_000_000)
