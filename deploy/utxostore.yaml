@@ -20,7 +20,7 @@ spec:
       containers:
         - name: utxostore
           image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-utxostore=1", "-tracer=1"]
+          args: ["-utxostore=1"]
           env:
           - name: utxostore
             value: memory://:8082
