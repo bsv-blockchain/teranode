@@ -13,12 +13,12 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -184,8 +184,8 @@ func (u *PropagationServer) Get(ctx context.Context, req *propagation_api.GetReq
 }
 
 func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetRequest) (*emptypb.Empty, error) {
-	ctx, span := otel.Tracer("").Start(ctx, "PropagationServer:Set")
-	defer span.End()
+	traceSpan := tracing.Start(ctx, "PropagationServer:Set")
+	defer traceSpan.Finish()
 
 	timeStart := time.Now()
 	btTx, err := bt.NewTxFromBytes(req.Tx)
@@ -194,7 +194,7 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, err
 	}
 
-	if err = u.txStore.Set(ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
+	if err = u.txStore.Set(traceSpan.Ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
@@ -208,16 +208,16 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	}
 
 	if !IsExtended(btTx) {
-		extendCtx, extendSpan := otel.Tracer("").Start(ctx, "PropagationServer:ExtendTransaction")
-		err = ExtendTransaction(extendCtx, btTx, u.txStore)
+		extendSpan := tracing.Start(traceSpan.Ctx, "PropagationServer:ExtendTransaction")
+		err = ExtendTransaction(extendSpan.Ctx, btTx, u.txStore)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return &emptypb.Empty{}, err
 		}
-		extendSpan.End()
+		extendSpan.Finish()
 	}
 
-	if err = u.validator.Validate(ctx, btTx); err != nil {
+	if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		u.logger.Errorf("received invalid transaction: %s", err.Error())
 		prometheusInvalidTransactions.Inc()

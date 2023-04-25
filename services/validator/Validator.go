@@ -3,34 +3,37 @@ package validator
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-bitcoin"
-	"go.opentelemetry.io/otel"
 )
 
 type Validator struct {
-	store store.UTXOStore
+	store          store.UTXOStore
+	saveInParallel bool
 }
 
 func New(store store.UTXOStore) Interface {
 	return &Validator{
-		store: store,
+		store:          store,
+		saveInParallel: true,
 	}
 }
 
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
-	ctx, span := otel.Tracer("").Start(ctx, "Validator:Validate")
-	defer span.End()
+	traceSpan := tracing.Start(ctx, "Validator:Validate")
+	defer traceSpan.Finish()
 
 	if tx.IsCoinbase() {
-		coinbaseCtx, coinbaseSpan := otel.Tracer("").Start(ctx, "Validator:Validate:IsCoinbase")
-		defer coinbaseSpan.End()
+		coinbaseSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:IsCoinbase")
+		defer coinbaseSpan.Finish()
 
 		// TODO what checks do we need to do on a coinbase tx?
 		// not just anyone should be able to send a coinbase tx through the system
@@ -41,7 +44,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// store the coinbase utxo
 		// TODO this should be marked as spendable only after 100 blocks
-		_, err = v.store.Store(coinbaseCtx, hash)
+		_, err = v.store.Store(coinbaseSpan.Ctx, hash)
 		if err != nil {
 			return err
 		}
@@ -49,7 +52,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	_, basicSpan := otel.Tracer("").Start(ctx, "Validator:Validate:Basic")
+	basicSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:Basic")
 
 	// check all the basic stuff
 	// TODO this is using the ARC validator, but should be moved into a separate package or imported to this one
@@ -57,12 +60,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// this will also check whether the transaction is in extended format
 
 	if err := validator.ValidateTransaction(tx); err != nil {
-		basicSpan.End()
+		basicSpan.Finish()
 		return err
 	}
-	basicSpan.End()
+	basicSpan.Finish()
 
-	utxoCtx, utxoSpan := otel.Tracer("").Start(ctx, "Validator:Validate:CheckUtxos")
+	utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:CheckUtxos")
 
 	// check the utxos
 	txIDBytes := bt.ReverseBytes(tx.TxIDBytes())
@@ -82,7 +85,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		// TODO Should we be doing this in a batch?
-		utxoResponse, err = v.store.Spend(utxoCtx, hash, txIDChainHash)
+		utxoResponse, err = v.store.Spend(utxoSpan.Ctx, hash, txIDChainHash)
 		if err != nil {
 			utxoSpan.RecordError(err)
 			break
@@ -102,37 +105,63 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if err != nil {
-		reverseUtxoCtx, reverseUtxoSpan := otel.Tracer("").Start(ctx, "Validator:Validate:ReverseUtxos")
+		reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
 		defer func() {
-			reverseUtxoSpan.End()
-			utxoSpan.End()
+			reverseUtxoSpan.Finish()
+			utxoSpan.Finish()
 		}()
 
 		// Revert all the spends
 		for _, hash = range reservedUtxos {
-			if _, err = v.store.Reset(reverseUtxoCtx, hash); err != nil {
+			if _, err = v.store.Reset(reverseUtxoSpan.Ctx, hash); err != nil {
 				reverseUtxoSpan.RecordError(err)
 			}
 		}
 
 		return err
 	}
-	utxoSpan.End()
+	utxoSpan.Finish()
 
 	// process the outputs of the transaction into new spendable outputs
-	storeUtxoCtx, storeUtxoSpan := otel.Tracer("").Start(ctx, "Validator:Validate:StoreUtxos")
-	defer storeUtxoSpan.End()
+	storeUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreUtxos")
+	defer storeUtxoSpan.Finish()
 
-	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 {
-			hash, err = utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
-			if err != nil {
-				return err
+	if v.saveInParallel {
+		var wg sync.WaitGroup
+		for i, output := range tx.Outputs {
+			if output.Satoshis > 0 {
+				i := i
+				output := output
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+
+					utxoHash, utxoErr := utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
+					if utxoErr != nil {
+						fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
+						//return err
+					}
+
+					_, utxoErr = v.store.Store(storeUtxoSpan.Ctx, utxoHash)
+					if utxoErr != nil {
+						fmt.Printf("error storing utxo: %s\n", utxoErr.Error())
+					}
+				}()
 			}
+		}
+		wg.Wait()
+	} else {
+		for i, output := range tx.Outputs {
+			if output.Satoshis > 0 {
+				hash, err = utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
+				if err != nil {
+					return err
+				}
 
-			_, err = v.store.Store(storeUtxoCtx, hash)
-			if err != nil {
-				break
+				_, err = v.store.Store(storeUtxoSpan.Ctx, hash)
+				if err != nil {
+					break
+				}
 			}
 		}
 	}
