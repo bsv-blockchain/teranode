@@ -50,8 +50,9 @@ jobs:
       # Install dependencies
       - name: Install Dependencies
         run: |
-          sudo apt-get update &&\
-          sudo apt-get install wget -y  &&\
+          sudo apt-get update && \
+          sudo apt-get install wget -y  && \
+          mkdir -p /var/lib && \
           wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
 
       - name: Install FoundationDB
