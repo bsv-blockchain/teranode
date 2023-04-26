@@ -84,7 +84,7 @@ type Store struct {
 }
 
 func New(host string, port int, user, password string) (*Store, error) {
-	fdb.MustAPIVersion(710)
+	fdb.MustAPIVersion(720)
 	// TODO add connection options etc.
 	db := fdb.MustOpenDefault()
 	if err := db.Options().SetTransactionTimeout(60000); err != nil { // 60,000 ms = 1 minute
