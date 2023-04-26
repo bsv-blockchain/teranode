@@ -9,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	store "github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store/aerospike"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store/foundationdb"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -45,11 +46,10 @@ func NewUTXOStore(logger utils.Logger, url *url.URL) (store.UTXOStore, error) {
 		apiClient := utxostore_api.NewUtxoStoreAPIClient(conn)
 		return utxo.NewClient(apiClient)
 
-		//case "foundationdb":
-		// TODO: Not working yet
-		//	password, _ := url.User.Password()
-		// logger.Infof("[UTXOStore] connecting to foundationdb service at %s:%d", url.Hostname(), port)
-		//	return foundationdb.New(url.Hostname(), port, url.User.String(), password)
+	case "foundationdb":
+		password, _ := url.User.Password()
+		logger.Infof("[UTXOStore] connecting to foundationdb service at %s:%d", url.Hostname(), port)
+		return foundationdb.New(url.Hostname(), port, url.User.String(), password)
 	}
 
 	return nil, fmt.Errorf("unknown scheme: %s", url.Scheme)

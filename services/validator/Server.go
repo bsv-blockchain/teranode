@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -187,20 +187,20 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 
 func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	timeStart := time.Now()
-	ctx, span := otel.Tracer("").Start(ctx, "Validator:ValidateTransaction")
-	defer span.End()
+	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
+	defer traceSpan.Finish()
 
 	tx, err := bt.NewTxFromBytes(req.TransactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		span.RecordError(err)
+		traceSpan.RecordError(err)
 		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
 	}
 
-	err = v.validator.Validate(ctx, tx)
+	err = v.validator.Validate(traceSpan.Ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		span.RecordError(err)
+		traceSpan.RecordError(err)
 		return &validator_api.ValidateTransactionResponse{
 			Valid:  false,
 			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),

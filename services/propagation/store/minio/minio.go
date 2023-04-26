@@ -7,11 +7,9 @@ import (
 	"io"
 	"net/url"
 
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/ext"
-	"github.com/opentracing/opentracing-go/log"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -66,8 +64,8 @@ func (m *Minio) Close(ctx context.Context) error {
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Close").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "minio:Close")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "minio:Close")
+	defer traceSpan.Finish()
 
 	return nil //m.client.Close()
 }
@@ -77,16 +75,15 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Set").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "minio:Set")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "minio:Set")
+	defer traceSpan.Finish()
 
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
 	bufReader := bytes.NewReader(value)
 	contentType := "application/octet-stream"
 	_, err := m.client.PutObject(ctx, m.bucketName, objectName, bufReader, int64(len(value)), minio.PutObjectOptions{ContentType: contentType})
 	if err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set minio data: %w", err)
 	}
 
@@ -98,14 +95,13 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Get").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "minio:Get")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "minio:Get")
+	defer traceSpan.Finish()
 
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
-	object, err := m.client.GetObject(context.Background(), m.bucketName, objectName, minio.GetObjectOptions{})
+	object, err := m.client.GetObject(ctx, m.bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get minio data: %w", err)
 	}
 	defer object.Close()
@@ -113,8 +109,7 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	var b []byte
 	b, err = io.ReadAll(object)
 	if err != nil && err != io.EOF {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to read minio data: %w", err)
 	}
 
@@ -126,16 +121,15 @@ func (m *Minio) Del(ctx context.Context, hash []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Del").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "minio:Del")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "minio:Del")
+	defer traceSpan.Finish()
 
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
 	err := m.client.RemoveObject(ctx, m.bucketName, objectName, minio.RemoveObjectOptions{
 		GovernanceBypass: true,
 	})
 	if err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to del minio data: %w", err)
 	}
 

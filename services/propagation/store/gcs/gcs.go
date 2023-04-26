@@ -6,9 +6,7 @@ import (
 	"io"
 
 	"cloud.google.com/go/storage"
-	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/ext"
-	"github.com/opentracing/opentracing-go/log"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/api/option"
@@ -44,8 +42,8 @@ func (g *GCS) Close(ctx context.Context) error {
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Close").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "gcs:Close")
-	defer span.Finish()
+	traceSpan := tracing.Start(context.Background(), "gcs:Close")
+	defer traceSpan.Finish()
 
 	return g.client.Close()
 }
@@ -55,19 +53,17 @@ func (g *GCS) Set(ctx context.Context, key []byte, value []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Set").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "gcs:Set")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "gcs:Set")
+	defer traceSpan.Finish()
 
 	// upload the tx data to gcs bucket
 	wc := g.bucket.Object(utils.ReverseAndHexEncodeSlice(key)).NewWriter(ctx)
 	if _, err := wc.Write(value); err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 	if err := wc.Close(); err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 
@@ -79,22 +75,20 @@ func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Get").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "gcs:Get")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "gcs:Get")
+	defer traceSpan.Finish()
 
 	// download the tx data from gcs bucket
 	rc, err := g.bucket.Object(utils.ReverseAndHexEncodeSlice(hash)).NewReader(ctx)
 	if err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get data: %w", err)
 	}
 	defer rc.Close()
 
 	result, err := io.ReadAll(rc)
 	if err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get data: %w", err)
 	}
 
@@ -106,13 +100,12 @@ func (g *GCS) Del(ctx context.Context, hash []byte) error {
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Del").AddTime(start)
 	}()
-	span, _ := opentracing.StartSpanFromContext(ctx, "gcs:Del")
-	defer span.Finish()
+	traceSpan := tracing.Start(ctx, "gcs:Del")
+	defer traceSpan.Finish()
 
 	// delete the tx data from gcs bucket
 	if err := g.bucket.Object(utils.ReverseAndHexEncodeSlice(hash)).Delete(ctx); err != nil {
-		span.SetTag(string(ext.Error), true)
-		span.LogFields(log.Error(err))
+		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to del data: %w", err)
 	}
 

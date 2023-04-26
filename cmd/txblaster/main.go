@@ -17,15 +17,13 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 )
 
@@ -206,16 +204,16 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 var counter atomic.Uint64
 
 func sendTransaction(tx *bt.Tx) error {
-	ctx, span := otel.Tracer("").Start(context.Background(), "txBlaster:sendTransaction")
-	defer span.End()
+	traceSpan := tracing.Start(context.Background(), "txBlaster:sendTransaction")
+	defer traceSpan.Finish()
 
-	span.SetAttributes(attribute.String("progname", "txblaster"))
-	span.AddEvent("sendTransaction", trace.WithAttributes(attribute.String("txid", tx.TxID())))
+	traceSpan.SetTag("progname", "txblaster")
+	traceSpan.SetTag("txid", tx.TxID())
 
 	if useHTTP {
-		span.SetAttributes(attribute.String("transport", "http"))
+		traceSpan.SetTag("transport", "http")
 
-		req, err := http.NewRequestWithContext(ctx, "POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
+		req, err := http.NewRequestWithContext(traceSpan.Ctx, "POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
 		if err != nil {
 			return fmt.Errorf("error creating http request: %v", err)
 		}
@@ -234,9 +232,9 @@ func sendTransaction(tx *bt.Tx) error {
 			return fmt.Errorf("error sending transaction: %v - %s", resp.Status, body)
 		}
 	} else {
-		span.SetAttributes(attribute.String("transport", "grpc"))
+		traceSpan.SetTag("transport", "grpc")
 
-		if _, err := propagationServer.Set(ctx, &propagation_api.SetRequest{
+		if _, err := propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
 			Tx: tx.ExtendedBytes(),
 		}); err != nil {
 			return fmt.Errorf("error sending transaction to propagation server: %v", err)

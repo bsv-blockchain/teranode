@@ -8,6 +8,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/blockchain"
@@ -17,7 +18,6 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.opentelemetry.io/otel"
 )
 
 var (
@@ -165,8 +165,8 @@ func (ph *PeerHandler) HandleTransactionRejection(rejMsg *wire.MsgReject, peer p
 
 func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error {
 	timeStart := time.Now()
-	ctx, span := otel.Tracer("").Start(context.Background(), "PeerHandler:HandleTransaction")
-	defer span.End()
+	traceSpan := tracing.Start(context.Background(), "PeerHandler:HandleTransaction")
+	defer traceSpan.Finish()
 
 	ph.logger.Infof("received transaction: %s", msg.TxHash().String())
 	var buf bytes.Buffer
@@ -193,7 +193,7 @@ func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error 
 		return fmt.Errorf("received coinbase transaction: %s", msg.TxHash().String())
 	}
 
-	err = ph.extendTransaction(ctx, btTx)
+	err = ph.extendTransaction(traceSpan.Ctx, btTx)
 	if err != nil {
 		prometheusPeerInvalidTransactions.Inc()
 		return err
@@ -202,7 +202,7 @@ func (ph *PeerHandler) HandleTransaction(msg *wire.MsgTx, peer p2p.PeerI) error 
 	prometheusPeerTransactionSize.Observe(float64(len(txBytes)))
 	prometheusPeerReceivedTransactions.Inc()
 
-	if err = ph.validator.Validate(ctx, btTx); err != nil {
+	if err = ph.validator.Validate(traceSpan.Ctx, btTx); err != nil {
 		// send REJECT message to peer if invalid tx
 		ph.logger.Errorf("received invalid transaction: %s", err.Error())
 		_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
@@ -241,8 +241,8 @@ func (ph *PeerHandler) HandleBlockAnnouncement(invMsg *wire.InvVect, peer p2p.Pe
 
 func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	start := time.Now()
-	ctx, span := otel.Tracer("").Start(context.Background(), "PeerHandler:HandleBlock")
-	defer span.End()
+	traceSpan := tracing.Start(context.Background(), "PeerHandler:HandleBlock")
+	defer traceSpan.Finish()
 
 	msg, ok := wireMsg.(*wire.MsgBlock)
 	if !ok {
@@ -254,7 +254,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	if !blockHash.IsEqual(&chainhash.Hash{}) { // genesis block
 		previousBlockHash := msg.Header.PrevBlock
 		if !previousBlockHash.IsEqual(&chainhash.Hash{}) { // genesis block
-			_, err := ph.blockStore.Get(ctx, previousBlockHash[:])
+			_, err := ph.blockStore.Get(traceSpan.Ctx, previousBlockHash[:])
 			if err != nil {
 				_, ok := ph.blockBacklog[previousBlockHash]
 				if !ok {
@@ -270,7 +270,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 	merkleRoot := msg.Header.MerkleRoot
 
-	processTxsCtx, processTxsSpan := otel.Tracer("").Start(ctx, "PeerHandler:HandleBlock:Transactions")
+	processTxsSpan := tracing.Start(traceSpan.Ctx, "PeerHandler:HandleBlock:Transactions")
 	transactionHashes := make([][]byte, len(msg.Transactions))
 	for i, tx := range msg.Transactions {
 		var buff bytes.Buffer
@@ -282,14 +282,14 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 
 		// extend the transaction with input data
 		if !btTx.IsCoinbase() {
-			err = ph.extendTransaction(processTxsCtx, btTx)
+			err = ph.extendTransaction(processTxsSpan.Ctx, btTx)
 			if err != nil {
 				return fmt.Errorf("could not extend transaction %s: %w", btTx.TxID(), err)
 			}
 		}
 
 		// Validate the transaction
-		if err = ph.validator.Validate(processTxsCtx, btTx); err != nil {
+		if err = ph.validator.Validate(processTxsSpan.Ctx, btTx); err != nil {
 			// send REJECT message to peer if invalid tx
 			ph.logger.Errorf("received invalid transaction: %s", err.Error())
 			_ = peer.WriteMsg(wire.NewMsgReject(wire.CmdReject, wire.RejectInvalid, err.Error()))
@@ -297,9 +297,9 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 		}
 
 		hash := tx.TxHash()
-		txExists, _ := ph.txStore.Get(processTxsCtx, hash[:])
+		txExists, _ := ph.txStore.Get(processTxsSpan.Ctx, hash[:])
 		if txExists == nil {
-			if err = ph.txStore.Set(processTxsCtx, hash[:], buff.Bytes()); err != nil {
+			if err = ph.txStore.Set(processTxsSpan.Ctx, hash[:], buff.Bytes()); err != nil {
 				return fmt.Errorf("could not store transaction %s: %w", hash.String(), err)
 			}
 		}
@@ -307,14 +307,14 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 		// bt returns the tx id bytes in reverse order :-/
 		transactionHashes[i] = bt.ReverseBytes(btTx.TxIDBytes())
 	}
-	processTxsSpan.End()
+	processTxsSpan.Finish()
 
-	_, merkleSpan := otel.Tracer("").Start(ctx, "PeerHandler:HandleBlock:MerkleRoot")
+	merkleSpan := tracing.Start(traceSpan.Ctx, "PeerHandler:HandleBlock:MerkleRoot")
 	calculatedMerkleRoot := blockchain.BuildMerkleTreeStore(transactionHashes)
 	if !bytes.Equal(calculatedMerkleRoot[len(calculatedMerkleRoot)-1], merkleRoot[:]) {
 		return fmt.Errorf("merkle root mismatch for block %s", blockHash.String())
 	}
-	merkleSpan.End()
+	merkleSpan.Finish()
 
 	ph.logger.Infof("Processed block %s, %d transactions in %0.2f seconds", blockHash.String(), len(msg.Transactions), time.Since(start).Seconds())
 
@@ -331,7 +331,7 @@ func (ph *PeerHandler) HandleBlock(wireMsg wire.Message, peer p2p.PeerI) error {
 	prometheusPeerBlockSize.Observe(float64(len(blockBytes)))
 	prometheusPeerBlockDuration.Observe(float64(time.Since(start).Microseconds()))
 
-	err := ph.blockStore.Set(ctx, blockHash[:], blockBytes)
+	err := ph.blockStore.Set(traceSpan.Ctx, blockHash[:], blockBytes)
 	if err != nil {
 		return fmt.Errorf("could not store block %s: %w", blockHash.String(), err)
 	}

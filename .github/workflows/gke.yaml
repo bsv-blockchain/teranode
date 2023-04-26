@@ -12,12 +12,12 @@ jobs:
         run: |
           sudo apt-get update &&\
           sudo apt-get install wget -y  &&\
-          wget https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-clients_7.1.31-1_amd64.deb && \
-          wget https://github.com/apple/foundationdb/releases/download/7.1.31/foundationdb-server_7.1.31-1_amd64.deb 
-          
+          wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
+          wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-server_7.2.5-1_amd64.deb 
+
       - name: Install FoundationDB
         run: |
-           sudo dpkg -i foundationdb-clients_7.1.31-1_amd64.deb foundationdb-server_7.1.31-1_amd64.deb
+           sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb foundationdb-server_7.2.5-1_amd64.deb
 
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -28,7 +28,7 @@ jobs:
         run: go mod verify
 
       - name: Build
-        run: CGO_ENABLED=1; go build -v ./...
+        run: CGO_ENABLED=1 go build -v ./...
 
       - name: Run go vet
         run: go vet ./...
@@ -47,6 +47,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      # Install dependencies
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update && \
+          sudo apt-get install wget -y  && \
+          wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
+
+      - name: Install FoundationDB
+        run: |
+          sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
       # Setup gcloud CLI
       - id: auth

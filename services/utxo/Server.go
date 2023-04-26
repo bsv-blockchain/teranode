@@ -8,7 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store/memory"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -89,7 +92,7 @@ type UTXOStore struct {
 	logger     utils.Logger
 	grpcServer *grpc.Server
 	mu         sync.Mutex
-	store      map[chainhash.Hash]chainhash.Hash
+	store      store.UTXOStore
 }
 
 func Enabled() bool {
@@ -101,7 +104,7 @@ func Enabled() bool {
 func New(logger utils.Logger) (*UTXOStore, error) {
 	return &UTXOStore{
 		logger: logger,
-		store:  make(map[chainhash.Hash]chainhash.Hash),
+		store:  memory.New(), // delete spends
 	}, nil
 }
 
@@ -169,41 +172,31 @@ func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.
 	}, nil
 }
 
-func (u *UTXOStore) Store(_ context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
+func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
+	traceSpan := tracing.Start(ctx, "UTXOStore:Store")
+	defer traceSpan.Finish()
+
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
 	}
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	spendingTxid, found := u.store[*utxoHash]
-	if found {
-		if spendingTxid.IsEqual(empty) {
-			prometheusUtxoReStore.Inc()
-			return &utxostore_api.StoreResponse{
-				Status: utxostore_api.Status_OK,
-			}, nil
-		}
-
-		prometheusUtxoStoreSpent.Inc()
-		return &utxostore_api.StoreResponse{
-			Status: utxostore_api.Status_SPENT,
-		}, nil
-
+	resp, err := u.store.Store(traceSpan.Ctx, utxoHash)
+	if err != nil {
+		return nil, err
 	}
-
-	u.store[*utxoHash] = *empty
 
 	prometheusUtxoStore.Inc()
 
 	return &utxostore_api.StoreResponse{
-		Status: utxostore_api.Status_OK,
+		Status: utxostore_api.Status(resp.Status),
 	}, nil
 }
 
-func (u *UTXOStore) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
+func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
+	traceSpan := tracing.Start(ctx, "UTXOStore:Spend")
+	defer traceSpan.Finish()
+
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
@@ -214,59 +207,41 @@ func (u *UTXOStore) Spend(_ context.Context, req *utxostore_api.SpendRequest) (*
 		return nil, err
 	}
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	existingHash, found := u.store[*utxoHash]
-	if found {
-		if existingHash.IsEqual(empty) {
-			u.store[*utxoHash] = *spendingHash
-
-			prometheusUtxoSpend.Inc()
-			return &utxostore_api.SpendResponse{
-				Status: utxostore_api.Status_OK,
-			}, nil
-		}
-
-		if existingHash.IsEqual(spendingHash) {
-			prometheusUtxoReSpend.Inc()
-			return &utxostore_api.SpendResponse{
-				Status: utxostore_api.Status_OK,
-			}, nil
-		}
+	resp, err := u.store.Spend(traceSpan.Ctx, utxoHash, spendingHash)
+	if err != nil {
+		return nil, err
 	}
 
 	prometheusUtxoSpendSpent.Inc()
 
+	var spendingTxID []byte
+	if resp.SpendingTxID != nil {
+		spendingTxID = resp.SpendingTxID[:]
+	}
+
 	return &utxostore_api.SpendResponse{
-		Status:       utxostore_api.Status_SPENT,
-		SpendingTxid: existingHash.CloneBytes(),
+		Status:       utxostore_api.Status(resp.Status),
+		SpendingTxid: spendingTxID,
 	}, nil
 }
 
-func (u *UTXOStore) Reset(_ context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
+func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
+	traceSpan := tracing.Start(ctx, "UTXOStore:Reset")
+	defer traceSpan.Finish()
+
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
 	if err != nil {
 		return nil, err
 	}
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	spendingHash, found := u.store[*utxoHash]
-	if found {
-		if !spendingHash.IsEqual(empty) {
-			u.store[*utxoHash] = *empty
-		}
-
-		return &utxostore_api.ResetResponse{
-			Status: utxostore_api.Status_OK,
-		}, nil
+	resp, err := u.store.Reset(traceSpan.Ctx, utxoHash)
+	if err != nil {
+		return nil, err
 	}
 
 	prometheusUtxoReset.Inc()
 
 	return &utxostore_api.ResetResponse{
-		Status: utxostore_api.Status_NOT_FOUND,
+		Status: utxostore_api.Status(resp.Status),
 	}, nil
 }
