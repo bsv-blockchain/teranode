@@ -12,7 +12,7 @@ COPY . /app
 WORKDIR /app
 
 ENV CGO_ENABLED=1
-ENV CGO_CFLAGS="-I/usr/local"
+ENV CGO_CFLAGS="-I/usr/include"
 RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
