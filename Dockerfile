@@ -12,16 +12,17 @@ COPY . /app
 WORKDIR /app
 
 ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-I/usr/local"
 RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
 RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run main.go
 
 # Build TX Blaster
-RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/ 
+RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
 
 # Install Delve debugger
-RUN go install -ldflags "-s -w -extldflags ' -static'" github.com/go-delve/delve/cmd/dlv@latest 
+RUN go install -ldflags "-s -w -extldflags ' -static'" github.com/go-delve/delve/cmd/dlv@latest
 
 
 FROM alpine:latest
