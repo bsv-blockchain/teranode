@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/storage v1.30.1
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go v4.5.2+incompatible
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230406170925-94e42d5c64f5
+	github.com/apple/foundationdb/bindings/go v0.0.0-20230425195552-1b4889891530
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.1.0
