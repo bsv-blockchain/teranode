@@ -52,11 +52,12 @@ jobs:
         run: |
           sudo apt-get update && \
           sudo apt-get install wget -y  && \
-          mkdir -p /var/lib && \
+          
           wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
 
       - name: Install FoundationDB
         run: |
+          sudo mkdir -p /var/lib && \
           sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
       # Setup gcloud CLI
