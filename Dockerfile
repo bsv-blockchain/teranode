@@ -12,7 +12,9 @@ COPY . /app
 WORKDIR /app
 
 ENV CGO_ENABLED=1
-ENV CGO_CFLAGS="-I/usr/include"
+ENV CGO_CPPFLAGS="-I${GOPATH}/src/github.com/apple/foundationdb/bindings/c"
+ENV CGO_CFLAGS="-g -O2"
+ENV CGO_LDFLAGS="/usr/local/lib"
 RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
