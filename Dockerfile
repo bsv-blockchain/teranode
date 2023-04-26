@@ -12,10 +12,9 @@ COPY . /app
 WORKDIR /app
 
 ENV CGO_ENABLED=1
-ENV CGO_CPPFLAGS="-I${GOPATH}/src/github.com/apple/foundationdb/bindings/c"
-ENV CGO_CFLAGS="-g -O2"
-ENV CGO_LDFLAGS="/usr/local/lib"
 RUN echo "${GITHUB_SHA}"
+
+RUN go get -u github.com/apple/foundationdb/bindings/go/src/fdb@release-7.2
 
 # Build the Go library
 RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run main.go
