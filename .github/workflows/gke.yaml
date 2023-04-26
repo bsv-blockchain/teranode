@@ -43,7 +43,7 @@ jobs:
         run: go test -race -vet=off ./...
 
   build-docker-and-deploy:
-    runs-on: mono:latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
@@ -51,7 +51,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update && \
-          sudo apt-get install wget build-essential -y  && \
+          sudo apt-get install wget build-essential mono -y  && \
           wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
 
       - name: Install FoundationDB
