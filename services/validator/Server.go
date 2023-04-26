@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -82,7 +83,7 @@ func NewServer(logger utils.Logger) *Server {
 		panic("no utxostore setting found")
 	}
 
-	s, err := NewUTXOStore(logger, utxostoreURL)
+	s, err := utxo.NewStore(logger, utxostoreURL)
 	if err != nil {
 		panic(err)
 	}

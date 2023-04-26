@@ -102,9 +102,33 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger) (*UTXOStore, error) {
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("no utxostore setting found")
+	}
+
+	var s store.UTXOStore
+	switch utxostoreURL.Path {
+	case "/splitbyhash":
+		logger.Infof("[UTXOStore] using splitbyhash memory store")
+		s = memory.NewSplitByHash(true)
+	case "/swiss":
+		logger.Infof("[UTXOStore] using swissmap memory store")
+		s = memory.NewSwissMap(true)
+	case "/xsyncmap":
+		logger.Infof("[UTXOStore] using xsyncmap memory store")
+		s = memory.NewXSyncMap(true)
+	default:
+		logger.Infof("[UTXOStore] using default memory store")
+		s = memory.New(true)
+	}
+
 	return &UTXOStore{
 		logger: logger,
-		store:  memory.New(), // delete spends
+		store:  s,
 	}, nil
 }
 

@@ -14,13 +14,15 @@ var (
 )
 
 type Memory struct {
-	mu sync.Mutex
-	m  map[chainhash.Hash]chainhash.Hash
+	mu           sync.Mutex
+	m            map[chainhash.Hash]chainhash.Hash
+	DeleteSpends bool
 }
 
-func New() *Memory {
+func New(deleteSpends bool) *Memory {
 	return &Memory{
-		m: make(map[chainhash.Hash]chainhash.Hash),
+		m:            make(map[chainhash.Hash]chainhash.Hash),
+		DeleteSpends: deleteSpends,
 	}
 }
 
@@ -77,7 +79,11 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 
 	if existingHash, found := m.m[*hash]; found {
 		if existingHash.IsEqual(&chainhash.Hash{}) {
-			m.m[*hash] = *txID
+			if m.DeleteSpends {
+				delete(m.m, *hash)
+			} else {
+				m.m[*hash] = *txID
+			}
 			return &store.UTXOResponse{
 				Status:       int(utxostore_api.Status_OK),
 				SpendingTxID: txID,

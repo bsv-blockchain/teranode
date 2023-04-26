@@ -9,7 +9,7 @@ import (
 func TestMemory(t *testing.T) {
 
 	t.Run("memory store", func(t *testing.T) {
-		db := New()
+		db := New(false)
 		err := db.delete(hash)
 		require.NoError(t, err)
 
@@ -17,7 +17,7 @@ func TestMemory(t *testing.T) {
 	})
 
 	t.Run("memory spend", func(t *testing.T) {
-		db := New()
+		db := New(false)
 		err := db.delete(hash)
 		require.NoError(t, err)
 
@@ -25,7 +25,7 @@ func TestMemory(t *testing.T) {
 	})
 
 	t.Run("memory reset", func(t *testing.T) {
-		db := New()
+		db := New(false)
 		err := db.delete(hash)
 		require.NoError(t, err)
 
@@ -34,11 +34,11 @@ func TestMemory(t *testing.T) {
 }
 
 func TestMemorySanity(t *testing.T) {
-	db := New()
+	db := New(false)
 	testSanity(t, db)
 }
 
 func BenchmarkMemory(b *testing.B) {
-	db := New()
+	db := New(true)
 	benchmark(b, db)
 }

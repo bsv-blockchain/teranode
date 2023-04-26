@@ -1,3 +1,5 @@
+//go:build aerospike
+
 package aerospike
 
 import (
