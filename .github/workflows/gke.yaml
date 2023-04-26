@@ -56,8 +56,8 @@ jobs:
 
       - name: Install FoundationDB
         run: |
-          sudo mkdir -p /var/lib/foundationdb && \
-          sudo dpkg -i --debug=77777 foundationdb-clients_7.2.5-1_amd64.deb
+          CGO_CFLAGS='-I/usr/local' \
+          sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
       # Setup gcloud CLI
       - id: auth
