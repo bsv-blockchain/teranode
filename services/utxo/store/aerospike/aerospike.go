@@ -94,12 +94,12 @@ func New(host string, port int, namespace string) (*Store, error) {
 	}, nil
 }
 
-func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	prometheusUtxoGet.Inc()
 	return nil, nil
 }
 
-func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(0, 0)
 	policy.RecordExistsAction = aero.CREATE_ONLY
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
@@ -153,7 +153,7 @@ func (s Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespon
 	}, nil
 }
 
-func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *store.UTXOResponse, err error) {
+func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *store.UTXOResponse, err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			fmt.Printf("ERROR panic in aerospike Spend: %v", recoverErr)
@@ -215,7 +215,7 @@ func (s Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Ha
 	}, nil
 }
 
-func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(2, 0)
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
@@ -235,6 +235,6 @@ func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResp
 	return s.Store(ctx, hash)
 }
 
-func (s Store) DeleteSpends(_ bool) {
+func (s *Store) DeleteSpends(_ bool) {
 	// noop
 }

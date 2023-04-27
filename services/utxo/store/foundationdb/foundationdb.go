@@ -242,6 +242,6 @@ func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 	return &store.UTXOResponse{}, nil
 }
 
-func (s Store) DeleteSpends(_ bool) {
+func (s *Store) DeleteSpends(_ bool) {
 	// noop
 }
