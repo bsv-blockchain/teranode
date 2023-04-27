@@ -234,3 +234,7 @@ func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResp
 
 	return s.Store(ctx, hash)
 }
+
+func (s Store) DeleteSpends(_ bool) {
+	// noop
+}
