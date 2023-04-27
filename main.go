@@ -157,7 +157,7 @@ func main() {
 
 		if found {
 			g.Go(func() (err error) {
-				logger.Infof("Starting PropagationServer on: %s", utxostoreURL.Host)
+				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
 
 				utxoStore, err = utxo.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
 				if err != nil {

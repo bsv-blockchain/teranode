@@ -19,29 +19,34 @@ func main() {
 	runtime.GC()
 	fmt.Printf("Started with memory: %s\n", printAlloc())
 
-	uint256Map := make(map[uint256.Int]*uint256.Int, 1_000_000)
-	for i := uint64(0); i < 1_000_000; i++ {
-		ii := uint256.NewInt(i)
-		iii := uint256.NewInt(i + 2_000_000)
-		uint256Map[*ii] = iii
-	}
+	func() {
+		uint256Map := make(map[uint256.Int]*uint256.Int, 1_000_000)
+		for i := uint64(0); i < 1_000_000; i++ {
+			ii := uint256.NewInt(i)
+			iii := uint256.NewInt(i + 2_000_000)
+			uint256Map[*ii] = iii
+		}
 
-	fmt.Printf("Mem used for uint256: %s\n", printAlloc())
-	uint256Map = nil
+		fmt.Printf("Mem used for uint256: %s\n", printAlloc())
+	}()
+
 	runtime.GC()
 
-	chainhashMap := make(map[chainhash.Hash]*chainhash.Hash, 1_000_000)
 	bs := make([]byte, 32)
-	for i := uint64(0); i < 1_000_000; i++ {
-		binary.LittleEndian.PutUint64(bs, i)
-		ii := chainhash.HashH(bs)
-		binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		iii := chainhash.HashH(bs)
-		chainhashMap[ii] = &iii
-	}
 
-	fmt.Printf("Mem used for chainhashMap: %s\n", printAlloc())
-	chainhashMap = nil
+	func() {
+		chainhashMap := make(map[chainhash.Hash]*chainhash.Hash, 1_000_000)
+		for i := uint64(0); i < 1_000_000; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii := chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+2_000_000)
+			iii := chainhash.HashH(bs)
+			chainhashMap[ii] = &iii
+		}
+
+		fmt.Printf("Mem used for chainhashMap: %s\n", printAlloc())
+	}()
+
 	runtime.GC()
 
 	swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](1_000_000)
@@ -93,33 +98,38 @@ func main() {
 	runtime.GC()
 
 	key := make([]byte, 32)
-	byte32Map := make(map[[1]byte]subBytes)
-	for i := uint64(0); i < uint64(256); i++ {
-		binary.BigEndian.PutUint64(key, i)
-		byte32Map[[1]byte(key[:1])] = make(subBytes)
-	}
 
-	for i := uint64(0); i < 1_000_000; i++ {
-		binary.BigEndian.PutUint64(key, i)
-		bytes := [1]byte(key[:1])
-		bytes32 := [32]byte(key[:32])
-		byte32Map[bytes][bytes32] = &bytes32
-	}
+	func() {
+		byte32Map := make(map[[1]byte]subBytes)
+		for i := uint64(0); i < uint64(256); i++ {
+			binary.BigEndian.PutUint64(key, i)
+			byte32Map[[1]byte(key[:1])] = make(subBytes)
+		}
 
-	fmt.Printf("Mem used for byte1+byte32 map: %s\n", printAlloc())
-	byte32Map = nil
+		for i := uint64(0); i < 1_000_000; i++ {
+			binary.BigEndian.PutUint64(key, i)
+			bytes := [1]byte(key[:1])
+			bytes32 := [32]byte(key[:32])
+			byte32Map[bytes][bytes32] = &bytes32
+		}
+
+		fmt.Printf("Mem used for byte1+byte32 map: %s\n", printAlloc())
+	}()
+
 	runtime.GC()
 
-	keySlice := make([]string, 1_000_000)
+	func() {
+		keySlice := make([]string, 1_000_000)
 
-	for i := uint64(0); i < 1_000_000; i++ {
-		// convert int to byte array
-		binary.LittleEndian.PutUint64(key, i)
-		keySlice[i] = utils.ReverseAndHexEncodeHash([32]byte(key[:32]))
-	}
+		for i := uint64(0); i < 1_000_000; i++ {
+			// convert int to byte array
+			binary.LittleEndian.PutUint64(key, i)
+			keySlice[i] = utils.ReverseAndHexEncodeHash([32]byte(key[:32]))
+		}
 
-	fmt.Printf("Mem used for keySlice: %s\n", printAlloc())
-	keySlice = nil
+		fmt.Printf("Mem used for keySlice: %s\n", printAlloc())
+	}()
+
 	runtime.GC()
 
 	keySliceBytes := make([][32]byte, 1_000_000)

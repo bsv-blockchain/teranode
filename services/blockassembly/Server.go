@@ -85,7 +85,7 @@ func (u *BlockAssembly) Start() error {
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 	})
 	if err != nil {
-		return fmt.Errorf("Could not create GRPC server [%w]", err)
+		return fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
 	gocore.SetAddress(address.Host)

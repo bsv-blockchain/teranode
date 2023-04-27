@@ -16,7 +16,7 @@ import (
 type NullStore struct{}
 
 func (ns *NullStore) DeleteSpends(deleteSpends bool) {
-	return
+	// No nothing
 }
 
 func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
