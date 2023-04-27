@@ -19,11 +19,11 @@ func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	}, nil
 }
 
-func (s Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	return nil, nil
 }
 
-func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
 		UxtoHash: hash[:],
 	})
@@ -36,7 +36,7 @@ func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResp
 	}, nil
 }
 
-func (s Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Spend(ctx, &utxostore_api.SpendRequest{
 		UxtoHash:     hash[:],
 		SpendingTxid: txID[:],
@@ -50,7 +50,7 @@ func (s Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.
 	}, nil
 }
 
-func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	response, err := s.db.Reset(ctx, &utxostore_api.ResetRequest{
 		UxtoHash: hash[:],
 	})
@@ -63,6 +63,6 @@ func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResp
 	}, nil
 }
 
-func (s Store) DeleteSpends(deleteSpends bool) {
-	s.DeleteSpentUtxos = deleteSpends
+func (s *Store) DeleteSpends(deleteSpends bool) {
+	// do nothing
 }
