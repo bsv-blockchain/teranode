@@ -17,7 +17,7 @@ RUN echo "${GITHUB_SHA}"
 RUN go get -u github.com/apple/foundationdb/bindings/go/src/fdb@release-7.2
 
 # Build the Go library
-RUN go build -tags aerospike,foundationdb --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run main.go
+RUN go build -tags aerospike --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run main.go
 
 # Build TX Blaster
 RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/

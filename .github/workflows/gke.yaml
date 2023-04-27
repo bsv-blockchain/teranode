@@ -52,11 +52,6 @@ jobs:
         run: |
           sudo apt-get update && \
           sudo apt-get install wget build-essential -y  && \
-          sudo apt install dirmngr gnupg apt-transport-https ca-certificates -y && \
-          sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF && \
-          sudo apt-add-repository 'deb <a href="https://download.mono-project.com/repo/ubuntu">https://download.mono-project.com/repo/ubuntu</a> stable-bionic main' && \
-          sudo apt update && \
-          sudo apt install mono-complete -y && \
           wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
 
       - name: Install FoundationDB
