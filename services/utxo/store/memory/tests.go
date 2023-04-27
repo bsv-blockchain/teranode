@@ -69,6 +69,7 @@ func testRestore(t *testing.T, db store.UTXOStore) {
 
 	resp, err = db.Spend(ctx, hash, hash)
 	require.NoError(t, err)
+	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 	// try to reset the utxo
 	resp, err = db.Reset(ctx, hash)
@@ -80,7 +81,7 @@ func testRestore(t *testing.T, db store.UTXOStore) {
 }
 
 func testSanity(t *testing.T, db store.UTXOStore) {
-	//skipLongTests(t)
+	skipLongTests(t)
 	ctx := context.Background()
 
 	var resp *store.UTXOResponse
@@ -140,7 +141,7 @@ func benchmark(b *testing.B, db store.UTXOStore) {
 			b.Fatal("unexpected status")
 		}
 
-		resp, err = db.Reset(ctx, hash)
+		_, err = db.Reset(ctx, hash)
 		if err != nil {
 			b.Fatal(err)
 		}

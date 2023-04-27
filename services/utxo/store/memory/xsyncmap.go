@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/maphash"
-	"sync"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -15,7 +14,6 @@ import (
 var emptyHash = chainhash.Hash{}
 
 type XsyncMap struct {
-	mu           sync.Mutex
 	m            *xsync.MapOf[chainhash.Hash, *chainhash.Hash]
 	DeleteSpends bool
 }

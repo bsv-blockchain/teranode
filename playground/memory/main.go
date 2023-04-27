@@ -61,10 +61,10 @@ func main() {
 	xsyncMap := xsync.NewTypedMapOfPresized[chainhash.Hash, *chainhash.Hash](func(seed maphash.Seed, hash chainhash.Hash) uint64 {
 		var h maphash.Hash
 		h.SetSeed(seed)
-		binary.Write(&h, binary.LittleEndian, hash[:16])
+		_ = binary.Write(&h, binary.LittleEndian, hash[:16])
 		hh := h.Sum64()
 		h.Reset()
-		binary.Write(&h, binary.LittleEndian, hash[16:32])
+		_ = binary.Write(&h, binary.LittleEndian, hash[16:32])
 		return 31*hh + h.Sum64()
 	}, 1_000_000)
 	for i := uint64(0); i < 1_000_000; i++ {

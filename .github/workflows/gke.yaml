@@ -37,7 +37,7 @@ jobs:
         uses: golangci/golangci-lint-action@v3
         with:
           version: v1.50.1
-          args: --skip-dirs p2p/wire
+          args: --skip-dirs p2p/wire --skip-dirs playground
 
       - name: Run tests
         run: go test -race -vet=off ./...

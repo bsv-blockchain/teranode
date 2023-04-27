@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
@@ -24,15 +23,14 @@ import (
 )
 
 var (
-	empty                    = &chainhash.Hash{}
-	prometheusUtxoGet        prometheus.Counter
-	prometheusUtxoStore      prometheus.Counter
-	prometheusUtxoReStore    prometheus.Counter
-	prometheusUtxoStoreSpent prometheus.Counter
-	prometheusUtxoSpend      prometheus.Counter
-	prometheusUtxoReSpend    prometheus.Counter
-	prometheusUtxoSpendSpent prometheus.Counter
-	prometheusUtxoReset      prometheus.Counter
+	prometheusUtxoGet   prometheus.Counter
+	prometheusUtxoStore prometheus.Counter
+	// prometheusUtxoReStore    prometheus.Counter
+	// prometheusUtxoStoreSpent prometheus.Counter
+	prometheusUtxoSpend prometheus.Counter
+	// prometheusUtxoReSpend    prometheus.Counter
+	// prometheusUtxoSpendSpent prometheus.Counter
+	prometheusUtxoReset prometheus.Counter
 )
 
 func init() {
@@ -48,36 +46,36 @@ func init() {
 			Help: "Number of utxo store calls done to utxostore",
 		},
 	)
-	prometheusUtxoStoreSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_store_spent",
-			Help: "Number of utxo store calls that were already spent to utxostore",
-		},
-	)
-	prometheusUtxoReStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_restore",
-			Help: "Number of utxo restore calls done to utxostore",
-		},
-	)
+	//prometheusUtxoStoreSpent = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "utxostore_utxo_store_spent",
+	//		Help: "Number of utxo store calls that were already spent to utxostore",
+	//	},
+	//)
+	//prometheusUtxoReStore = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "utxostore_utxo_restore",
+	//		Help: "Number of utxo restore calls done to utxostore",
+	//	},
+	//)
 	prometheusUtxoSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "utxostore_utxo_spend",
 			Help: "Number of utxo spend calls done to utxostore",
 		},
 	)
-	prometheusUtxoReSpend = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_respend",
-			Help: "Number of utxo respend calls done to utxostore",
-		},
-	)
-	prometheusUtxoSpendSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_spend_spent",
-			Help: "Number of utxo spend calls that were already spent done to utxostore",
-		},
-	)
+	//prometheusUtxoReSpend = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "utxostore_utxo_respend",
+	//		Help: "Number of utxo respend calls done to utxostore",
+	//	},
+	//)
+	//prometheusUtxoSpendSpent = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "utxostore_utxo_spend_spent",
+	//		Help: "Number of utxo spend calls that were already spent done to utxostore",
+	//	},
+	//)
 	prometheusUtxoReset = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "utxostore_utxo_reset",
@@ -91,7 +89,6 @@ type UTXOStore struct {
 	utxostore_api.UnsafeUtxoStoreAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	mu         sync.Mutex
 	store      store.UTXOStore
 }
 
@@ -236,7 +233,7 @@ func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) 
 		return nil, err
 	}
 
-	prometheusUtxoSpendSpent.Inc()
+	prometheusUtxoSpend.Inc()
 
 	var spendingTxID []byte
 	if resp.SpendingTxID != nil {
