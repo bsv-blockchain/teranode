@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,7 +13,7 @@ import (
 func TestStore(t *testing.T) {
 	hash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 
-	s, err := New(nil)
+	s, err := New(p2p.TestLogger{}, WithDeleteSpends(false))
 	require.NoError(t, err)
 
 	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{
@@ -34,7 +35,7 @@ func TestStoreAndSpend(t *testing.T) {
 	hash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	spendingHash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 
-	s, err := New(nil)
+	s, err := New(p2p.TestLogger{}, WithDeleteSpends(false))
 	require.NoError(t, err)
 
 	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{

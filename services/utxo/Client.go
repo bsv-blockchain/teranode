@@ -9,7 +9,8 @@ import (
 )
 
 type Store struct {
-	db utxostore_api.UtxoStoreAPIClient
+	db               utxostore_api.UtxoStoreAPIClient
+	DeleteSpentUtxos bool
 }
 
 func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
@@ -60,4 +61,8 @@ func (s Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResp
 	return &store.UTXOResponse{
 		Status: int(response.Status),
 	}, nil
+}
+
+func (s Store) DeleteSpends(deleteSpends bool) {
+	s.DeleteSpentUtxos = deleteSpends
 }

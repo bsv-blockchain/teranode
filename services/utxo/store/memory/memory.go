@@ -14,15 +14,15 @@ var (
 )
 
 type Memory struct {
-	mu           sync.Mutex
-	m            map[chainhash.Hash]chainhash.Hash
-	DeleteSpends bool
+	mu               sync.Mutex
+	m                map[chainhash.Hash]chainhash.Hash
+	DeleteSpentUtxos bool
 }
 
 func New(deleteSpends bool) *Memory {
 	return &Memory{
-		m:            make(map[chainhash.Hash]chainhash.Hash),
-		DeleteSpends: deleteSpends,
+		m:                make(map[chainhash.Hash]chainhash.Hash),
+		DeleteSpentUtxos: deleteSpends,
 	}
 }
 
@@ -79,7 +79,7 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 
 	if existingHash, found := m.m[*hash]; found {
 		if existingHash.IsEqual(&chainhash.Hash{}) {
-			if m.DeleteSpends {
+			if m.DeleteSpentUtxos {
 				delete(m.m, *hash)
 			} else {
 				m.m[*hash] = *txID
@@ -123,4 +123,8 @@ func (m *Memory) delete(hash *chainhash.Hash) error {
 	delete(m.m, *hash)
 
 	return nil
+}
+
+func (m *Memory) DeleteSpends(deleteSpends bool) {
+	m.DeleteSpentUtxos = deleteSpends
 }

@@ -11,9 +11,9 @@ import (
 )
 
 type SwissMap struct {
-	mu           sync.Mutex
-	m            *swiss.Map[chainhash.Hash, *chainhash.Hash]
-	DeleteSpends bool
+	mu               sync.Mutex
+	m                *swiss.Map[chainhash.Hash, *chainhash.Hash]
+	DeleteSpentUtxos bool
 }
 
 func NewSwissMap(deleteSpends bool) *SwissMap {
@@ -21,8 +21,8 @@ func NewSwissMap(deleteSpends bool) *SwissMap {
 	swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](1_000_000)
 
 	return &SwissMap{
-		m:            swissMap,
-		DeleteSpends: deleteSpends,
+		m:                swissMap,
+		DeleteSpentUtxos: deleteSpends,
 	}
 }
 
@@ -110,4 +110,8 @@ func (m *SwissMap) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXO
 func (m *SwissMap) delete(hash *chainhash.Hash) error {
 	m.m.Delete(*hash)
 	return nil
+}
+
+func (m *SwissMap) DeleteSpends(deleteSpends bool) {
+	m.DeleteSpentUtxos = deleteSpends
 }

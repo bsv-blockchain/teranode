@@ -1,3 +1,5 @@
+//go:build manual_tests
+
 package aerospike
 
 import (
@@ -8,7 +10,7 @@ import (
 )
 
 func TestEmptyChainHash(t *testing.T) {
-	var txID *chainhash.Hash
+	var txID chainhash.Hash
 
 	bins := aero.BinMap{
 		"txid": txID[:],

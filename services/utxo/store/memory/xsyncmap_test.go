@@ -34,7 +34,7 @@ func TestXsyncMap(t *testing.T) {
 
 func TestXsyncMapSanity(t *testing.T) {
 	db := NewXSyncMap(false)
-	db.DeleteSpends = false
+	db.DeleteSpentUtxos = false
 
 	testSanity(t, db)
 }

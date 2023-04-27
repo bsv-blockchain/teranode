@@ -9,14 +9,14 @@ import (
 )
 
 type SplitByHash struct {
-	m            map[[1]byte]*MapWithLocking
-	DeleteSpends bool
+	m                map[[1]byte]*MapWithLocking
+	DeleteSpentUtxos bool
 }
 
 func NewSplitByHash(deleteSpends bool) *SplitByHash {
 	db := &SplitByHash{
-		m:            make(map[[1]byte]*MapWithLocking),
-		DeleteSpends: deleteSpends,
+		m:                make(map[[1]byte]*MapWithLocking),
+		DeleteSpentUtxos: deleteSpends,
 	}
 
 	for i := 0; i <= 255; i++ {
@@ -85,4 +85,8 @@ func (m *SplitByHash) delete(hash *chainhash.Hash) error {
 	memMap := m.m[[1]byte{hash[0]}]
 	memMap.Delete(hash)
 	return nil
+}
+
+func (m *SplitByHash) DeleteSpends(deleteSpends bool) {
+	m.DeleteSpentUtxos = deleteSpends
 }

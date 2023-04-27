@@ -14,8 +14,8 @@ import (
 var emptyHash = chainhash.Hash{}
 
 type XsyncMap struct {
-	m            *xsync.MapOf[chainhash.Hash, *chainhash.Hash]
-	DeleteSpends bool
+	m                *xsync.MapOf[chainhash.Hash, *chainhash.Hash]
+	DeleteSpentUtxos bool
 }
 
 func NewXSyncMap(deleteSpends bool) *XsyncMap {
@@ -32,8 +32,8 @@ func NewXSyncMap(deleteSpends bool) *XsyncMap {
 	})
 
 	return &XsyncMap{
-		m:            xsyncMap,
-		DeleteSpends: deleteSpends,
+		m:                xsyncMap,
+		DeleteSpentUtxos: deleteSpends,
 	}
 }
 
@@ -109,4 +109,8 @@ func (m *XsyncMap) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXO
 func (m *XsyncMap) delete(hash *chainhash.Hash) error {
 	m.m.Delete(*hash)
 	return nil
+}
+
+func (m *XsyncMap) DeleteSpends(deleteSpends bool) {
+	m.DeleteSpentUtxos = deleteSpends
 }

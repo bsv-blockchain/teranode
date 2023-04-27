@@ -16,4 +16,5 @@ type UTXOStore interface {
 	Store(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
 	Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*UTXOResponse, error)
 	Reset(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
+	DeleteSpends(deleteSpends bool)
 }

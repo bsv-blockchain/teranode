@@ -34,7 +34,7 @@ func TestSwissMap(t *testing.T) {
 
 func TestSwissMapSanity(t *testing.T) {
 	db := NewSwissMap(false)
-	db.DeleteSpends = false
+	db.DeleteSpentUtxos = false
 
 	testSanity(t, db)
 }

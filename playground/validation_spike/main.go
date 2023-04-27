@@ -3,18 +3,21 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
-
-	"net/http"
-	_ "net/http/pprof"
 )
 
 type NullStore struct{}
+
+func (ns *NullStore) DeleteSpends(deleteSpends bool) {
+	return
+}
 
 func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
 	// fmt.Printf("Get(%s)\n", hash.String())

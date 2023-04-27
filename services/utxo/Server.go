@@ -98,7 +98,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) (*UTXOStore, error) {
+func New(logger utils.Logger, opts ...Options) (*UTXOStore, error) {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		return nil, err
@@ -121,6 +121,12 @@ func New(logger utils.Logger) (*UTXOStore, error) {
 	default:
 		logger.Infof("[UTXOStore] using default memory store")
 		s = memory.New(true)
+	}
+
+	if len(opts) > 0 {
+		for _, opt := range opts {
+			opt(s)
+		}
 	}
 
 	return &UTXOStore{
