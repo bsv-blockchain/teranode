@@ -3,11 +3,13 @@ FROM --platform=linux/amd64 ubuntu:latest
 ARG GITHUB_SHA
 
 RUN apt update && apt install wget build-essential -y
-RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
-RUN dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
-RUN wget -q https://go.dev/dl/go1.20.3.linux-amd64.tar.gz
-RUN rm -rf /usr/local/go && tar -C /usr/local -xzf go1.20.3.linux-amd64.tar.gz
+RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
+  dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
+
+RUN wget -q https://go.dev/dl/go1.20.3.linux-amd64.tar.gz && \
+  tar -C /usr/local -xzf go1.20.3.linux-amd64.tar.gz
+
 ENV PATH=${PATH}:/usr/local/go/bin
 
 RUN mkdir /app
@@ -20,8 +22,6 @@ WORKDIR /app
 ENV CGO_ENABLED=1
 RUN echo "${GITHUB_SHA}"
 
-RUN go get -u github.com/apple/foundationdb/bindings/go/src/fdb@release-7.2
-
 # Build the Go library
 RUN go build -tags aerospike,foundationdb --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run main.go
 
@@ -29,7 +29,7 @@ RUN go build -tags aerospike,foundationdb --trimpath -ldflags="-X main.commit=${
 RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
 
 # Install Delve debugger
-RUN go install -ldflags "-s -w -extldflags ' -static'" github.com/go-delve/delve/cmd/dlv@latest
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 
 FROM --platform=linux/amd64 ubuntu:latest
