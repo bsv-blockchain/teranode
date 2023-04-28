@@ -100,6 +100,7 @@ func main() {
 
 	conn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		panic(err)

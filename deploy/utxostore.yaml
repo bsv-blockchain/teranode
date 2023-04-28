@@ -23,7 +23,9 @@ spec:
           args: ["-utxostore=1"]
           env:
           - name: utxostore
-            value: memory://:8082
+            #value: memory://:8082
+            value: memory://:8082/splitbyhash
+
           - name: profilerAddr
             value: 0.0.0.0:9091
           ports:

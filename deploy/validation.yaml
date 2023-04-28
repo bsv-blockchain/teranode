@@ -27,6 +27,7 @@ spec:
           - name: utxostore
             #value: aerospike://aerospike-aerospike.aerospike.svc.cluster.local:3000/test
             value: memory://utxostore-service.utxostore-service.svc.cluster.local:8082
+            #value: foundationdb://foundationdb-exporter-service:9444
           - name: validator_grpcAddress
             value: 0.0.0.0:8081
           - name: profilerAddr

@@ -17,6 +17,7 @@ func init() {
 	availableDatabases["memory"] = func(url *url.URL) (store.UTXOStore, error) {
 		conn, err := utils.GetGRPCClient(context.Background(), url.Host, &utils.ConnectionOptions{
 			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			MaxRetries:  3,
 		})
 		if err != nil {
 			return nil, err
