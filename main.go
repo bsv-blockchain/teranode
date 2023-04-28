@@ -37,6 +37,9 @@ func main() {
 	logLevel, _ := gocore.Config().Get("logLevel")
 	logger := gocore.Log(progname, gocore.NewLogLevelFromString(logLevel))
 
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
+
 	err := sentry.Init(sentry.ClientOptions{
 		Dsn: "https://dcad1ec4c60a4a2e80a7f8599e86ec4b@o4505013263466496.ingest.sentry.io/4505013264449536",
 		// Set TracesSampleRate to 1.0 to capture 100% of transactions for performance monitoring.
@@ -54,6 +57,22 @@ func main() {
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
+
+	if !*startBlockAssembly {
+		*startBlockAssembly = gocore.Config().GetBool("startBlockAssembly", false)
+	}
+
+	if !*startValidator {
+		*startValidator = gocore.Config().GetBool("startValidator", false)
+	}
+
+	if !*startUtxoStore {
+		*startUtxoStore = gocore.Config().GetBool("startUtxoStore", false)
+	}
+
+	if !*startPropagation {
+		*startPropagation = gocore.Config().GetBool("startPropagation", false)
+	}
 
 	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly) {
 		fmt.Println("usage: main [options]")
@@ -76,9 +95,6 @@ func main() {
 		fmt.Println("")
 		return
 	}
-
-	stats := gocore.Config().Stats()
-	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	go func() {
 		profilerAddr, ok := gocore.Config().Get("profilerAddr")
