@@ -1,8 +1,8 @@
 # Set the base image
-FROM --platform=linux/amd64 ubuntu:latest
+FROM --platform=linux/amd64 ubuntu:focal
 ARG GITHUB_SHA
 
-RUN apt update && apt install wget build-essential -y
+RUN apt update && apt install -y wget build-essential libsecp256k1-dev
 
 RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
   dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
@@ -32,7 +32,7 @@ RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=M
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 
-FROM --platform=linux/amd64 ubuntu:latest
+FROM --platform=linux/amd64 ubuntu:focal
 
 RUN apt update && apt install -y vim htop curl wget lsof iputils-ping net-tools dnsutils
 
@@ -44,6 +44,10 @@ COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
 COPY --from=0 /root/go/bin/dlv .
 COPY --from=0 /usr/lib/libfdb_c.so .
+COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
+
+RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
+  ln -s libsecp256k1.so.0.0.0 libsecp256k1.so
 
 ENV LD_LIBRARY_PATH=.
 

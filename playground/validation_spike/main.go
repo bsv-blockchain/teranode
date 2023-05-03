@@ -10,7 +10,9 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/verifysignature"
 )
 
 type NullStore struct{}
@@ -59,6 +61,8 @@ func main() {
 
 	// fmt.Printf("%x", tx.ExtendedBytes())
 
+	interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature)
+
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
@@ -76,7 +80,7 @@ func main() {
 
 	start := time.Now()
 
-	for i := 0; i < 1_000_000; i++ {
+	for i := 0; i < 100_000; i++ {
 		if err := v.Validate(context.Background(), tx); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		}

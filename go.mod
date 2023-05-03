@@ -2,7 +2,7 @@ module github.com/TAAL-GmbH/ubsv
 
 go 1.20
 
-replace github.com/libsv/go-bt/v2 => github.com/icellan/go-bt/v2 v2.1.0-beta.4.0.20230419082430-8281ffeaa9d7
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.0
 
 require (
 	cloud.google.com/go/storage v1.30.1
@@ -23,6 +23,7 @@ require (
 	github.com/ordishs/go-bitcoin v1.0.79
 	github.com/ordishs/go-utils v1.0.42
 	github.com/ordishs/gocore v1.0.35
+	github.com/ordishs/verifysignature v1.0.0
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.14.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0

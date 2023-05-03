@@ -8,3 +8,4 @@ data/
 *.pprof
 .idea/
 keyfile.json
+bitcoin-data/
