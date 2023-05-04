@@ -32,6 +32,8 @@ spec:
             value: 0.0.0.0:8081
           - name: profilerAddr
             value: 0.0.0.0:9091
+          - name: tracing_collector_url
+            value: jaeger://jaeger-cluster-agent.jaeger.svc.cluster.local:6831
           ports:
             - containerPort: 8081
               protocol: TCP

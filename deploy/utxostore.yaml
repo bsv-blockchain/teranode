@@ -25,7 +25,8 @@ spec:
           - name: utxostore
             #value: memory://:8082
             value: memory://:8082/splitbyhash
-
+          - name: tracing_collector_url
+            value: jaeger://jaeger-cluster-agent.jaeger.svc.cluster.local:6831
           - name: profilerAddr
             value: 0.0.0.0:9091
           ports:
