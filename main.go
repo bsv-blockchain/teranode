@@ -120,7 +120,11 @@ func main() {
 		logger.Infof("Starting tracer")
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
-		_, closer, err := utils.InitGlobalTracer("ubsv")
+		serviceName := os.Getenv("SERVICE_NAME")
+        if serviceName == "" {
+            serviceName = "ubsv" // default to ubsv in case the service is not passed
+        }
+		_, closer, err := utils.InitGlobalTracer(serviceName)
 		if err != nil {
 			logger.Fatalf("failed to initialize tracer: %v", err)
 		}

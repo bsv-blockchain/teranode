@@ -32,6 +32,12 @@ spec:
             value: 0.0.0.0:8081
           - name: profilerAddr
             value: 0.0.0.0:9091
+          - name: JAEGER_AGENT_HOST
+            value: jaeger-cluster-agent.jaeger.svc.cluster.local
+          - name: JAEGER_AGENT_PORT
+            value: "6831"
+          - name: SERVICE_NAME
+            value: validation-service
           ports:
             - containerPort: 8081
               protocol: TCP
