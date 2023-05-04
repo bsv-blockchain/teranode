@@ -12,6 +12,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/ordishs/verifysignature"
 )
 
@@ -61,7 +62,9 @@ func main() {
 
 	// fmt.Printf("%x", tx.ExtendedBytes())
 
-	interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature)
+	if gocore.Config().GetBool("use_gco_verifier", false) {
+		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature)
+	}
 
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
