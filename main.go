@@ -34,7 +34,7 @@ var commit string
 func init() {
 	gocore.SetInfo(progname, version, commit)
 	if gocore.Config().GetBool("use_gco_verifier", false) {
-		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature)
+		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature2)
 	}
 }
 
@@ -121,9 +121,9 @@ func main() {
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
 		serviceName := os.Getenv("SERVICE_NAME")
-        if serviceName == "" {
-            serviceName = "ubsv" // default to ubsv in case the service is not passed
-        }
+		if serviceName == "" {
+			serviceName = "ubsv" // default to ubsv in case the service is not passed
+		}
 		_, closer, err := utils.InitGlobalTracer(serviceName)
 		if err != nil {
 			logger.Fatalf("failed to initialize tracer: %v", err)
