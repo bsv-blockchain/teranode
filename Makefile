@@ -58,9 +58,18 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/blockassembly/blockassembly_api/blockassembly_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/seeder/seeder_api/seeder_api.proto
+
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/blockassembly/blockassembly_api/*.pb.go
+	rm -f ./services/seeder/seeder_api/*.pb.go
 	rm -f ./services/validator/validator_api/*.pb.go
 	rm -f ./services/utxo/utxostore_api/*.pb.go
 	rm -f ./services/propagation/propagation_api/*.pb.go

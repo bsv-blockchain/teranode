@@ -1,0 +1,193 @@
+package seeder
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"net"
+	"time"
+
+	seeder_api "github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
+	"github.com/TAAL-GmbH/ubsv/services/seeder/store"
+	"github.com/TAAL-GmbH/ubsv/services/seeder/store/memory"
+	utxostore "github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/crypto"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Server type carries the logger within it
+type Server struct {
+	seeder_api.UnimplementedSeederAPIServer
+	seederStore store.SeederStore
+	utxoStore   utxostore.UTXOStore
+	logger      utils.Logger
+	grpcServer  *grpc.Server
+}
+
+func Enabled() bool {
+	_, found := gocore.Config().Get("seeder_grpcAddress")
+	return found
+}
+
+// NewServer will return a server instance with the logger stored within it
+func NewServer(logger utils.Logger) *Server {
+
+	seederStore := memory.New()
+
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no utxostore setting found")
+	}
+
+	s, err := utxo.NewStore(logger, utxostoreURL)
+	if err != nil {
+		panic(err)
+	}
+
+	return &Server{
+		logger:      logger,
+		seederStore: seederStore,
+		utxoStore:   s,
+	}
+}
+
+// Start function
+func (v *Server) Start() error {
+
+	address, ok := gocore.Config().Get("seeder_grpcAddress")
+	if !ok {
+		return errors.New("no seeder_grpcAddress setting found")
+	}
+
+	var err error
+	v.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+	})
+	if err != nil {
+		return fmt.Errorf("could not create GRPC server [%w]", err)
+	}
+
+	gocore.SetAddress(address)
+
+	lis, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("GRPC server failed to listen [%w]", err)
+	}
+
+	seeder_api.RegisterSeederAPIServer(v.grpcServer, v)
+
+	// Register reflection service on gRPC server.
+	reflection.Register(v.grpcServer)
+
+	v.logger.Infof("GRPC server listening on %s", address)
+
+	if err = v.grpcServer.Serve(lis); err != nil {
+		return fmt.Errorf("GRPC server failed [%w]", err)
+	}
+
+	return nil
+}
+
+func (v *Server) Stop(ctx context.Context) {
+	_, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	v.grpcServer.GracefulStop()
+}
+
+func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.HealthResponse, error) {
+	return &seeder_api.HealthResponse{
+		Ok:        true,
+		Timestamp: timestamppb.New(time.Now()),
+	}, nil
+}
+
+func (v *Server) CreateSpendableTransactions(_ context.Context, req *seeder_api.CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
+	// Create a random private key
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// Create a random 32 byte array
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	txid, err := chainhash.NewHash(b)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	for i := int32(0); i < req.NumberOfOutputs; i++ {
+		hash, err := utxoHash(txid, i, *lockingScript, req.SatoshisPerOutput)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		if _, err := v.utxoStore.Store(context.Background(), hash); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
+		Txid:              txid,
+		NumberOfOutputs:   req.NumberOfOutputs,
+		SatoshisPerOutput: req.SatoshisPerOutput,
+		PrivateKey:        privateKey,
+	}); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (v *Server) NextSpendableTransaction(_ context.Context, _ *emptypb.Empty) (*seeder_api.NextSpendableTransactionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "NextSpendableTransaction is not implemented")
+}
+
+func utxoHash(previousTxid *chainhash.Hash, index int32, lockingScript []byte, satoshis int64) (*chainhash.Hash, error) {
+	if len(lockingScript) == 0 {
+		return nil, fmt.Errorf("locking script is nil")
+	}
+
+	if satoshis == 0 {
+		return nil, fmt.Errorf("satoshis is 0")
+	}
+
+	utxoHash := make([]byte, 0, 200)
+	utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
+	utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
+	utxoHash = append(utxoHash, lockingScript...)
+	utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
+
+	hash := crypto.Sha256(utxoHash)
+	chHash, err := chainhash.NewHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return chHash, nil
+}
