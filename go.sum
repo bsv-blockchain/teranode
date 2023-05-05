@@ -383,8 +383,8 @@ github.com/ordishs/go-utils v1.0.42 h1:M8QfxIKxnPI7w15bUBzhmyfZZTk1ZWDljbcSUmcb5
 github.com/ordishs/go-utils v1.0.42/go.mod h1:veAMjjUivvT45Yo5UspfQFVDHzwL5exMNAdYKQz+zOY=
 github.com/ordishs/gocore v1.0.35 h1:dasWlk2xEjibXCWRltlw74nkwqzJVxo2ZB3Fvl2u4IE=
 github.com/ordishs/gocore v1.0.35/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
-github.com/ordishs/verifysignature v1.0.2 h1:/8kHRcHgjxlODM1DwQVPAU0xD0sX6X3q+RcuZWMOxe8=
-github.com/ordishs/verifysignature v1.0.2/go.mod h1:gPWrg+ypbDcOFD51pNkkDeeOXHfBTYMP+R9mG2g4JKU=
+github.com/ordishs/verifysignature v1.0.3 h1:iZ2Re0T4ldIHhbFZln0U7ghaG3QmIqgjUGWWs/Xnlm0=
+github.com/ordishs/verifysignature v1.0.3/go.mod h1:gPWrg+ypbDcOFD51pNkkDeeOXHfBTYMP+R9mG2g4JKU=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pelletier/go-toml v1.2.0/go.mod h1:5z9KED0ma1S8pY6P1sdut58dfprrGBbd/94hg7ilaic=
