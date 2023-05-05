@@ -23,7 +23,7 @@ require (
 	github.com/ordishs/go-bitcoin v1.0.79
 	github.com/ordishs/go-utils v1.0.42
 	github.com/ordishs/gocore v1.0.35
-	github.com/ordishs/verifysignature v1.0.3
+	github.com/ordishs/verifysignature v1.0.4
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.14.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
