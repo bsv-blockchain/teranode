@@ -45,7 +45,7 @@ func Enabled() bool {
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
 
-	seederStore := memory.New()
+	seederStore := memory.NewMemorySeederStore()
 
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
@@ -118,54 +118,94 @@ func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.Health
 	}, nil
 }
 
-func (v *Server) CreateSpendableTransactions(_ context.Context, req *seeder_api.CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
-	// Create a random private key
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
+func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_api.CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
+	for i := int32(0); i < req.NumberOfTransactions; i++ {
 
-	// Create a random 32 byte array
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	txid, err := chainhash.NewHash(b)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	for i := int32(0); i < req.NumberOfOutputs; i++ {
-		hash, err := utxoHash(txid, i, *lockingScript, req.SatoshisPerOutput)
+		// Create a random private key
+		privateKey, err := bec.NewPrivateKey(bec.S256())
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
-		if _, err := v.utxoStore.Store(context.Background(), hash); err != nil {
+		// Create a random 32 byte array
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-	}
 
-	if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
-		Txid:              txid,
-		NumberOfOutputs:   req.NumberOfOutputs,
-		SatoshisPerOutput: req.SatoshisPerOutput,
-		PrivateKey:        privateKey,
-	}); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		txid, err := chainhash.NewHash(b)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		for j := int32(0); j < req.NumberOfOutputs; j++ {
+			hash, err := utxoHash(txid, j, *lockingScript, req.SatoshisPerOutput)
+			if err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+
+			if _, err := v.utxoStore.Store(ctx, hash); err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+		}
+
+		if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
+			Txid:              txid,
+			NumberOfOutputs:   req.NumberOfOutputs,
+			SatoshisPerOutput: req.SatoshisPerOutput,
+			PrivateKey:        privateKey,
+		}); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 	}
 
 	return &emptypb.Empty{}, nil
 }
 
-func (v *Server) NextSpendableTransaction(_ context.Context, _ *emptypb.Empty) (*seeder_api.NextSpendableTransactionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "NextSpendableTransaction is not implemented")
+func (v *Server) NextSpendableTransaction(ctx context.Context, _ *emptypb.Empty) (*seeder_api.NextSpendableTransactionResponse, error) {
+	tx, err := v.seederStore.Pop(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &seeder_api.NextSpendableTransactionResponse{
+		Txid:              tx.Txid.CloneBytes(),
+		NumberOfOutputs:   tx.NumberOfOutputs,
+		SatoshisPerOutput: tx.SatoshisPerOutput,
+		PrivateKey:        tx.PrivateKey.Serialise(),
+	}, nil
+}
+
+func (v *Server) ShowAllSpendableTransactions(_ *emptypb.Empty, stream seeder_api.SeederAPI_ShowAllSpendableTransactionsServer) error {
+	it := v.seederStore.Iterator()
+
+	for {
+		tx, err := it.Next()
+		if err != nil {
+			if err.Error() == "no more transactions" {
+				break
+			} else {
+				return err
+			}
+		}
+
+		if err := stream.Send(&seeder_api.NextSpendableTransactionResponse{
+			Txid:              tx.Txid.CloneBytes(),
+			NumberOfOutputs:   tx.NumberOfOutputs,
+			SatoshisPerOutput: tx.SatoshisPerOutput,
+			PrivateKey:        tx.PrivateKey.Serialise(),
+		}); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
 }
 
 func utxoHash(previousTxid *chainhash.Hash, index int32, lockingScript []byte, satoshis int64) (*chainhash.Hash, error) {

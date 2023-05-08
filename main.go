@@ -13,13 +13,12 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
+	"github.com/TAAL-GmbH/ubsv/services/seeder"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/getsentry/sentry-go"
-	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/ordishs/verifysignature"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 )
@@ -33,9 +32,9 @@ var commit string
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
-	if gocore.Config().GetBool("use_gco_verifier", false) {
-		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature2)
-	}
+	// if gocore.Config().GetBool("use_gco_verifier", false) {
+	// 	interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature2)
+	// }
 }
 
 func main() {
@@ -190,6 +189,20 @@ func main() {
 				}
 
 				return utxoStore.Start()
+			})
+		}
+	}
+
+	// seeder
+	if seeder.Enabled() {
+		seederURL, found := gocore.Config().Get("seeder_grpcAddress")
+		if found {
+			g.Go(func() (err error) {
+				logger.Infof("Starting Seeder on: %s", seederURL)
+
+				s := seeder.NewServer(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+
+				return s.Start()
 			})
 		}
 	}

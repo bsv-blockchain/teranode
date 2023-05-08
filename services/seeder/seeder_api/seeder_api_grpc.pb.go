@@ -20,9 +20,10 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	SeederAPI_Health_FullMethodName                      = "/seeder_api.SeederAPI/Health"
-	SeederAPI_CreateSpendableTransactions_FullMethodName = "/seeder_api.SeederAPI/CreateSpendableTransactions"
-	SeederAPI_NextSpendableTransaction_FullMethodName    = "/seeder_api.SeederAPI/NextSpendableTransaction"
+	SeederAPI_Health_FullMethodName                       = "/seeder_api.SeederAPI/Health"
+	SeederAPI_CreateSpendableTransactions_FullMethodName  = "/seeder_api.SeederAPI/CreateSpendableTransactions"
+	SeederAPI_NextSpendableTransaction_FullMethodName     = "/seeder_api.SeederAPI/NextSpendableTransaction"
+	SeederAPI_ShowAllSpendableTransactions_FullMethodName = "/seeder_api.SeederAPI/ShowAllSpendableTransactions"
 )
 
 // SeederAPIClient is the client API for SeederAPI service.
@@ -33,6 +34,7 @@ type SeederAPIClient interface {
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	CreateSpendableTransactions(ctx context.Context, in *CreateSpendableTransactionsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	NextSpendableTransaction(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NextSpendableTransactionResponse, error)
+	ShowAllSpendableTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (SeederAPI_ShowAllSpendableTransactionsClient, error)
 }
 
 type seederAPIClient struct {
@@ -70,6 +72,38 @@ func (c *seederAPIClient) NextSpendableTransaction(ctx context.Context, in *empt
 	return out, nil
 }
 
+func (c *seederAPIClient) ShowAllSpendableTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (SeederAPI_ShowAllSpendableTransactionsClient, error) {
+	stream, err := c.cc.NewStream(ctx, &SeederAPI_ServiceDesc.Streams[0], SeederAPI_ShowAllSpendableTransactions_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &seederAPIShowAllSpendableTransactionsClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type SeederAPI_ShowAllSpendableTransactionsClient interface {
+	Recv() (*NextSpendableTransactionResponse, error)
+	grpc.ClientStream
+}
+
+type seederAPIShowAllSpendableTransactionsClient struct {
+	grpc.ClientStream
+}
+
+func (x *seederAPIShowAllSpendableTransactionsClient) Recv() (*NextSpendableTransactionResponse, error) {
+	m := new(NextSpendableTransactionResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // SeederAPIServer is the server API for SeederAPI service.
 // All implementations must embed UnimplementedSeederAPIServer
 // for forward compatibility
@@ -78,6 +112,7 @@ type SeederAPIServer interface {
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	CreateSpendableTransactions(context.Context, *CreateSpendableTransactionsRequest) (*emptypb.Empty, error)
 	NextSpendableTransaction(context.Context, *emptypb.Empty) (*NextSpendableTransactionResponse, error)
+	ShowAllSpendableTransactions(*emptypb.Empty, SeederAPI_ShowAllSpendableTransactionsServer) error
 	mustEmbedUnimplementedSeederAPIServer()
 }
 
@@ -93,6 +128,9 @@ func (UnimplementedSeederAPIServer) CreateSpendableTransactions(context.Context,
 }
 func (UnimplementedSeederAPIServer) NextSpendableTransaction(context.Context, *emptypb.Empty) (*NextSpendableTransactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NextSpendableTransaction not implemented")
+}
+func (UnimplementedSeederAPIServer) ShowAllSpendableTransactions(*emptypb.Empty, SeederAPI_ShowAllSpendableTransactionsServer) error {
+	return status.Errorf(codes.Unimplemented, "method ShowAllSpendableTransactions not implemented")
 }
 func (UnimplementedSeederAPIServer) mustEmbedUnimplementedSeederAPIServer() {}
 
@@ -161,6 +199,27 @@ func _SeederAPI_NextSpendableTransaction_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SeederAPI_ShowAllSpendableTransactions_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(SeederAPIServer).ShowAllSpendableTransactions(m, &seederAPIShowAllSpendableTransactionsServer{stream})
+}
+
+type SeederAPI_ShowAllSpendableTransactionsServer interface {
+	Send(*NextSpendableTransactionResponse) error
+	grpc.ServerStream
+}
+
+type seederAPIShowAllSpendableTransactionsServer struct {
+	grpc.ServerStream
+}
+
+func (x *seederAPIShowAllSpendableTransactionsServer) Send(m *NextSpendableTransactionResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // SeederAPI_ServiceDesc is the grpc.ServiceDesc for SeederAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -181,6 +240,12 @@ var SeederAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SeederAPI_NextSpendableTransaction_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ShowAllSpendableTransactions",
+			Handler:       _SeederAPI_ShowAllSpendableTransactions_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "services/seeder/seeder_api/seeder_api.proto",
 }

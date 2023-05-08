@@ -12,6 +12,7 @@ service SeederAPI {
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc CreateSpendableTransactions(CreateSpendableTransactionsRequest) returns (google.protobuf.Empty) {}
   rpc NextSpendableTransaction(google.protobuf.Empty) returns (NextSpendableTransactionResponse) {}
+  rpc ShowAllSpendableTransactions(google.protobuf.Empty) returns (stream NextSpendableTransactionResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -23,8 +24,9 @@ message HealthResponse {
 
 // swagger:model CreateSpendableTransactionsRequest
 message CreateSpendableTransactionsRequest {
-  int32 number_of_outputs = 1;
-  int64 satoshis_per_output = 2;
+  int32 number_of_transactions = 1;
+  int32 number_of_outputs = 2;
+  int64 satoshis_per_output = 3;
 }
 
 // swagger:model NextSpendableTransactionResponse

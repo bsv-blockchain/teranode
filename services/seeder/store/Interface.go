@@ -17,4 +17,9 @@ type SpendableTransaction struct {
 type SeederStore interface {
 	Push(context.Context, *SpendableTransaction) error
 	Pop(context.Context) (*SpendableTransaction, error)
+	Iterator() Iterator
+}
+
+type Iterator interface {
+	Next() (*SpendableTransaction, error)
 }
