@@ -22,7 +22,7 @@ spec:
           image: eu.gcr.io/PROJECT/IMAGE:TAG
           command:
             - ./blaster.run
-          args: ["-workers=1000"]
+          args: ["-workers=1000", "-print=10000"]
           env:
             - name: SETTINGS_CONTEXT
               value: "kubernetes"
