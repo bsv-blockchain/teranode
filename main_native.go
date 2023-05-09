@@ -4,7 +4,8 @@
 package main
 
 func init() {
-	if gocore.Config().GetBool("use_gco_verifier", false) {
+	if gocore.Config().GetBool("use_cgo_verifier", false) {
+		log.Println("Using CGO verifier")
 		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature2)
 	}
 }

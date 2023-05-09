@@ -62,7 +62,7 @@ func main() {
 
 	// fmt.Printf("%x", tx.ExtendedBytes())
 
-	if gocore.Config().GetBool("use_gco_verifier", false) {
+	if gocore.Config().GetBool("use_cgo_verifier", false) {
 		interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature)
 	}
 
