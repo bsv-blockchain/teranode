@@ -32,9 +32,6 @@ var commit string
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
-	// if gocore.Config().GetBool("use_gco_verifier", false) {
-	// 	interpreter.InjectExternalVerifySignatureFn(verifysignature.VerifySignature2)
-	// }
 }
 
 func main() {
