@@ -20,7 +20,22 @@ func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 }
 
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
-	return nil, nil
+	response, err := s.db.Get(context.Background(), &utxostore_api.GetRequest{
+		UxtoHash: hash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	txid, err := chainhash.NewHash(response.SpendingTxid)
+	if err != nil {
+		return nil, err
+	}
+
+	return &store.UTXOResponse{
+		Status:       int(response.Status.Number()),
+		SpendingTxID: txid,
+	}, nil
 }
 
 func (s *Store) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -13,9 +14,8 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/seeder/store/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/crypto"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -144,7 +144,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 		}
 
 		for j := uint32(0); j < req.NumberOfOutputs; j++ {
-			hash, err := utxoHash(txid, j, *lockingScript, req.SatoshisPerOutput)
+			hash, err := util.UTXOHash(txid, j, *lockingScript, req.SatoshisPerOutput)
 			if err != nil {
 				return nil, status.Error(codes.Internal, err.Error())
 			}
@@ -206,28 +206,4 @@ func (v *Server) ShowAllSpendableTransactions(_ *emptypb.Empty, stream seeder_ap
 	}
 
 	return nil
-}
-
-func utxoHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
-	if len(lockingScript) == 0 {
-		return nil, fmt.Errorf("locking script is nil")
-	}
-
-	if satoshis == 0 {
-		return nil, fmt.Errorf("satoshis is 0")
-	}
-
-	utxoHash := make([]byte, 0, 200)
-	utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
-	utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
-	utxoHash = append(utxoHash, lockingScript...)
-	utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
-
-	hash := crypto.Sha256(utxoHash)
-	chHash, err := chainhash.NewHash(hash)
-	if err != nil {
-		return nil, err
-	}
-
-	return chHash, nil
 }

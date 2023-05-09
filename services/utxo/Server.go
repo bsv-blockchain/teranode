@@ -272,3 +272,30 @@ func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) 
 		Status: utxostore_api.Status(resp.Status),
 	}, nil
 }
+
+func (u *UTXOStore) Get(ctx context.Context, req *utxostore_api.GetRequest) (*utxostore_api.GetResponse, error) {
+	traceSpan := tracing.Start(ctx, "UTXOStore:Get")
+	defer traceSpan.Finish()
+
+	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := u.store.Get(traceSpan.Ctx, utxoHash)
+	if err != nil {
+		return nil, err
+	}
+
+	prometheusUtxoGet.Inc()
+
+	r := &utxostore_api.GetResponse{
+		Status: utxostore_api.Status(resp.Status),
+	}
+
+	if resp.SpendingTxID != nil {
+		r.SpendingTxid = resp.SpendingTxID.CloneBytes()
+	}
+
+	return r, nil
+}

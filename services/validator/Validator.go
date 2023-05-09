@@ -3,13 +3,14 @@ package validator
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
-	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-bitcoin"
@@ -37,7 +38,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// TODO what checks do we need to do on a coinbase tx?
 		// not just anyone should be able to send a coinbase tx through the system
-		hash, err := utxo.GetOutputUtxoHash(bt.ReverseBytes(tx.TxIDBytes()), tx.Outputs[0], 0)
+		txid, err := chainhash.NewHash(bt.ReverseBytes(tx.TxIDBytes()))
+		if err != nil {
+			return err
+		}
+
+		hash, err := util.UTXOHashFromOutput(txid, tx.Outputs[0], 0)
 		if err != nil {
 			return err
 		}
@@ -78,7 +84,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	var utxoResponse *store.UTXOResponse
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	for idx, input := range tx.Inputs {
-		hash, err = utxo.GetInputUtxoHash(input)
+		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
 			utxoSpan.RecordError(err)
 			return err
@@ -136,7 +142,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 				go func() {
 					defer wg.Done()
 
-					utxoHash, utxoErr := utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
+					utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
 					if utxoErr != nil {
 						fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
 						//return err
@@ -153,7 +159,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	} else {
 		for i, output := range tx.Outputs {
 			if output.Satoshis > 0 {
-				hash, err = utxo.GetOutputUtxoHash(txIDBytes, output, uint64(i))
+				hash, err = util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
 				if err != nil {
 					return err
 				}

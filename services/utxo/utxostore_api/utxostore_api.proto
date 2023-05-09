@@ -13,6 +13,7 @@ service UtxoStoreAPI {
   rpc Store (StoreRequest) returns (StoreResponse) {}
   rpc Spend (SpendRequest) returns (SpendResponse) {}
   rpc Reset (ResetRequest) returns (ResetResponse) {}
+  rpc Get (GetRequest) returns (GetResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -61,3 +62,13 @@ message ResetResponse {
   Status status = 1;
 }
 
+// swagger:model GetRequest
+message GetRequest {
+  bytes uxto_hash = 1;
+}
+
+// swagger:model GetResponse
+message GetResponse {
+  Status status = 1;
+  bytes spending_txid = 2;
+}

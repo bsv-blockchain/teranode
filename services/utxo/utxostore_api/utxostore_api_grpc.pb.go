@@ -24,6 +24,7 @@ const (
 	UtxoStoreAPI_Store_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Store"
 	UtxoStoreAPI_Spend_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Spend"
 	UtxoStoreAPI_Reset_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Reset"
+	UtxoStoreAPI_Get_FullMethodName    = "/utxostore_api.UtxoStoreAPI/Get"
 )
 
 // UtxoStoreAPIClient is the client API for UtxoStoreAPI service.
@@ -35,6 +36,7 @@ type UtxoStoreAPIClient interface {
 	Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*StoreResponse, error)
 	Spend(ctx context.Context, in *SpendRequest, opts ...grpc.CallOption) (*SpendResponse, error)
 	Reset(ctx context.Context, in *ResetRequest, opts ...grpc.CallOption) (*ResetResponse, error)
+	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
 }
 
 type utxoStoreAPIClient struct {
@@ -81,6 +83,15 @@ func (c *utxoStoreAPIClient) Reset(ctx context.Context, in *ResetRequest, opts .
 	return out, nil
 }
 
+func (c *utxoStoreAPIClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+	out := new(GetResponse)
+	err := c.cc.Invoke(ctx, UtxoStoreAPI_Get_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UtxoStoreAPIServer is the server API for UtxoStoreAPI service.
 // All implementations must embed UnimplementedUtxoStoreAPIServer
 // for forward compatibility
@@ -90,6 +101,7 @@ type UtxoStoreAPIServer interface {
 	Store(context.Context, *StoreRequest) (*StoreResponse, error)
 	Spend(context.Context, *SpendRequest) (*SpendResponse, error)
 	Reset(context.Context, *ResetRequest) (*ResetResponse, error)
+	Get(context.Context, *GetRequest) (*GetResponse, error)
 	mustEmbedUnimplementedUtxoStoreAPIServer()
 }
 
@@ -108,6 +120,9 @@ func (UnimplementedUtxoStoreAPIServer) Spend(context.Context, *SpendRequest) (*S
 }
 func (UnimplementedUtxoStoreAPIServer) Reset(context.Context, *ResetRequest) (*ResetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Reset not implemented")
+}
+func (UnimplementedUtxoStoreAPIServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
 func (UnimplementedUtxoStoreAPIServer) mustEmbedUnimplementedUtxoStoreAPIServer() {}
 
@@ -194,6 +209,24 @@ func _UtxoStoreAPI_Reset_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UtxoStoreAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UtxoStoreAPIServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UtxoStoreAPI_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UtxoStoreAPIServer).Get(ctx, req.(*GetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UtxoStoreAPI_ServiceDesc is the grpc.ServiceDesc for UtxoStoreAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -216,6 +249,10 @@ var UtxoStoreAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Reset",
 			Handler:    _UtxoStoreAPI_Reset_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _UtxoStoreAPI_Get_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

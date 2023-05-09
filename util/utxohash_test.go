@@ -1,4 +1,4 @@
-package utxo
+package util
 
 import (
 	"encoding/hex"
@@ -44,7 +44,7 @@ func Test_getInputUtxoHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetInputUtxoHash(tt.args.input)
+			got, err := UTXOHashFromInput(tt.args.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetInputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -60,7 +60,7 @@ func Test_getOutputUtxoHash(t *testing.T) {
 	type args struct {
 		txID   []byte
 		output *bt.Output
-		vOut   uint64
+		vOut   uint32
 	}
 
 	txID, _ := utils.DecodeAndReverseHexString("2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82")
@@ -87,7 +87,8 @@ func Test_getOutputUtxoHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetOutputUtxoHash(tt.args.txID, tt.args.output, tt.args.vOut)
+			txid, _ := chainhash.NewHash(tt.args.txID)
+			got, err := UTXOHashFromOutput(txid, tt.args.output, tt.args.vOut)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetOutputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return

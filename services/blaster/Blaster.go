@@ -83,7 +83,7 @@ func (b *Blaster) Start() error {
 		tx := bt.NewTx()
 
 		if err := tx.FromUTXOs(&bt.UTXO{
-			TxID:          res.Txid,
+			TxID:          bt.ReverseBytes(res.Txid),
 			Vout:          0,
 			LockingScript: script,
 			Satoshis:      res.SatoshisPerOutput,
