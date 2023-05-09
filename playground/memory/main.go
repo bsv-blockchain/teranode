@@ -49,6 +49,20 @@ func main() {
 
 	runtime.GC()
 
+	func() {
+		chainhashMap := make(map[chainhash.Hash]chainhash.Hash, 1_000_000)
+		for i := uint64(0); i < 1_000_000; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii := chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+2_000_000)
+			chainhashMap[ii] = chainhash.HashH(bs)
+		}
+
+		fmt.Printf("Mem used for chainhashMap values: %s\n", printAlloc())
+	}()
+
+	runtime.GC()
+
 	swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](1_000_000)
 	for i := uint64(0); i < 1_000_000; i++ {
 		binary.LittleEndian.PutUint64(bs, i)

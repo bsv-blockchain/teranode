@@ -57,6 +57,7 @@ func main() {
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
+	profilePort := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
@@ -107,7 +108,13 @@ func main() {
 	}
 
 	go func() {
-		profilerAddr, ok := gocore.Config().Get("profilerAddr")
+		var profilerAddr string
+		var ok bool
+		if profilePort != nil && *profilePort != "" {
+			profilerAddr, ok = ":"+*profilePort, true
+		} else {
+			profilerAddr, ok = gocore.Config().Get("profilerAddr")
+		}
 		if ok {
 			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
 			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
