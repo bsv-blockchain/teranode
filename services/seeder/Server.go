@@ -119,7 +119,7 @@ func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.Health
 }
 
 func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_api.CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
-	for i := int32(0); i < req.NumberOfTransactions; i++ {
+	for i := uint32(0); i < req.NumberOfTransactions; i++ {
 
 		// Create a random private key
 		privateKey, err := bec.NewPrivateKey(bec.S256())
@@ -143,7 +143,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
-		for j := int32(0); j < req.NumberOfOutputs; j++ {
+		for j := uint32(0); j < req.NumberOfOutputs; j++ {
 			hash, err := utxoHash(txid, j, *lockingScript, req.SatoshisPerOutput)
 			if err != nil {
 				return nil, status.Error(codes.Internal, err.Error())
@@ -156,8 +156,8 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 
 		if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
 			Txid:              txid,
-			NumberOfOutputs:   req.NumberOfOutputs,
-			SatoshisPerOutput: req.SatoshisPerOutput,
+			NumberOfOutputs:   int32(req.NumberOfOutputs),
+			SatoshisPerOutput: int64(req.SatoshisPerOutput),
 			PrivateKey:        privateKey,
 		}); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
@@ -175,8 +175,8 @@ func (v *Server) NextSpendableTransaction(ctx context.Context, _ *emptypb.Empty)
 
 	return &seeder_api.NextSpendableTransactionResponse{
 		Txid:              tx.Txid.CloneBytes(),
-		NumberOfOutputs:   tx.NumberOfOutputs,
-		SatoshisPerOutput: tx.SatoshisPerOutput,
+		NumberOfOutputs:   uint32(tx.NumberOfOutputs),
+		SatoshisPerOutput: uint64(tx.SatoshisPerOutput),
 		PrivateKey:        tx.PrivateKey.Serialise(),
 	}, nil
 }
@@ -196,8 +196,8 @@ func (v *Server) ShowAllSpendableTransactions(_ *emptypb.Empty, stream seeder_ap
 
 		if err := stream.Send(&seeder_api.NextSpendableTransactionResponse{
 			Txid:              tx.Txid.CloneBytes(),
-			NumberOfOutputs:   tx.NumberOfOutputs,
-			SatoshisPerOutput: tx.SatoshisPerOutput,
+			NumberOfOutputs:   uint32(tx.NumberOfOutputs),
+			SatoshisPerOutput: uint64(tx.SatoshisPerOutput),
 			PrivateKey:        tx.PrivateKey.Serialise(),
 		}); err != nil {
 			return err
@@ -208,7 +208,7 @@ func (v *Server) ShowAllSpendableTransactions(_ *emptypb.Empty, stream seeder_ap
 	return nil
 }
 
-func utxoHash(previousTxid *chainhash.Hash, index int32, lockingScript []byte, satoshis int64) (*chainhash.Hash, error) {
+func utxoHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
 	if len(lockingScript) == 0 {
 		return nil, fmt.Errorf("locking script is nil")
 	}
