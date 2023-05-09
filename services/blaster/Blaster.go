@@ -11,7 +11,6 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Blaster struct {
@@ -63,7 +62,7 @@ func (b *Blaster) Start() error {
 	for {
 		ctx := context.Background()
 
-		res, err := b.seeder.NextSpendableTransaction(ctx, &emptypb.Empty{})
+		res, err := b.seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{})
 		if err != nil {
 			b.logger.Errorf("Could not get next spendable output: %v", err)
 			return err

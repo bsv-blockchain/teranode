@@ -33,7 +33,7 @@ type SeederAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	CreateSpendableTransactions(ctx context.Context, in *CreateSpendableTransactionsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	NextSpendableTransaction(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NextSpendableTransactionResponse, error)
+	NextSpendableTransaction(ctx context.Context, in *NextSpendableTransactionRequest, opts ...grpc.CallOption) (*NextSpendableTransactionResponse, error)
 	ShowAllSpendableTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (SeederAPI_ShowAllSpendableTransactionsClient, error)
 }
 
@@ -63,7 +63,7 @@ func (c *seederAPIClient) CreateSpendableTransactions(ctx context.Context, in *C
 	return out, nil
 }
 
-func (c *seederAPIClient) NextSpendableTransaction(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NextSpendableTransactionResponse, error) {
+func (c *seederAPIClient) NextSpendableTransaction(ctx context.Context, in *NextSpendableTransactionRequest, opts ...grpc.CallOption) (*NextSpendableTransactionResponse, error) {
 	out := new(NextSpendableTransactionResponse)
 	err := c.cc.Invoke(ctx, SeederAPI_NextSpendableTransaction_FullMethodName, in, out, opts...)
 	if err != nil {
@@ -111,7 +111,7 @@ type SeederAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	CreateSpendableTransactions(context.Context, *CreateSpendableTransactionsRequest) (*emptypb.Empty, error)
-	NextSpendableTransaction(context.Context, *emptypb.Empty) (*NextSpendableTransactionResponse, error)
+	NextSpendableTransaction(context.Context, *NextSpendableTransactionRequest) (*NextSpendableTransactionResponse, error)
 	ShowAllSpendableTransactions(*emptypb.Empty, SeederAPI_ShowAllSpendableTransactionsServer) error
 	mustEmbedUnimplementedSeederAPIServer()
 }
@@ -126,7 +126,7 @@ func (UnimplementedSeederAPIServer) Health(context.Context, *emptypb.Empty) (*He
 func (UnimplementedSeederAPIServer) CreateSpendableTransactions(context.Context, *CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateSpendableTransactions not implemented")
 }
-func (UnimplementedSeederAPIServer) NextSpendableTransaction(context.Context, *emptypb.Empty) (*NextSpendableTransactionResponse, error) {
+func (UnimplementedSeederAPIServer) NextSpendableTransaction(context.Context, *NextSpendableTransactionRequest) (*NextSpendableTransactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NextSpendableTransaction not implemented")
 }
 func (UnimplementedSeederAPIServer) ShowAllSpendableTransactions(*emptypb.Empty, SeederAPI_ShowAllSpendableTransactionsServer) error {
@@ -182,7 +182,7 @@ func _SeederAPI_CreateSpendableTransactions_Handler(srv interface{}, ctx context
 }
 
 func _SeederAPI_NextSpendableTransaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
+	in := new(NextSpendableTransactionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func _SeederAPI_NextSpendableTransaction_Handler(srv interface{}, ctx context.Co
 		FullMethod: SeederAPI_NextSpendableTransaction_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SeederAPIServer).NextSpendableTransaction(ctx, req.(*emptypb.Empty))
+		return srv.(SeederAPIServer).NextSpendableTransaction(ctx, req.(*NextSpendableTransactionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

@@ -17,6 +17,7 @@ type SpendableTransaction struct {
 type SeederStore interface {
 	Push(context.Context, *SpendableTransaction) error
 	Pop(context.Context) (*SpendableTransaction, error)
+	PopWithFilter(context.Context, func(*SpendableTransaction) bool) (*SpendableTransaction, error)
 	Iterator() Iterator
 }
 

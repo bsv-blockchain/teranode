@@ -15,7 +15,6 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func main() {
@@ -52,6 +51,9 @@ func main() {
 	pConn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
 		MaxRetries: 3,
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	seeder := seeder_api.NewSeederAPIClient(sConn)
 	utxostore := utxostore_api.NewUtxoStoreAPIClient(uConn)
@@ -65,7 +67,7 @@ func main() {
 		panic(err)
 	}
 
-	res2, err := seeder.NextSpendableTransaction(ctx, &emptypb.Empty{})
+	res2, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{})
 	if err != nil {
 		panic(err)
 	}

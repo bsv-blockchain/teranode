@@ -56,6 +56,7 @@ func main() {
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
+	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
@@ -76,6 +77,10 @@ func main() {
 		*startPropagation = gocore.Config().GetBool("startPropagation", false)
 	}
 
+	if !*startSeeder {
+		*startSeeder = gocore.Config().GetBool("startSeeder", false)
+	}
+
 	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
@@ -91,6 +96,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -blockassembly=<1|0>")
 		fmt.Println("          whether to start the blockassembly service")
+		fmt.Println("")
+		fmt.Println("    -seeder=<1|0>")
+		fmt.Println("          whether to start the seeder service")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
@@ -143,6 +151,7 @@ func main() {
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
 	var blockAssemblyService *blockassembly.BlockAssembly
+	var seederService *seeder.Server
 
 	// blockAssembly
 	if *startBlockAssembly {
@@ -192,15 +201,15 @@ func main() {
 	}
 
 	// seeder
-	if seeder.Enabled() {
+	if *startSeeder {
 		seederURL, found := gocore.Config().Get("seeder_grpcAddress")
 		if found {
 			g.Go(func() (err error) {
 				logger.Infof("Starting Seeder on: %s", seederURL)
 
-				s := seeder.NewServer(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+				seederService = seeder.NewServer(gocore.Log("seed", gocore.NewLogLevelFromString(logLevel)))
 
-				return s.Start()
+				return seederService.Start()
 			})
 		}
 	}
@@ -296,6 +305,10 @@ func main() {
 
 	if validatorService != nil {
 		validatorService.Stop(shutdownCtx)
+	}
+
+	if seederService != nil {
+		seederService.Stop(shutdownCtx)
 	}
 
 	if blockAssemblyService != nil {

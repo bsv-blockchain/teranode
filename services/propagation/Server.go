@@ -208,14 +208,18 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	}
 
 	if !IsExtended(btTx) {
-		extendSpan := tracing.Start(traceSpan.Ctx, "PropagationServer:ExtendTransaction")
-		err = ExtendTransaction(extendSpan.Ctx, btTx, u.txStore)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return &emptypb.Empty{}, err
-		}
-		extendSpan.Finish()
+		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
+
+	// if !IsExtended(btTx) {
+	// 	extendSpan := tracing.Start(traceSpan.Ctx, "PropagationServer:ExtendTransaction")
+	// 	err = ExtendTransaction(extendSpan.Ctx, btTx, u.txStore)
+	// 	if err != nil {
+	// 		prometheusInvalidTransactions.Inc()
+	// 		return &emptypb.Empty{}, err
+	// 	}
+	// 	extendSpan.Finish()
+	// }
 
 	if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
 		// send REJECT message to peer if invalid tx

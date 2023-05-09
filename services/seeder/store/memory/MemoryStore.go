@@ -38,6 +38,21 @@ func (s *memorySeederStore) Pop(ctx context.Context) (*store.SpendableTransactio
 	return tx, nil
 }
 
+func (s *memorySeederStore) PopWithFilter(ctx context.Context, fn func(*store.SpendableTransaction) bool) (*store.SpendableTransaction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, tx := range s.transactions {
+		if fn(tx) {
+			s.transactions = append(s.transactions[:i], s.transactions[i+1:]...)
+			return tx, nil
+		}
+	}
+
+	return nil, errors.New("store is empty")
+
+}
+
 func (s *memorySeederStore) Iterator() store.Iterator {
 	return &memoryIterator{store: s}
 }

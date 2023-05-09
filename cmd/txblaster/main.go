@@ -3,34 +3,34 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	_ "net/http/pprof"
-	"net/url"
-	"os"
 	"runtime"
 	"sync/atomic"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
+	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/time/rate"
 )
 
+const NUMBER_OF_OUTPUTS = 10_000
+
 var logger utils.Logger
-var rpcURL *url.URL
 var startTime time.Time
 var propagationServer propagation_api.PropagationAPIClient
+var seederServer seeder_api.SeederAPIClient
 var txChan chan *bt.UTXO
 var printProgress uint64
 var useHTTP bool
@@ -81,41 +81,93 @@ func main() {
 		_ = http.ListenAndServe(":9099", nil)
 	}()
 
-	bitcoinRpcUri := os.Getenv("BITCOIN_RPC_URI")
-
-	if bitcoinRpcUri == "" {
-		panic("You must set BITCOIN_RPC_URI environment variable")
-	}
-
-	var err error
-	rpcURL, err = url.Parse(bitcoinRpcUri)
-	if err != nil {
-		panic(err)
-	}
-
-	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
 	if !ok {
-		panic("no propagation_grpcAddress setting found")
+		panic("no seeder_grpcAddress setting found")
 	}
 
-	conn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
+	sConn, err := utils.GetGRPCClient(context.Background(), seederGrpcAddress, &utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		MaxRetries:  3,
 	})
 	if err != nil {
 		panic(err)
 	}
-	propagationServer = propagation_api.NewPropagationAPIClient(conn)
+	seederServer = seeder_api.NewSeederAPIClient(sConn)
 
-	txChan = make(chan *bt.UTXO, 10_000)
+	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+	if !ok {
+		panic("no propagation_grpcAddress setting found")
+	}
+
+	pConn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		MaxRetries:  3,
+	})
+	if err != nil {
+		panic(err)
+	}
+	propagationServer = propagation_api.NewPropagationAPIClient(pConn)
+
+	txChan = make(chan *bt.UTXO, NUMBER_OF_OUTPUTS)
 
 	// create new private key
-	keySet, err := New()
+	keySet, err := extra.New()
 	if err != nil {
 		panic(err)
 	}
 
-	address := keySet.Address(false)
+	numberOfTransactions := uint32(1)
+	satoshisPerOutput := uint64(1000)
+
+	logger.Infof("Asking seeder to create %d transaction(s) with %d outputs of %d satoshis each",
+		numberOfTransactions,
+		NUMBER_OF_OUTPUTS,
+		satoshisPerOutput,
+	)
+
+	if _, err := seederServer.CreateSpendableTransactions(context.Background(), &seeder_api.CreateSpendableTransactionsRequest{
+		PrivateKey:           keySet.PrivateKey.Serialise(),
+		NumberOfTransactions: numberOfTransactions,
+		NumberOfOutputs:      NUMBER_OF_OUTPUTS,
+		SatoshisPerOutput:    satoshisPerOutput,
+	}); err != nil {
+		panic(err)
+	}
+
+	res, err := seederServer.NextSpendableTransaction(context.Background(), &seeder_api.NextSpendableTransactionRequest{
+		PrivateKey: keySet.PrivateKey.Serialise(),
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	logger.Infof("Received transaction with txid %x and %d outputs", res.Txid, res.NumberOfOutputs)
+
+	privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
+
+	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+	if err != nil {
+		panic(err)
+	}
+
+	go func(numberOfOutputs uint32) {
+		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+		for i := uint32(0); i < numberOfOutputs; i++ {
+			u := &bt.UTXO{
+				TxID:          bt.ReverseBytes(res.Txid),
+				Vout:          i,
+				LockingScript: script,
+				Satoshis:      res.SatoshisPerOutput,
+			}
+
+			txChan <- u
+		}
+		logger.Infof("Finished sending %d outputs to txChan", numberOfOutputs)
+	}(res.NumberOfOutputs)
+
+	startTime = time.Now()
 
 	if *rateLimit > 1 {
 		rateLimitDuration := (time.Duration(*workers) * time.Second) / (time.Duration(*rateLimit))
@@ -130,22 +182,10 @@ func main() {
 		}
 	}
 
-	var u *bt.UTXO
-	u, err = sendToAddress(address, 50_000_000)
-	if err != nil {
-		panic(err)
-	}
-
-	startTime = time.Now()
-	err = fireTransactions(u, keySet)
-	if err != nil {
-		fmt.Printf("ERROR in fire transactions: %v\n", err)
-	}
-
 	select {}
 }
 
-func txWorker(keySet *KeySet, txChan <-chan *bt.UTXO) {
+func txWorker(keySet *extra.KeySet, txChan <-chan *bt.UTXO) {
 	for utxo := range txChan {
 		err := fireTransactions(utxo, keySet)
 		if err != nil {
@@ -154,7 +194,7 @@ func txWorker(keySet *KeySet, txChan <-chan *bt.UTXO) {
 	}
 }
 
-func txWorkerLimited(keySet *KeySet, rateLimitDuration time.Duration, txChan <-chan *bt.UTXO) {
+func txWorkerLimited(keySet *extra.KeySet, rateLimitDuration time.Duration, txChan <-chan *bt.UTXO) {
 	limiter := rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	for utxo := range txChan {
 		_ = limiter.Wait(context.Background())
@@ -165,20 +205,13 @@ func txWorkerLimited(keySet *KeySet, rateLimitDuration time.Duration, txChan <-c
 	}
 }
 
-func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
+func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
 	tx := bt.NewTx()
 	_ = tx.FromUTXOs(u)
 
-	nrOutputs := u.Satoshis
-	if nrOutputs > 1000 {
-		nrOutputs = 1000
-	}
+	_ = tx.PayTo(keySet.Script, u.Satoshis)
 
-	//fmt.Printf("Firing %d outputs, Satoshis: %d - %d\n", nrOutputs, u.Satoshis, u.Satoshis/nrOutputs)
-	for i := uint64(0); i < nrOutputs; i++ {
-		_ = tx.PayTo(keyset.Script, u.Satoshis/nrOutputs) // add 1 satoshi to allow for our longer OP_RETURN
-	}
-	unlockerGetter := unlocker.Getter{PrivateKey: keyset.PrivateKey}
+	unlockerGetter := unlocker.Getter{PrivateKey: keySet.PrivateKey}
 	if err := tx.FillAllInputs(context.Background(), &unlockerGetter); err != nil {
 		return err
 	}
@@ -188,16 +221,12 @@ func fireTransactions(u *bt.UTXO, keyset *KeySet) error {
 		return err
 	}
 
-	go func(txOutputs []*bt.Output) {
-		for vout, output := range txOutputs {
-			txChan <- &bt.UTXO{
-				TxID:          tx.TxIDBytes(),
-				Vout:          uint32(vout),
-				LockingScript: output.LockingScript,
-				Satoshis:      output.Satoshis,
-			}
-		}
-	}(tx.Outputs)
+	// txChan <- &bt.UTXO{
+	// 	TxID:          tx.TxIDBytes(),
+	// 	Vout:          0,
+	// 	LockingScript: keySet.Script,
+	// 	Satoshis:      u.Satoshis,
+	// }
 
 	return nil
 }
@@ -253,59 +282,4 @@ func sendTransaction(tx *bt.Tx) error {
 	}
 
 	return nil
-}
-
-func sendToAddress(address string, satoshis uint64) (*bt.UTXO, error) {
-	client, err := bitcoin.NewFromURL(rpcURL, false)
-	if err != nil {
-		logger.Fatalf("Could not create bitcoin client: %v", err)
-	}
-
-	amount := float64(satoshis) / 1e8
-
-	txid, err := client.SendToAddress(address, amount)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := client.GetRawTransaction(txid)
-	if err != nil {
-		return nil, err
-	}
-
-	btTx, err := bt.NewTxFromString(tx.Hex)
-	if err != nil {
-		return nil, err
-	}
-
-	// enrich the transaction with parent locking script and satoshis
-	var parentTx *bitcoin.RawTransaction
-	for idx, input := range tx.Vin {
-		parentTx, err = client.GetRawTransaction(input.Txid)
-		if err != nil {
-			return nil, err
-		}
-		btTx.Inputs[idx].PreviousTxScript, _ = bscript.NewFromHexString(parentTx.Vout[input.Vout].ScriptPubKey.Hex)
-		btTx.Inputs[idx].PreviousTxSatoshis = uint64(parentTx.Vout[input.Vout].Value * 1e8)
-	}
-
-	err = sendTransaction(btTx)
-	if err != nil {
-		return nil, err
-	}
-
-	for i, vout := range tx.Vout {
-		if vout.ScriptPubKey.Addresses[0] == address {
-			txIDBytes, _ := hex.DecodeString(txid)
-			lockingScript, _ := bscript.NewFromHexString(vout.ScriptPubKey.Hex)
-			return &bt.UTXO{
-				TxID:          txIDBytes,
-				Vout:          uint32(i),
-				Satoshis:      satoshis,
-				LockingScript: lockingScript,
-			}, nil
-		}
-	}
-
-	return nil, errors.New("utxo not found in tx")
 }

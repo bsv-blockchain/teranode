@@ -1,6 +1,7 @@
 package seeder
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -118,14 +119,20 @@ func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.Health
 }
 
 func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_api.CreateSpendableTransactionsRequest) (*emptypb.Empty, error) {
-	for i := uint32(0); i < req.NumberOfTransactions; i++ {
+	var privateKey *bec.PrivateKey
 
+	if len(req.PrivateKey) > 0 {
+		privateKey, _ = bec.PrivKeyFromBytes(bec.S256(), req.PrivateKey)
+	} else {
 		// Create a random private key
-		privateKey, err := bec.NewPrivateKey(bec.S256())
+		var err error
+		privateKey, err = bec.NewPrivateKey(bec.S256())
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+	}
 
+	for i := uint32(0); i < req.NumberOfTransactions; i++ {
 		// Create a random 32 byte array
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
@@ -166,8 +173,19 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 	return &emptypb.Empty{}, nil
 }
 
-func (v *Server) NextSpendableTransaction(ctx context.Context, _ *emptypb.Empty) (*seeder_api.NextSpendableTransactionResponse, error) {
-	tx, err := v.seederStore.Pop(ctx)
+func (v *Server) NextSpendableTransaction(ctx context.Context, req *seeder_api.NextSpendableTransactionRequest) (*seeder_api.NextSpendableTransactionResponse, error) {
+
+	fn := func(*store.SpendableTransaction) bool {
+		return true
+	}
+
+	if len(req.PrivateKey) > 0 {
+		fn = func(tx *store.SpendableTransaction) bool {
+			return bytes.Equal(tx.PrivateKey.Serialise(), req.PrivateKey)
+		}
+	}
+
+	tx, err := v.seederStore.PopWithFilter(ctx, fn)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

@@ -29,6 +29,8 @@ func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, 
 		return nil, err
 	}
 
+	// log.Printf("UTXOHash: %x - %x", utxoHash, chHash)
+
 	return chHash, nil
 }
 
