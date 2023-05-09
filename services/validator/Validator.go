@@ -3,7 +3,6 @@ package validator
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
