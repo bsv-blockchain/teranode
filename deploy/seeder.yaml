@@ -1,33 +1,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: validation
-  namespace: validation-service
+  name: seeder
+  namespace: seeder-service
   labels:
     monitor: prometheus
-    app: validation
+    app: seeder
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: validation
+      app: seeder
   template:
     metadata:
       labels:
-        app: validation
+        app: seeder
         monitor: prometheus
     spec:
       containers:
-        - name: validation
+        - name: seeder
           image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-validator=1"]
+          args: ["-seeder=1"]
           env:
+          - name: seeder_grpcAddress
+            value: 0.0.0.0:8083
           - name: utxostore
-            #value: aerospike://aerospike-aerospike.aerospike.svc.cluster.local:3000/test
             value: memory://utxostore-service.utxostore-service.svc.cluster.local:8082
-            #value: foundationdb://foundationdb-exporter-service:9444
-          - name: validator_grpcAddress
-            value: 0.0.0.0:8081
           - name: profilerAddr
             value: 0.0.0.0:9091
           - name: JAEGER_AGENT_HOST
@@ -35,9 +33,9 @@ spec:
           - name: JAEGER_AGENT_PORT
             value: "6831"
           - name: SERVICE_NAME
-            value: validation-service
+            value: seeder-service
           ports:
-            - containerPort: 8081
+            - containerPort: 8083
               protocol: TCP
             - containerPort: 9091
               protocol: TCP
@@ -54,10 +52,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: validation-service
-  namespace: validation-service
+  name: seeder-service
+  namespace: seeder-service
   labels:
-    app: validation
+    app: seeder
     monitor: prometheus
 spec:
   clusterIP: None
@@ -65,11 +63,11 @@ spec:
   ipFamilies:
   - IPv4
   selector:
-    app: validation
+    app: seeder
   ports:
     - name: tcp
-      port: 8081
-      targetPort: 8081
+      port: 8083
+      targetPort: 8083
       protocol: TCP
     - name: profiler
       port: 9091

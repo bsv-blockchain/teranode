@@ -25,14 +25,8 @@ spec:
           #command: ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
           #command: ["./ubsv.run"]
           env:
-            - name: peerCount
-              value: "1"
             - name: validator_grpcAddress
               value: dns:///validation-service.validation-service.svc.cluster.local:8081
-            - name: peer_1_p2p
-              value: p2p://regtest.regtest.svc.cluster.local:18333
-            - name: peer_1_rpc
-              value: rpc://bitcoin:bitcoin@regtest.regtest.svc.cluster.local:18332
             - name: profilerAddr
               value: 0.0.0.0:9091
             - name: JAEGER_AGENT_HOST

@@ -6,3 +6,4 @@ resources:
 - validation.yaml
 - tx-blaster.yaml
 - utxostore.yaml
+- seeder.yaml
