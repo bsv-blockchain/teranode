@@ -232,12 +232,12 @@ func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
 		return err
 	}
 
-	// txChan <- &bt.UTXO{
-	// 	TxID:          tx.TxIDBytes(),
-	// 	Vout:          0,
-	// 	LockingScript: keySet.Script,
-	// 	Satoshis:      u.Satoshis,
-	// }
+	txChan <- &bt.UTXO{
+		TxID:          tx.TxIDBytes(),
+		Vout:          0,
+		LockingScript: keySet.Script,
+		Satoshis:      u.Satoshis,
+	}
 
 	return nil
 }

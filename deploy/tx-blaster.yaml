@@ -24,10 +24,12 @@ spec:
             - ./blaster.run
           args: ["-workers=1000"]
           env:
+            - name: SETTINGS_CONTEXT
+              value: "kubernetes"
             - name: propagation_grpcAddress
               value: dns:///propagation-service.propagation-service.svc.cluster.local:8084
             - name: seeder_grpcAddress
-              value: dns:///seeder-service.propagation-service.svc.cluster.local:8083
+              value: dns:///seeder-service.seeder-service.svc.cluster.local:8083
             - name: profilerAddr
               value: 0.0.0.0:9091
             - name: JAEGER_AGENT_HOST

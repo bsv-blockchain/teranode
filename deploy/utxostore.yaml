@@ -22,6 +22,8 @@ spec:
           image: eu.gcr.io/PROJECT/IMAGE:TAG
           args: ["-utxostore=1"]
           env:
+          - name: SETTINGS_CONTEXT
+            value: "kubernetes"
           - name: utxostore
             #value: memory://:8082
             value: memory://:8082/splitbyhash

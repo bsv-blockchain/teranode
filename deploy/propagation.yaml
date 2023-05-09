@@ -25,6 +25,8 @@ spec:
           #command: ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
           #command: ["./ubsv.run"]
           env:
+            - name: SETTINGS_CONTEXT
+              value: "kubernetes"
             - name: validator_grpcAddress
               value: dns:///validation-service.validation-service.svc.cluster.local:8081
             - name: profilerAddr
