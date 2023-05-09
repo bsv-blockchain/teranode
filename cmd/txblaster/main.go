@@ -37,11 +37,22 @@ var useHTTP bool
 var httpURL string
 var httpClient *http.Client
 
+// Name used by build script for the binaries. (Please keep on single line)
+const progname = "tx-blaster"
+
+// // Version & commit strings injected at build with -ldflags -X...
+var version string
+var commit string
+
 func init() {
+	gocore.SetInfo(progname, version, commit)
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
 }
 
 func main() {
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
+
 	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
@@ -78,7 +89,7 @@ func main() {
 	}
 
 	go func() {
-		_ = http.ListenAndServe(":9099", nil)
+		_ = http.ListenAndServe("localhost:9099", nil)
 	}()
 
 	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
