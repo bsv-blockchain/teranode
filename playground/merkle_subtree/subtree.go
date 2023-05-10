@@ -7,14 +7,6 @@ import (
 	"math"
 )
 
-type node struct {
-	data []byte
-}
-
-func (n node) Serialize() ([]byte, error) {
-	return n.data[:], nil
-}
-
 type SubTree struct {
 	rootHash [32]byte
 	treeSize int
@@ -83,6 +75,27 @@ func (st *SubTree) RootHash() [32]byte {
 	st.rootHash = store[len(store)-1]
 
 	return st.rootHash
+}
+
+func (st *SubTree) Difference(ids txMap) ([][32]byte, error) {
+	// return all the ids that are in st.Nodes, but not in ids
+	diff := make([][32]byte, 0, 1_000)
+	for _, id := range st.Nodes {
+		if !ids.Exists(id) {
+			diff = append(diff, id)
+		}
+	}
+
+	//fmt.Printf("diff: %d\n", len(diff))
+	//for i := 0; i < len(diff); i++ {
+	//	hash, _ := chainhash.NewHash(diff[i][:])
+	//	fmt.Printf("%s\n", hash.String())
+	//	if i > 10 {
+	//		break
+	//	}
+	//}
+
+	return diff, nil
 }
 
 func (st *SubTree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {

@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"crypto/rand"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -35,6 +40,38 @@ func TestRootHash(t *testing.T) {
 	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", utils.ReverseAndHexEncodeHash(rootHash))
 }
 
+func TestDifference(t *testing.T) {
+	timeStart := time.Now()
+
+	subTree, err := loadIds(20)
+	require.NoError(t, err)
+
+	ids, err := loadList("block.bin")
+	require.NoError(t, err)
+
+	nodeIds := NewGoSplitMutexMap(len(ids))
+	for _, id := range ids {
+		err = nodeIds.Put(id)
+		require.NoError(t, err)
+	}
+
+	fmt.Printf("Loading data took %s\n", time.Since(timeStart))
+
+	timeStart = time.Now()
+
+	diff, err := subTree.Difference(nodeIds)
+	require.NoError(t, err)
+
+	fmt.Printf("Difference took %s\n", time.Since(timeStart))
+
+	assert.Equal(t, 0, len(diff))
+}
+
+func TestGenerateData(t *testing.T) {
+	err := generateTestSets()
+	require.NoError(t, err)
+}
+
 func BenchmarkSubTree_RootHash(b *testing.B) {
 	subTree, err := loadIds(18)
 	require.NoError(b, err)
@@ -44,4 +81,57 @@ func BenchmarkSubTree_RootHash(b *testing.B) {
 		_ = subTree.RootHash()
 		subTree.rootHash = [32]byte{}
 	}
+}
+
+func loadList(filename string) ([][32]byte, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+
+	ids := make([][32]byte, 60_000_000)
+	// read 32 bytes at a time
+	var id [32]byte
+	for {
+		n, err := r.Read(id[:])
+		if err != nil || n != 32 {
+			break
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}
+
+func generateTestSets() error {
+	f, err := os.Create("ids-20.txt")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+
+	var f2 *os.File
+	f2, err = os.Create("block.bin")
+	if err != nil {
+		return err
+	}
+	defer f2.Close()
+	w2 := bufio.NewWriter(f2)
+
+	nrOfIds := 60_000_000
+	for i := 0; i < nrOfIds; i++ {
+		txID := make([]byte, 32)
+		_, _ = rand.Read(txID)
+
+		if i%(nrOfIds/1_000_000) == 0 {
+			_, err = w.WriteString(utils.ReverseAndHexEncodeHash([32]byte(txID)) + "\n")
+		}
+		_, err = w2.Write(txID)
+	}
+
+	return nil
 }
