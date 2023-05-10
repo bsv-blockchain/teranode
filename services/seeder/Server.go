@@ -20,6 +20,7 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -155,8 +156,18 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 				return nil, status.Error(codes.Internal, err.Error())
 			}
 
-			if _, err := v.utxoStore.Store(ctx, hash); err != nil {
-				return nil, status.Error(codes.Internal, err.Error())
+			ctx := context.Background()
+			g, ctx := errgroup.WithContext(ctx)
+
+			g.Go(func() error {
+				if _, err := v.utxoStore.Store(ctx, hash); err != nil {
+					return status.Error(codes.Internal, err.Error())
+				}
+				return nil
+			})
+
+			if err := g.Wait(); err != nil {
+				return nil, err
 			}
 		}
 
