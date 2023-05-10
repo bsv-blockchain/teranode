@@ -130,17 +130,18 @@ func main() {
 
 	numberOfTransactions := uint32(1)
 	satoshisPerOutput := uint64(1000)
+	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 
 	logger.Infof("Asking seeder to create %d transaction(s) with %d outputs of %d satoshis each",
 		numberOfTransactions,
-		NUMBER_OF_OUTPUTS,
+		numberOfOutputs,
 		satoshisPerOutput,
 	)
 
 	if _, err := seederServer.CreateSpendableTransactions(context.Background(), &seeder_api.CreateSpendableTransactionsRequest{
 		PrivateKey:           keySet.PrivateKey.Serialise(),
 		NumberOfTransactions: numberOfTransactions,
-		NumberOfOutputs:      NUMBER_OF_OUTPUTS,
+		NumberOfOutputs:      uint32(numberOfOutputs),
 		SatoshisPerOutput:    satoshisPerOutput,
 	}); err != nil {
 		panic(err)
