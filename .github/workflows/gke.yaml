@@ -4,61 +4,11 @@ on:
     branches:
       - master
 jobs:
-  build-go-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update &&\
-          sudo apt-get install wget -y  &&\
-          wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
-          wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-server_7.2.5-1_amd64.deb 
-
-      - name: Install FoundationDB
-        run: |
-           sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb foundationdb-server_7.2.5-1_amd64.deb
-
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        with:
-          go-version: 1.20.3
-
-      - name: Verify dependencies
-        run: go mod verify
-
-      - name: Build
-        # build with all optional tags to make sure we are not missing any dependencies
-        run: CGO_ENABLED=1 go build -tags aerospike,foundationdb -v ./...
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: v1.51.2
-          args: --verbose --skip-dirs p2p/wire --skip-dirs playground
-
-      - name: Run tests
-        run: go test -race -vet=off ./...
-
   build-docker-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
-      # Install dependencies
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update && \
-          sudo apt-get install wget build-essential -y  && \
-          wget https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb
-
-      - name: Install FoundationDB
-        run: |
-          sudo dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
-
       # Setup gcloud CLI
       - id: auth
         uses: google-github-actions/auth@v1

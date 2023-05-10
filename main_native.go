@@ -1,10 +1,10 @@
-// //go:build native
+//go:build native
 
 package main
 
 /*
 	#cgo CFLAGS: -I./include
-	#cgo LDFLAGS: -L ./lib -lsecp256k1 -lgmp
+	#cgo LDFLAGS: -lsecp256k1 -lgmp
 	#include <stdlib.h>
 	#include <secp256k1.h>
 */

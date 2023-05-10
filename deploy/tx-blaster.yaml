@@ -39,7 +39,7 @@ spec:
             - name: SERVICE_NAME
               value: tx-blaster-service
             - name: number_of_outputs
-              value: "50000"
+              value: "5000"
           ports:
             - containerPort: 8081
               protocol: TCP
