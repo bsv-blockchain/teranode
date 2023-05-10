@@ -25,8 +25,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-const NUMBER_OF_OUTPUTS = 10_000
-
 var logger utils.Logger
 var startTime time.Time
 var propagationServer propagation_api.PropagationAPIClient
@@ -120,7 +118,9 @@ func main() {
 	}
 	propagationServer = propagation_api.NewPropagationAPIClient(pConn)
 
-	txChan = make(chan *bt.UTXO, NUMBER_OF_OUTPUTS)
+	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
+
+	txChan = make(chan *bt.UTXO, numberOfOutputs*2)
 
 	// create new private key
 	keySet, err := extra.New()
@@ -130,7 +130,6 @@ func main() {
 
 	numberOfTransactions := uint32(1)
 	satoshisPerOutput := uint64(1000)
-	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 
 	logger.Infof("Asking seeder to create %d transaction(s) with %d outputs of %d satoshis each",
 		numberOfTransactions,
