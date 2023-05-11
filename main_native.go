@@ -21,7 +21,6 @@ import (
 func init() {
 	if gocore.Config().GetBool("use_cgo_verifier", false) {
 		log.Println("Using CGO verifier - VerifySignature")
-		log.Println("Using CGO verifier - VerifySignature2")
 		interpreter.InjectExternalVerifySignatureFn(VerifySignature)
 	}
 }
