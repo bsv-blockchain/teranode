@@ -15,5 +15,8 @@ sleep 30
 
 
 kubectl scale deployment -n tx-blaster-service --replicas 2 --all
+echo "Sleeping for 30 seconds to allow all propagation services to spin up"
+sleep 30
+echo "Starting propagation services"
 
-kubectl get pods --all-namespaces -o wide | grep "-service"
+kubectl get pods --all-namespaces | grep "-service"

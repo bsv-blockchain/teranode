@@ -39,7 +39,7 @@ spec:
           - name: SERVICE_NAME
             value: validation-service
           - name: use_cgo_verifier
-            value: "false"
+            value: "true"
           ports:
             - containerPort: 8081
               protocol: TCP
