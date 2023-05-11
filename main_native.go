@@ -21,7 +21,7 @@ import (
 
 func init() {
 	if gocore.Config().GetBool("use_cgo_verifier", false) {
-		log.Println("Using CGO verifier - VerifySignatureGo")
+		log.Println("Using CGO verifier - VerifySignature2")
 		interpreter.InjectExternalVerifySignatureFn(VerifySignatureGo)
 	}
 }
@@ -33,6 +33,7 @@ func cBuf(goSlice []byte) *C.uchar {
 func VerifySignature(message []byte, signature []byte, publicKey []byte) bool {
 	// Create a secp256k1 context
 	ctx := C.secp256k1_context_create(C.SECP256K1_CONTEXT_SIGN | C.SECP256K1_CONTEXT_VERIFY)
+	defer C.free(unsafe.Pointer(ctx))
 
 	// Allocate memory for the message, signature, and public key
 	cMessage := C.CBytes(message)
@@ -66,6 +67,7 @@ func VerifySignature(message []byte, signature []byte, publicKey []byte) bool {
 func VerifySignature2(message []byte, signature []byte, publicKey []byte) bool {
 	// Create a secp256k1 context
 	ctx := C.secp256k1_context_create(C.SECP256K1_CONTEXT_SIGN | C.SECP256K1_CONTEXT_VERIFY)
+	defer C.free(unsafe.Pointer(ctx))
 
 	// Allocate memory for the message, signature, and public key
 	cMessage := cBuf(message)
