@@ -7,7 +7,7 @@ metadata:
 #    monitor: prometheus
     app: tx-blaster
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: tx-blaster
@@ -40,6 +40,8 @@ spec:
               value: tx-blaster-service
             - name: number_of_outputs
               value: "5000"
+            - name: use_cgo_signer
+              value: "true"
           ports:
             - containerPort: 8086
               protocol: TCP
