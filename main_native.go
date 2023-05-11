@@ -4,7 +4,7 @@ package main
 
 /*
 	#cgo CFLAGS: -I./include
-	#cgo LDFLAGS: -lsecp256k1 -lgmp
+	#cgo LDFLAGS: -lsecp256k1
 	#include <stdlib.h>
 	#include <secp256k1.h>
 */
