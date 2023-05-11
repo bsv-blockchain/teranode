@@ -10,23 +10,26 @@ package main
 */
 import "C"
 import (
+	"crypto/ecdsa"
 	"log"
 	"unsafe"
 
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/ordishs/gocore"
 )
 
 func init() {
 	if gocore.Config().GetBool("use_cgo_verifier", false) {
-		log.Println("Using CGO verifier")
-		interpreter.InjectExternalVerifySignatureFn(VerifySignature)
+		log.Println("Using CGO verifier - VerifySignatureGo")
+		interpreter.InjectExternalVerifySignatureFn(VerifySignatureGo)
 	}
 }
 
 func cBuf(goSlice []byte) *C.uchar {
 	return (*C.uchar)(unsafe.Pointer(&goSlice[0]))
 }
+
 func VerifySignature(message []byte, signature []byte, publicKey []byte) bool {
 	// Create a secp256k1 context
 	ctx := C.secp256k1_context_create(C.SECP256K1_CONTEXT_SIGN | C.SECP256K1_CONTEXT_VERIFY)
@@ -87,4 +90,15 @@ func VerifySignature2(message []byte, signature []byte, publicKey []byte) bool {
 	}
 
 	return true
+}
+
+func VerifySignatureGo(message []byte, signature []byte, publicKey []byte) bool {
+	sig, _ := bec.ParseSignature(signature, bec.S256())
+
+	pubKey, err := bec.ParsePubKey(publicKey, bec.S256())
+	if err != nil {
+		panic(err)
+	}
+
+	return ecdsa.Verify(pubKey.ToECDSA(), message, sig.R, sig.S)
 }
