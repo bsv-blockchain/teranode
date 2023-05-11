@@ -1,11 +1,12 @@
 # Set the base image
-FROM --platform=linux/amd64 ubuntu:focal
+#FROM --platform=linux/amd64 ubuntu:focal
+FROM --platform=linux/amd64 ubuntu:latest
 ARG GITHUB_SHA
 
 RUN apt update && apt install -y wget build-essential libsecp256k1-dev
 
-RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
-  dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
+#RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
+#  dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
 RUN wget -q https://go.dev/dl/go1.20.3.linux-amd64.tar.gz && \
   tar -C /usr/local -xzf go1.20.3.linux-amd64.tar.gz
@@ -23,7 +24,8 @@ ENV CGO_ENABLED=1
 RUN echo "${GITHUB_SHA}"
 
 # Build the Go library
-RUN go build -tags aerospike,foundationdb,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
+#RUN go build -tags aerospike,foundationdb,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
+RUN go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
 
 # Build TX Blaster
 RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
