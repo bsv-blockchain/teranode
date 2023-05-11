@@ -34,7 +34,7 @@ RUN go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=M
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 
-FROM --platform=linux/amd64 ubuntu:focal
+FROM --platform=linux/amd64 ubuntu:latest
 
 RUN apt update && apt install -y vim htop curl wget lsof iputils-ping net-tools dnsutils
 
