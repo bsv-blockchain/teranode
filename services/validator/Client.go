@@ -4,17 +4,26 @@ import (
 	"context"
 	"fmt"
 
+	_ "github.com/TAAL-GmbH/ubsv/k8sresolver"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc/resolver"
 )
 
 type Client struct {
 	client validator_api.ValidatorAPIClient
 }
 
-func NewClient(ctx context.Context) (*Client, error) {
+func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
+
+	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+	if grpcResolver == "k8s" {
+		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		resolver.SetDefaultScheme("k8s")
+	}
+
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
 	conn, err := utils.GetGRPCClient(ctx, validator_grpcAddress, &utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),

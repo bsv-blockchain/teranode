@@ -57,7 +57,7 @@ func main() {
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
-	profilePort := flag.String("profile", "", "use this profile port instead of the default")
+	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
@@ -110,8 +110,8 @@ func main() {
 	go func() {
 		var profilerAddr string
 		var ok bool
-		if profilePort != nil && *profilePort != "" {
-			profilerAddr, ok = ":"+*profilePort, true
+		if profileAddress != nil && *profileAddress != "" {
+			profilerAddr, ok = *profileAddress, true
 		} else {
 			profilerAddr, ok = gocore.Config().Get("profilerAddr")
 		}
@@ -255,7 +255,7 @@ func main() {
 			panic(err)
 		}
 
-		validatorClient, err := validator.NewClient(context.Background())
+		validatorClient, err := validator.NewClient(context.Background(), logger)
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)
 		}
