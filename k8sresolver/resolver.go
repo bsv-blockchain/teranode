@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc/resolver"
 	"k8s.io/apimachinery/pkg/watch"
 )
@@ -32,7 +33,8 @@ type k8sResolver struct {
 	// If Close() doesn't wait for watcher() goroutine finishes, race detector sometimes
 	// will warns lookup (READ the lookup function pointers) inside watcher() goroutine
 	// has data race with replaceNetFunc (WRITE the lookup function pointers).
-	wg sync.WaitGroup
+	wg     sync.WaitGroup
+	logger utils.Logger
 }
 
 // ResolveNow invoke an immediate resolution of the target that this k8sResolver watches.
@@ -96,16 +98,22 @@ func (k *k8sResolver) watcher() {
 }
 
 func (k *k8sResolver) lookup() (*resolver.State, error) {
+	k.logger.Infof("[k8s] looking up service endpoints (%s:%s)", k.host, k.port)
 	endpoints, err := k.k8sC.Resolve(k.ctx, k.host, k.port)
 	if err != nil {
 		return nil, err
 	}
+
+	k.logger.Infof("[k8s] found %d service endpoints (%s:%s)", len(endpoints), k.host, k.port)
+	k.logger.Infof("[k8s] endpoints: %v", endpoints)
 
 	state := &resolver.State{Addresses: []resolver.Address{}}
 
 	for _, ep := range endpoints {
 		state.Addresses = append(state.Addresses, resolver.Address{Addr: ep})
 	}
+
+	k.logger.Infof("[k8s] state: %v", state)
 
 	return state, nil
 }

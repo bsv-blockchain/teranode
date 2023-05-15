@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ordishs/go-utils"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -23,9 +24,11 @@ type serviceEndpointResolver interface {
 type serviceClient struct {
 	k8s       kubernetes.Interface
 	namespace string
+	logger    utils.Logger
 }
 
-func newInClusterClient(namespace string) (*serviceClient, error) {
+func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, error) {
+	logger.Infof("[k8s] newInClusterClient called with namespace: %s", namespace)
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
@@ -36,10 +39,15 @@ func newInClusterClient(namespace string) (*serviceClient, error) {
 		return nil, fmt.Errorf("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
 	}
 
-	return &serviceClient{k8s: clientset, namespace: namespace}, nil
+	return &serviceClient{
+		k8s:       clientset,
+		namespace: namespace,
+		logger:    logger,
+	}, nil
 }
 
 func (s *serviceClient) Resolve(ctx context.Context, host string, port string) ([]string, error) {
+	s.logger.Infof("[k8s] Resolve called with host: %s, port: %s", host, port)
 	eps := []string{}
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
@@ -57,6 +65,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 }
 
 func (s *serviceClient) Watch(ctx context.Context, host string) (<-chan watch.Event, chan struct{}, error) {
+	s.logger.Infof("[k8s] Watch called with host: %s", host)
 	ev := make(chan watch.Event)
 
 	watchList := cache.NewListWatchFromClient(s.k8s.CoreV1().RESTClient(), "endpoints", s.namespace, fields.OneTermEqualSelector("metadata.name", host))
