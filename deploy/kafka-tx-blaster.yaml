@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tx-blaster
+  name: kafka-tx-blaster
   namespace: tx-blaster-service
   labels:
     monitor: prometheus
-    app: tx-blaster
+    app: kafka-tx-blaster
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: tx-blaster
+      app: kafka-tx-blaster
   template:
     metadata:
       labels:
-        app: tx-blaster
+        app: kafka-tx-blaster
         monitor: prometheus
     spec:
       containers:
-        - name: tx-blaster
+        - name: kafka-tx-blaster
           image: eu.gcr.io/PROJECT/IMAGE:TAG
           command:
             - ./blaster.run
@@ -37,7 +37,7 @@ spec:
             - name: JAEGER_AGENT_PORT
               value: "6831"
             - name: SERVICE_NAME
-              value: tx-blaster-service
+              value: kafka-tx-blaster-service
             - name: number_of_outputs
               value: "5000"
           ports:
@@ -58,17 +58,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: tx-blaster-service
+  name: kafka-tx-blaster-service
   namespace: tx-blaster-service
   labels:
-    app: tx-blaster
+    app: kafka-tx-blaster
     monitor: prometheus
 spec:
   ipFamilyPolicy: SingleStack
   ipFamilies:
   - IPv4
   selector:
-    app: tx-blaster
+    app: kafka-tx-blaster
   ports:
     - name: tcp
       port: 8086

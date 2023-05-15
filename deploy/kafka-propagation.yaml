@@ -36,7 +36,7 @@ spec:
             - name: JAEGER_AGENT_PORT
               value: "6831"
             - name: SERVICE_NAME
-              value: propagation-service
+              value: kafka-propagation-service
           ports:
             - containerPort: 8833
               protocol: TCP
@@ -53,10 +53,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: propagation-service
+  name: kafka-propagation-service
   namespace: propagation-service
   labels:
-    app: propagation
+    app: kafka-propagation
     monitor: prometheus
 spec:
   clusterIP: None
@@ -64,7 +64,7 @@ spec:
   ipFamilies:
   - IPv4
   selector:
-    app: propagation
+    app: kafka-propagation
   ports:
     - name: http
       port: 8833
