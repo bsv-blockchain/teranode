@@ -80,6 +80,6 @@ jobs:
               echo "$FILE_NAME"
               
               # Run kubectl commands
-              kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME"
+              kubectl rollout status -f "deployments/$FILE_NAME"
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
