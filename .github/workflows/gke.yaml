@@ -65,6 +65,8 @@ jobs:
         run: |-
           # kubectl rollout
           cd ./deploy/
+          kubectl scale deployment -n propagation-service --replicas 0 --all
+          kubectl scale deployment -n tx-blaster-service --replicas 0 --all
           for file in *.yaml; do
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
