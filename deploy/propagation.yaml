@@ -28,7 +28,7 @@ spec:
             - name: SETTINGS_CONTEXT
               value: "kubernetes"
             - name: validator_grpcAddress
-              value: dns:///validation-service.validation-service.svc.cluster.local:8081
+              value: k8s:///validation-service.validation-service.svc.cluster.local:8081
             - name: profilerAddr
               value: 0.0.0.0:9091
             - name: JAEGER_AGENT_HOST

@@ -98,14 +98,14 @@ func (k *k8sResolver) watcher() {
 }
 
 func (k *k8sResolver) lookup() (*resolver.State, error) {
-	k.logger.Infof("[k8s] looking up service endpoints (%s:%s)", k.host, k.port)
+	k.logger.Debugf("[k8s] looking up service endpoints (%s:%s)", k.host, k.port)
 	endpoints, err := k.k8sC.Resolve(k.ctx, k.host, k.port)
 	if err != nil {
 		return nil, err
 	}
 
-	k.logger.Infof("[k8s] found %d service endpoints (%s:%s)", len(endpoints), k.host, k.port)
-	k.logger.Infof("[k8s] endpoints: %v", endpoints)
+	k.logger.Debugf("[k8s] found %d service endpoints (%s:%s)", len(endpoints), k.host, k.port)
+	k.logger.Debugf("[k8s] endpoints: %v", endpoints)
 
 	state := &resolver.State{Addresses: []resolver.Address{}}
 
@@ -113,7 +113,7 @@ func (k *k8sResolver) lookup() (*resolver.State, error) {
 		state.Addresses = append(state.Addresses, resolver.Address{Addr: ep})
 	}
 
-	k.logger.Infof("[k8s] state: %v", state)
+	k.logger.Debugf("[k8s] state: %v", state)
 
 	return state, nil
 }

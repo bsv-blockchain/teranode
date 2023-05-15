@@ -18,6 +18,7 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
+	_ "github.com/TAAL-GmbH/ubsv/k8sresolver"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"

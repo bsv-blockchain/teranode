@@ -47,7 +47,7 @@ func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, 
 }
 
 func (s *serviceClient) Resolve(ctx context.Context, host string, port string) ([]string, error) {
-	s.logger.Infof("[k8s] Resolve called with host: %s, port: %s", host, port)
+	s.logger.Debugf("[k8s] Resolve called with host: %s, port: %s", host, port)
 	eps := []string{}
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
