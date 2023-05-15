@@ -20,7 +20,7 @@ spec:
       containers:
         - name: kafka-propagation
           image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-propagation=1", "-kafka=kafka://kafka-cluster.kafka-cluster.svc.cluster.local:9092/txs"]
+          args: ["-propagation=1", "-kafka=kafka://kafka-cluster-headless.kafka.svc.cluster.local:9092/txs"]
           # command: "You can override the entrypoint with a command."
           #command: ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
           #command: ["./ubsv.run"]

@@ -20,7 +20,7 @@ spec:
       containers:
         - name: kafka-validation
           image: eu.gcr.io/PROJECT/IMAGE:TAG
-          args: ["-validator=1", "-kafka=kafka://kafka-cluster.kafka-cluster.svc.cluster.local:9092/txs"]
+          args: ["-validator=1", "-kafka=kafka://kafka-cluster-headless.kafka.svc.cluster.local:9092/txs"]
           env:
           - name: SETTINGS_CONTEXT
             value: "kubernetes"
