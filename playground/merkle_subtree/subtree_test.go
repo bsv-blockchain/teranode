@@ -26,7 +26,7 @@ func TestNewTree(t *testing.T) {
 func TestRootHash(t *testing.T) {
 	st := NewTree(2)
 	if st.Size() != 4 {
-		t.Errorf("expected size to be 1048576, got %d", st.Size())
+		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
 	hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 	hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
