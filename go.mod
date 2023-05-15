@@ -2,7 +2,7 @@ module github.com/TAAL-GmbH/ubsv
 
 go 1.20
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.1
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.2
 
 require (
 	cloud.google.com/go/storage v1.30.1
