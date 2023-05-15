@@ -135,7 +135,7 @@ func (v *Server) Start() error {
 						}
 						processedN := n.Add(1)
 						if processedN%1000 == 0 {
-							v.logger.Infof("[Validator] Processed %d transactions", processedN)
+							v.logger.Debugf("[Validator] Processed %d transactions", processedN)
 						}
 					}
 				}()
