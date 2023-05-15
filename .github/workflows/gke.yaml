@@ -65,8 +65,14 @@ jobs:
         run: |-
           # kubectl rollout
           cd ./deploy/
+          
+          # Scale Down all services depending on other services 
           kubectl scale deployment -n propagation-service --replicas 0 --all
           kubectl scale deployment -n tx-blaster-service --replicas 0 --all
+          kubectl scale deployment -n kafka-propagation-service --replicas 0 --all
+          kubectl scale deployment -n kafka-tx-blaster-service --replicas 0 --all
+          
+          # Apply latest configuration changes
           for file in *.yaml; do
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
@@ -80,6 +86,6 @@ jobs:
               echo "$FILE_NAME"
               
               # Run kubectl commands
-              kubectl rollout status -f "deployments/$FILE_NAME"
+              kubectl rollout status -f "$file"
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
