@@ -30,6 +30,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
 
@@ -101,6 +102,12 @@ func main() {
 
 	flag.Parse()
 
+	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
+	if ok && prometheusEndpoint != "" {
+		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+		http.Handle(prometheusEndpoint, promhttp.Handler())
+	}
+
 	if kafka != nil && *kafka != "" {
 		kafkaURL, err := url.Parse(*kafka)
 		if err != nil {
@@ -165,7 +172,7 @@ func main() {
 	}
 
 	go func() {
-		_ = http.ListenAndServe("localhost:9099", nil)
+		_ = http.ListenAndServe("localhost:9199", nil)
 	}()
 
 	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
