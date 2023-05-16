@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/blaster"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
@@ -218,14 +217,6 @@ func main() {
 
 				return seederService.Start()
 			})
-		}
-	}
-
-	if blaster.Enabled() {
-		b := blaster.New()
-
-		if err := b.Start(); err != nil {
-			panic(err)
 		}
 	}
 

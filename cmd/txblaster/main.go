@@ -145,6 +145,17 @@ func main() {
 
 	printProgress = uint64(*printFlag)
 
+	go func() {
+		var profilerAddr string
+		var ok bool
+		profilerAddr, ok = gocore.Config().Get("profilerAddr")
+
+		if ok {
+			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
+			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
+		}
+	}()
+
 	if gocore.Config().GetBool("use_open_tracing", true) {
 		logger.Infof("Starting open tracing")
 		// closeTracer := tracing.InitOtelTracer()

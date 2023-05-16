@@ -17,12 +17,12 @@ require (
 	github.com/holiman/uint256 v1.2.2
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt/v2 v2.1.1
+	github.com/libsv/go-bt/v2 v2.2.1
 	github.com/libsv/go-p2p v0.1.1
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
-	github.com/ordishs/go-utils v1.0.42
+	github.com/ordishs/go-utils v1.0.43
 	github.com/ordishs/gocore v1.0.35
 	github.com/ordishs/verifysignature v1.0.7
 	github.com/pkg/profile v1.7.0
@@ -72,7 +72,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.17 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/rs/xid v1.4.0 // indirect
-	github.com/segmentio/kafka-go v0.4.40 // indirect
 	github.com/sirupsen/logrus v1.9.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.40.0 // indirect
 	go.opentelemetry.io/otel/metric v0.37.0 // indirect
