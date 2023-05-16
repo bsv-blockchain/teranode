@@ -54,7 +54,7 @@ jobs:
       - name: Build k8s files
         run: |-
           # Setting Image
-          cd ./deploy/
+          cd ./deploy/k8s/deployments
           echo "Setting image"
           kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/ubsv-383015/ubsv-go:$GITHUB_SHA
 
@@ -70,6 +70,11 @@ jobs:
           # Apply latest deployment configuration changes
           cd ./deploy/k8s/deployments
           for file in *.yaml; do     # Loop over all files in the directory
+              # Skip kustomization.yaml file
+              if [ "$file" == "kustomization.yaml" ]; then
+                  continue
+              fi
+          
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
               
