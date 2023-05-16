@@ -1,6 +1,6 @@
 //go:build native
 
-package main
+package native
 
 import (
 	"encoding/hex"

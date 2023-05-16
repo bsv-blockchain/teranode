@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
+	_ "github.com/TAAL-GmbH/ubsv/k8sresolver"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
@@ -22,6 +28,9 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
 
@@ -41,10 +50,44 @@ const progname = "tx-blaster"
 // // Version & commit strings injected at build with -ldflags -X...
 var version string
 var commit string
+var kafkaProducer sarama.SyncProducer
+var kafkaTopic string
+
+var (
+	prometheusProcessedTransactions prometheus.Counter
+	prometheusInvalidTransactions   prometheus.Counter
+	prometheusTransactionDuration   prometheus.Histogram
+	prometheusTransactionSize       prometheus.Histogram
+)
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
 	logger = gocore.Log("txblaster", gocore.NewLogLevelFromString("debug"))
+
+	prometheusProcessedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_processed_transactions",
+			Help: "Number of transactions processed by the tx blaster",
+		},
+	)
+	prometheusInvalidTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_invalid_transactions",
+			Help: "Number of transactions found invalid by the tx blaster",
+		},
+	)
+	prometheusTransactionDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "tx_blaster_transactions_duration",
+			Help: "Duration of transaction processing by the tx blaster",
+		},
+	)
+	prometheusTransactionSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "tx_blaster_transactions_size",
+			Help: "Size of transactions processed by the tx blaster",
+		},
+	)
 }
 
 func main() {
@@ -55,8 +98,50 @@ func main() {
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
+	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
 
 	flag.Parse()
+
+	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
+	if ok && prometheusEndpoint != "" {
+		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+		http.Handle(prometheusEndpoint, promhttp.Handler())
+	}
+
+	if kafka != nil && *kafka != "" {
+		kafkaURL, err := url.Parse(*kafka)
+		if err != nil {
+			log.Fatalf("unable to parse kafka url: %v", err)
+		}
+
+		brokersUrl := []string{kafkaURL.Host}
+
+		config := sarama.NewConfig()
+		config.Version = sarama.V2_1_0_0
+
+		var clusterAdmin sarama.ClusterAdmin
+		clusterAdmin, err = sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
+		if err != nil {
+			log.Fatal("Error while creating cluster admin: ", err.Error())
+		}
+		defer func() { _ = clusterAdmin.Close() }()
+
+		partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
+		replicationFactor, _ := gocore.Config().GetInt("validator_kafkaReplicationFactor", 1)
+		_ = clusterAdmin.CreateTopic("txs", &sarama.TopicDetail{
+			NumPartitions:     int32(partitions),
+			ReplicationFactor: int16(replicationFactor),
+		}, false)
+
+		producer, err := ConnectProducer(brokersUrl)
+		if err != nil {
+			log.Fatalf("unable to connect to kafka: %v", err)
+		}
+		defer producer.Close()
+
+		kafkaProducer = producer
+		kafkaTopic = kafkaURL.Path[1:]
+	}
 
 	printProgress = uint64(*printFlag)
 
@@ -87,7 +172,7 @@ func main() {
 	}
 
 	go func() {
-		_ = http.ListenAndServe("localhost:9099", nil)
+		_ = http.ListenAndServe("localhost:9199", nil)
 	}()
 
 	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
@@ -217,6 +302,8 @@ func txWorkerLimited(keySet *extra.KeySet, rateLimitDuration time.Duration, txCh
 }
 
 func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
+	timeStart := time.Now()
+
 	tx := bt.NewTx()
 	_ = tx.FromUTXOs(u)
 
@@ -224,13 +311,29 @@ func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
 
 	unlockerGetter := unlocker.Getter{PrivateKey: keySet.PrivateKey}
 	if err := tx.FillAllInputs(context.Background(), &unlockerGetter); err != nil {
+		prometheusInvalidTransactions.Inc()
 		return err
 	}
 
-	err := sendTransaction(tx)
-	if err != nil {
-		return err
+	if kafkaProducer != nil {
+		err := publishToKafka(kafkaProducer, kafkaTopic, tx.TxIDBytes(), tx.ExtendedBytes())
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			return err
+		}
+
+	} else {
+		err := sendTransaction(tx.TxID(), tx.ExtendedBytes())
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			return err
+		}
 	}
+
+	// increment prometheus counter
+	prometheusProcessedTransactions.Inc()
+	prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
+	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	txChan <- &bt.UTXO{
 		TxID:          tx.TxIDBytes(),
@@ -244,17 +347,44 @@ func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
 
 var counter atomic.Uint64
 
-func sendTransaction(tx *bt.Tx) error {
+func publishToKafka(producer sarama.SyncProducer, topic string, txIDBytes []byte, txExtendedBytes []byte) error {
+	// partition is the first byte of the txid - max 2^8 partitions = 256
+	partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
+	partition := binary.LittleEndian.Uint32(txIDBytes) % uint32(partitions)
+	_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+		Topic:     topic,
+		Partition: int32(partition),
+		Key:       sarama.ByteEncoder(txIDBytes),
+		Value:     sarama.ByteEncoder(txExtendedBytes),
+	})
+	if err != nil {
+		return err
+	}
+
+	counterLoad := counter.Add(1)
+	if printProgress > 0 && counterLoad%printProgress == 0 {
+		txPs := float64(0)
+		ts := time.Since(startTime).Seconds()
+		if ts > 0 {
+			txPs = float64(counterLoad) / ts
+		}
+		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(startTime).Seconds(), int(txPs))
+	}
+
+	return nil
+}
+
+func sendTransaction(txID string, txExtendedBytes []byte) error {
 	traceSpan := tracing.Start(context.Background(), "txBlaster:sendTransaction")
 	defer traceSpan.Finish()
 
 	traceSpan.SetTag("progname", "txblaster")
-	traceSpan.SetTag("txid", tx.TxID())
+	traceSpan.SetTag("txid", txID)
 
 	if useHTTP {
 		traceSpan.SetTag("transport", "http")
 
-		req, err := http.NewRequestWithContext(traceSpan.Ctx, "POST", httpURL, bytes.NewBuffer(tx.ExtendedBytes()))
+		req, err := http.NewRequestWithContext(traceSpan.Ctx, "POST", httpURL, bytes.NewBuffer(txExtendedBytes))
 		if err != nil {
 			return fmt.Errorf("error creating http request: %v", err)
 		}
@@ -276,7 +406,7 @@ func sendTransaction(tx *bt.Tx) error {
 		traceSpan.SetTag("transport", "grpc")
 
 		if _, err := propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
-			Tx: tx.ExtendedBytes(),
+			Tx: txExtendedBytes,
 		}); err != nil {
 			return fmt.Errorf("error sending transaction to propagation server: %v", err)
 		}
@@ -293,4 +423,18 @@ func sendTransaction(tx *bt.Tx) error {
 	}
 
 	return nil
+}
+
+func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
+	config := sarama.NewConfig()
+	config.Producer.Return.Successes = true
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Partitioner = sarama.NewManualPartitioner
+	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.
+	conn, err := sarama.NewSyncProducer(brokersUrl, config)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }

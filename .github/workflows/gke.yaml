@@ -54,7 +54,7 @@ jobs:
       - name: Build k8s files
         run: |-
           # Setting Image
-          cd ./deploy/
+          cd ./deploy/k8s/deployments
           echo "Setting image"
           kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/ubsv-383015/ubsv-go:$GITHUB_SHA
 
@@ -63,21 +63,29 @@ jobs:
           kustomize build . | kubectl apply -f -
       - name: Validate Deployment Healthy
         run: |-
-          # kubectl rollout
-          cd ./deploy/
-          for file in *.yaml; do
+          # Apply latest deployment configuration changes
+          cd ./deploy/k8s/deployments
+          for file in *.yaml; do     # Loop over all files in the directory
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
                   continue
               fi
           
-              # Get filename without extension
-              # Loop over all files in the directory
-              # Remove everything after the first dot in the file name
+              # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-              echo "$FILE_NAME"
               
               # Run kubectl commands
-              kubectl rollout status -n "$FILE_NAME-service" "deployments/$FILE_NAME"
+              kubectl rollout status -f "$file"
+          done
+          
+          
+          # Apply latest services configuration changes
+          cd ../services
+          for file in *.yaml; do     # Loop over all files in the directory
+              # Get filename without extension. Remove everything after the first dot in the file name
+              FILE_NAME="${file%%.*}"
+              
+              # Run kubectl commands
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
+          

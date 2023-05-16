@@ -5,7 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/grpc/grpclog"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -15,20 +16,29 @@ const (
 	minK8SResRate    = 5 * time.Second
 )
 
-var logger = grpclog.Component("k8s")
+var (
+	logLevel, _ = gocore.Config().Get("logLevel")
+	logger      = gocore.Log("k8sresolver", gocore.NewLogLevelFromString(logLevel))
+)
 
 func init() {
-	resolver.Register(NewBuilder())
+	logger.Infof("[k8s] GRPC k8sresolver init")
+	resolver.Register(NewBuilder(logger))
 }
 
 // NewBuilder creates a k8sBuilder which is used to factory K8S service resolvers.
-func NewBuilder() resolver.Builder {
-	return &k8sBuilder{}
+func NewBuilder(logger utils.Logger) resolver.Builder {
+	return &k8sBuilder{
+		logger: logger,
+	}
 }
 
-type k8sBuilder struct{}
+type k8sBuilder struct {
+	logger utils.Logger
+}
 
 func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	logger.Debugf("[k8s] Build called with target: %v", target)
 	host, port, err := parseTarget(target.Endpoint(), defaultPort)
 	if err != nil {
 		return nil, err
@@ -36,7 +46,7 @@ func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts 
 
 	namespace, host := getNamespaceFromHost(host)
 
-	k8sc, err := newInClusterClient(namespace)
+	k8sc, err := newInClusterClient(logger, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +60,7 @@ func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts 
 		cancel: cancel,
 		cc:     cc,
 		rn:     make(chan struct{}, 1),
+		logger: logger,
 	}
 
 	k.wg.Add(1)
