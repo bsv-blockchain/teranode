@@ -63,10 +63,6 @@ jobs:
           kustomize build . | kubectl apply -f -
       - name: Validate Deployment Healthy
         run: |-
-          # Scale Down all services depending on other services 
-          kubectl scale deployment -n propagation-service --replicas 0 --all
-          kubectl scale deployment -n tx-blaster-service --replicas 0 --all
-          
           # Apply latest deployment configuration changes
           cd ./deploy/k8s/deployments
           for file in *.yaml; do     # Loop over all files in the directory
