@@ -81,7 +81,7 @@ func (k *k8sResolver) watcher() {
 		if err != nil {
 			k.cc.ReportError(err)
 		} else {
-			k.cc.UpdateState(*state)
+			_ = k.cc.UpdateState(*state)
 		}
 
 		// Sleep to prevent excessive re-resolutions. Incoming resolution requests
@@ -102,6 +102,10 @@ func (k *k8sResolver) lookup() (*resolver.State, error) {
 	endpoints, err := k.k8sC.Resolve(k.ctx, k.host, k.port)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(endpoints) == 0 {
+		return nil, errNoEndpoints
 	}
 
 	k.logger.Debugf("[k8s] found %d service endpoints (%s:%s)", len(endpoints), k.host, k.port)

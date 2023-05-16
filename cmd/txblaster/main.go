@@ -183,7 +183,7 @@ func main() {
 	}
 
 	go func() {
-		profilerAddr, _ := gocore.Config().Get("tx_blaster_profilerAddr", "localhost:9091")
+		profilerAddr, _ := gocore.Config().Get("tx_blaster_profilerAddr", ":9091")
 		_ = http.ListenAndServe(profilerAddr, nil)
 	}()
 

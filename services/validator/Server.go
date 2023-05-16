@@ -201,7 +201,8 @@ func (v *Server) Start() error {
 	return nil
 }
 
-func (v *Server) startKafkaListener(kafkaURL *url.URL, workerCh chan []byte) error {
+// startKafkaListener
+func (v *Server) _(kafkaURL *url.URL, workerCh chan []byte) error { // nolint:unused
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
