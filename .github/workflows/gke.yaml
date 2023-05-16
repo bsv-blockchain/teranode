@@ -63,27 +63,28 @@ jobs:
           kustomize build . | kubectl apply -f -
       - name: Validate Deployment Healthy
         run: |-
-          # kubectl rollout
-          cd ./deploy/
-          
           # Scale Down all services depending on other services 
           kubectl scale deployment -n propagation-service --replicas 0 --all
           kubectl scale deployment -n tx-blaster-service --replicas 0 --all
           
-          # Apply latest configuration changes
-          for file in *.yaml; do
-              # Skip kustomization.yaml file
-              if [ "$file" == "kustomization.yaml" ]; then
-                  continue
-              fi
-          
-              # Get filename without extension
-              # Loop over all files in the directory
-              # Remove everything after the first dot in the file name
+          # Apply latest deployment configuration changes
+          cd ./deploy/k8s/deployments
+          for file in *.yaml; do     # Loop over all files in the directory
+              # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-              echo "$FILE_NAME"
               
               # Run kubectl commands
               kubectl rollout status -f "$file"
+          done
+          
+          
+          # Apply latest services configuration changes
+          cd ../services
+          for file in *.yaml; do     # Loop over all files in the directory
+              # Get filename without extension. Remove everything after the first dot in the file name
+              FILE_NAME="${file%%.*}"
+              
+              # Run kubectl commands
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
+          
