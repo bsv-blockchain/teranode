@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
@@ -37,12 +36,10 @@ func init() {
 
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
-	blockassembly_api.BlockAssemblyAPIServer
+	blockassembly_api.UnimplementedBlockAssemblyAPIServer
 	utxoStore  store.UTXOStore
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	mu         sync.Mutex
-	txIDs      []*chainhash.Hash
 }
 
 func Enabled() bool {
@@ -68,7 +65,6 @@ func New(logger utils.Logger) *BlockAssembly {
 	bAss := &BlockAssembly{
 		utxoStore: s,
 		logger:    logger,
-		txIDs:     make([]*chainhash.Hash, 0),
 	}
 
 	return bAss
@@ -77,26 +73,11 @@ func New(logger utils.Logger) *BlockAssembly {
 // Start function
 func (u *BlockAssembly) Start() error {
 
-	address, _, ok := gocore.Config().GetURL("blockassembly_grpcAddress")
+	address, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		return errors.New("no blockassembly_grpcAddress setting found")
 	}
 
-	// // LEVEL 0 - no security / no encryption
-	// var opts []grpc.ServerOption
-	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	// if prometheusOn {
-	// 	opts = append(opts,
-	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-	// 		grpc.KeepaliveParams(keepalive.ServerParameters{
-	// 			MaxConnectionAge:      30 * time.Second, // for re-polling dns
-	// 			MaxConnectionAgeGrace: 30 * time.Second,
-	// 		}),
-	// 	)
-	// }
-
-	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
 	var err error
 	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -105,9 +86,9 @@ func (u *BlockAssembly) Start() error {
 		return fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
-	gocore.SetAddress(address.Host)
+	gocore.SetAddress(address)
 
-	lis, err := net.Listen("tcp", address.Host)
+	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
@@ -140,11 +121,8 @@ func (u *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassem
 	}, nil
 }
 
-func (u *BlockAssembly) AddTxID(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
+func (u *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
 	prometheusBlockAssemblyAddTx.Inc()
-
-	u.mu.Lock()
-	defer u.mu.Unlock()
 
 	hash, err := chainhash.NewHash(req.Txid)
 	if err != nil {
@@ -163,9 +141,8 @@ func (u *BlockAssembly) AddTxID(ctx context.Context, req *blockassembly_api.AddT
 		}
 	}
 
-	_ = hash
 	// TODO Don't do anything as we don't have a mempool yet
-	// u.txIDs = append(u.txIDs, hash)
+	_ = hash
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,

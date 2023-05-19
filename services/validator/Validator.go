@@ -3,9 +3,9 @@ package validator
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
+	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
@@ -17,12 +17,17 @@ import (
 
 type Validator struct {
 	store          store.UTXOStore
+	blockAssembler *blockassembly.Store
 	saveInParallel bool
 }
 
 func New(store store.UTXOStore) Interface {
+	ba := blockassembly.NewClient()
+
 	return &Validator{
 		store:          store,
+		blockAssembler: ba,
+
 		saveInParallel: true,
 	}
 }
@@ -131,45 +136,63 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	storeUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreUtxos")
 	defer storeUtxoSpan.Finish()
 
-	if v.saveInParallel {
-		var wg sync.WaitGroup
-		for i, output := range tx.Outputs {
-			if output.Satoshis > 0 {
-				i := i
-				output := output
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 
-					utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
-					if utxoErr != nil {
-						fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
-						//return err
-					}
-
-					_, utxoErr = v.store.Store(storeUtxoSpan.Ctx, utxoHash)
-					if utxoErr != nil {
-						fmt.Printf("error storing utxo: %s\n", utxoErr.Error())
-					}
-				}()
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 {
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
+			if utxoErr != nil {
+				fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
+				//return err
 			}
-		}
-		wg.Wait()
-	} else {
-		for i, output := range tx.Outputs {
-			if output.Satoshis > 0 {
-				hash, err = util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
-				if err != nil {
-					return err
-				}
 
-				_, err = v.store.Store(storeUtxoSpan.Ctx, hash)
-				if err != nil {
-					break
-				}
-			}
+			utxoHashes = append(utxoHashes, utxoHash)
 		}
 	}
+
+	if _, err := v.blockAssembler.Store(ctx, txIDChainHash, utxoHashes); err != nil {
+		fmt.Printf("error sending tx to block assembler: %v", err)
+	}
+
+	// if v.saveInParallel {
+	// 	var wg sync.WaitGroup
+	// 	for i, output := range tx.Outputs {
+	// 		if output.Satoshis > 0 {
+	// 			i := i
+	// 			output := output
+	// 			wg.Add(1)
+	// 			go func() {
+	// 				defer wg.Done()
+
+	// 				utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
+	// 				if utxoErr != nil {
+	// 					fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
+	// 					//return err
+	// 				}
+
+	// 				_, utxoErr = v.store.Store(storeUtxoSpan.Ctx, utxoHash)
+	// 				if utxoErr != nil {
+	// 					fmt.Printf("error storing utxo: %s\n", utxoErr.Error())
+	// 				}
+	// 			}()
+	// 		}
+	// 	}
+	// 	wg.Wait()
+	// } else {
+	// 	for i, output := range tx.Outputs {
+	// 		if output.Satoshis > 0 {
+	// 			hash, err = util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
+	// 			if err != nil {
+	// 				return err
+	// 			}
+
+	// 			_, err = v.store.Store(storeUtxoSpan.Ctx, hash)
+	// 			if err != nil {
+	// 				break
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	return nil
 }

@@ -130,41 +130,41 @@ func OpenForReading(chaintip *chainhash.Hash, height uint32, fileNumber int) (*C
 }
 
 func (c *Container) Close() error {
-	return t.currentFile.Close()
+	return c.currentFile.Close()
 }
 
 func (c *Container) AddTxID(txid *chainhash.Hash) error {
-	if !t.write {
+	if !c.write {
 		return errors.New("file is not in write mode")
 	}
 
-	if t.count == t.maxItemsPerFile {
+	if c.count == c.maxItemsPerFile {
 		// Rotate file
-		t.currentFile.Close()
-		t.fileCount++
+		c.currentFile.Close()
+		c.fileCount++
 
-		filename := path.Join(t.folder, fmt.Sprintf("%06d", t.fileCount))
+		filename := path.Join(c.folder, fmt.Sprintf("%06d", c.fileCount))
 
 		var err error
-		t.currentFile, err = os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
+		c.currentFile, err = os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
 		if err != nil {
 			return err
 		}
 
-		t.count = 0
+		c.count = 0
 	}
 
-	if _, err := t.currentFile.Write(txid.CloneBytes()); err != nil {
+	if _, err := c.currentFile.Write(txid.CloneBytes()); err != nil {
 		return err
 	}
 
-	t.count++
+	c.count++
 
 	return nil
 }
 
 func (c *Container) Count() uint32 {
-	return t.count
+	return c.count
 }
 
 func (c *Container) MerkleRoot() (*chainhash.Hash, error) {
@@ -176,9 +176,9 @@ func (c *Container) MerkleRoot() (*chainhash.Hash, error) {
 }
 
 func (c *Container) deleteAll() error {
-	if err := t.currentFile.Close(); err != nil {
+	if err := c.currentFile.Close(); err != nil {
 		return err
 	}
 
-	return os.RemoveAll(t.folder)
+	return os.RemoveAll(c.folder)
 }

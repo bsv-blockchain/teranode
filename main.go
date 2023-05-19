@@ -161,7 +161,7 @@ func main() {
 
 	// blockAssembly
 	if *startBlockAssembly {
-		if _, found := gocore.Config().Get("blockAssembly_grpcAddress"); found {
+		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
 			g.Go(func() error {
 				logger.Infof("Starting Server")
 
