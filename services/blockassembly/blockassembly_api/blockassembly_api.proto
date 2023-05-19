@@ -10,7 +10,7 @@ import "google/protobuf/empty.proto";
 service BlockAssemblyAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc AddTxID (AddTxIDRequest) returns (AddTxIDResponse) {}
+  rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -21,11 +21,12 @@ message HealthResponse {
 }
 
 // swagger:model StoreRequest
-message AddTxIDRequest {
+message AddTxRequest {
   bytes txid = 1;
+  repeated bytes utxoHashes = 2;
 }
 
 // swagger:model StoreResponse
-message AddTxIDResponse {
+message AddTxResponse {
   bool ok = 1;
 }

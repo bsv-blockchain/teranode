@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -36,6 +38,7 @@ func init() {
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
 	blockassembly_api.BlockAssemblyAPIServer
+	utxoStore  store.UTXOStore
 	logger     utils.Logger
 	grpcServer *grpc.Server
 	mu         sync.Mutex
@@ -49,9 +52,23 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger) *BlockAssembly {
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no utxostore setting found")
+	}
+
+	s, err := utxo.NewStore(logger, utxostoreURL)
+	if err != nil {
+		panic(err)
+	}
+
 	bAss := &BlockAssembly{
-		logger: logger,
-		txIDs:  make([]*chainhash.Hash, 0),
+		utxoStore: s,
+		logger:    logger,
+		txIDs:     make([]*chainhash.Hash, 0),
 	}
 
 	return bAss
@@ -123,7 +140,7 @@ func (u *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassem
 	}, nil
 }
 
-func (u *BlockAssembly) AddTxID(_ context.Context, req *blockassembly_api.AddTxIDRequest) (*blockassembly_api.AddTxIDResponse, error) {
+func (u *BlockAssembly) AddTxID(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
 	prometheusBlockAssemblyAddTx.Inc()
 
 	u.mu.Lock()
@@ -134,11 +151,23 @@ func (u *BlockAssembly) AddTxID(_ context.Context, req *blockassembly_api.AddTxI
 		return nil, err
 	}
 
+	// Add all the utxo hashes to the utxostore
+	for _, hash := range req.UtxoHashes {
+		h, err := chainhash.NewHash(hash)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp, err := u.utxoStore.Store(ctx, h); err != nil {
+			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
+		}
+	}
+
 	_ = hash
 	// TODO Don't do anything as we don't have a mempool yet
 	// u.txIDs = append(u.txIDs, hash)
 
-	return &blockassembly_api.AddTxIDResponse{
+	return &blockassembly_api.AddTxResponse{
 		Ok: true,
 	}, nil
 }

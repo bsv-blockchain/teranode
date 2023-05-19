@@ -5,23 +5,43 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type Store struct {
 	db blockassembly_api.BlockAssemblyAPIClient
 }
 
-func NewClient(db blockassembly_api.BlockAssemblyAPIClient) (*Store, error) {
-	return &Store{
-		db: db,
-	}, nil
-}
+func NewClient() *Store {
+	ctx := context.Background()
 
-func (s Store) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	_, err := s.db.AddTxID(ctx, &blockassembly_api.AddTxIDRequest{
-		Txid: hash[:],
+	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
+	if !ok {
+		panic("no blockassembly_grpcAddress setting found")
+	}
+	baConn, err := utils.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &utils.ConnectionOptions{
+		MaxRetries: 3,
 	})
 	if err != nil {
+		panic(err)
+	}
+
+	return &Store{
+		db: blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+	}
+}
+
+func (s Store) Store(ctx context.Context, txid *chainhash.Hash, utxoHashes []*chainhash.Hash) (bool, error) {
+	req := &blockassembly_api.AddTxRequest{
+		Txid: txid[:],
+	}
+
+	for _, hash := range utxoHashes {
+		req.UtxoHashes = append(req.UtxoHashes, hash.CloneBytes())
+	}
+
+	if _, err := s.db.AddTx(ctx, req); err != nil {
 		return false, err
 	}
 

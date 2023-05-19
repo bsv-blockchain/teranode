@@ -20,8 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockAssemblyAPI_Health_FullMethodName  = "/blockassembly_api.BlockAssemblyAPI/Health"
-	BlockAssemblyAPI_AddTxID_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/AddTxID"
+	BlockAssemblyAPI_Health_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/Health"
+	BlockAssemblyAPI_AddTx_FullMethodName  = "/blockassembly_api.BlockAssemblyAPI/AddTx"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -30,7 +30,7 @@ const (
 type BlockAssemblyAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	AddTxID(ctx context.Context, in *AddTxIDRequest, opts ...grpc.CallOption) (*AddTxIDResponse, error)
+	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -50,9 +50,9 @@ func (c *blockAssemblyAPIClient) Health(ctx context.Context, in *emptypb.Empty, 
 	return out, nil
 }
 
-func (c *blockAssemblyAPIClient) AddTxID(ctx context.Context, in *AddTxIDRequest, opts ...grpc.CallOption) (*AddTxIDResponse, error) {
-	out := new(AddTxIDResponse)
-	err := c.cc.Invoke(ctx, BlockAssemblyAPI_AddTxID_FullMethodName, in, out, opts...)
+func (c *blockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error) {
+	out := new(AddTxResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_AddTx_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (c *blockAssemblyAPIClient) AddTxID(ctx context.Context, in *AddTxIDRequest
 type BlockAssemblyAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	AddTxID(context.Context, *AddTxIDRequest) (*AddTxIDResponse, error)
+	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -76,8 +76,8 @@ type UnimplementedBlockAssemblyAPIServer struct {
 func (UnimplementedBlockAssemblyAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedBlockAssemblyAPIServer) AddTxID(context.Context, *AddTxIDRequest) (*AddTxIDResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AddTxID not implemented")
+func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 
@@ -110,20 +110,20 @@ func _BlockAssemblyAPI_Health_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockAssemblyAPI_AddTxID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddTxIDRequest)
+func _BlockAssemblyAPI_AddTx_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddTxRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockAssemblyAPIServer).AddTxID(ctx, in)
+		return srv.(BlockAssemblyAPIServer).AddTx(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockAssemblyAPI_AddTxID_FullMethodName,
+		FullMethod: BlockAssemblyAPI_AddTx_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockAssemblyAPIServer).AddTxID(ctx, req.(*AddTxIDRequest))
+		return srv.(BlockAssemblyAPIServer).AddTx(ctx, req.(*AddTxRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -140,8 +140,8 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockAssemblyAPI_Health_Handler,
 		},
 		{
-			MethodName: "AddTxID",
-			Handler:    _BlockAssemblyAPI_AddTxID_Handler,
+			MethodName: "AddTx",
+			Handler:    _BlockAssemblyAPI_AddTx_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
