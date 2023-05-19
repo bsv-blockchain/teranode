@@ -4,6 +4,8 @@ kubectl scale deployment -n seeder-service --replicas 1 --all
 
 kubectl scale deployment -n utxostore-service --replicas 1 --all
 
+kubectl scale deployment -n blockassembly-service --replicas 1 --all
+
 kubectl scale deployment -n validation-service --replicas 5 --all
 
 echo "Sleeping for 30 seconds to allow all validation services to spin up"
