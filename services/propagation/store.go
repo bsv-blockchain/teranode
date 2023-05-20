@@ -9,10 +9,16 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/gcs"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/store/minio"
+	"github.com/TAAL-GmbH/ubsv/services/propagation/store/null"
 )
 
 func NewStore(storeUrl *url.URL) (propagationStore store.TransactionStore, err error) {
 	switch storeUrl.Scheme {
+	case "null":
+		propagationStore, err = null.New()
+		if err != nil {
+			return nil, fmt.Errorf("error creating null block store: %v", err)
+		}
 	case "badger":
 		propagationStore, err = badger.New("." + storeUrl.Path) // relative
 		if err != nil {
