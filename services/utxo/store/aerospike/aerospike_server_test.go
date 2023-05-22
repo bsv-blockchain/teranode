@@ -4,6 +4,7 @@ package aerospike
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
@@ -17,9 +18,13 @@ func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, err := aero.NewClient("localhost", 3800)
 
+	var aeroURL *url.URL
+	aeroURL, err = url.Parse("aerospike://localhost:3800/test")
+	require.NoError(t, err)
+
 	// ubsv db client
 	var db *Store
-	db, err = New("localhost", 3800, "test")
+	db, err = New(aeroURL)
 	require.NoError(t, err)
 
 	var hash *chainhash.Hash

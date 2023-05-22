@@ -5,9 +5,12 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	"github.com/aerospike/aerospike-client-go"
 	aero "github.com/aerospike/aerospike-client-go"
 	"github.com/aerospike/aerospike-client-go/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -82,8 +85,28 @@ type Store struct {
 	namespace string
 }
 
-func New(host string, port int, namespace string) (*Store, error) {
-	client, err := aero.NewClient(host, port)
+func New(url *url.URL) (*Store, error) {
+	port, err := strconv.Atoi(url.Port())
+	if err != nil {
+		return nil, err
+	}
+
+	if len(url.Path) < 1 {
+		return nil, fmt.Errorf("aerospike namespace not found")
+	}
+	namespace := url.Path[1:]
+
+	policy := aerospike.NewClientPolicy()
+	policy.Timeout = 5000 // Set timeout to 5 seconds
+
+	policy.User = url.User.Username()
+	policy.Password, _ = url.User.Password()
+
+	hosts := []*aerospike.Host{
+		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
+	}
+
+	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
 	}
