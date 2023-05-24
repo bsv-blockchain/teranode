@@ -97,8 +97,8 @@ func New(url *url.URL) (*Store, error) {
 	namespace := url.Path[1:]
 
 	policy := aerospike.NewClientPolicy()
-	policy.Timeout = 5000 // Set timeout to 5 seconds
-
+	policy.Timeout = 10000 // Set timeout to 5 seconds
+    policy.LogLevel = aerospike.LOG_DEBUG // Set log level to debug
 	policy.User = url.User.Username()
 	policy.Password, _ = url.User.Password()
 
