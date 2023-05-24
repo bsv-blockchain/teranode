@@ -105,7 +105,7 @@ func New(url *url.URL) (*Store, error) {
 	hosts := []*aerospike.Host{
 		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
 	}
-
+    fmt.Printf("url %v policy %v name %s pass %s\n", url, policy, policy.User, policy.Password)
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
