@@ -16,6 +16,7 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	asl "github.com/aerospike/aerospike-client-go/logger"
 )
 
 var (
@@ -86,6 +87,7 @@ type Store struct {
 }
 
 func New(url *url.URL) (*Store, error) {
+    asl.Logger.SetLevel(asl.DEBUG)
 	port, err := strconv.Atoi(url.Port())
 	if err != nil {
 		return nil, err
@@ -98,7 +100,6 @@ func New(url *url.URL) (*Store, error) {
 
 	policy := aerospike.NewClientPolicy()
 	policy.Timeout = 10000 // Set timeout to 5 seconds
-    policy.LogLevel = aerospike.LOG_DEBUG // Set log level to debug
 	policy.User = url.User.Username()
 	policy.Password, _ = url.User.Password()
 
