@@ -3,10 +3,12 @@ package merkle
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strconv"
 
+	"github.com/libsv/go-p2p/blockchain"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -167,12 +169,39 @@ func (c *Container) Count() uint32 {
 	return c.count
 }
 
-func (c *Container) MerkleRoot() (*chainhash.Hash, error) {
+func (c *Container) MerkleRoot(coinbase *chainhash.Hash) (*chainhash.Hash, error) {
 	if c.write {
 		return nil, errors.New("container must be in read mode")
 	}
 
-	return nil, nil
+	transactionHashes := make([][]byte, c.count)
+
+	for i := 0; i < int(c.count); i++ {
+		txid := make([]byte, 32)
+		_, err := c.currentFile.Read(txid)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+
+		if coinbase != nil && i == 0 {
+			transactionHashes[i] = coinbase.CloneBytes()
+		} else {
+			transactionHashes[i] = txid[:]
+		}
+
+	}
+
+	calculatedMerkleRoot := blockchain.BuildMerkleTreeStore(transactionHashes)
+
+	hash, err := chainhash.NewHash(calculatedMerkleRoot[len(calculatedMerkleRoot)-1])
+	if err != nil {
+		return nil, err
+	}
+
+	return hash, nil
 }
 
 func (c *Container) deleteAll() error {
