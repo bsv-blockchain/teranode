@@ -32,13 +32,13 @@ func initTLS() *tls.Config {
 	var clientPool []tls.Certificate
 
 	// Read cert file
-	certFileBytes, err := readFromFile("./certs/certificate.pem")
+	certFileBytes, err := readFromFile("./certificate.pem")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Read key file
-	keyFileBytes, err := readFromFile("./certs/key.pem")
+	keyFileBytes, err := readFromFile("./key.pem")
 	if err != nil {
 		log.Fatal(err)
 	}
