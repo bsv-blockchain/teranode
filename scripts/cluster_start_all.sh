@@ -2,7 +2,7 @@
 
 kubectl scale deployment -n seeder-service --replicas 1 --all
 
-kubectl scale deployment -n utxostore-service --replicas 1 --all
+# kubectl scale deployment -n utxostore-service --replicas 1 --all
 
 kubectl scale deployment -n blockassembly-service --replicas 1 --all
 
