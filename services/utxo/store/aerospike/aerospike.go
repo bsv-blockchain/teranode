@@ -12,11 +12,11 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/aerospike/aerospike-client-go"
 	aero "github.com/aerospike/aerospike-client-go"
+	asl "github.com/aerospike/aerospike-client-go/logger"
 	"github.com/aerospike/aerospike-client-go/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	asl "github.com/aerospike/aerospike-client-go/logger"
 )
 
 var (
@@ -87,7 +87,7 @@ type Store struct {
 }
 
 func New(url *url.URL) (*Store, error) {
-    asl.Logger.SetLevel(asl.DEBUG)
+	asl.Logger.SetLevel(asl.DEBUG)
 	port, err := strconv.Atoi(url.Port())
 	if err != nil {
 		return nil, err
@@ -100,13 +100,14 @@ func New(url *url.URL) (*Store, error) {
 
 	policy := aerospike.NewClientPolicy()
 	policy.Timeout = 10000 // Set timeout to 5 seconds
+	policy.AuthMode = aerospike.AuthModeExternal
 	policy.User = url.User.Username()
 	policy.Password, _ = url.User.Password()
 
 	hosts := []*aerospike.Host{
 		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
 	}
-    fmt.Printf("url %v policy %v name %s pass %s\n", url, policy, policy.User, policy.Password)
+	fmt.Printf("url %v policy %v name %s pass %s\n", url, policy, policy.User, policy.Password)
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
