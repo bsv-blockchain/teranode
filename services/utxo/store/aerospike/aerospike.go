@@ -103,7 +103,7 @@ func New(url *url.URL) (*Store, error) {
 	policy.Password, _ = url.User.Password()
 	policy.Timeout = 10000 // Set timeout to 5 seconds
 
-	policy.AuthMode = aerospike.AuthModeExternal
+	policy.AuthMode = aerospike.AuthModeInternal
 
 	policy.TlsConfig = initTLS()
 
