@@ -42,6 +42,7 @@ WORKDIR /app
 
 COPY --from=0 /app/ubsv.run .
 COPY --from=0 /app/settings_local.conf .
+COPY --from=0 /app/certs .
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
 COPY --from=0 /root/go/bin/dlv .
