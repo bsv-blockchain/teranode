@@ -4,6 +4,7 @@ package aerospike
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -101,6 +102,9 @@ func New(url *url.URL) (*Store, error) {
 	policy := aerospike.NewClientPolicy()
 	policy.Timeout = 10000 // Set timeout to 5 seconds
 	policy.AuthMode = aerospike.AuthModeExternal
+	policy.TlsConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
 	policy.User = url.User.Username()
 	policy.Password, _ = url.User.Password()
 
