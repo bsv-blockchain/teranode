@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -106,11 +105,11 @@ func New(url *url.URL) (*Store, error) {
 
 	// policy.AuthMode = aerospike.AuthModeInternal
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify:       true,
-		PreferServerCipherSuites: true,
-	}
-	tlsConfig.BuildNameToCertificate()
+	// tlsConfig := &tls.Config{
+	// 	InsecureSkipVerify:       true,
+	// 	PreferServerCipherSuites: true,
+	// }
+	// tlsConfig.BuildNameToCertificate()
 
 	hosts := []*aerospike.Host{
 		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
