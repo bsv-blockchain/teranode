@@ -4,6 +4,7 @@ package aerospike
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -101,16 +102,22 @@ func New(url *url.URL) (*Store, error) {
 	policy := aerospike.NewClientPolicy()
 	policy.User = url.User.Username()
 	policy.Password, _ = url.User.Password()
-	policy.Timeout = 10000 // Set timeout to 5 seconds
+	// policy.Timeout = 10000 // Set timeout to 5 seconds
 
-	policy.AuthMode = aerospike.AuthModeInternal
+	// policy.AuthMode = aerospike.AuthModeInternal
 
-	policy.TlsConfig = initTLS()
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify:       true,
+		PreferServerCipherSuites: true,
+	}
+	tlsConfig.BuildNameToCertificate()
 
 	hosts := []*aerospike.Host{
 		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
 	}
+
 	fmt.Printf("url %v policy %v name %s pass %s\n", url, policy, policy.User, policy.Password)
+
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
