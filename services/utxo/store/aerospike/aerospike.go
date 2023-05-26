@@ -122,6 +122,8 @@ func New(url *url.URL) (*Store, error) {
 		return nil, err
 	}
 
+	fmt.Printf("Connected %v", client.IsConnected())
+
 	return &Store{
 		client:    client,
 		namespace: namespace,
