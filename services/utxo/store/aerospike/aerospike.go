@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -88,10 +87,6 @@ type Store struct {
 
 func New(url *url.URL) (*Store, error) {
 	asl.Logger.SetLevel(asl.DEBUG)
-	port, err := strconv.Atoi(url.Port())
-	if err != nil {
-		return nil, err
-	}
 
 	if len(url.Path) < 1 {
 		return nil, fmt.Errorf("aerospike namespace not found")
@@ -99,23 +94,14 @@ func New(url *url.URL) (*Store, error) {
 	namespace := url.Path[1:]
 
 	policy := aerospike.NewClientPolicy()
-	policy.User = url.User.Username()
-	policy.Password, _ = url.User.Password()
-	// policy.Timeout = 10000 // Set timeout to 5 seconds
-
-	// policy.AuthMode = aerospike.AuthModeInternal
-
-	// tlsConfig := &tls.Config{
-	// 	InsecureSkipVerify:       true,
-	// 	PreferServerCipherSuites: true,
-	// }
-	// tlsConfig.BuildNameToCertificate()
 
 	hosts := []*aerospike.Host{
-		{Name: url.Hostname(), Port: port}, // Add your cluster hosts and ports here
+		{Name: "10.166.0.38", Port: 3000}, // hardcoded for testing
+		{Name: "10.166.0.39", Port: 3000}, // hardcoded for testing
+		{Name: "10.166.0.40", Port: 3000}, // hardcoded for testing
 	}
 
-	fmt.Printf("url %v policy %v name %s pass %s\n", url, policy, policy.User, policy.Password)
+	fmt.Printf("url %v policy %v\n", url, policy)
 
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
