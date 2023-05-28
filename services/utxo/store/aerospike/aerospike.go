@@ -96,9 +96,9 @@ func New(url *url.URL) (*Store, error) {
 	policy := aerospike.NewClientPolicy()
 
 	hosts := []*aerospike.Host{
-		{Name: "10.166.0.38", Port: 3000}, // hardcoded for testing
-		{Name: "10.166.0.39", Port: 3000}, // hardcoded for testing
-		{Name: "10.166.0.40", Port: 3000}, // hardcoded for testing
+		{Name: "10.138.0.23", Port: 3000}, // hardcoded for testing
+		{Name: "10.138.0.25", Port: 3000}, // hardcoded for testing
+		{Name: "10.138.0.21", Port: 3000}, // hardcoded for testing
 	}
 
 	fmt.Printf("url %v policy %v\n", url, policy)
