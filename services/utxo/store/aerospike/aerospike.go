@@ -9,10 +9,10 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/aerospike/aerospike-client-go"
-	aero "github.com/aerospike/aerospike-client-go"
-	asl "github.com/aerospike/aerospike-client-go/logger"
-	"github.com/aerospike/aerospike-client-go/types"
+	"github.com/aerospike/aerospike-client-go/v6"
+	aero "github.com/aerospike/aerospike-client-go/v6"
+	asl "github.com/aerospike/aerospike-client-go/v6/logger"
+	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -94,6 +94,7 @@ func New(url *url.URL) (*Store, error) {
 	namespace := url.Path[1:]
 
 	policy := aerospike.NewClientPolicy()
+	policy.LimitConnectionsToQueueSize = true
 	// policy.ConnectionQueueSize = 1024
 
 	hosts := []*aerospike.Host{

@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/storage v1.30.1
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
-	github.com/aerospike/aerospike-client-go v4.5.2+incompatible
+	github.com/aerospike/aerospike-client-go/v6 v6.12.0
 	github.com/apple/foundationdb/bindings/go v0.0.0-20230424201535-3e1f89b1cd42
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
@@ -69,6 +69,7 @@ require (
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/onsi/ginkgo/v2 v2.9.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.17 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/rs/xid v1.4.0 // indirect

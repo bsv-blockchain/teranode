@@ -5,7 +5,7 @@ package aerospike
 import (
 	"testing"
 
-	aero "github.com/aerospike/aerospike-client-go"
+	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
