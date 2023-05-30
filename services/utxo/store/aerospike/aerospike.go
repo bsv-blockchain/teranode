@@ -94,8 +94,8 @@ func New(url *url.URL) (*Store, error) {
 	namespace := url.Path[1:]
 
 	policy := aerospike.NewClientPolicy()
-	policy.LimitConnectionsToQueueSize = true
-	// policy.ConnectionQueueSize = 1024
+	policy.LimitConnectionsToQueueSize = false
+	policy.ConnectionQueueSize = 1024
 
 	hosts := []*aerospike.Host{
 		{Name: "10.138.0.29", Port: 3000}, // hardcoded for testing
