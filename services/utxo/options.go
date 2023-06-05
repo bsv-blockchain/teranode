@@ -1,11 +1,13 @@
 package utxo
 
-import "github.com/TAAL-GmbH/ubsv/services/utxo/store"
+import (
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+)
 
-type Options func(store.UTXOStore)
+type Options func(utxostore.UTXOStore)
 
 func WithDeleteSpends(deleteSpends bool) Options {
-	return func(u store.UTXOStore) {
+	return func(u utxostore.UTXOStore) {
 		u.DeleteSpends(deleteSpends)
 	}
 }

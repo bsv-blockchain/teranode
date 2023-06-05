@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"hash/maphash"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/puzpuzpuz/xsync/v2"
 )
@@ -37,29 +37,29 @@ func NewXSyncMap(deleteSpends bool) *XsyncMap {
 	}
 }
 
-func (m *XsyncMap) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *XsyncMap) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	if txID, ok := m.m.Load(*hash); ok {
 		if *txID == emptyHash {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
 
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: txID,
 		}, nil
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: 0,
 	}, nil
 }
 
-func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	if txID, ok := m.m.Load(*hash); ok {
 		if *txID != emptyHash {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status:       int(utxostore_api.Status_SPENT),
 				SpendingTxID: txID,
 			}, nil
@@ -68,27 +68,27 @@ func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORe
 		m.m.Store(*hash, &emptyHash)
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
 }
 
-func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	if existingTxID, ok := m.m.Load(*hash); ok {
 		if existingTxID.IsEqual(&chainhash.Hash{}) {
 			m.m.Store(*hash, txID)
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status:       int(utxostore_api.Status_OK),
 				SpendingTxID: txID,
 			}, nil
 		} else {
 			if existingTxID.IsEqual(txID) {
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: existingTxID,
 				}, nil
 			} else {
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: existingTxID,
 				}, nil
@@ -96,12 +96,12 @@ func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhas
 		}
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *XsyncMap) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *XsyncMap) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.m.Delete(*hash)
 	return m.Store(ctx, hash)
 }

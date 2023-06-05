@@ -5,12 +5,12 @@ package utxo
 import (
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store/aerospike"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo/aerospike"
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(url *url.URL) (store.UTXOStore, error) {
+	availableDatabases["aerospike"] = func(url *url.URL) (utxostore.UTXOStore, error) {
 		return aerospike.New(url)
 	}
 }

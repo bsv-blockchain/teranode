@@ -3,8 +3,8 @@ package memory
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -26,27 +26,27 @@ func NewSplitByHash(deleteSpends bool) *SplitByHash {
 	return db
 }
 
-func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
 	if txID, ok := memMap.Get(hash); ok {
 		if txID == nil {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: txID,
 		}, nil
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
 	status, err := memMap.Store(hash)
@@ -54,12 +54,12 @@ func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*store.UTX
 		return nil, err
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: status,
 	}, nil
 }
 
-func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
 	status, err := memMap.Spend(hash, txID)
@@ -67,13 +67,13 @@ func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chain
 		return nil, err
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status:       status,
 		SpendingTxID: txID,
 	}, nil
 }
 
-func (m *SplitByHash) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *SplitByHash) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 	memMap.Delete(hash)
 

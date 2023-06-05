@@ -6,8 +6,8 @@ import (
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -16,12 +16,12 @@ import (
 )
 
 type Validator struct {
-	store          store.UTXOStore
+	store          utxostore.UTXOStore
 	blockAssembler *blockassembly.Store
 	saveInParallel bool
 }
 
-func New(store store.UTXOStore) Interface {
+func New(store utxostore.UTXOStore) Interface {
 	ba := blockassembly.NewClient()
 
 	return &Validator{
@@ -85,7 +85,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	var hash *chainhash.Hash
-	var utxoResponse *store.UTXOResponse
+	var utxoResponse *utxostore.UTXOResponse
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	for idx, input := range tx.Inputs {
 		hash, err = util.UTXOHashFromInput(input)

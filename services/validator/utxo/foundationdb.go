@@ -6,12 +6,12 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store/foundationdb"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo/foundationdb"
 )
 
 func init() {
-	availableDatabases["foundationdb"] = func(url *url.URL) (store.UTXOStore, error) {
+	availableDatabases["foundationdb"] = func(url *url.URL) (utxostore.UTXOStore, error) {
 		port, err := strconv.Atoi(url.Port())
 		if err != nil {
 			return nil, err

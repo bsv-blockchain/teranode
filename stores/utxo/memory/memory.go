@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -26,40 +26,40 @@ func New(deleteSpends bool) *Memory {
 	}
 }
 
-func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if txID, ok := m.m[*hash]; ok {
 		if txID.IsEqual(empty) {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: &txID,
 		}, nil
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *Memory) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *Memory) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	spendingTxid, found := m.m[*hash]
 	if found {
 		if spendingTxid.IsEqual(empty) {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
 
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: &spendingTxid,
 		}, nil
@@ -68,12 +68,12 @@ func (m *Memory) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResp
 
 	m.m[*hash] = *empty
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
 }
 
-func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -84,18 +84,18 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 			} else {
 				m.m[*hash] = *txID
 			}
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status:       int(utxostore_api.Status_OK),
 				SpendingTxID: txID,
 			}, nil
 		} else {
 			if existingHash.IsEqual(txID) {
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_OK),
 					SpendingTxID: txID,
 				}, nil
 			} else {
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: &existingHash,
 				}, nil
@@ -103,12 +103,12 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 		}
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *Memory) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (m *Memory) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	delete(m.m, *hash)
 	m.mu.Unlock()

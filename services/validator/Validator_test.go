@@ -5,8 +5,8 @@ import (
 	"log"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
@@ -17,25 +17,25 @@ func (ns *NullStore) DeleteSpends(deleteSpends bool) {
 	// No nothing
 }
 
-func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Get(%s)\n", hash.String())
 	return nil, nil
 }
 
-func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Store(%s)\n", hash.String())
 	return nil, nil
 }
 
-func (ns *NullStore) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (ns *NullStore) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Spend(%s, %s)\n", hash.String(), txID.String())
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status:       0,
 		SpendingTxID: txID,
 	}, nil
 }
 
-func (ns *NullStore) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (ns *NullStore) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Reset(%s)\n", hash.String())
 	return nil, nil
 }

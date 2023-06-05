@@ -9,7 +9,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -37,7 +37,7 @@ func init() {
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
-	utxoStore  store.UTXOStore
+	utxoStore  utxostore.UTXOStore
 	logger     utils.Logger
 	grpcServer *grpc.Server
 }

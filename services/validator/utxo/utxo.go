@@ -5,13 +5,13 @@ import (
 	"net/url"
 	"strconv"
 
-	store "github.com/TAAL-GmbH/ubsv/services/utxo/store"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 )
 
-var availableDatabases = map[string]func(url *url.URL) (store.UTXOStore, error){}
+var availableDatabases = map[string]func(url *url.URL) (utxostore.UTXOStore, error){}
 
-func NewStore(logger utils.Logger, url *url.URL) (store.UTXOStore, error) {
+func NewStore(logger utils.Logger, url *url.URL) (utxostore.UTXOStore, error) {
 	port, err := strconv.Atoi(url.Port())
 	if err != nil {
 		return nil, err

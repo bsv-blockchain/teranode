@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -105,7 +105,7 @@ func New(host string, port int, user, password string) (*Store, error) {
 	}, nil
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	var spendingTxID *chainhash.Hash
 	found := false
 	if _, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -138,18 +138,18 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXORespons
 	prometheusUtxoGet.Inc()
 
 	if found {
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_OK),
 			SpendingTxID: spendingTxID,
 		}, nil
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.ClearRange(s.dir)
@@ -175,17 +175,17 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 	prometheusUtxoStore.Inc()
 
 	if err != nil {
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status: int(utxostore_api.Status_NOT_FOUND),
 		}, nil
 	}
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
 }
 
-func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.ClearRange(s.dir)
@@ -205,24 +205,24 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	})
 	if err != nil {
 		if err.Error() == "utxo not found" {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil
 		}
-		return &store.UTXOResponse{
+		return &utxostore.UTXOResponse{
 			Status: int(utxostore_api.Status_SPENT),
 		}, nil
 	}
 
 	prometheusUtxoSpend.Inc()
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status:       int(utxostore_api.Status_OK),
 		SpendingTxID: txID,
 	}, nil
 }
 
-func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.ClearRange(s.dir)
@@ -239,7 +239,7 @@ func (s *Store) Reset(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 
 	prometheusUtxoReset.Inc()
 
-	return &store.UTXOResponse{}, nil
+	return &utxostore.UTXOResponse{}, nil
 }
 
 func (s *Store) DeleteSpends(_ bool) {

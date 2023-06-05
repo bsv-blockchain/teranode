@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
@@ -16,10 +16,10 @@ import (
 
 func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
-	client, err := aero.NewClient("localhost", 3800)
+	client, aeroErr := aero.NewClient("localhost", 3800)
+	require.NoError(t, aeroErr)
 
-	var aeroURL *url.URL
-	aeroURL, err = url.Parse("aerospike://localhost:3800/test")
+	aeroURL, err := url.Parse("aerospike://localhost:3800/test")
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -45,7 +45,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	var resp *store.UTXOResponse
+	var resp *utxostore.UTXOResponse
 	var value *aero.Record
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)

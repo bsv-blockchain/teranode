@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +17,7 @@ var (
 	hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 )
 
-func testStore(t *testing.T, db store.UTXOStore) {
+func testStore(t *testing.T, db utxostore.UTXOStore) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -42,7 +42,7 @@ func testStore(t *testing.T, db store.UTXOStore) {
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 }
 
-func testSpend(t *testing.T, db store.UTXOStore) {
+func testSpend(t *testing.T, db utxostore.UTXOStore) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -60,7 +60,7 @@ func testSpend(t *testing.T, db store.UTXOStore) {
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 }
 
-func testRestore(t *testing.T, db store.UTXOStore) {
+func testRestore(t *testing.T, db utxostore.UTXOStore) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -80,11 +80,11 @@ func testRestore(t *testing.T, db store.UTXOStore) {
 	require.Nil(t, resp.SpendingTxID)
 }
 
-func testSanity(t *testing.T, db store.UTXOStore) {
+func testSanity(t *testing.T, db utxostore.UTXOStore) {
 	skipLongTests(t)
 	ctx := context.Background()
 
-	var resp *store.UTXOResponse
+	var resp *utxostore.UTXOResponse
 	var err error
 	bs := make([]byte, 32)
 	for i := uint64(0); i < 1_000_000; i++ {
@@ -121,7 +121,7 @@ func testSanity(t *testing.T, db store.UTXOStore) {
 	}
 }
 
-func benchmark(b *testing.B, db store.UTXOStore) {
+func benchmark(b *testing.B, db utxostore.UTXOStore) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {

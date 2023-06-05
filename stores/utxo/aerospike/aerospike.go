@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/aerospike/aerospike-client-go/v6"
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
@@ -131,12 +131,12 @@ func New(url *url.URL) (*Store, error) {
 	}, nil
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	prometheusUtxoGet.Inc()
 	return nil, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(0, 0)
 	policy.RecordExistsAction = aero.CREATE_ONLY
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
@@ -162,20 +162,20 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 				if err != nil {
 					return nil, err
 				}
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: spendingTxHash,
 				}, nil
 			}
 
 			prometheusUtxoReStore.Inc()
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_OK),
 			}, nil
 		}
 
 		if getErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
-			return &store.UTXOResponse{
+			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil
 		}
@@ -185,12 +185,12 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*store.UTXORespo
 
 	prometheusUtxoStore.Inc()
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK), // should be created, we need this for the block assembly
 	}, nil
 }
 
-func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *store.UTXOResponse, err error) {
+func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *utxostore.UTXOResponse, err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			fmt.Printf("ERROR panic in aerospike Spend: %v", recoverErr)
@@ -198,7 +198,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	}()
 
 	// set the default we return when we recover from a panic
-	utxoResponse = &store.UTXOResponse{
+	utxoResponse = &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}
 
@@ -227,7 +227,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		if ok {
 			if [32]byte(valueBytes) == [32]byte(txID[:]) {
 				prometheusUtxoReSpend.Inc()
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status: int(utxostore_api.Status_OK),
 				}, nil
 			} else {
@@ -236,7 +236,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 				if err != nil {
 					return nil, err
 				}
-				return &store.UTXOResponse{
+				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: spendingTxHash,
 				}, nil
@@ -247,12 +247,12 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 
 	prometheusUtxoSpend.Inc()
 
-	return &store.UTXOResponse{
+	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
 }
 
-func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*store.UTXOResponse, error) {
+func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	policy := aero.NewWritePolicy(2, 0)
 	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
