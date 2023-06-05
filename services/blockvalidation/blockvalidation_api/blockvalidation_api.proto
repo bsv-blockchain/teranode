@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+option go_package = ".;blockassembly_api";
+
+package blockvalidation_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service BlockValidationAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc BlockFound (BlockFoundRequest) returns (google.protobuf.Empty) {}
+  rpc GetSubtree (GetSubtreeRequest) returns (GetSubtreeResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model BlockFoundRequest
+message BlockFoundRequest {
+  bytes block_header = 1;
+  bytes coinbase = 2;
+  bytes subtree_roots = 3;
+}
+
+// swagger:model GetSubtreeRequest
+message GetSubtreeRequest {
+  bytes subtree_root = 1;
+}
+
+// swagger:model GetSubtreeRequest
+message GetSubtreeResponse {
+  bytes subtree_txs = 1;
+}
+
