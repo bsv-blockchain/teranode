@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospike
 
@@ -96,6 +96,19 @@ func New(url *url.URL) (*Store, error) {
 	policy := aerospike.NewClientPolicy()
 	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
+	policy.Timeout = 5000 // Set timeout to 5 seconds
+
+	policy.AuthMode = 2
+
+	if url.User != nil {
+		policy.User = url.User.Username()
+		var ok bool
+		policy.Password, ok = url.User.Password()
+		if !ok {
+			policy.User = ""
+			policy.Password = ""
+		}
+	}
 
 	hosts := []*aerospike.Host{
 		{Name: "10.138.0.29", Port: 3000}, // hardcoded for testing

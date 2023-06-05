@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

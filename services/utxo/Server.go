@@ -7,9 +7,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/store/memory"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -89,7 +89,7 @@ type UTXOStore struct {
 	utxostore_api.UnsafeUtxoStoreAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	store      store.UTXOStore
+	store      utxostore.UTXOStore
 }
 
 func Enabled() bool {
@@ -107,7 +107,7 @@ func New(logger utils.Logger, opts ...Options) (*UTXOStore, error) {
 		return nil, fmt.Errorf("no utxostore setting found")
 	}
 
-	var s store.UTXOStore
+	var s utxostore.UTXOStore
 	switch utxostoreURL.Path {
 	case "/splitbyhash":
 		logger.Infof("[UTXOStore] using splitbyhash memory store")
