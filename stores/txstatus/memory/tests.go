@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 	"testing"
 
@@ -18,14 +19,14 @@ var (
 func testStore(t *testing.T, db txstatus.Store) {
 	ctx := context.Background()
 
-	err := db.Set(ctx, hash, 100, nil)
+	err := db.Set(ctx, hash, 100, nil, nil)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, txstatus.Unconfirmed, resp.Status)
 
-	err = db.Set(ctx, hash, 100, nil)
+	err = db.Set(ctx, hash, 100, nil, nil)
 	require.Error(t, err, txstatus.ErrAlreadyExists)
 }
 
@@ -35,23 +36,26 @@ func testSanity(t *testing.T, db txstatus.Store) {
 
 func benchmark(b *testing.B, db txstatus.Store) {
 	ctx := context.Background()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			buf := make([]byte, 32)
+			_, err := rand.Read(buf)
+			bHash, _ := chainhash.NewHash(buf)
 
-	for i := 0; i < b.N; i++ {
-		err := db.Set(ctx, hash, 100, nil)
-		if err != nil {
-			b.Fatal(err)
-		}
+			err = db.Set(ctx, bHash, 100, nil, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
 
-		status, err := db.Get(ctx, hash)
-		if err != nil {
-			b.Fatal(err)
+			status, err := db.Get(ctx, bHash)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if status.Status != txstatus.Unconfirmed {
+				b.Fatal(status)
+			}
 		}
-		if status.Status != txstatus.Unconfirmed {
-			b.Fatal(status)
-		}
-
-		_ = db.Delete(ctx, hash)
-	}
+	})
 }
 
 func skipLongTests(t *testing.T) {

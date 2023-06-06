@@ -14,6 +14,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
+	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/getsentry/sentry-go"
@@ -54,6 +55,7 @@ func main() {
 	startBlockAssembly := flag.Bool("blockassembly", false, "start blockassembly service")
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
+	startTxStatusStore := flag.Bool("txstatusstore", false, "start txstatus store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
@@ -154,10 +156,33 @@ func main() {
 
 	var validatorService *validator.Server
 	var utxoStore *utxo.UTXOStore
+	var txStatusStore *txstatus.Server
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
 	var blockAssemblyService *blockassembly.BlockAssembly
 	var seederService *seeder.Server
+
+	// txstatus store
+	if *startTxStatusStore {
+		txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
+		if err != nil {
+			panic(err)
+		}
+
+		if found {
+			g.Go(func() (err error) {
+				logger.Infof("Starting Tx Status Store on: %s", txStatusURL.Host)
+
+				txStatusLogger := gocore.Log("txstatus", gocore.NewLogLevelFromString(logLevel))
+				txStatusStore, err = txstatus.New(txStatusLogger, txStatusURL)
+				if err != nil {
+					panic(err)
+				}
+
+				return txStatusStore.Start()
+			})
+		}
+	}
 
 	// blockAssembly
 	if *startBlockAssembly {

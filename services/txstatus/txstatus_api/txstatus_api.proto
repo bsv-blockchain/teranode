@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+option go_package = ".;txstatus_api";
+
+package txstatus_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service TxStatusAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc Set (SetRequest) returns (SetResponse) {}
+  rpc SetMined (SetMinedRequest) returns (SetMinedResponse) {}
+  rpc Get (GetRequest) returns (GetResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:enum Status
+enum Status {
+  // StatusUnknown is the default status.
+  StatusUnknown = 0;
+  // StatusUnconfirmed is the status of a transaction that has not been mined.
+  StatusUnconfirmed = 1;
+  // StatusConfirmed is the status of a transaction that has been mined.
+  StatusConfirmed = 2;
+}
+
+// swagger:model SetRequest
+message SetRequest {
+  bytes hash = 1;
+  uint64 fee = 2;
+  repeated bytes utxoHashes = 3;
+}
+
+// swagger:model SetResponse
+message SetResponse {
+  Status status = 1;
+}
+
+// swagger:model SetMinedRequest
+message SetMinedRequest {
+  bytes hash = 1;
+  bytes block_hash = 2;
+}
+
+// swagger:model SetMinedResponse
+message SetMinedResponse {
+  Status status = 1;
+}
+
+// swagger:model GetRequest
+message GetRequest {
+  bytes hash = 1;
+}
+
+// swagger:model GetResponse
+message GetResponse {
+  Status status = 1;
+  uint64 Fee = 2;
+  repeated bytes UtxoHashes = 3;
+  google.protobuf.Timestamp FirstSeen = 4;
+  repeated bytes BlockHashes = 5;
+  uint32 BlockHeight = 6;
+}

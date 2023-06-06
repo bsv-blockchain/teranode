@@ -9,10 +9,6 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-// var (
-// 	empty = &chainhash.Hash{}
-// )
-
 type Memory struct {
 	mu       sync.Mutex
 	txStatus map[chainhash.Hash]txstatus.Status
@@ -36,7 +32,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status,
 	return &status, nil
 }
 
-func (m *Memory) Set(_ context.Context, hash *chainhash.Hash, fee uint64, utxoHashes []*chainhash.Hash) error {
+func (m *Memory) Set(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -46,10 +42,11 @@ func (m *Memory) Set(_ context.Context, hash *chainhash.Hash, fee uint64, utxoHa
 	}
 
 	s := txstatus.Status{
-		Status:     txstatus.Unconfirmed,
-		Fee:        fee,
-		FirstSeen:  time.Now(),
-		UtxoHashes: utxoHashes,
+		Status:         txstatus.Unconfirmed,
+		Fee:            fee,
+		FirstSeen:      time.Now(),
+		ParentTxHashes: parentTxHashes,
+		UtxoHashes:     utxoHashes,
 	}
 
 	m.txStatus[*hash] = s
@@ -72,6 +69,7 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 		s.BlockHashes = make([]*chainhash.Hash, 0)
 	}
 
+	s.Status = txstatus.Confirmed
 	s.BlockHashes = append(s.BlockHashes, blockHash)
 
 	m.txStatus[*hash] = s

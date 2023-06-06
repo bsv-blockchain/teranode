@@ -22,17 +22,18 @@ var (
 )
 
 type Status struct {
-	Status      TxStatus
-	Fee         uint64
-	UtxoHashes  []*chainhash.Hash
-	FirstSeen   time.Time
-	BlockHashes []*chainhash.Hash
-	BlockHeight uint32 // delete after 100 blocks?
+	Status         TxStatus
+	Fee            uint64
+	UtxoHashes     []*chainhash.Hash
+	ParentTxHashes []*chainhash.Hash
+	FirstSeen      time.Time
+	BlockHashes    []*chainhash.Hash
+	BlockHeight    uint32 // delete after 100 blocks?
 }
 
 type Store interface {
 	Get(ctx context.Context, hash *chainhash.Hash) (*Status, error)
-	Set(ctx context.Context, hash *chainhash.Hash, fee uint64, utxoHashes []*chainhash.Hash) error
+	Set(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error
 	SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 }
