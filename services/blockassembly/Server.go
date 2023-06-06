@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/TAAL-GmbH/ubsv/services/blockassembly/merkle"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -37,9 +38,14 @@ func init() {
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
-	utxoStore  utxostore.UTXOStore
-	logger     utils.Logger
-	grpcServer *grpc.Server
+	addTxChan         chan *blockassembly_api.AddTxRequest
+	newHeightChan     chan *blockassembly_api.NewChaintipAndHeightRequest
+	rotateChan        chan string
+	incomingBlockChan chan string
+	utxoStore         utxostore.UTXOStore
+	logger            utils.Logger
+	grpcServer        *grpc.Server
+	merkleContainer   *merkle.Container
 }
 
 func Enabled() bool {
@@ -62,24 +68,35 @@ func New(logger utils.Logger) *BlockAssembly {
 		panic(err)
 	}
 
-	bAss := &BlockAssembly{
-		utxoStore: s,
-		logger:    logger,
+	// TODO - Get current chaintip and height and open merkle container for it.
+
+	chaintip := &chainhash.Hash{}
+
+	maxItemsPerFile, _ := gocore.Config().GetInt("merkle_items_per_subtree", 1_000_000)
+
+	merkleContainer, err := merkle.OpenForWriting(chaintip, 0, uint32(maxItemsPerFile))
+	if err != nil {
+		panic(err)
 	}
 
-	return bAss
+	return &BlockAssembly{
+		utxoStore:       s,
+		logger:          logger,
+		addTxChan:       make(chan *blockassembly_api.AddTxRequest, 100_000),
+		newHeightChan:   make(chan *blockassembly_api.NewChaintipAndHeightRequest),
+		merkleContainer: merkleContainer,
+	}
 }
 
 // Start function
-func (u *BlockAssembly) Start() error {
-
+func (ba *BlockAssembly) Start() error {
 	address, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		return errors.New("no blockassembly_grpcAddress setting found")
 	}
 
 	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
+	ba.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 	})
 	if err != nil {
@@ -93,56 +110,91 @@ func (u *BlockAssembly) Start() error {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
 
-	blockassembly_api.RegisterBlockAssemblyAPIServer(u.grpcServer, u)
+	blockassembly_api.RegisterBlockAssemblyAPIServer(ba.grpcServer, ba)
 
 	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
+	reflection.Register(ba.grpcServer)
 
-	u.logger.Infof("GRPC server listening on %s", address)
+	ba.logger.Infof("GRPC server listening on %s", address)
 
-	if err = u.grpcServer.Serve(lis); err != nil {
+	go func() {
+		for {
+			select {
+			case <-ba.rotateChan:
+
+			case <-ba.incomingBlockChan:
+
+			case heightReq := <-ba.newHeightChan:
+				chaintip, err := chainhash.NewHash(heightReq.Chaintip)
+				if err != nil {
+					panic(err)
+				}
+
+				ba.merkleContainer.Close()
+
+				txidFile, err := merkle.OpenForWriting(chaintip, heightReq.Height, 4)
+				if err != nil {
+					panic(err)
+				}
+
+				ba.merkleContainer = txidFile
+
+			case txReq := <-ba.addTxChan:
+				prometheusBlockAssemblyAddTx.Inc()
+
+				hash, err := chainhash.NewHash(txReq.Txid)
+				if err != nil {
+					panic(err)
+				}
+
+				if err := ba.merkleContainer.AddTxID(hash, txReq.Fees); err != nil {
+					panic(err)
+				}
+
+				// Add all the utxo hashes to the utxostore
+				for _, hash := range txReq.UtxoHashes {
+					h, err := chainhash.NewHash(hash)
+					if err != nil {
+						panic(err)
+					}
+
+					if resp, err := ba.utxoStore.Store(context.Background(), h); err != nil {
+						panic(fmt.Errorf("error storing utxo (%v): %w", resp, err))
+					}
+				}
+			}
+		}
+	}()
+
+	if err = ba.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}
 
 	return nil
 }
 
-func (u *BlockAssembly) Stop(ctx context.Context) {
+func (ba *BlockAssembly) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	u.grpcServer.GracefulStop()
+	ba.grpcServer.GracefulStop()
 }
 
-func (u *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassembly_api.HealthResponse, error) {
+func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassembly_api.HealthResponse, error) {
 	return &blockassembly_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (u *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
-	prometheusBlockAssemblyAddTx.Inc()
+func (ba *BlockAssembly) NewChaintipAndHeight(ctx context.Context, req *blockassembly_api.NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
+	ba.newHeightChan <- req
 
-	hash, err := chainhash.NewHash(req.Txid)
-	if err != nil {
-		return nil, err
-	}
+	return &emptypb.Empty{}, nil
+}
 
-	// Add all the utxo hashes to the utxostore
-	for _, hash := range req.UtxoHashes {
-		h, err := chainhash.NewHash(hash)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp, err := u.utxoStore.Store(ctx, h); err != nil {
-			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
-		}
-	}
-
-	// TODO Don't do anything as we don't have a mempool yet
-	_ = hash
+func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
+	ba.addTxChan <- req
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,

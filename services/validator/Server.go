@@ -276,7 +276,7 @@ func (v *Server) startKafkaGroupListener(kafkaURL *url.URL, workerCh chan []byte
 			if err = client.Consume(ctx, topics, &consumer); err != nil {
 				log.Panicf("Error from consumer: %v", err)
 			}
-			// check if context was cancelled, signaling that the consumer should stop
+			// check if context was cancelled, signalling that the consumer should stop
 			if ctx.Err() != nil {
 				return
 			}

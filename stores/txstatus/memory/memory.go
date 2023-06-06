@@ -9,9 +9,9 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-var (
-	empty = &chainhash.Hash{}
-)
+// var (
+// 	empty = &chainhash.Hash{}
+// )
 
 type Memory struct {
 	mu       sync.Mutex

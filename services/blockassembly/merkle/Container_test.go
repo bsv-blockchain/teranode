@@ -28,47 +28,59 @@ func TestOpen(t *testing.T) {
 
 	height := uint32(1)
 
-	txidFile, err := OpenForWriting(chaintip, height, 4)
+	container, err := OpenForWriting(chaintip, height, 4)
 	require.NoError(t, err)
 
-	count := txidFile.Count()
+	defer func() {
+		err = container.deleteAll()
+		require.NoError(t, err)
+	}()
+
+	count := container.Count()
 	assert.Equal(t, count, uint32(1))
 
 	for _, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		err = txidFile.AddTxID(hash, 1)
+		err = container.AddTxID(hash, 1)
 		require.NoError(t, err)
 	}
 
-	count = txidFile.Count()
+	count = container.Count()
 	assert.Equal(t, uint32(4), count)
 
-	assert.Equal(t, uint64(3), txidFile.fees)
+	assert.Equal(t, uint64(3), container.fees)
 
-	err = txidFile.AddTxID(chaintip, 1)
+	err = container.AddTxID(chaintip, 1)
 	require.NoError(t, err)
 
-	count = txidFile.Count()
+	count = container.Count()
 	assert.Equal(t, uint32(1), count)
 
-	err = txidFile.Close()
+	err = container.Close()
 	require.NoError(t, err)
 
-	txidFile, err = OpenForReading(chaintip, height, 0)
+	container, err = OpenForReading(chaintip, height, 0)
 	require.NoError(t, err)
 
-	count = txidFile.Count()
+	count = container.Count()
 	assert.Equal(t, uint32(4), count)
 
 	coinbaseHash, err := chainhash.NewHashFromStr(coinbase)
 	require.NoError(t, err)
 
-	merkleRoot, err := txidFile.MerkleRoot(coinbaseHash)
+	merkleRoot, err := container.MerkleRoot(coinbaseHash)
 	require.NoError(t, err)
 
 	assert.Equal(t, expectedMerkleRoot, merkleRoot.String())
-	err = txidFile.deleteAll()
+
+	container.Close()
+
+	// Make sure opening this height again opens the 2nd file, not the first...
+	container, err = OpenForWriting(chaintip, height, 4)
 	require.NoError(t, err)
+
+	count = container.Count()
+	assert.Equal(t, uint32(1), count)
 }

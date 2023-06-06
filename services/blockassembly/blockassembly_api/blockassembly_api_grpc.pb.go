@@ -20,8 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockAssemblyAPI_Health_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/Health"
-	BlockAssemblyAPI_AddTx_FullMethodName  = "/blockassembly_api.BlockAssemblyAPI/AddTx"
+	BlockAssemblyAPI_Health_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/Health"
+	BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight"
+	BlockAssemblyAPI_AddTx_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/AddTx"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -30,6 +31,7 @@ const (
 type BlockAssemblyAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
 }
 
@@ -44,6 +46,15 @@ func NewBlockAssemblyAPIClient(cc grpc.ClientConnInterface) BlockAssemblyAPIClie
 func (c *blockAssemblyAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_Health_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +76,7 @@ func (c *blockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest, op
 type BlockAssemblyAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
@@ -75,6 +87,9 @@ type UnimplementedBlockAssemblyAPIServer struct {
 
 func (UnimplementedBlockAssemblyAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NewChaintipAndHeight not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
@@ -110,6 +125,24 @@ func _BlockAssemblyAPI_Health_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_NewChaintipAndHeight_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NewChaintipAndHeightRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).NewChaintipAndHeight(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).NewChaintipAndHeight(ctx, req.(*NewChaintipAndHeightRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_AddTx_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddTxRequest)
 	if err := dec(in); err != nil {
@@ -138,6 +171,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _BlockAssemblyAPI_Health_Handler,
+		},
+		{
+			MethodName: "NewChaintipAndHeight",
+			Handler:    _BlockAssemblyAPI_NewChaintipAndHeight_Handler,
 		},
 		{
 			MethodName: "AddTx",

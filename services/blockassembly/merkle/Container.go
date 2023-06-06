@@ -70,7 +70,7 @@ func OpenForWriting(chaintip *chainhash.Hash, height uint32, maxItemsPerFile uin
 		//TODO sort the files in order
 
 		filename := path.Join(folder, files[len(files)-1].Name())
-		f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0666)
+		f, err = os.OpenFile(filename, os.O_RDWR, 0666)
 		if err != nil {
 			return nil, err
 		}

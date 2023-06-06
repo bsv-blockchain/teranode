@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	hash, _  = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
-	hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
+	hash, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
+	// hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 )
 
 func testStore(t *testing.T, db txstatus.Store) {
@@ -50,7 +50,7 @@ func benchmark(b *testing.B, db txstatus.Store) {
 			b.Fatal(status)
 		}
 
-		err = db.Delete(ctx, hash)
+		_ = db.Delete(ctx, hash)
 	}
 }
 

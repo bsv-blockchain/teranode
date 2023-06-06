@@ -10,6 +10,7 @@ import "google/protobuf/empty.proto";
 service BlockAssemblyAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc NewChaintipAndHeight(NewChaintipAndHeightRequest) returns (google.protobuf.Empty) {}
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
 }
 
@@ -18,6 +19,12 @@ message HealthResponse {
   bool ok = 1;
   string details = 2;
   google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model NewChaintipAndHeightRequest
+message NewChaintipAndHeightRequest {
+  bytes chaintip = 1;
+  uint32 height = 2;
 }
 
 // swagger:model StoreRequest

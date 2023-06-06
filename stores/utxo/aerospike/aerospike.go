@@ -10,7 +10,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/aerospike/aerospike-client-go/v6"
-	aero "github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -81,7 +80,7 @@ func init() {
 }
 
 type Store struct {
-	client    *aero.Client
+	client    *aerospike.Client
 	namespace string
 }
 
@@ -137,16 +136,16 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 }
 
 func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := aero.NewWritePolicy(0, 0)
-	policy.RecordExistsAction = aero.CREATE_ONLY
-	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
+	policy := aerospike.NewWritePolicy(0, 0)
+	policy.RecordExistsAction = aerospike.CREATE_ONLY
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aero.NewKey(s.namespace, "utxo", hash[:])
+	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		return nil, err
 	}
 
-	bins := aero.BinMap{
+	bins := aerospike.BinMap{
 		"txid": []byte{},
 	}
 	err = s.client.Put(policy, key, bins)
@@ -202,16 +201,16 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}
 
-	policy := aero.NewWritePolicy(1, 0)
-	policy.RecordExistsAction = aero.UPDATE_ONLY
-	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
-	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
+	policy := aerospike.NewWritePolicy(1, 0)
+	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aero.NewKey(s.namespace, "utxo", hash[:])
+	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		return nil, err
 	}
-	bins := aero.BinMap{
+	bins := aerospike.BinMap{
 		"txid": txID.CloneBytes(),
 	}
 
@@ -253,11 +252,11 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 }
 
 func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := aero.NewWritePolicy(2, 0)
-	policy.GenerationPolicy = aero.EXPECT_GEN_EQUAL
-	policy.CommitLevel = aero.COMMIT_ALL // strong consistency
+	policy := aerospike.NewWritePolicy(2, 0)
+	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aero.NewKey(s.namespace, "utxo", hash[:])
+	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		return nil, err
 	}
