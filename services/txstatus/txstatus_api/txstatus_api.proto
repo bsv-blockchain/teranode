@@ -36,7 +36,8 @@ enum Status {
 message SetRequest {
   bytes hash = 1;
   uint64 fee = 2;
-  repeated bytes utxoHashes = 3;
+  repeated bytes ParentTxHashes = 3;
+  repeated bytes utxoHashes = 4;
 }
 
 // swagger:model SetResponse
@@ -64,8 +65,9 @@ message GetRequest {
 message GetResponse {
   Status status = 1;
   uint64 Fee = 2;
-  repeated bytes UtxoHashes = 3;
-  google.protobuf.Timestamp FirstSeen = 4;
-  repeated bytes BlockHashes = 5;
-  uint32 BlockHeight = 6;
+  repeated bytes ParentTxHashes = 3;
+  repeated bytes UtxoHashes = 4;
+  google.protobuf.Timestamp FirstSeen = 5;
+  repeated bytes BlockHashes = 6;
+  uint32 BlockHeight = 7;
 }

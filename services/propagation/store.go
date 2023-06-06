@@ -5,14 +5,14 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/badger"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/gcs"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/minio"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store/null"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/badger"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/minio"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
 )
 
-func NewStore(storeUrl *url.URL) (propagationStore store.TransactionStore, err error) {
+func NewStore(storeUrl *url.URL) (propagationStore blob.Store, err error) {
 	switch storeUrl.Scheme {
 	case "null":
 		propagationStore, err = null.New()

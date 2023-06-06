@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -64,7 +64,7 @@ type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	txStore    store.TransactionStore
+	txStore    blob.Store
 	validator  validator.Interface
 }
 
@@ -74,7 +74,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore store.TransactionStore, validatorClient *validator.Client) (*PropagationServer, error) {
+func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Client) (*PropagationServer, error) {
 	return &PropagationServer{
 		logger:    logger,
 		txStore:   txStore,

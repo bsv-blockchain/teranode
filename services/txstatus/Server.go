@@ -155,7 +155,17 @@ func (u *Server) Set(ctx context.Context, request *txstatus_api.SetRequest) (*tx
 		utxoHashes[index] = utxoHash
 	}
 
-	err = u.store.Set(ctx, hash, request.Fee, utxoHashes)
+	parentTxHashes := make([]*chainhash.Hash, len(request.ParentTxHashes))
+	var parentTxHash *chainhash.Hash
+	for index, parentTxHashBytes := range request.ParentTxHashes {
+		parentTxHash, err = chainhash.NewHash(parentTxHashBytes)
+		if err != nil {
+			return nil, err
+		}
+		parentTxHashes[index] = parentTxHash
+	}
+
+	err = u.store.Set(ctx, hash, request.Fee, parentTxHashes, utxoHashes)
 	if err != nil {
 		return nil, err
 	}
@@ -206,17 +216,23 @@ func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*tx
 		utxoHashes[index] = utxoHash.CloneBytes()
 	}
 
+	parentTxHashes := make([][]byte, len(tx.ParentTxHashes))
+	for index, parentTxHash := range tx.ParentTxHashes {
+		parentTxHashes[index] = parentTxHash.CloneBytes()
+	}
+
 	blockHashes := make([][]byte, len(tx.BlockHashes))
 	for index, blockHash := range tx.BlockHashes {
 		blockHashes[index] = blockHash.CloneBytes()
 	}
 
 	return &txstatus_api.GetResponse{
-		Status:      txstatus_api.Status(tx.Status),
-		Fee:         tx.Fee,
-		UtxoHashes:  utxoHashes,
-		FirstSeen:   timestamppb.New(tx.FirstSeen),
-		BlockHashes: blockHashes,
-		BlockHeight: tx.BlockHeight,
+		Status:         txstatus_api.Status(tx.Status),
+		Fee:            tx.Fee,
+		ParentTxHashes: parentTxHashes,
+		UtxoHashes:     utxoHashes,
+		FirstSeen:      timestamppb.New(tx.FirstSeen),
+		BlockHashes:    blockHashes,
+		BlockHeight:    tx.BlockHeight,
 	}, nil
 }

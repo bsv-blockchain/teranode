@@ -4,8 +4,8 @@ import (
 	"context"
 	"net"
 
-	"github.com/TAAL-GmbH/ubsv/services/propagation/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/ordishs/go-utils"
 )
 
@@ -24,7 +24,7 @@ type Server struct {
 	validatorClient *validator.Client
 }
 
-func NewServer(logger utils.Logger, txStore store.TransactionStore, blockStore store.TransactionStore, validatorClient *validator.Client) *Server {
+func NewServer(logger utils.Logger, txStore blob.Store, blockStore blob.Store, validatorClient *validator.Client) *Server {
 	return &Server{
 		logger:          logger,
 		validatorClient: validatorClient,
