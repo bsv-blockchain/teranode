@@ -23,7 +23,8 @@ message HealthResponse {
 // swagger:model StoreRequest
 message AddTxRequest {
   bytes txid = 1;
-  repeated bytes utxoHashes = 2;
+  uint64 fees = 2;
+  repeated bytes utxoHashes = 3;
 }
 
 // swagger:model StoreResponse

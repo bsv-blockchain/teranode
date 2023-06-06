@@ -32,9 +32,10 @@ func NewClient() *Store {
 	}
 }
 
-func (s Store) Store(ctx context.Context, txid *chainhash.Hash, utxoHashes []*chainhash.Hash) (bool, error) {
+func (s Store) Store(ctx context.Context, txid *chainhash.Hash, fees uint64, utxoHashes []*chainhash.Hash) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
 		Txid: txid[:],
+		Fees: fees,
 	}
 
 	for _, hash := range utxoHashes {

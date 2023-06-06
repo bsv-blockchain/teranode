@@ -1,6 +1,7 @@
 package merkle
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ type Container struct {
 	maxItemsPerFile uint32
 	count           uint32
 	write           bool
+	fees            uint64
 }
 
 func OpenForWriting(chaintip *chainhash.Hash, height uint32, maxItemsPerFile uint32) (*Container, error) {
@@ -42,6 +44,7 @@ func OpenForWriting(chaintip *chainhash.Hash, height uint32, maxItemsPerFile uin
 	var f *os.File
 	var fileCount int32
 	var count uint32
+	var fees uint64
 
 	if len(files) == 0 {
 		var err error
@@ -55,21 +58,43 @@ func OpenForWriting(chaintip *chainhash.Hash, height uint32, maxItemsPerFile uin
 		if _, err := f.Write(b); err != nil {
 			return nil, err
 		}
+
+		fees := make([]byte, 8)
+		if _, err := f.Write(fees); err != nil {
+			return nil, err
+		}
+
 		count++
 
 	} else {
+		//TODO sort the files in order
+
 		filename := path.Join(folder, files[len(files)-1].Name())
 		f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0666)
 		if err != nil {
 			return nil, err
 		}
 
-		pos, err := f.Seek(0, 2) // Seek to the end of the file
-		if err != nil {
-			f.Close()
-			return nil, err
+		// Read all the existing records and sum up their fees
+		b := make([]byte, 32)
+		feeBytes := make([]byte, 8)
+
+		for {
+			if _, err := f.Read(b); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return nil, err
+			}
+
+			if _, err := f.Read(feeBytes); err != nil {
+				return nil, err
+			}
+
+			count++
+			fees += binary.LittleEndian.Uint64(feeBytes)
 		}
-		count = uint32(pos / int64(32))
+
 		num, err := strconv.ParseInt(files[len(files)-1].Name(), 10, 64)
 		if err != nil {
 			return nil, err
@@ -87,6 +112,7 @@ func OpenForWriting(chaintip *chainhash.Hash, height uint32, maxItemsPerFile uin
 		count:           count,
 		maxItemsPerFile: maxItemsPerFile,
 		write:           true,
+		fees:            fees,
 	}, nil
 }
 
@@ -114,7 +140,7 @@ func OpenForReading(chaintip *chainhash.Hash, height uint32, fileNumber int) (*C
 		f.Close()
 		return nil, err
 	}
-	count := uint32(pos / int64(32))
+	count := uint32(pos / int64(32+8))
 
 	if _, err = f.Seek(0, 0); err != nil { // Seek to the beginning of the file
 		f.Close()
@@ -135,7 +161,7 @@ func (c *Container) Close() error {
 	return c.currentFile.Close()
 }
 
-func (c *Container) AddTxID(txid *chainhash.Hash) error {
+func (c *Container) AddTxID(txid *chainhash.Hash, fees uint64) error {
 	if !c.write {
 		return errors.New("file is not in write mode")
 	}
@@ -160,7 +186,15 @@ func (c *Container) AddTxID(txid *chainhash.Hash) error {
 		return err
 	}
 
+	feeBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(feeBytes, fees)
+
+	if _, err := c.currentFile.Write(feeBytes); err != nil {
+		return err
+	}
+
 	c.count++
+	c.fees += fees
 
 	return nil
 }
@@ -178,11 +212,16 @@ func (c *Container) MerkleRoot(coinbase *chainhash.Hash) (*chainhash.Hash, error
 
 	for i := 0; i < int(c.count); i++ {
 		txid := make([]byte, 32)
-		_, err := c.currentFile.Read(txid)
-		if err != nil {
+		feeBytes := make([]byte, 8)
+
+		if _, err := c.currentFile.Read(txid); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+			return nil, err
+		}
+
+		if _, err := c.currentFile.Read(feeBytes); err != nil {
 			return nil, err
 		}
 

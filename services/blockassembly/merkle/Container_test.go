@@ -1,7 +1,6 @@
 package merkle
 
 import (
-	"crypto/rand"
 	"testing"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -20,9 +19,9 @@ var txIds []string = []string{
 var expectedMerkleRoot = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
 
 func TestOpen(t *testing.T) {
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
+	// b := make([]byte, 32)
+	// _, err := rand.Read(b)
+	// require.NoError(t, err)
 
 	chaintip, err := chainhash.NewHashFromStr("5bc1ec4dca8e07b2f816f538a7caf1b9e3765a1977082398914d54b215dfb362")
 	require.NoError(t, err)
@@ -39,14 +38,16 @@ func TestOpen(t *testing.T) {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		err = txidFile.AddTxID(hash)
+		err = txidFile.AddTxID(hash, 1)
 		require.NoError(t, err)
 	}
 
 	count = txidFile.Count()
 	assert.Equal(t, uint32(4), count)
 
-	err = txidFile.AddTxID(chaintip)
+	assert.Equal(t, uint64(3), txidFile.fees)
+
+	err = txidFile.AddTxID(chaintip, 1)
 	require.NoError(t, err)
 
 	count = txidFile.Count()

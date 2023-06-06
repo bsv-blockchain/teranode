@@ -136,10 +136,17 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	storeUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreUtxos")
 	defer storeUtxoSpan.Finish()
 
+	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
+
+	for _, input := range tx.Inputs {
+		fees += input.PreviousTxSatoshis
+	}
 
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 {
+			fees -= output.Satoshis
+
 			utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
 			if utxoErr != nil {
 				fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
@@ -150,7 +157,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		}
 	}
 
-	if _, err := v.blockAssembler.Store(ctx, txIDChainHash, utxoHashes); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, txIDChainHash, fees, utxoHashes); err != nil {
 		fmt.Printf("error sending tx to block assembler: %v", err)
 	}
 
