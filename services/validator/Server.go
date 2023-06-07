@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
+	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
@@ -97,7 +98,13 @@ func NewServer(logger utils.Logger) *Server {
 		panic(err)
 	}
 
-	validator := New(s)
+	var txStatusStore *txstatus.Client
+	txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+	if err != nil {
+		panic(err)
+	}
+
+	validator := New(s, txStatusStore)
 
 	return &Server{
 		logger:    logger,

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	"github.com/TAAL-GmbH/ubsv/stores/txstatus/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -48,7 +49,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v := validator.New(ns)
+	v := validator.New(ns, memory.New())
 
 	b.ResetTimer()
 

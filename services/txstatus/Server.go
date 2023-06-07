@@ -236,3 +236,8 @@ func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*tx
 		BlockHeight:    tx.BlockHeight,
 	}, nil
 }
+
+func (u *Server) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	//TODO implement me
+	panic("implement me")
+}

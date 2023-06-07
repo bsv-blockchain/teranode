@@ -79,7 +79,7 @@ func main() {
 
 	ns := &NullStore{}
 
-	v := validator.New(ns)
+	v := validator.New(ns, nil)
 
 	start := time.Now()
 

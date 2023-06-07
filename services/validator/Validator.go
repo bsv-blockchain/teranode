@@ -7,6 +7,7 @@ import (
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
+	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -17,17 +18,18 @@ import (
 
 type Validator struct {
 	store          utxostore.UTXOStore
-	blockAssembler *blockassembly.Store
+	blockAssembler blockassembly.Store
+	txStatus       txstatus.Store
 	saveInParallel bool
 }
 
-func New(store utxostore.UTXOStore) Interface {
+func New(store utxostore.UTXOStore, txStatus txstatus.Store) Interface {
 	ba := blockassembly.NewClient()
 
 	return &Validator{
 		store:          store,
 		blockAssembler: ba,
-
+		txStatus:       txStatus,
 		saveInParallel: true,
 	}
 }
@@ -86,7 +88,11 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 	var hash *chainhash.Hash
 	var utxoResponse *utxostore.UTXOResponse
+	var parentTxHash *chainhash.Hash
+
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
+	parentTxHashes := make([]*chainhash.Hash, 0, len(tx.Inputs))
+
 	for idx, input := range tx.Inputs {
 		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
@@ -112,6 +118,9 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		reservedUtxos = append(reservedUtxos, hash)
+
+		parentTxHash, err = chainhash.NewHash(bt.ReverseBytes(input.PreviousTxID()))
+		parentTxHashes = append(parentTxHashes, parentTxHash)
 	}
 
 	if err != nil {
@@ -157,7 +166,15 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		}
 	}
 
-	if _, err := v.blockAssembler.Store(ctx, txIDChainHash, fees, utxoHashes); err != nil {
+	// TODO what if one of these fails?
+	// we should probably recover and add it to a retry queue
+
+	// register transaction in tx status store
+	if err = v.txStatus.Set(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
+		fmt.Printf("error sending tx to txstatus: %v", err)
+	}
+
+	if _, err = v.blockAssembler.Store(ctx, txIDChainHash, fees, utxoHashes); err != nil {
 		fmt.Printf("error sending tx to block assembler: %v", err)
 	}
 
@@ -177,7 +194,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// 					//return err
 	// 				}
 
-	// 				_, utxoErr = v.store.Store(storeUtxoSpan.Ctx, utxoHash)
+	// 				_, utxoErr = v.store.Client(storeUtxoSpan.Ctx, utxoHash)
 	// 				if utxoErr != nil {
 	// 					fmt.Printf("error storing utxo: %s\n", utxoErr.Error())
 	// 				}
@@ -193,7 +210,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// 				return err
 	// 			}
 
-	// 			_, err = v.store.Store(storeUtxoSpan.Ctx, hash)
+	// 			_, err = v.store.Client(storeUtxoSpan.Ctx, hash)
 	// 			if err != nil {
 	// 				break
 	// 			}

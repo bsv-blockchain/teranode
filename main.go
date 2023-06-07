@@ -173,7 +173,7 @@ func main() {
 
 		if found {
 			g.Go(func() (err error) {
-				logger.Infof("Starting Tx Status Store on: %s", txStatusURL.Host)
+				logger.Infof("Starting Tx Status Client on: %s", txStatusURL.Host)
 
 				txStatusLogger := gocore.Log("txstatus", gocore.NewLogLevelFromString(logLevel))
 				txStatusStore, err = txstatus.New(txStatusLogger, txStatusURL)
@@ -205,7 +205,8 @@ func main() {
 			g.Go(func() error {
 				logger.Infof("Starting Server")
 
-				validatorService = validator.NewServer(gocore.Log("valid", gocore.NewLogLevelFromString(logLevel)))
+				validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
+				validatorService = validator.NewServer(validatorLogger)
 
 				return validatorService.Start()
 			})

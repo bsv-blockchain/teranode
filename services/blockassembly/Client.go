@@ -9,11 +9,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-type Store struct {
+type Client struct {
 	db blockassembly_api.BlockAssemblyAPIClient
 }
 
-func NewClient() *Store {
+func NewClient() *Client {
 	ctx := context.Background()
 
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
@@ -27,12 +27,12 @@ func NewClient() *Store {
 		panic(err)
 	}
 
-	return &Store{
+	return &Client{
 		db: blockassembly_api.NewBlockAssemblyAPIClient(baConn),
 	}
 }
 
-func (s Store) Store(ctx context.Context, txid *chainhash.Hash, fees uint64, utxoHashes []*chainhash.Hash) (bool, error) {
+func (s Client) Store(ctx context.Context, txid *chainhash.Hash, fees uint64, utxoHashes []*chainhash.Hash) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
 		Txid: txid[:],
 		Fees: fees,

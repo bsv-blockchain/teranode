@@ -99,6 +99,7 @@ func main() {
 	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
+	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 
 	flag.Parse()
 
@@ -147,10 +148,15 @@ func main() {
 
 	go func() {
 		var profilerAddr string
-		var ok bool
-		profilerAddr, ok = gocore.Config().Get("profilerAddr")
+		var startProfiler bool
 
-		if ok {
+		if profileAddress != nil && *profileAddress != "" {
+			profilerAddr, startProfiler = *profileAddress, true
+		} else {
+			profilerAddr, startProfiler = gocore.Config().Get("profilerAddr")
+		}
+
+		if startProfiler {
 			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
 			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
 		}
