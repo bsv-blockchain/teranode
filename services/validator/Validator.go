@@ -170,7 +170,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// we should probably recover and add it to a retry queue
 
 	// register transaction in tx status store
-	if err = v.txStatus.Set(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
+	if err = v.txStatus.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
 		fmt.Printf("error sending tx to txstatus: %v", err)
 	}
 

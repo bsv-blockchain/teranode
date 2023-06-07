@@ -32,7 +32,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status,
 	return &status, nil
 }
 
-func (m *Memory) Set(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
+func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -42,7 +42,7 @@ func (m *Memory) Set(_ context.Context, hash *chainhash.Hash, fee uint64, parent
 	}
 
 	s := txstatus.Status{
-		Status:         txstatus.Unconfirmed,
+		Status:         txstatus.Validated,
 		Fee:            fee,
 		FirstSeen:      time.Now(),
 		ParentTxHashes: parentTxHashes,

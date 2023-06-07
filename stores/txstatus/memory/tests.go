@@ -19,14 +19,14 @@ var (
 func testStore(t *testing.T, db txstatus.Store) {
 	ctx := context.Background()
 
-	err := db.Set(ctx, hash, 100, nil, nil)
+	err := db.Create(ctx, hash, 100, nil, nil)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, hash)
 	require.NoError(t, err)
-	require.Equal(t, txstatus.Unconfirmed, resp.Status)
+	require.Equal(t, txstatus.Validated, resp.Status)
 
-	err = db.Set(ctx, hash, 100, nil, nil)
+	err = db.Create(ctx, hash, 100, nil, nil)
 	require.Error(t, err, txstatus.ErrAlreadyExists)
 }
 
@@ -42,7 +42,7 @@ func benchmark(b *testing.B, db txstatus.Store) {
 			_, err := rand.Read(buf)
 			bHash, _ := chainhash.NewHash(buf)
 
-			err = db.Set(ctx, bHash, 100, nil, nil)
+			err = db.Create(ctx, bHash, 100, nil, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -51,7 +51,7 @@ func benchmark(b *testing.B, db txstatus.Store) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if status.Status != txstatus.Unconfirmed {
+			if status.Status != txstatus.Validated {
 				b.Fatal(status)
 			}
 		}
@@ -60,6 +60,6 @@ func benchmark(b *testing.B, db txstatus.Store) {
 
 func skipLongTests(t *testing.T) {
 	if os.Getenv("LONG_TESTS") == "" {
-		t.Skip("Skipping long running tests. Set LONG_TESTS=1 to run them.")
+		t.Skip("Skipping long running tests. Create LONG_TESTS=1 to run them.")
 	}
 }
