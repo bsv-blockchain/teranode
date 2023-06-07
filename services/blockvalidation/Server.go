@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
@@ -120,5 +121,63 @@ func (u *BlockValidation) Health(_ context.Context, _ *emptypb.Empty) (*blockval
 func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
 
+	// check we have all the subtrees. If any are missing request them then validate them.
+	subtreeRoots, err := splitSubtreeRoots(req.SubtreeRoots)
+	if err != nil {
+		return nil, err
+	}
+
+	waitGroup := sync.WaitGroup{}
+
+	for _, subtreeRoot := range subtreeRoots {
+		go func(chunk []byte) {
+			isValid := validateSubtree(chunk)
+			if !isValid {
+				// an invalid subtree has been found.
+				// logging, cleanup
+				return
+			} else {
+				waitGroup.Done()
+			}
+		}(subtreeRoot)
+	}
+
+	waitGroup.Wait()
+
+	// check merkle root
+	// check the solution meets the difficulty requirements
+	// check the block is valid by concensus rules.
+	// persist block
+	// inform block assembler that a new block has been found
+
 	return &emptypb.Empty{}, nil
+}
+
+func splitSubtreeRoots(subtreeRoots []byte) ([][]byte, error) {
+	if len(subtreeRoots) == 0 {
+		return nil, errors.New("empty subtreeRoots array")
+	}
+	if len(subtreeRoots)%32 != 0 {
+		return nil, errors.New("length of subtreeRoots must be a multiple of 32")
+	}
+	// Split the byte array into 32 byte chunks
+	chunks := make([][]byte, len(subtreeRoots)/32)
+	for i := 0; i < len(chunks); i++ {
+		chunks[i] = subtreeRoots[i*32 : (i+1)*32]
+	}
+
+	return chunks, nil
+}
+
+func validateSubtree(subtree []byte) bool {
+	// get subtree from store
+	// if not in store get it from the network
+	// validate the subtree
+	// is the txid in the store?
+	// no - get it from the network
+	// yes - is the txid blessed?
+	// does the merkle tree give the correct root?
+	// if all txs in tree are blessed, then bless the tree
+
+	return true
 }
