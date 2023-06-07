@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -48,7 +50,7 @@ func (g *GCS) Close(ctx context.Context) error {
 	return g.client.Close()
 }
 
-func (g *GCS) Set(ctx context.Context, key []byte, value []byte) error {
+func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Set").AddTime(start)
@@ -62,11 +64,27 @@ func (g *GCS) Set(ctx context.Context, key []byte, value []byte) error {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
+
+	// TODO handle options
+	// TTL on object is not supported in GCS
+
 	if err := wc.Close(); err != nil {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 
+	return nil
+}
+
+func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_gcs").NewStat("SetTTL").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "gcs:SetTTL")
+	defer traceSpan.Finish()
+
+	// TODO implement
 	return nil
 }
 

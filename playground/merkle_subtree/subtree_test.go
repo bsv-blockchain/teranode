@@ -51,7 +51,7 @@ func TestDifference(t *testing.T) {
 	ids, err := loadList("block.bin")
 	require.NoError(t, err)
 
-	nodeIds := NewGoSplitMutexMap(len(ids))
+	nodeIds := NewSwissMap(len(ids))
 	for _, id := range ids {
 		err = nodeIds.Put(id)
 		require.NoError(t, err)

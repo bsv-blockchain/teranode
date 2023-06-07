@@ -9,7 +9,6 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -98,31 +97,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, opts ...Options) (*UTXOStore, error) {
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("no utxostore setting found")
-	}
-
-	var s utxostore.UTXOStore
-	switch utxostoreURL.Path {
-	case "/splitbyhash":
-		logger.Infof("[UTXOStore] using splitbyhash memory store")
-		s = memory.NewSplitByHash(true)
-	case "/swiss":
-		logger.Infof("[UTXOStore] using swissmap memory store")
-		s = memory.NewSwissMap(true)
-	case "/xsyncmap":
-		logger.Infof("[UTXOStore] using xsyncmap memory store")
-		s = memory.NewXSyncMap(true)
-	default:
-		logger.Infof("[UTXOStore] using default memory store")
-		s = memory.New(true)
-	}
-
+func New(logger utils.Logger, s utxostore.UTXOStore, opts ...Options) (*UTXOStore, error) {
 	if len(opts) > 0 {
 		for _, opt := range opts {
 			opt(s)

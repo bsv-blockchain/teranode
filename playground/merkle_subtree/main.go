@@ -31,7 +31,7 @@ func main() {
 			txID := make([]byte, 32)
 			_, _ = rand.Read(txID)
 
-			if err = subTree.AddNode([32]byte(txID)); err != nil {
+			if err = subTree.AddNode([32]byte(txID), 111); err != nil {
 				panic(err)
 			}
 		}
@@ -92,7 +92,7 @@ func loadIds(treeSize int) (*SubTree, error) {
 		if err != nil {
 			return nil, err
 		}
-		_ = subTree.AddNode(*hash)
+		_ = subTree.AddNode(*hash, 111)
 	}
 
 	return subTree, nil

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"time"
 
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -70,7 +72,7 @@ func (m *Minio) Close(ctx context.Context) error {
 	return nil //m.client.Close()
 }
 
-func (m *Minio) Set(ctx context.Context, hash []byte, value []byte) error {
+func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...blob.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Set").AddTime(start)
@@ -80,11 +82,46 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte) error {
 
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
 	bufReader := bytes.NewReader(value)
-	contentType := "application/octet-stream"
-	_, err := m.client.PutObject(ctx, m.bucketName, objectName, bufReader, int64(len(value)), minio.PutObjectOptions{ContentType: contentType})
+	objectOptions := minio.PutObjectOptions{
+		ContentType: "application/octet-stream",
+	}
+
+	options := blob.NewSetOptions(opts...)
+	if options.TTL > 0 {
+		objectOptions.RetainUntilDate = time.Now().Add(options.TTL)
+	}
+
+	_, err := m.client.PutObject(ctx, m.bucketName, objectName, bufReader, int64(len(value)), objectOptions)
 	if err != nil {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set minio data: %w", err)
+	}
+
+	return nil
+}
+
+func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_minio").NewStat("SetTTL").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "minio:SetTTL")
+	defer traceSpan.Finish()
+
+	objectName := utils.ReverseAndHexEncodeSlice(hash)
+	objectOptions := minio.PutObjectRetentionOptions{
+		RetainUntilDate: nil,
+	}
+
+	if ttl > 0 {
+		retention := time.Now().Add(ttl)
+		objectOptions.RetainUntilDate = &retention
+	}
+
+	err := m.client.PutObjectRetention(ctx, m.bucketName, objectName, objectOptions)
+	if err != nil {
+		traceSpan.RecordError(err)
+		return fmt.Errorf("failed to set minio retention options: %w", err)
 	}
 
 	return nil

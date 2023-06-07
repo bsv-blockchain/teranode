@@ -5,13 +5,17 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
+
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 )
 
 type SubTree struct {
 	rootHash [32]byte
 	treeSize int
 	Height   int
+	Fees     uint64
 	Nodes    [][32]byte
+	store    blob.Store
 }
 
 // NewTree creates a new SubTree with a fixed height
@@ -39,13 +43,14 @@ func (st *SubTree) ReplaceRootNode(node [32]byte) [32]byte {
 	return st.RootHash()
 }
 
-func (st *SubTree) AddNode(node [32]byte) error {
+func (st *SubTree) AddNode(node [32]byte, fee uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subTree is full")
 	}
 
 	st.Nodes = append(st.Nodes, node)
 	st.rootHash = [32]byte{} // reset rootHash
+	st.Fees += fee
 
 	return nil
 }
@@ -155,4 +160,30 @@ func (st *SubTree) nextPowerOfTwo(n int) int {
 	// Figure out and return the next power of two.
 	exponent := uint(math.Log2(float64(n))) + 1
 	return 1 << exponent // 2^exponent
+}
+
+func (st *SubTree) Serialize() []byte {
+	// write rootHash
+
+	// write fees
+
+	// write number of nodes
+
+	// write nodes
+
+	return nil
+}
+
+func (st *SubTree) Load([]byte) error {
+	// read rootHash
+
+	// read fees
+
+	// read number of nodes
+
+	// read nodes
+
+	// calculate rootHash and compare with given rootHash
+
+	return nil
 }

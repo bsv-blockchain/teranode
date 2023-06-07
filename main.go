@@ -17,6 +17,8 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -221,7 +223,24 @@ func main() {
 			g.Go(func() (err error) {
 				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
 
-				utxoStore, err = utxo.New(gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel)))
+				var s utxostore.UTXOStore
+				switch utxostoreURL.Path {
+				case "/splitbyhash":
+					logger.Infof("[UTXOStore] using splitbyhash memory store")
+					s = memory.NewSplitByHash(true)
+				case "/swiss":
+					logger.Infof("[UTXOStore] using swissmap memory store")
+					s = memory.NewSwissMap(true)
+				case "/xsyncmap":
+					logger.Infof("[UTXOStore] using xsyncmap memory store")
+					s = memory.NewXSyncMap(true)
+				default:
+					logger.Infof("[UTXOStore] using default memory store")
+					s = memory.New(true)
+				}
+
+				utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
+				utxoStore, err = utxo.New(utxoLogger, s)
 				if err != nil {
 					panic(err)
 				}

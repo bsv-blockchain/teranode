@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,6 +29,7 @@ func TestResolve(t *testing.T) {
 					},
 				}},
 		),
+		logger: gocore.Log("k8sresolver", gocore.NewLogLevelFromString("PANIC")),
 	}
 
 	res, err := s.Resolve(context.Background(), "test", "0")
@@ -54,6 +56,7 @@ func TestWatch(t *testing.T) {
 					},
 				}},
 		),
+		logger: gocore.Log("k8sresolver", gocore.NewLogLevelFromString("PANIC")),
 	}
 
 	_, _, err := s.Watch(context.Background(), "test")
