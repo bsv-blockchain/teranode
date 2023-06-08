@@ -26,18 +26,6 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Build and push Docker image to AWS ECR
-      - name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
-          build-args: |
-            GITHUB_SHA=${{github.sha}}
-            GITHUB_REF=${{github.ref_name}}
-
       # Install and configure kubectl for AWS EKS
       - name: Install kubectl
         run: |
@@ -57,6 +45,18 @@ jobs:
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
           chmod u+x ./kustomize
           cp ./kustomize /usr/local/bin
+
+      # Build and push Docker image to AWS ECR
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+          build-args: |
+            GITHUB_SHA=${{github.sha}}
+            GITHUB_REF=${{github.ref_name}}
 
       # Deploy the Docker image to the GKE cluster
       - name: Build k8s files
