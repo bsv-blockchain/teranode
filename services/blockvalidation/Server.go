@@ -195,9 +195,9 @@ func validateSubtree(subtree []byte) bool {
 	return true
 }
 
-func (u *BlockValidation) validateBlock(ctx context.Context, block *model.Block) error {
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block) error {
 	// 1. Check that the block header hash is less than the target difficulty.
-	if err := u.checkPOW(ctx, block); err != nil {
+	if err := u.CheckPOW(ctx, block); err != nil {
 		return err
 	}
 
@@ -226,7 +226,7 @@ func (u *BlockValidation) validateBlock(ctx context.Context, block *model.Block)
 	// }
 
 	// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
-	if err := u.checkMerkleRoot(block); err != nil {
+	if err := u.CheckMerkleRoot(block); err != nil {
 		return err
 	}
 
@@ -244,7 +244,7 @@ func (u *BlockValidation) validateBlock(ctx context.Context, block *model.Block)
 	return nil
 }
 
-func (u *BlockValidation) checkPOW(ctx context.Context, block *model.Block) error {
+func (u *BlockValidation) CheckPOW(ctx context.Context, block *model.Block) error {
 	// TODO Check the nBits value is correct for this block
 	previousBlockHash, err := chainhash.NewHash(block.Header.HashPrevBlock)
 	if err == nil {
@@ -252,7 +252,7 @@ func (u *BlockValidation) checkPOW(ctx context.Context, block *model.Block) erro
 	}
 
 	// TODO - replace the following with a call to the blockchain service that gets the correct nBits value for the block
-	u.blockchainClient.GetBlock(ctx, previousBlockHash)
+	_, _ = u.blockchainClient.GetBlock(ctx, previousBlockHash)
 
 	// Check that the block header hash is less than the target difficulty.
 	ok := block.Header.Valid()
@@ -264,7 +264,7 @@ func (u *BlockValidation) checkPOW(ctx context.Context, block *model.Block) erro
 	return nil
 }
 
-func (u *BlockValidation) checkMerkleRoot(block *model.Block) error {
+func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	hashes := make([][32]byte, len(block.SubTrees))
 
 	for i, subtree := range block.SubTrees {

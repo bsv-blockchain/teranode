@@ -101,28 +101,28 @@ func TestGenerateData(t *testing.T) {
 // 	}
 // }
 
-func loadList(filename string) ([][32]byte, error) {
-	f, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+// func loadList(filename string) ([][32]byte, error) {
+// 	f, err := os.Open(filename)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	defer f.Close()
 
-	r := bufio.NewReader(f)
+// 	r := bufio.NewReader(f)
 
-	ids := make([][32]byte, 60_000_000)
-	// read 32 bytes at a time
-	var id [32]byte
-	for {
-		n, err := r.Read(id[:])
-		if err != nil || n != 32 {
-			break
-		}
-		ids = append(ids, id)
-	}
+// 	ids := make([][32]byte, 60_000_000)
+// 	// read 32 bytes at a time
+// 	var id [32]byte
+// 	for {
+// 		n, err := r.Read(id[:])
+// 		if err != nil || n != 32 {
+// 			break
+// 		}
+// 		ids = append(ids, id)
+// 	}
 
-	return ids, nil
-}
+// 	return ids, nil
+// }
 
 func generateTestSets() error {
 	f, err := os.Create("ids-20.txt")
@@ -147,8 +147,14 @@ func generateTestSets() error {
 
 		if i%(nrOfIds/1_000_000) == 0 {
 			_, err = w.WriteString(utils.ReverseAndHexEncodeHash([32]byte(txID)) + "\n")
+			if err != nil {
+				return err
+			}
 		}
 		_, err = w2.Write(txID)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

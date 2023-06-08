@@ -23,10 +23,10 @@ var (
 		"e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d",
 	}
 
-	expectedMerkleRoot                        = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
-	expectedMerkleRootWithCoinbasePlaceholder = "e9b915f49bde65e53f1ca83d0d7589d613362edb0ac0ceeff5b348fe111e8a0e"
-	prevBlockHashStr                          = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
-	bitsStr                                   = "1b04864c"
+	// expectedMerkleRootWithCoinbasePlaceholder = "e9b915f49bde65e53f1ca83d0d7589d613362edb0ac0ceeff5b348fe111e8a0e"
+	expectedMerkleRoot = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
+	prevBlockHashStr   = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
+	bitsStr            = "1b04864c"
 )
 
 func TestMerkleRoot(t *testing.T) {
@@ -88,6 +88,6 @@ func TestMerkleRoot(t *testing.T) {
 	blockValidationService, err := New(p2p.TestLogger{})
 	require.NoError(t, err)
 
-	t.Log(blockValidationService.checkMerkleRoot(block))
+	t.Log(blockValidationService.CheckMerkleRoot(block))
 
 }
