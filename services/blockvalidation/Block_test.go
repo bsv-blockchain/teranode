@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bc"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -24,13 +25,16 @@ var (
 	expectedMerkleRoot = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
 
 	expectedMerkleRootWithCoinbasePlaceholder = "e9b915f49bde65e53f1ca83d0d7589d613362edb0ac0ceeff5b348fe111e8a0e"
+	prevBlockHashStr                          = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
+	merkleRootStr                             = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
+	bitsStr                                   = "1b04864c"
 )
 
 func TestMerkleRoot(t *testing.T) {
 	subtrees := make([]*util.SubTree, 2)
 
-	subtrees[0] = &util.SubTree{}
-	subtrees[1] = &util.SubTree{}
+	subtrees[0] = util.NewTree(2)
+	subtrees[1] = util.NewTree(2)
 
 	subtrees[0].AddNode([32]byte{0x00}, 0)
 
@@ -50,7 +54,27 @@ func TestMerkleRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, coinbase, coinbaseTx.TxID())
 
+	prevBlockHash, err := chainhash.NewHashFromStr(prevBlockHashStr)
+	if err != nil {
+		t.Fail()
+	}
+	merkleRoot, err := chainhash.NewHashFromStr(merkleRootStr)
+	if err != nil {
+		t.Fail()
+	}
+	bits, err := chainhash.NewHashFromStr(bitsStr)
+	if err != nil {
+		t.Fail()
+	}
 	block := Block{
+		Header: &bc.BlockHeader{
+			Version:        1,
+			Time:           1293623863,
+			Nonce:          274148111,
+			HashPrevBlock:  prevBlockHash.CloneBytes(),
+			HashMerkleRoot: merkleRoot.CloneBytes(),
+			Bits:           bits.CloneBytes(),
+		},
 		SubTrees:   subtrees,
 		CoinbaseTx: coinbaseTx,
 	}

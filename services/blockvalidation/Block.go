@@ -168,7 +168,7 @@ func (b *Block) checkPOW(ctx context.Context) error {
 }
 
 func (b *Block) checkMerkleRoot() error {
-	hashes := make([][]byte, 0, len(b.SubTrees))
+	hashes := make([][]byte, len(b.SubTrees))
 
 	for i, subtree := range b.SubTrees {
 		if i == 0 {
