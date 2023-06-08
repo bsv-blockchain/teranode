@@ -6,12 +6,14 @@ import (
 	"errors"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
+	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*bc.Block, error) {
+func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*blockvalidation.Block, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -22,29 +24,34 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*bc.Bloc
 
 	q := `
 		SELECT
-		 b.hash
-		,b.prevhash
-		,b.merkleroot
-		//,b.height
-		,b.processed_at
-		//,b.orphanedyn
+	    ,b.version
+		,b.block_time
+		,b.n_bits
+	    ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.subtree_count
+		,b.subtrees
 		FROM blocks b
 		WHERE b.hash = $1
 	`
 
-	block := &bc.Block{
-		BlockHeader: &bc.BlockHeader{},
+	block := &blockvalidation.Block{
+		Header: &bc.BlockHeader{},
 	}
 
-	var processed_at sql.NullString
+	var subtreeCount uint64
+	var subtreeBytes []byte
 
 	if err := s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
-		&block.BlockHeader.HashPrevBlock,
-		&block.BlockHeader.HashPrevBlock,
-		&block.BlockHeader.HashMerkleRoot,
-		//&block.BlockHeader.Height,
-		&processed_at,
-		//&block.Orphaned,
+		&block.Header.Version,
+		&block.Header.Time,
+		&block.Header.Bits,
+		&block.Header.Nonce,
+		&block.Header.HashPrevBlock,
+		&block.Header.HashMerkleRoot,
+		&subtreeCount,
+		&subtreeBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrBlockNotFound
@@ -52,7 +59,11 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*bc.Bloc
 		return nil, err
 	}
 
-	//block.Processed = processed_at.Valid
+	block.SubTrees = make([]*util.SubTree, subtreeCount)
+	for i := uint64(0); i < subtreeCount; i++ {
+		// TODO - read subtree from store ???
+		block.SubTrees[i] = &util.SubTree{}
+	}
 
 	return block, nil
 }

@@ -129,27 +129,30 @@ func createPostgresSchema(db *sql.DB) error {
 	    ,hash           BYTEA NOT NULL
 	    ,previous_hash  BYTEA NOT NULL
 	    ,merkle_root    BYTEA NOT NULL
+        ,block_time     BIGINT NOT NULL
+        ,n_bits         BIGINT NOT NULL
+        ,nonce          BIGINT NOT NULL
 	    ,height         BIGINT NOT NULL
-	    ,processed_at   TIMESTAMPTZ
-		,tx_count       BIGINT NOT NULL
-		,subtrees       BYTEA NOT NULL
-        ,bits           BIGINT NOT NULL
         ,chain_work     BYTEA NOT NULL
-	    ,forked         BOOLEAN NOT NULL DEFAULT FALSE
+		,tx_count       BIGINT NOT NULL
+		,subtree_count  BIGINT NOT NULL
+        ,subtrees       BYTEA NOT NULL
+        ,coinbase_tx    BYTEA NOT NULL
+	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
         ,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create blocks table - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphanedyn = FALSE;`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
 
@@ -168,7 +171,7 @@ func createPostgresSchema(db *sql.DB) error {
 		  END;
 		$$ LANGUAGE SQL IMMUTABLE;
    `); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create block_transactions_map table - [%+v]", err)
 	}
 
@@ -177,9 +180,11 @@ func createPostgresSchema(db *sql.DB) error {
 		'SELECT reverse_bytes_iter(bytes, octet_length(bytes)-1, octet_length(bytes)/2, 0)'
 		LANGUAGE SQL IMMUTABLE;
 	`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create block_transactions_map table - [%+v]", err)
 	}
+
+	// TODO check for the genesis block and add it if missing
 
 	return nil
 }
@@ -189,31 +194,38 @@ func createSqliteSchema(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS blocks (
 		 id           INTEGER PRIMARY KEY AUTOINCREMENT
 		,parentId	  INTEGER REFERENCES blocks(id)
-		,hash         BLOB NOT NULL
-	    ,prevhash     BLOB NOT NULL
-		,merkleroot   BLOB NOT NULL
-	    ,height       BIGINT NOT NULL
-	    ,processed_at TEXT
-		,size		  BIGINT
-		,tx_count	  BIGINT
-		,subtrees     BLOB NOT NULL
-		,orphanedyn   BOOLEAN NOT NULL DEFAULT FALSE
-		,inserted_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ,version        INTEGER NOT NULL
+	    ,hash           BLOB NOT NULL
+	    ,previous_hash  BLOB NOT NULL
+	    ,merkle_root    BLOB NOT NULL
+        ,block_time		BIGINT NOT NULL
+        ,n_bits         BIGINT NOT NULL
+        ,nonce          BIGINT NOT NULL
+	    ,height         BIGINT NOT NULL
+        ,chain_work     BLOB NOT NULL
+		,tx_count       BIGINT NOT NULL
+		,subtree_count  BIGINT NOT NULL
+		,subtrees       BLOB NOT NULL
+        ,coinbase_tx    BLOB NOT NULL
+	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
+        ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create blocks table - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphanedyn = FALSE;`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
+
+	// TODO check for the genesis block and add it if missing
 
 	return nil
 }

@@ -13,7 +13,8 @@ service BlockchainAPI {
   rpc AddBlock (AddBlockRequest) returns (AddBlockResponse) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
   rpc ChainTip(google.protobuf.Empty) returns (ChainTipResponse) {}
-  rpc SubscribeChainTip (stream google.protobuf.Empty) returns (ChainTipResponse) {}
+  rpc GetMedianTime(GetMedianTimeRequest) returns (GetMedianTimeResponse) {}
+  rpc SubscribeChainTip (google.protobuf.Empty) returns (stream ChainTipResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -41,6 +42,16 @@ message GetBlockRequest {
 // swagger:model GetBlockResponse
 message GetBlockResponse {
   bytes block = 1;
+}
+
+// swagger:model GetMedianTimeRequest
+message GetMedianTimeRequest {
+  bytes blockHash = 1;
+}
+
+// swagger:model GetMedianTimeResponse
+message GetMedianTimeResponse {
+  uint64 medianTime = 1;
 }
 
 // swagger:model ChainTipResponse
