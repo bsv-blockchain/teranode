@@ -14,7 +14,7 @@ type SubTree struct {
 	treeSize int
 	Height   int
 	Fees     uint64
-	Nodes    [][32]byte
+	TxHashes [][32]byte
 	store    blob.Store
 }
 
@@ -22,46 +22,39 @@ type SubTree struct {
 func NewTree(height int) *SubTree {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &SubTree{
-		Nodes:    make([][32]byte, 0, treeSize),
+		TxHashes: make([][32]byte, 0, treeSize),
 		Height:   height,
 		treeSize: treeSize,
 	}
 }
 
+func (st *SubTree) Len() int {
+	return len(st.TxHashes)
+}
+
 func (st *SubTree) Size() int {
-	return cap(st.Nodes)
+	return cap(st.TxHashes)
 }
 
 func (st *SubTree) IsComplete() bool {
-	return len(st.Nodes) == cap(st.Nodes)
+	return len(st.TxHashes) == cap(st.TxHashes)
 }
 
 func (st *SubTree) ReplaceRootNode(node [32]byte) [32]byte {
-	st.Nodes[0] = node
+	st.TxHashes[0] = node
 	st.rootHash = [32]byte{} // reset rootHash
 
 	return st.RootHash()
 }
 
 func (st *SubTree) AddNode(node [32]byte, fee uint64) error {
-	if (len(st.Nodes) + 1) > st.treeSize {
+	if (len(st.TxHashes) + 1) > st.treeSize {
 		return fmt.Errorf("subTree is full")
 	}
 
-	st.Nodes = append(st.Nodes, node)
+	st.TxHashes = append(st.TxHashes, node)
 	st.rootHash = [32]byte{} // reset rootHash
 	st.Fees += fee
-
-	return nil
-}
-
-func (st *SubTree) AddNodes(nodes [][32]byte) error {
-	if (len(st.Nodes) + len(nodes)) > st.treeSize {
-		return fmt.Errorf("subTree is full")
-	}
-
-	st.Nodes = append(st.Nodes, nodes...)
-	st.rootHash = [32]byte{} // reset rootHash
 
 	return nil
 }
@@ -83,9 +76,9 @@ func (st *SubTree) RootHash() [32]byte {
 }
 
 func (st *SubTree) Difference(ids txMap) ([][32]byte, error) {
-	// return all the ids that are in st.Nodes, but not in ids
+	// return all the ids that are in st.TxHashes, but not in ids
 	diff := make([][32]byte, 0, 1_000)
-	for _, id := range st.Nodes {
+	for _, id := range st.TxHashes {
 		if !ids.Exists(id) {
 			diff = append(diff, id)
 		}
@@ -105,24 +98,24 @@ func (st *SubTree) Difference(ids txMap) ([][32]byte, error) {
 
 func (st *SubTree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {
 	// Calculate how many entries are re?n array of that size.
-	nextPoT := st.nextPowerOfTwo(len(st.Nodes))
+	nextPoT := st.nextPowerOfTwo(len(st.TxHashes))
 	arraySize := nextPoT*2 - 1
 	// we do not include the original nodes in the merkle tree
-	merkles := make([][32]byte, arraySize-len(st.Nodes))
+	merkles := make([][32]byte, arraySize-len(st.TxHashes))
 
 	// Start the array offset after the last transaction and adjusted to the
 	// next power of two.
-	offset := nextPoT - len(st.Nodes)
+	offset := nextPoT - len(st.TxHashes)
 	var hash [32]byte
 	var currentMerkle [32]byte
 	var currentMerkle1 [32]byte
 	for i := 0; i < arraySize-1; i += 2 {
-		if i < len(st.Nodes) {
-			currentMerkle = st.Nodes[i]
-			currentMerkle1 = st.Nodes[i+1]
+		if i < len(st.TxHashes) {
+			currentMerkle = st.TxHashes[i]
+			currentMerkle1 = st.TxHashes[i+1]
 		} else {
-			currentMerkle = merkles[i-len(st.Nodes)]
-			currentMerkle1 = merkles[i-len(st.Nodes)+1]
+			currentMerkle = merkles[i-len(st.TxHashes)]
+			currentMerkle1 = merkles[i-len(st.TxHashes)+1]
 		}
 
 		switch {

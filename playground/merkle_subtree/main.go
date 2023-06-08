@@ -36,14 +36,14 @@ func main() {
 			}
 		}
 		fmt.Printf("AddNode took: %v\n", time.Since(t))
-		fmt.Printf("subTree: %v\n", len(subTree.Nodes))
+		fmt.Printf("subTree: %v\n", len(subTree.TxHashes))
 		if err = storeIds(subTree, *treeSize); err != nil {
 			panic(err)
 		}
 	} else {
 		fmt.Printf("Loading subtree from file took: %v\n", time.Since(t))
 	}
-	fmt.Printf("subTree: %d (%d)\n", len(subTree.Nodes), subTree.Size())
+	fmt.Printf("subTree: %d (%d)\n", len(subTree.TxHashes), subTree.Size())
 
 	t = time.Now()
 	rootHash := subTree.RootHash()
@@ -66,7 +66,7 @@ func storeIds(subTree *SubTree, treeSize int) error {
 	}
 	defer f.Close()
 
-	for _, id := range subTree.Nodes {
+	for _, id := range subTree.TxHashes {
 		_, err = f.WriteString(utils.ReverseAndHexEncodeHash(id) + "\n")
 		if err != nil {
 			return err
