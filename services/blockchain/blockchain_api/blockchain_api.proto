@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+option go_package = ".;blockchain_api";
+
+package blockchain_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service BlockchainAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc AddBlock (AddBlockRequest) returns (AddBlockResponse) {}
+  rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc ChainTip(google.protobuf.Empty) returns (ChainTipResponse) {}
+  rpc SubscribeChainTip (stream google.protobuf.Empty) returns (ChainTipResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model AddBlockRequest
+message AddBlockRequest {
+  bytes block = 1;
+}
+
+// swagger:model AddBlockResponse
+message AddBlockResponse {
+  bool ok = 1;
+}
+
+// swagger:model GetBlockRequest
+message GetBlockRequest {
+  bytes hash = 1;
+}
+
+// swagger:model GetBlockResponse
+message GetBlockResponse {
+  bytes block = 1;
+}
+
+// swagger:model ChainTipResponse
+message ChainTipResponse {
+  bytes blockHeader = 1;
+  uint64 height = 2;
+}

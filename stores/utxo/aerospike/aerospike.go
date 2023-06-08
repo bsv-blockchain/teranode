@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -108,10 +110,24 @@ func New(url *url.URL) (*Store, error) {
 		}
 	}
 
-	hosts := []*aerospike.Host{
-		{Name: "10.138.0.29", Port: 3000}, // hardcoded for testing
-		{Name: "10.138.0.30", Port: 3000}, // hardcoded for testing
-		{Name: "10.138.0.31", Port: 3000}, // hardcoded for testing
+	// url can be either aerospike://host:port/namespace or aerospike://host:port,host:port/namespace
+	hosts := []*aerospike.Host{}
+	urlHosts := strings.Split(url.Host, ",")
+	for i, host := range urlHosts {
+		hostParts := strings.Split(host, ":")
+		if len(hostParts) == 2 {
+			hosts = append(hosts, &aerospike.Host{
+				Name: hostParts[0],
+				Port: int(strconv.ParseInt(hostParts[1], 10, 32)),
+			})
+		} else if len(hostParts) == 1 {
+			hosts = append(hosts, &aerospike.Host{
+				Name: hostParts[0],
+				Port: 3000,
+			})
+		} else {
+			return nil, fmt.Errorf("invalid host %v", host)
+		}
 	}
 
 	fmt.Printf("url %v policy %v\n", url, policy)
