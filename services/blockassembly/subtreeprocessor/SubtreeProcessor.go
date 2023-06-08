@@ -9,9 +9,17 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type txIDAndFee struct {
+	txID   chainhash.Hash
+	fee    uint64
+	waitCh chan struct{}
+}
+
 type SubtreeProcessor struct {
 	maxItemsPerFile   uint32
-	txChan            chan utils.Pair[chainhash.Hash, uint64]
+	txChan            chan *txIDAndFee
+	getFeesChan       chan chan uint64
+	getLengthChan     chan chan int
 	incomingBlockChan chan string
 	newSubTreeChan    chan utils.Pair[[]chainhash.Hash, uint64]
 	txIDs             []chainhash.Hash
@@ -24,7 +32,9 @@ func NewSubtreeProcessor() *SubtreeProcessor {
 
 	stp := &SubtreeProcessor{
 		maxItemsPerFile:   uint32(maxItemsPerFile),
-		txChan:            make(chan utils.Pair[chainhash.Hash, uint64], 100_000),
+		txChan:            make(chan *txIDAndFee, 100_000),
+		getFeesChan:       make(chan chan uint64),
+		getLengthChan:     make(chan chan int),
 		incomingBlockChan: make(chan string),
 		newSubTreeChan:    make(chan utils.Pair[[]chainhash.Hash, uint64], 5),
 	}
@@ -52,10 +62,21 @@ func NewSubtreeProcessor() *SubtreeProcessor {
 					stp.totalFees = 0
 				}
 
-				stp.txIDs = append(stp.txIDs, txReq.First)
-				stp.totalFees += txReq.Second
+				stp.txIDs = append(stp.txIDs, txReq.txID)
+				stp.totalFees += txReq.fee
 				stp.itemCount++
+
+				if txReq.waitCh != nil {
+					txReq.waitCh <- struct{}{}
+				}
+
+			case responseChan := <-stp.getLengthChan:
+				responseChan <- len(stp.txIDs)
+
+			case responseChan := <-stp.getFeesChan:
+				responseChan <- stp.totalFees
 			}
+
 		}
 	}()
 
@@ -63,8 +84,36 @@ func NewSubtreeProcessor() *SubtreeProcessor {
 }
 
 // Add adds a txid to a channel
-func (stp *SubtreeProcessor) Add(txid chainhash.Hash, fee uint64) {
-	stp.txChan <- utils.Pair[chainhash.Hash, uint64]{First: txid, Second: fee}
+func (stp *SubtreeProcessor) Add(txid chainhash.Hash, fee uint64, optionalWaitCh ...chan struct{}) {
+	if len(optionalWaitCh) > 0 {
+		stp.txChan <- &txIDAndFee{
+			txID:   txid,
+			fee:    fee,
+			waitCh: optionalWaitCh[0],
+		}
+		return
+	}
+
+	stp.txChan <- &txIDAndFee{
+		txID: txid,
+		fee:  fee,
+	}
+}
+
+func (stp *SubtreeProcessor) Length() <-chan int {
+	responseChan := make(chan int)
+
+	stp.getLengthChan <- responseChan
+
+	return responseChan
+}
+
+func (stp *SubtreeProcessor) TotalFees() <-chan uint64 {
+	responseChan := make(chan uint64)
+
+	stp.getFeesChan <- responseChan
+
+	return responseChan
 }
 
 // Report new height

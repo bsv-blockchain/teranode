@@ -3,7 +3,6 @@ package subtreeprocessor
 import (
 	"os"
 	"testing"
-	"time"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -25,21 +24,24 @@ func TestRotate(t *testing.T) {
 
 	stp := NewSubtreeProcessor()
 
+	waitCh := make(chan struct{})
+	defer close(waitCh)
+
 	// Add a placeholder for the coinbase
-	stp.Add(chainhash.Hash{}, 0)
+	stp.Add(chainhash.Hash{}, 0, waitCh)
+	<-waitCh
 
 	for _, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1)
+		stp.Add(*hash, 1, waitCh)
+		<-waitCh
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, 4, <-stp.Length())
 
-	require.Equal(t, 4, len(stp.txIDs))
-
-	assert.Equal(t, uint64(3), stp.totalFees)
+	assert.Equal(t, uint64(3), <-stp.TotalFees())
 
 	merkleRoot, err := stp.MerkleRoot(nil)
 	require.NoError(t, err)
@@ -50,9 +52,8 @@ func TestRotate(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	require.NoError(t, err)
 
-	stp.Add(*hash, 1)
+	stp.Add(*hash, 1, waitCh)
+	<-waitCh
 
-	time.Sleep(500 * time.Millisecond)
-
-	assert.Equal(t, 1, len(stp.txIDs))
+	assert.Equal(t, 1, <-stp.Length())
 }
