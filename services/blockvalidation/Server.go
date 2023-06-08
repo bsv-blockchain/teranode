@@ -1,14 +1,20 @@
 package blockvalidation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,8 +41,9 @@ func init() {
 // BlockValidation type carries the logger within it
 type BlockValidation struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger     utils.Logger
-	grpcServer *grpc.Server
+	logger           utils.Logger
+	grpcServer       *grpc.Server
+	blockchainClient *blockchain.Client
 }
 
 func Enabled() bool {
@@ -45,7 +52,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) *BlockValidation {
+func New(logger utils.Logger) (*BlockValidation, error) {
 	// utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	// if err != nil {
 	// 	panic(err)
@@ -59,12 +66,18 @@ func New(logger utils.Logger) *BlockValidation {
 	// 	panic(err)
 	// }
 
-	bVal := &BlockValidation{
-		// utxoStore: s,
-		logger: logger,
+	blockchainClient, err := blockchain.NewClient()
+	if err != nil {
+		return nil, err
 	}
 
-	return bVal
+	bVal := &BlockValidation{
+		// utxoStore: s,
+		logger:           logger,
+		blockchainClient: blockchainClient,
+	}
+
+	return bVal, nil
 }
 
 // Start function
@@ -146,7 +159,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 
 	// check merkle root
 	// check the solution meets the difficulty requirements
-	// check the block is valid by concensus rules.
+	// check the block is valid by consensus rules.
 	// persist block
 	// inform block assembler that a new block has been found
 
@@ -180,4 +193,109 @@ func validateSubtree(subtree []byte) bool {
 	// if all txs in tree are blessed, then bless the tree
 
 	return true
+}
+
+func (u *BlockValidation) validateBlock(ctx context.Context, block *model.Block) error {
+	// 1. Check that the block header hash is less than the target difficulty.
+	if err := u.checkPOW(ctx, block); err != nil {
+		return err
+	}
+
+	// 2. Check that the block timestamp is not more than two hours in the future.
+
+	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
+
+	// 4. Check that the coinbase transaction is valid (reward checked later).
+	// if err := b.checkValidCoinbase(); err != nil {
+	// 	return err
+	// }
+
+	// 5. Check that the coinbase transaction includes the correct block height.
+	// if err := b.checkCoinbaseHeight(); err != nil {
+	// 	return err
+	// }
+
+	// 6. Get and validate any missing subtrees.
+	// if err := b.getAndValidateSubTrees(ctx); err != nil {
+	// 	return err
+	// }
+
+	// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
+	// if err := b.checkCoinbasePlaceholder(); err != nil {
+	// 	return err
+	// }
+
+	// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
+	if err := u.checkMerkleRoot(block); err != nil {
+		return err
+	}
+
+	// 4. Check that the coinbase transaction includes the correct block height.
+
+	// 3. Check that each subtree is know and if not, get and process it.
+	// 4. Add up the fees of each subtree.
+
+	// 5. Check that the total fees of the block are less than or equal to the block reward.
+	// 4. Check that the coinbase transaction includes the correct block reward.
+
+	// 5. Check the there are no duplicate transactions in the block.
+	// 6. Check that all transactions are valid (or blessed)
+
+	return nil
+}
+
+func (u *BlockValidation) checkPOW(ctx context.Context, block *model.Block) error {
+	// TODO Check the nBits value is correct for this block
+	previousBlockHash, err := chainhash.NewHash(block.Header.HashPrevBlock)
+	if err == nil {
+		return err
+	}
+
+	// TODO - replace the following with a call to the blockchain service that gets the correct nBits value for the block
+	u.blockchainClient.GetBlock(ctx, previousBlockHash)
+
+	// Check that the block header hash is less than the target difficulty.
+	ok := block.Header.Valid()
+
+	if !ok {
+		return model.ErrInvalidPOW
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) checkMerkleRoot(block *model.Block) error {
+	hashes := make([][32]byte, len(block.SubTrees))
+
+	for i, subtree := range block.SubTrees {
+		if i == 0 {
+			// We need to inject the coinbase txid into the first position of the first subtree
+			var coinbaseHash [32]byte
+			copy(coinbaseHash[:], block.CoinbaseTx.TxIDBytes())
+			subtree.ReplaceRootNode(coinbaseHash)
+		}
+
+		hashes[i] = subtree.RootHash()
+	}
+
+	// Create a new subtree with the hashes of the subtrees
+	st := util.NewTree(1)
+	for _, hash := range hashes {
+		err := st.AddNode(hash, 1)
+		if err != nil {
+			return err
+		}
+	}
+
+	// merkleTree := p2p_bc.BuildMerkleTreeStore(hashes)
+
+	// calculatedMerkleRoot := merkleTree[len(merkleTree)-1]
+	calculatedMerkleRoot := st.RootHash()
+
+	if !bytes.Equal(calculatedMerkleRoot[:], block.Header.HashMerkleRoot) {
+		log.Printf("Expected %x, got %x", block.Header.HashMerkleRoot, calculatedMerkleRoot)
+		return errors.New("merkle root does not match")
+	}
+
+	return nil
 }

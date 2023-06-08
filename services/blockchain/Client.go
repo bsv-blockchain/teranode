@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
-	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -40,9 +40,14 @@ func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, err
 	return c.client.Health(ctx, &emptypb.Empty{})
 }
 
-func (c Client) AddBlock(ctx context.Context, block *blockvalidation.Block) error {
+func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return err
+	}
+
 	resp, err := c.client.AddBlock(ctx, &blockchain_api.AddBlockRequest{
-		Block: block.Bytes(),
+		Block: blockBytes,
 	})
 	if err != nil {
 		return err
@@ -55,7 +60,7 @@ func (c Client) AddBlock(ctx context.Context, block *blockvalidation.Block) erro
 	return nil
 }
 
-func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*blockvalidation.Block, error) {
+func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
 	resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
 	})
@@ -63,7 +68,8 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*block
 		return nil, err
 	}
 
-	return bc.NewBlockFromBytes(resp.Block)
+	// return bc.NewBlockFromBytes(resp.Block)
+	return model.NewBlockFromBytes(resp.Block)
 }
 
 func (c Client) ChainTip(ctx context.Context) (*bc.BlockHeader, uint64, error) {

@@ -9,3 +9,5 @@ data/
 .idea/
 keyfile.json
 bitcoin-data/
+ids-20.txt
+block.bin

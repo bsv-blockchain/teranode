@@ -7,9 +7,9 @@ import (
 	"net"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
-	"github.com/TAAL-GmbH/ubsv/stores/blockchain"
-	"github.com/libsv/go-bc"
+	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -38,7 +38,7 @@ func init() {
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan chan *blockchain_api.AddBlockRequest
-	store        blockchain.Store
+	store        blockchain_store.Store
 	logger       utils.Logger
 	grpcServer   *grpc.Server
 }
@@ -58,7 +58,7 @@ func New(logger utils.Logger) (*Blockchain, error) {
 		return nil, fmt.Errorf("no blockchain_store setting found")
 	}
 
-	s, err := blockchain.NewStore(logger, blockchainStoreURL)
+	s, err := blockchain_store.NewStore(logger, blockchainStoreURL)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*blockchain_api.AddBlockResponse, error) {
-	block, err := bc.NewBlockFromBytes(request.Block)
+	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, err
 	}
@@ -149,8 +149,13 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		return nil, err
 	}
 
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return nil, err
+	}
+
 	return &blockchain_api.GetBlockResponse{
-		Block: block.Bytes(),
+		Block: blockBytes,
 	}, nil
 }
 
