@@ -95,11 +95,10 @@ func New(url *url.URL) (*Store, error) {
 	policy := aerospike.NewClientPolicy()
 	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
-	policy.Timeout = 5000 // Set timeout to 5 seconds
-
-	policy.AuthMode = 2
 
 	if url.User != nil {
+		policy.AuthMode = 2
+
 		policy.User = url.User.Username()
 		var ok bool
 		policy.Password, ok = url.User.Password()
