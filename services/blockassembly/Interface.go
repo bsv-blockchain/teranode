@@ -7,5 +7,9 @@ import (
 )
 
 type Store interface {
-	Store(ctx context.Context, txid *chainhash.Hash, fees uint64, utxoHashes []*chainhash.Hash) (bool, error)
+	Store(ctx context.Context, txid *chainhash.Hash) (bool, error)
+}
+
+type SubTreeProcessor interface {
+	AddTxID(txid *chainhash.Hash) error
 }

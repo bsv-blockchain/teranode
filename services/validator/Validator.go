@@ -174,7 +174,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		fmt.Printf("error sending tx to txstatus: %v", err)
 	}
 
-	if _, err = v.blockAssembler.Store(ctx, txIDChainHash, fees, utxoHashes); err != nil {
+	if _, err = v.blockAssembler.Store(ctx, txIDChainHash); err != nil {
 		fmt.Printf("error sending tx to block assembler: %v", err)
 	}
 

@@ -17,6 +17,7 @@ require (
 	github.com/holiman/uint256 v1.2.2
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
+	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.1
 	github.com/libsv/go-p2p v0.1.1
 	github.com/minio/minio-go/v7 v7.0.52

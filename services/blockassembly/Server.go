@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
-	"github.com/TAAL-GmbH/ubsv/services/blockassembly/merkle"
+	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
+	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -38,14 +39,12 @@ func init() {
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
-	addTxChan         chan *blockassembly_api.AddTxRequest
-	newHeightChan     chan *blockassembly_api.NewChaintipAndHeightRequest
-	rotateChan        chan string
-	incomingBlockChan chan string
-	utxoStore         utxostore.UTXOStore
-	logger            utils.Logger
-	grpcServer        *grpc.Server
-	merkleContainer   *merkle.Container
+	logger utils.Logger
+
+	utxoStore        utxostore.UTXOStore
+	txStatusClient   txstatus.Client
+	subtreeProcessor *subtreeprocessor.SubtreeProcessor
+	grpcServer       *grpc.Server
 }
 
 func Enabled() bool {
@@ -68,23 +67,16 @@ func New(logger utils.Logger) *BlockAssembly {
 		panic(err)
 	}
 
-	// TODO - Get current chaintip and height and open merkle container for it.
-
-	chaintip := &chainhash.Hash{}
-
-	maxItemsPerFile, _ := gocore.Config().GetInt("merkle_items_per_subtree", 1_000_000)
-
-	merkleContainer, err := merkle.OpenForWriting(chaintip, 0, uint32(maxItemsPerFile))
+	txStatusClient, err := txstatus.NewClient(context.Background(), logger)
 	if err != nil {
 		panic(err)
 	}
 
 	return &BlockAssembly{
-		utxoStore:       s,
-		logger:          logger,
-		addTxChan:       make(chan *blockassembly_api.AddTxRequest, 100_000),
-		newHeightChan:   make(chan *blockassembly_api.NewChaintipAndHeightRequest),
-		merkleContainer: merkleContainer,
+		logger:           logger,
+		utxoStore:        s,
+		txStatusClient:   *txStatusClient,
+		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(),
 	}
 }
 
@@ -117,55 +109,6 @@ func (ba *BlockAssembly) Start() error {
 
 	ba.logger.Infof("GRPC server listening on %s", address)
 
-	go func() {
-		for {
-			select {
-			case <-ba.rotateChan:
-
-			case <-ba.incomingBlockChan:
-
-			case heightReq := <-ba.newHeightChan:
-				chaintip, err := chainhash.NewHash(heightReq.Chaintip)
-				if err != nil {
-					panic(err)
-				}
-
-				ba.merkleContainer.Close()
-
-				txidFile, err := merkle.OpenForWriting(chaintip, heightReq.Height, 4)
-				if err != nil {
-					panic(err)
-				}
-
-				ba.merkleContainer = txidFile
-
-			case txReq := <-ba.addTxChan:
-				prometheusBlockAssemblyAddTx.Inc()
-
-				hash, err := chainhash.NewHash(txReq.Txid)
-				if err != nil {
-					panic(err)
-				}
-
-				if err := ba.merkleContainer.AddTxID(hash, txReq.Fees); err != nil {
-					panic(err)
-				}
-
-				// Add all the utxo hashes to the utxostore
-				for _, hash := range txReq.UtxoHashes {
-					h, err := chainhash.NewHash(hash)
-					if err != nil {
-						panic(err)
-					}
-
-					if resp, err := ba.utxoStore.Store(context.Background(), h); err != nil {
-						panic(fmt.Errorf("error storing utxo (%v): %w", resp, err))
-					}
-				}
-			}
-		}
-	}()
-
 	if err = ba.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}
@@ -187,16 +130,59 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockasse
 	}, nil
 }
 
-func (ba *BlockAssembly) NewChaintipAndHeight(ctx context.Context, req *blockassembly_api.NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
-	ba.newHeightChan <- req
-
-	return &emptypb.Empty{}, nil
-}
+// func (ba *BlockAssembly) NewChaintipAndHeight(ctx context.Context, req *blockassembly_api.NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
+// 	return &emptypb.Empty{}, nil
+// }
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
-	ba.addTxChan <- req
+	// Look up the new utxos for this txid, add them to the utxostore, and add the tx to the subtree builder...
+	txid, err := chainhash.NewHash(req.Txid)
+	if err != nil {
+		return nil, err
+	}
+
+	txMetadata, err := ba.txStatusClient.Get(ctx, txid)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add all the utxo hashes to the utxostore
+	for _, hash := range txMetadata.UtxoHashes {
+		if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
+			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
+		}
+	}
+
+	ba.subtreeProcessor.Add(*txid, txMetadata.Fee)
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
 	}, nil
 }
+
+// func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
+
+// 	// TODO - Get current chaintip and height and open merkle container for it.
+// 	chaintip := &chainhash.Hash{}
+// 	height := uint32(0)
+// 	previousHash := &chainhash.Hash{}
+
+// 	// Get the list of completed containers for the current chaintip and height...
+// 	subTrees, err := merkle.GetContainersForCandidate(chaintip, height)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+
+// 	return &blockassembly_api.GetMiningCandidateResponse{
+// 		Id:             fmt.Sprintf("%d-%d", height, time.Now().UnixNano()),
+// 		PreviousHash:   previousHash.CloneBytes(),
+// 		CoinbaseValue:  0, // TODO ba.Fees,
+// 		Version:        1,
+// 		NBits:          uint32(0x1d00ffff),
+// 		Height:         uint32(height),
+// 		Time:           uint32(time.Now().Unix()),
+// 		NumTx:          uint64(0),
+// 		MerkleProof:    []string{},
+// 		MerkleSubtrees: subTrees,
+// 	}, nil
+// }

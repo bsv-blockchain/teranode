@@ -12,6 +12,8 @@ service BlockAssemblyAPI {
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc NewChaintipAndHeight(NewChaintipAndHeightRequest) returns (google.protobuf.Empty) {}
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
+  // rpc GetMiningCandidate (google.protobuf.Empty) returns (GetMiningCandidateResponse) {}
+  // rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -27,14 +29,25 @@ message NewChaintipAndHeightRequest {
   uint32 height = 2;
 }
 
-// swagger:model StoreRequest
+// swagger:model AddTxRequest
 message AddTxRequest {
   bytes txid = 1;
-  uint64 fees = 2;
-  repeated bytes utxoHashes = 3;
 }
 
-// swagger:model StoreResponse
+// swagger:model AddTxResponse
 message AddTxResponse {
   bool ok = 1;
 }
+
+// message GetMiningCandidateResponse {
+//   string id = 1;
+//   bytes previous_hash = 2;
+//   uint64 coinbase_value = 3;
+//   uint32 version = 4;
+//   uint32 nBits = 5;
+//   uint32 time = 6;
+//   uint32 height = 7;
+//   uint64 num_tx = 8;
+//   repeated string merkle_proof = 10;
+//   repeated bytes merkle_subtrees = 11;
+// }
