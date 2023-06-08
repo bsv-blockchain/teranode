@@ -1,4 +1,4 @@
-name: deploy-to-gke
+name: deploy-to-eks
 on:
   push:
     branches:
@@ -9,38 +9,46 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      # Setup gcloud CLI
-      - id: auth
-        uses: google-github-actions/auth@v1
-        with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
 
-      # setup docker build tools
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1  # Replace with your desired AWS region
+
+      # Setup Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Authorize Docker push
-        run: gcloud auth configure-docker
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
 
-      # authenticate to k8s cluster using private ip
-      - name: 'get-gke-credentials'
-        uses: 'google-github-actions/get-gke-credentials@v1'
-        with:
-          cluster_name: ubsv-playground
-          location: 'europe-north1'
-          project_id: ubsv-383015  # Deploy to GKE using kubectl
-
-      # build and push docker image
+      # Build and push Docker image to AWS ECR
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: eu.gcr.io/ubsv-383015/ubsv-go:${{github.sha}}
+          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
+
+      # Install and configure kubectl for AWS EKS
+      - name: Install kubectl
+        run: |
+          # Download kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Configure kubeconfig
+        run: |
+          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
 
       # install kustomize for deployment
       - name: Install Kustomize
@@ -56,11 +64,12 @@ jobs:
           # Setting Image
           cd ./deploy/k8s/deployments
           echo "Setting image"
-          kustomize edit set image eu.gcr.io/PROJECT/IMAGE:TAG=eu.gcr.io/ubsv-383015/ubsv-go:$GITHUB_SHA
+          kustomize edit set image 434394763103.dkr.ecr.eu-north-1.amazonaws.com/IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
           kustomize build . | kubectl apply -f -
+
       - name: Validate Deployment Healthy
         run: |-
           # Apply latest deployment configuration changes
@@ -73,7 +82,7 @@ jobs:
           
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-              
+          
               # Run kubectl commands
               kubectl rollout status -f "$file"
           done
@@ -84,7 +93,7 @@ jobs:
           for file in *.yaml; do     # Loop over all files in the directory
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-              
+          
               # Run kubectl commands
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
