@@ -1,0 +1,60 @@
+package blockvalidation
+
+import (
+	"testing"
+
+	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+var (
+	coinbase = "8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"
+
+	coinbaseStr = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000"
+
+	txIds []string = []string{
+		"fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4",
+		"6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4",
+		"e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d",
+	}
+
+	expectedMerkleRoot = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
+
+	expectedMerkleRootWithCoinbasePlaceholder = "e9b915f49bde65e53f1ca83d0d7589d613362edb0ac0ceeff5b348fe111e8a0e"
+)
+
+func TestMerkleRoot(t *testing.T) {
+	subtrees := make([]*util.SubTree, 2)
+
+	subtrees[0] = &util.SubTree{}
+	subtrees[1] = &util.SubTree{}
+
+	subtrees[0].AddNode([32]byte{0x00}, 0)
+
+	hash1, err := chainhash.NewHashFromStr(txIds[0])
+	require.NoError(t, err)
+	subtrees[0].AddNode(*hash1, 1)
+
+	hash2, err := chainhash.NewHashFromStr(txIds[1])
+	require.NoError(t, err)
+	subtrees[1].AddNode(*hash2, 1)
+
+	hash3, err := chainhash.NewHashFromStr(txIds[2])
+	require.NoError(t, err)
+	subtrees[1].AddNode(*hash3, 1)
+
+	coinbaseTx, err := bt.NewTxFromString(coinbaseStr)
+	require.NoError(t, err)
+	assert.Equal(t, coinbase, coinbaseTx.TxID())
+
+	block := Block{
+		SubTrees:   subtrees,
+		CoinbaseTx: coinbaseTx,
+	}
+
+	t.Log(block.checkMerkleRoot())
+
+}
