@@ -155,6 +155,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 	ba.subtreeProcessor.Add(*txid, txMetadata.Fee)
 
+	prometheusBlockAssemblyAddTx.Inc()
+
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
 	}, nil

@@ -40,6 +40,8 @@ func benchmark(b *testing.B, db txstatus.Store) {
 		for pb.Next() {
 			buf := make([]byte, 32)
 			_, err := rand.Read(buf)
+			require.NoError(b, err)
+
 			bHash, _ := chainhash.NewHash(buf)
 
 			err = db.Create(ctx, bHash, 100, nil, nil)

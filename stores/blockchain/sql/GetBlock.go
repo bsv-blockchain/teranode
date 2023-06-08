@@ -6,14 +6,14 @@ import (
 	"errors"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
-	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*blockvalidation.Block, error) {
+func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -36,7 +36,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*blockva
 		WHERE b.hash = $1
 	`
 
-	block := &blockvalidation.Block{
+	block := &model.Block{
 		Header: &bc.BlockHeader{},
 	}
 
