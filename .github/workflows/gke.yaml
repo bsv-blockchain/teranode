@@ -34,10 +34,6 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
-      - name: Configure kubeconfig
-        run: |
-          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
-
       # install kustomize for deployment
       - name: Install Kustomize
         run: |-
@@ -45,6 +41,10 @@ jobs:
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
           chmod u+x ./kustomize
           cp ./kustomize /usr/local/bin
+
+      - name: Configure kubeconfig
+        run: |
+          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
 
       # Build and push Docker image to AWS ECR
       - name: Build and push
