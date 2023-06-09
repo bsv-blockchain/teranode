@@ -42,10 +42,6 @@ jobs:
           chmod u+x ./kustomize
           cp ./kustomize /usr/local/bin
 
-      - name: Configure kubeconfig
-        run: |
-          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
-
       # Build and push Docker image to AWS ECR
       - name: Build and push
         uses: docker/build-push-action@v4
@@ -61,6 +57,8 @@ jobs:
       # Deploy the Docker image to the GKE cluster
       - name: Build k8s files
         run: |-
+          # auth 
+          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
           # Setting Image
           cd ./deploy/k8s/deployments
           echo "Setting image"
