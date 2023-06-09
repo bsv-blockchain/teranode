@@ -30,9 +30,10 @@ jobs:
       - name: Install kubectl
         run: |
           # Download kubectl
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
+          snap install kubectl --classic
+          kubectl version --client
+          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1
+          kubectl cluster-info
 
       # install kustomize for deployment
       - name: Install Kustomize
@@ -50,6 +51,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
@@ -57,8 +60,7 @@ jobs:
       # Deploy the Docker image to the GKE cluster
       - name: Build k8s files
         run: |-
-          # auth 
-          aws eks --region eu-north-1 update-kubeconfig --name aws-ubsv-playground
+          
           # Setting Image
           cd ./deploy/k8s/deployments
           echo "Setting image"
