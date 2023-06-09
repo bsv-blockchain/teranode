@@ -30,7 +30,7 @@ jobs:
       - name: Install kubectl
         run: |
           # Download kubectl
-          snap install kubectl --classic
+          sudo snap install kubectl --classic
           kubectl version --client
           aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1
           kubectl cluster-info
