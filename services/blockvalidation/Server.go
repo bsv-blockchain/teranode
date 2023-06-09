@@ -14,6 +14,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -271,7 +272,7 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
 			var coinbaseHash [32]byte
-			copy(coinbaseHash[:], block.CoinbaseTx.TxIDBytes())
+			copy(coinbaseHash[:], bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()))
 			subtree.ReplaceRootNode(coinbaseHash)
 		}
 
@@ -279,7 +280,7 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	}
 
 	// Create a new subtree with the hashes of the subtrees
-	st := util.NewTree(1)
+	st := util.NewTree(1)xxx
 	for _, hash := range hashes {
 		err := st.AddNode(hash, 1)
 		if err != nil {
@@ -287,7 +288,7 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 		}
 	}
 
-	// merkleTree := p2p_bc.BuildMerkleTreeStore(hashes)
+	// merkleTree2 := bc.BuildMerkleTreeStore(hashes)
 
 	// calculatedMerkleRoot := merkleTree[len(merkleTree)-1]
 	calculatedMerkleRoot := st.RootHash()

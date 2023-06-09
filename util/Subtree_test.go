@@ -3,6 +3,7 @@ package util
 import (
 	"bufio"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"testing"
 
@@ -56,6 +57,24 @@ func TestRootHashSimon(t *testing.T) {
 	})
 	rootHash := st.RootHash()
 	assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", utils.ReverseAndHexEncodeHash(rootHash))
+}
+
+func TestTwoTransactions(t *testing.T) {
+	st := NewTree(1)
+	if st.Size() != 2 {
+		t.Errorf("expected size to be 4, got %d", st.Size())
+	}
+
+	hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
+	hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
+
+	_ = st.AddNodes([][32]byte{
+		*hash1,
+		*hash2,
+	})
+
+	rootHash := st.RootHash()
+	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", utils.ReverseAndHexEncodeHash(rootHash))
 }
 
 // func TestDifference(t *testing.T) {
@@ -158,4 +177,18 @@ func generateTestSets() error {
 	}
 
 	return nil
+}
+
+func TestIsPowerOf2(t *testing.T) {
+	// Testing the function
+	numbers := []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1048576, 70368744177664}
+	for _, num := range numbers {
+		assert.True(t, isPowerOfTwo(num), fmt.Sprintf("%d should be a power of 2", num))
+	}
+
+	numbers = []int{-1, 0, 41, 13}
+	for _, num := range numbers {
+		assert.False(t, isPowerOfTwo(num), fmt.Sprintf("%d should be a power of 2", num))
+	}
+
 }
