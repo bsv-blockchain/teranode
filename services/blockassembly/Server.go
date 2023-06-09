@@ -12,6 +12,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -72,12 +73,26 @@ func New(logger utils.Logger) *BlockAssembly {
 		panic(err)
 	}
 
-	return &BlockAssembly{
+	newSubTreeChan := make(chan *util.SubTree)
+
+	ba := &BlockAssembly{
 		logger:           logger,
 		utxoStore:        s,
 		txStatusClient:   *txStatusClient,
-		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(),
+		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubTreeChan),
 	}
+
+	go func() {
+		for {
+			<-newSubTreeChan
+			// merkleRoot := stp.currentSubTree.ReplaceRootNode(*coinbaseHash)
+			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
+
+			logger.Infof("Received new subTree notification")
+		}
+	}()
+
+	return ba
 }
 
 // Start function
