@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	coinbaseStr = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000"
+	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000")
 
 	txIds []string = []string{
 		"8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87", // Coinbase
@@ -23,11 +23,68 @@ var (
 		"e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d",
 	}
 
-	// expectedMerkleRootWithCoinbasePlaceholder = "e9b915f49bde65e53f1ca83d0d7589d613362edb0ac0ceeff5b348fe111e8a0e"
-	expectedMerkleRoot = "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766"
-	prevBlockHashStr   = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
-	bitsStr            = "1b04864c"
+	merkleRoot, _ = chainhash.NewHashFromStr("f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766")
+
+	prevBlockHashStr = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
+	bitsStr          = "1b04864c"
 )
+
+func TestOneTransaction(t *testing.T) {
+	subtrees := make([]*util.SubTree, 1)
+
+	subtrees[0] = util.NewTree(1)
+
+	var empty [32]byte
+	err := subtrees[0].AddNode(empty, 0)
+	require.NoError(t, err)
+
+	blockValidationService, err := New(p2p.TestLogger{})
+	require.NoError(t, err)
+
+	block := &model.Block{
+		Header: &bc.BlockHeader{
+			HashMerkleRoot: bt.ReverseBytes(coinbaseTx.TxIDBytes()),
+		},
+		SubTrees:   subtrees,
+		CoinbaseTx: coinbaseTx,
+	}
+
+	err = blockValidationService.CheckMerkleRoot(block)
+	assert.NoError(t, err)
+}
+
+func TestTwoTransactions(t *testing.T) {
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff07044c86041b0147ffffffff0100f2052a01000000434104ad3b4c6ee28cb0c438c87b4efe1c36e1e54c10efc690f24c2c02446def863c50e9bf482647727b415aa81b45d0f7aa42c2cb445e4d08f18b49c027b58b6b4041ac00000000")
+	coinbaseTxID, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
+	txid1, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
+	expectedMerkleRoot, _ := chainhash.NewHashFromStr("7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5")
+
+	assert.Equal(t, coinbaseTxID.String(), coinbaseTx.TxID())
+
+	subtrees := make([]*util.SubTree, 1)
+	subtrees[0] = util.NewTree(1)
+
+	var empty [32]byte
+	err := subtrees[0].AddNode(empty, 0)
+	require.NoError(t, err)
+
+	err = subtrees[0].AddNode([32]byte(txid1.CloneBytes()), 0)
+	require.NoError(t, err)
+
+	blockValidationService, err := New(p2p.TestLogger{})
+	require.NoError(t, err)
+
+	block := &model.Block{
+		Header: &bc.BlockHeader{
+			HashMerkleRoot: expectedMerkleRoot.CloneBytes(),
+		},
+		SubTrees:   subtrees,
+		CoinbaseTx: coinbaseTx,
+	}
+
+	err = blockValidationService.CheckMerkleRoot(block)
+	assert.NoError(t, err)
+}
 
 func TestMerkleRoot(t *testing.T) {
 	subtrees := make([]*util.SubTree, 2)
@@ -54,8 +111,6 @@ func TestMerkleRoot(t *testing.T) {
 	err = subtrees[1].AddNode(*hash3, 1)
 	require.NoError(t, err)
 
-	coinbaseTx, err := bt.NewTxFromString(coinbaseStr)
-	require.NoError(t, err)
 	assert.Equal(t, txIds[0], coinbaseTx.TxID())
 
 	prevBlockHash, err := chainhash.NewHashFromStr(prevBlockHashStr)
@@ -63,10 +118,6 @@ func TestMerkleRoot(t *testing.T) {
 		t.Fail()
 	}
 
-	merkleRoot, err := chainhash.NewHashFromStr(expectedMerkleRoot)
-	if err != nil {
-		t.Fail()
-	}
 	bits, err := chainhash.NewHashFromStr(bitsStr)
 	if err != nil {
 		t.Fail()
@@ -88,6 +139,6 @@ func TestMerkleRoot(t *testing.T) {
 	blockValidationService, err := New(p2p.TestLogger{})
 	require.NoError(t, err)
 
-	t.Log(blockValidationService.CheckMerkleRoot(block))
-
+	err = blockValidationService.CheckMerkleRoot(block)
+	assert.NoError(t, err)
 }

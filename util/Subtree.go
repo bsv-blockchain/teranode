@@ -28,6 +28,15 @@ func NewTree(height int) *SubTree {
 	}
 }
 
+func NewTreeByLeafCount(numberOfLeaves int) *SubTree {
+	if !isPowerOfTwo(numberOfLeaves) {
+		panic("numberOfLeaves must be a power of two")
+	}
+
+	height := math.Ceil(math.Log2(float64(numberOfLeaves)))
+	return NewTree(int(height))
+}
+
 func (st *SubTree) Size() int {
 	return cap(st.Nodes)
 }
@@ -110,6 +119,12 @@ func (st *SubTree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {
 	// we do not include the original nodes in the merkle tree
 	merkles := make([][32]byte, arraySize-len(st.Nodes))
 
+	if arraySize == 1 {
+		// Handle this Bitcoin exception that the merkle root is the same as the transaction hash if there
+		// is only one transaction.
+		return st.Nodes, nil
+	}
+
 	// Start the array offset after the last transaction and adjusted to the
 	// next power of two.
 	offset := nextPoT - len(st.Nodes)
@@ -146,6 +161,13 @@ func (st *SubTree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {
 	}
 
 	return merkles, nil
+}
+
+func isPowerOfTwo(num int) bool {
+	if num <= 0 {
+		return false
+	}
+	return (num & (num - 1)) == 0
 }
 
 // nextPowerOfTwo returns the next highest power of two from a given number if
