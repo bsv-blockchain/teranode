@@ -32,7 +32,7 @@ jobs:
           # Download kubectl
           sudo snap install kubectl --classic
           kubectl version --client
-          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1 --role-arn
+          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1 
           kubectl cluster-info
 
       # install kustomize for deployment
