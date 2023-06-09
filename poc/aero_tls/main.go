@@ -4,44 +4,18 @@ import (
 	"fmt"
 
 	"github.com/aerospike/aerospike-client-go/v6"
-	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 )
 
 func main() {
 	// u := "aerospike://read-write:i23nqwreak@aerospike.aerospike.svc.cluster.local:3000/test"
 	// u := "aerospike://localhost:3000/test"
 
-	asl.Logger.SetLevel(asl.DEBUG)
-
-	// aUrl, err := url.Parse(u)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// port, err := strconv.Atoi(aUrl.Port())
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	policy := aerospike.NewClientPolicy()
-	// policy.User = aUrl.User.Username()
-	// policy.Password, _ = aUrl.User.Password()
-	// policy.Timeout = 10000 // Set timeout to 5 seconds
-
-	// policy.AuthMode = aerospike.AuthModeExternal
-
-	// policy.TlsConfig = &tls.Config{
-	// 	InsecureSkipVerify: true,
-	// }
-
-	// hosts := []*aerospike.Host{
-	// 	{Name: aUrl.Hostname(), Port: port}, // Add your cluster hosts and ports here
-	// }
 
 	hosts := []*aerospike.Host{
-		{Name: "192.168.13.144", Port: 3000}, // hardcoded for testing
-		{Name: "192.168.84.1", Port: 3000}, // hardcoded for testing
-		{Name: "192.168.34.151", Port: 3000}, // hardcoded for testing
+		{Name: "192.168.86.103", Port: 3000}, // hardcoded for testing
+		{Name: "192192.168.9.0", Port: 3000}, // hardcoded for testing
+		{Name: "192.168.55.153", Port: 3000}, // hardcoded for testing
 	}
 
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
