@@ -85,6 +85,10 @@ func main() {
 		*startSeeder = gocore.Config().GetBool("startSeeder", false)
 	}
 
+	if !*startTxStatusStore {
+		*startTxStatusStore = gocore.Config().GetBool("startTxStatusStore", false)
+	}
+
 	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly && !*startSeeder) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
