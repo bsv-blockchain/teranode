@@ -113,12 +113,17 @@ func New(url *url.URL) (*Store, error) {
 	// url can be either aerospike://host:port/namespace or aerospike://host:port,host:port/namespace
 	hosts := []*aerospike.Host{}
 	urlHosts := strings.Split(url.Host, ",")
-	for i, host := range urlHosts {
+	for _, host := range urlHosts {
 		hostParts := strings.Split(host, ":")
 		if len(hostParts) == 2 {
+			port, err := strconv.ParseInt(hostParts[1], 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %v", hostParts[1])
+			}
+
 			hosts = append(hosts, &aerospike.Host{
 				Name: hostParts[0],
-				Port: int(strconv.ParseInt(hostParts[1], 10, 32)),
+				Port: int(port),
 			})
 		} else if len(hostParts) == 1 {
 			hosts = append(hosts, &aerospike.Host{
