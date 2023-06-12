@@ -59,10 +59,10 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, err
 	}
 
-	block.SubTrees = make([]*util.SubTree, subtreeCount)
+	block.Subtrees = make([]*util.Subtree, subtreeCount)
 	for i := uint64(0); i < subtreeCount; i++ {
 		// TODO - read subtree from store ???
-		block.SubTrees[i] = &util.SubTree{}
+		block.Subtrees[i] = &util.Subtree{}
 	}
 
 	return block, nil

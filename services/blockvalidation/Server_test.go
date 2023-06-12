@@ -30,7 +30,7 @@ var (
 )
 
 func TestOneTransaction(t *testing.T) {
-	subtrees := make([]*util.SubTree, 1)
+	subtrees := make([]*util.Subtree, 1)
 
 	subtrees[0] = util.NewTree(1)
 
@@ -45,7 +45,7 @@ func TestOneTransaction(t *testing.T) {
 		Header: &bc.BlockHeader{
 			HashMerkleRoot: bt.ReverseBytes(coinbaseTx.TxIDBytes()),
 		},
-		SubTrees:   subtrees,
+		Subtrees:   subtrees,
 		CoinbaseTx: coinbaseTx,
 	}
 
@@ -61,7 +61,7 @@ func TestTwoTransactions(t *testing.T) {
 
 	assert.Equal(t, coinbaseTxID.String(), coinbaseTx.TxID())
 
-	subtrees := make([]*util.SubTree, 1)
+	subtrees := make([]*util.Subtree, 1)
 	subtrees[0] = util.NewTree(1)
 
 	var empty [32]byte
@@ -78,7 +78,7 @@ func TestTwoTransactions(t *testing.T) {
 		Header: &bc.BlockHeader{
 			HashMerkleRoot: expectedMerkleRoot.CloneBytes(),
 		},
-		SubTrees:   subtrees,
+		Subtrees:   subtrees,
 		CoinbaseTx: coinbaseTx,
 	}
 
@@ -87,7 +87,7 @@ func TestTwoTransactions(t *testing.T) {
 }
 
 func TestMerkleRoot(t *testing.T) {
-	subtrees := make([]*util.SubTree, 2)
+	subtrees := make([]*util.Subtree, 2)
 
 	subtrees[0] = util.NewTreeByLeafCount(2) // height = 1
 	subtrees[1] = util.NewTreeByLeafCount(2) // height = 1
@@ -131,7 +131,7 @@ func TestMerkleRoot(t *testing.T) {
 			HashMerkleRoot: merkleRoot.CloneBytes(),
 			Bits:           bits.CloneBytes(),
 		},
-		SubTrees:   subtrees,
+		Subtrees:   subtrees,
 		CoinbaseTx: coinbaseTx,
 	}
 

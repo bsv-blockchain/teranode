@@ -4,30 +4,28 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
-
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
 )
 
-type SubTree struct {
+type Subtree struct {
 	rootHash [32]byte
 	treeSize int
 	Height   int
 	Fees     uint64
 	Nodes    [][32]byte
-	store    blob.Store
+	// store    blob.Store
 }
 
-// NewTree creates a new SubTree with a fixed height
-func NewTree(height int) *SubTree {
+// NewTree creates a new Subtree with a fixed height
+func NewTree(height int) *Subtree {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
-	return &SubTree{
+	return &Subtree{
 		Nodes:    make([][32]byte, 0, treeSize),
 		Height:   height,
 		treeSize: treeSize,
 	}
 }
 
-func NewTreeByLeafCount(maxNumberOfLeaves int) *SubTree {
+func NewTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
 	if !isPowerOfTwo(maxNumberOfLeaves) {
 		panic("numberOfLeaves must be a power of two")
 	}
@@ -36,28 +34,28 @@ func NewTreeByLeafCount(maxNumberOfLeaves int) *SubTree {
 	return NewTree(int(height))
 }
 
-func (st *SubTree) Size() int {
+func (st *Subtree) Size() int {
 	return cap(st.Nodes)
 }
 
-func (st *SubTree) Length() int {
+func (st *Subtree) Length() int {
 	return len(st.Nodes)
 }
 
-func (st *SubTree) IsComplete() bool {
+func (st *Subtree) IsComplete() bool {
 	return len(st.Nodes) == cap(st.Nodes)
 }
 
-func (st *SubTree) ReplaceRootNode(node [32]byte) [32]byte {
+func (st *Subtree) ReplaceRootNode(node [32]byte) [32]byte {
 	st.Nodes[0] = node
 	st.rootHash = [32]byte{} // reset rootHash
 
 	return st.RootHash()
 }
 
-func (st *SubTree) AddNode(node [32]byte, fee uint64) error {
+func (st *Subtree) AddNode(node [32]byte, fee uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
-		return fmt.Errorf("subTree is full")
+		return fmt.Errorf("subtree is full")
 	}
 
 	st.Nodes = append(st.Nodes, node)
@@ -67,9 +65,9 @@ func (st *SubTree) AddNode(node [32]byte, fee uint64) error {
 	return nil
 }
 
-func (st *SubTree) AddNodes(nodes [][32]byte) error {
+func (st *Subtree) AddNodes(nodes [][32]byte) error {
 	if (len(st.Nodes) + len(nodes)) > st.treeSize {
-		return fmt.Errorf("subTree is full")
+		return fmt.Errorf("subtree is full")
 	}
 
 	st.Nodes = append(st.Nodes, nodes...)
@@ -78,7 +76,7 @@ func (st *SubTree) AddNodes(nodes [][32]byte) error {
 	return nil
 }
 
-func (st *SubTree) RootHash() [32]byte {
+func (st *Subtree) RootHash() [32]byte {
 	if st.rootHash != [32]byte{} {
 		return st.rootHash
 	}
@@ -94,7 +92,7 @@ func (st *SubTree) RootHash() [32]byte {
 	return st.rootHash
 }
 
-func (st *SubTree) Difference(ids txMap) ([][32]byte, error) {
+func (st *Subtree) Difference(ids txMap) ([][32]byte, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([][32]byte, 0, 1_000)
 	for _, id := range st.Nodes {
@@ -115,7 +113,7 @@ func (st *SubTree) Difference(ids txMap) ([][32]byte, error) {
 	return diff, nil
 }
 
-func (st *SubTree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {
+func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([][32]byte, error) {
 	// Calculate how many entries are re?n array of that size.
 	nextPoT := st.nextPowerOfTwo(len(st.Nodes))
 	arraySize := nextPoT*2 - 1
@@ -176,7 +174,7 @@ func isPowerOfTwo(num int) bool {
 // nextPowerOfTwo returns the next highest power of two from a given number if
 // it is not already a power of two.  This is a helper function used during the
 // calculation of a merkle tree.
-func (st *SubTree) nextPowerOfTwo(n int) int {
+func (st *Subtree) nextPowerOfTwo(n int) int {
 	// Return the number if it's already a power of 2.
 	if n&(n-1) == 0 {
 		return n
@@ -187,7 +185,7 @@ func (st *SubTree) nextPowerOfTwo(n int) int {
 	return 1 << exponent // 2^exponent
 }
 
-func (st *SubTree) Serialize() []byte {
+func (st *Subtree) Serialize() []byte {
 	// write rootHash
 
 	// write fees
@@ -199,7 +197,7 @@ func (st *SubTree) Serialize() []byte {
 	return nil
 }
 
-func (st *SubTree) Load([]byte) error {
+func (st *Subtree) Load([]byte) error {
 	// read rootHash
 
 	// read fees

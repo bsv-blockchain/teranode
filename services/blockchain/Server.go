@@ -10,6 +10,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
+	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -120,10 +121,14 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 	}, nil
 }
 
-func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*blockchain_api.AddBlockResponse, error) {
-	block, err := model.NewBlockFromBytes(request.Block)
+func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
+	header, err := bc.NewBlockHeaderFromBytes(request.Header)
 	if err != nil {
 		return nil, err
+	}
+
+	block := &model.Block{
+		Header: header,
 	}
 
 	err = b.store.StoreBlock(ctx, block)
@@ -133,9 +138,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	prometheusBlockchainAddBlock.Inc()
 
-	return &blockchain_api.AddBlockResponse{
-		Ok: true,
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
@@ -149,13 +152,9 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		return nil, err
 	}
 
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		return nil, err
-	}
-
 	return &blockchain_api.GetBlockResponse{
-		Block: blockBytes,
+		Header:        block.Header.Bytes(),
+		SubtreeHashes: [][]byte{},
 	}, nil
 }
 

@@ -34,9 +34,9 @@ func NewClient() *Store {
 
 func (s Store) BlockFound(ctx context.Context, txid *chainhash.Hash, utxoHashes []*chainhash.Hash) (bool, error) {
 	req := &blockvalidation_api.BlockFoundRequest{
-		BlockHeader:  []byte{},
-		Coinbase:     []byte{},
-		SubtreeRoots: []byte{},
+		BlockHeader:   []byte{},
+		Coinbase:      []byte{},
+		SubtreeHashes: [][]byte{},
 	}
 
 	if _, err := s.db.BlockFound(ctx, req); err != nil {

@@ -41,20 +41,18 @@ func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, err
 }
 
 func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		return err
+	req := &blockchain_api.AddBlockRequest{
+		Header:        block.Header.Bytes(),
+		SubtreeHashes: make([][]byte, 0),
 	}
 
-	resp, err := c.client.AddBlock(ctx, &blockchain_api.AddBlockRequest{
-		Block: blockBytes,
-	})
-	if err != nil {
-		return err
+	for _, subtreeHash := range block.Subtrees {
+		h := subtreeHash.RootHash()
+		req.SubtreeHashes = append(req.SubtreeHashes, h[:])
 	}
 
-	if !resp.Ok {
-		return fmt.Errorf("blockchain service could not add block")
+	if _, err := c.client.AddBlock(ctx, req); err != nil {
+		return err
 	}
 
 	return nil
@@ -68,20 +66,14 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		return nil, err
 	}
 
-	// return bc.NewBlockFromBytes(resp.Block)
-	return model.NewBlockFromBytes(resp.Block)
-}
-
-func (c Client) ChainTip(ctx context.Context) (*bc.BlockHeader, uint64, error) {
-	resp, err := c.client.ChainTip(ctx, &emptypb.Empty{})
+	header, err := bc.NewBlockHeaderFromBytes(resp.Header)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	blockHeader, err := bc.NewBlockHeaderFromBytes(resp.BlockHeader)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return blockHeader, resp.Height, nil
+	return &model.Block{
+		Header: header,
+		// TODO - convert to merkle subtree
+		// Subtrees: resp.SubtreeHashes,
+	}, nil
 }

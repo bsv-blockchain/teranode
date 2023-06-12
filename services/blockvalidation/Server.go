@@ -15,7 +15,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -136,15 +136,9 @@ func (u *BlockValidation) Health(_ context.Context, _ *emptypb.Empty) (*blockval
 func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
 
-	// check we have all the subtrees. If any are missing request them then validate them.
-	subtreeRoots, err := splitSubtreeRoots(req.SubtreeRoots)
-	if err != nil {
-		return nil, err
-	}
-
 	waitGroup := sync.WaitGroup{}
 
-	for _, subtreeRoot := range subtreeRoots {
+	for _, subtreeRoot := range req.SubtreeHashes {
 		go func(chunk []byte) {
 			isValid := validateSubtree(chunk)
 			if !isValid {
@@ -166,22 +160,6 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 	// inform block assembler that a new block has been found
 
 	return &emptypb.Empty{}, nil
-}
-
-func splitSubtreeRoots(subtreeRoots []byte) ([][]byte, error) {
-	if len(subtreeRoots) == 0 {
-		return nil, errors.New("empty subtreeRoots array")
-	}
-	if len(subtreeRoots)%32 != 0 {
-		return nil, errors.New("length of subtreeRoots must be a multiple of 32")
-	}
-	// Split the byte array into 32 byte chunks
-	chunks := make([][]byte, len(subtreeRoots)/32)
-	for i := 0; i < len(chunks); i++ {
-		chunks[i] = subtreeRoots[i*32 : (i+1)*32]
-	}
-
-	return chunks, nil
 }
 
 func validateSubtree(subtree []byte) bool {
@@ -218,7 +196,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block)
 	// }
 
 	// 6. Get and validate any missing subtrees.
-	// if err := b.getAndValidateSubTrees(ctx); err != nil {
+	// if err := b.getAndValidateSubtrees(ctx); err != nil {
 	// 	return err
 	// }
 
@@ -267,9 +245,9 @@ func (u *BlockValidation) CheckPOW(ctx context.Context, block *model.Block) erro
 }
 
 func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
-	hashes := make([][32]byte, len(block.SubTrees))
+	hashes := make([][32]byte, len(block.Subtrees))
 
-	for i, subtree := range block.SubTrees {
+	for i, subtree := range block.Subtrees {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
 			var coinbaseHash [32]byte
@@ -281,7 +259,7 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	}
 
 	// Create a new subtree with the hashes of the subtrees
-	st := util.NewTreeByLeafCount(ceilPowerOfTwo(len(block.SubTrees)))
+	st := util.NewTreeByLeafCount(ceilPowerOfTwo(len(block.Subtrees)))
 	for _, hash := range hashes {
 		err := st.AddNode(hash, 1)
 		if err != nil {

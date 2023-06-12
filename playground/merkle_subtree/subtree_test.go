@@ -1,5 +1,3 @@
-//go:build manual_tests
-
 package main
 
 import (
@@ -44,7 +42,7 @@ func TestRootHash(t *testing.T) {
 func TestDifference(t *testing.T) {
 	timeStart := time.Now()
 
-	subTree, err := loadIds(20)
+	subtree, err := loadIds(20)
 	require.NoError(t, err)
 
 	ids, err := loadList("block.bin")
@@ -60,7 +58,7 @@ func TestDifference(t *testing.T) {
 
 	timeStart = time.Now()
 
-	diff, err := subTree.Difference(nodeIds)
+	diff, err := subtree.Difference(nodeIds)
 	require.NoError(t, err)
 
 	fmt.Printf("Difference took %s\n", time.Since(timeStart))
@@ -73,14 +71,14 @@ func TestGenerateData(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func BenchmarkSubTree_RootHash(b *testing.B) {
-	subTree, err := loadIds(18)
+func BenchmarkSubtree_RootHash(b *testing.B) {
+	subtree, err := loadIds(18)
 	require.NoError(b, err)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = subTree.RootHash()
-		subTree.rootHash = [32]byte{}
+		_ = subtree.RootHash()
+		subtree.rootHash = [32]byte{}
 	}
 }
 
@@ -130,8 +128,15 @@ func generateTestSets() error {
 
 		if i%(nrOfIds/1_000_000) == 0 {
 			_, err = w.WriteString(utils.ReverseAndHexEncodeHash([32]byte(txID)) + "\n")
+			if err != nil {
+				return err
+			}
 		}
+
 		_, err = w2.Write(txID)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

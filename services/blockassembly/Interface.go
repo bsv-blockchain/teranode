@@ -10,6 +10,6 @@ type Store interface {
 	Store(ctx context.Context, txid *chainhash.Hash) (bool, error)
 }
 
-type SubTreeProcessor interface {
+type SubtreeProcessor interface {
 	AddTxID(txid *chainhash.Hash) error
 }

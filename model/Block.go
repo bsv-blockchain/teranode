@@ -20,19 +20,19 @@ var (
 type Block struct {
 	Header     *bc.BlockHeader
 	CoinbaseTx *bt.Tx
-	SubTrees   []*util.SubTree
+	Subtrees   []*util.Subtree
 	// Height uint32
 
 	// local
 	hash          *chainhash.Hash
-	subTreeLength uint64
+	subtreeLength uint64
 }
 
-func NewBlock(header *bc.BlockHeader, coinbase *bt.Tx, subTrees []*util.SubTree) (*Block, error) {
+func NewBlock(header *bc.BlockHeader, coinbase *bt.Tx, subtrees []*util.Subtree) (*Block, error) {
 	return &Block{
 		Header:     header,
 		CoinbaseTx: coinbase,
-		SubTrees:   subTrees,
+		Subtrees:   subtrees,
 	}, nil
 }
 
@@ -52,31 +52,31 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 	buf := bytes.NewReader(blockBytes[80:])
 
 	// read the length of the subtree list
-	block.subTreeLength, err = wire.ReadVarInt(buf, 0)
+	block.subtreeLength, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	// read the subtree list
 	var hashBytes [32]byte
-	var subTreeHash *chainhash.Hash
-	for i := uint64(0); i < block.subTreeLength; i++ {
+	var subtreeHash *chainhash.Hash
+	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
 		if err != nil {
 			return nil, err
 		}
 
-		subTreeHash, err = chainhash.NewHash(hashBytes[:])
+		subtreeHash, err = chainhash.NewHash(hashBytes[:])
 		if err != nil {
 			return nil, err
 		}
 
-		_ = subTreeHash
+		_ = subtreeHash
 
 		//
 		// TODO load the full subtree from the store ???
 		//
-		block.SubTrees = append(block.SubTrees, util.NewTree(20))
+		block.Subtrees = append(block.Subtrees, util.NewTree(20))
 	}
 
 	coinbaseTxBytes, _ := io.ReadAll(buf) // read the rest of the bytes as the coinbase tx
@@ -109,13 +109,13 @@ func (b *Block) Bytes() ([]byte, error) {
 
 	// write the subtree list
 	buf := bytes.NewBuffer(blockBytes)
-	err := wire.WriteVarInt(buf, 0, uint64(len(b.SubTrees)))
+	err := wire.WriteVarInt(buf, 0, uint64(len(b.Subtrees)))
 	if err != nil {
 		return nil, err
 	}
 
-	for _, subTree := range b.SubTrees {
-		hash := subTree.RootHash()
+	for _, subtree := range b.Subtrees {
+		hash := subtree.RootHash()
 		_, err = buf.Write(hash[:])
 		if err != nil {
 			return nil, err

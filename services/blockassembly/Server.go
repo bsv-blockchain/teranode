@@ -93,22 +93,22 @@ func New(logger utils.Logger) *BlockAssembly {
 		}
 	}
 
-	newSubTreeChan := make(chan *util.SubTree)
+	newSubtreeChan := make(chan *util.Subtree)
 
 	ba := &BlockAssembly{
 		logger:           logger,
 		utxoStore:        s,
 		txStatusClient:   txStatusStore,
-		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubTreeChan),
+		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubtreeChan),
 	}
 
 	go func() {
 		for {
-			<-newSubTreeChan
-			// merkleRoot := stp.currentSubTree.ReplaceRootNode(*coinbaseHash)
+			<-newSubtreeChan
+			// merkleRoot := stp.currentSubtree.ReplaceRootNode(*coinbaseHash)
 			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
 
-			logger.Infof("Received new subTree notification")
+			logger.Infof("Received new subtree notification")
 		}
 	}()
 
@@ -205,7 +205,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 // 	previousHash := &chainhash.Hash{}
 
 // 	// Get the list of completed containers for the current chaintip and height...
-// 	subTrees, err := merkle.GetContainersForCandidate(chaintip, height)
+// subtrees, err := merkle.GetContainersForCandidate(chaintip, height)
 // 	if err != nil {
 // 		panic(err)
 // 	}
@@ -220,6 +220,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 // 		Time:           uint32(time.Now().Unix()),
 // 		NumTx:          uint64(0),
 // 		MerkleProof:    []string{},
-// 		MerkleSubtrees: subTrees,
+// 		MerkleSubtrees:subtrees,
 // 	}, nil
 // }

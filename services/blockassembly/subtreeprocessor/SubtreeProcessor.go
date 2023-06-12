@@ -16,19 +16,19 @@ type SubtreeProcessor struct {
 	maxItemsPerFile   uint32
 	txChan            chan *txIDAndFee
 	incomingBlockChan chan string
-	chainedSubTrees   []*util.SubTree
-	currentSubTree    *util.SubTree
+	chainedSubtrees   []*util.Subtree
+	currentSubtree    *util.Subtree
 }
 
-func NewSubtreeProcessor(newSubTreeChan chan *util.SubTree) *SubtreeProcessor {
+func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	maxItemsPerFile, _ := gocore.Config().GetInt("merkle_items_per_subtree", 1_048_576)
 
 	stp := &SubtreeProcessor{
 		maxItemsPerFile:   uint32(maxItemsPerFile),
 		txChan:            make(chan *txIDAndFee, 100_000),
 		incomingBlockChan: make(chan string),
-		chainedSubTrees:   make([]*util.SubTree, 0),
-		currentSubTree:    util.NewTreeByLeafCount(maxItemsPerFile),
+		chainedSubtrees:   make([]*util.Subtree, 0),
+		currentSubtree:    util.NewTreeByLeafCount(maxItemsPerFile),
 	}
 
 	go func() {
@@ -38,17 +38,17 @@ func NewSubtreeProcessor(newSubTreeChan chan *util.SubTree) *SubtreeProcessor {
 				// Notified of another miner's validated block, so I need to process it.  This might be internal or external.
 
 			case txReq := <-stp.txChan:
-				err := stp.currentSubTree.AddNode(txReq.txID, txReq.fee)
+				err := stp.currentSubtree.AddNode(txReq.txID, txReq.fee)
 				if err != nil {
 					panic(err)
 				}
 
-				if stp.currentSubTree.IsComplete() {
-					stp.chainedSubTrees = append(stp.chainedSubTrees, stp.currentSubTree)
-					// Send the subTree to the newSubTreeChan
-					newSubTreeChan <- stp.currentSubTree
+				if stp.currentSubtree.IsComplete() {
+					stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
+					// Send the subtree to the newSubtreeChan
+					newSubtreeChan <- stp.currentSubtree
 
-					stp.currentSubTree = util.NewTreeByLeafCount(maxItemsPerFile)
+					stp.currentSubtree = util.NewTreeByLeafCount(maxItemsPerFile)
 				}
 
 				if txReq.waitCh != nil {
