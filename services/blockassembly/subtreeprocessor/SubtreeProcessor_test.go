@@ -7,6 +7,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,8 +38,13 @@ func TestRotate(t *testing.T) {
 			assert.Equal(t, 4, subTree.Length())
 			assert.Equal(t, uint64(3), subTree.Fees)
 
-			// merkleRoot := stp.currentSubTree.ReplaceRootNode(*coinbaseHash)
-			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
+			// Test the merkle root with the coinbase placeholder
+			merkleRoot := subTree.RootHash()
+			assert.Equal(t, "fd8e7ab196c23534961ef2e792e13426844f831e83b856aa99998ab9908d854f", utils.ReverseAndHexEncodeHash(merkleRoot))
+
+			// Test the merkle root with the coinbase placeholder replaced
+			merkleRoot = subTree.ReplaceRootNode(*coinbaseHash)
+			assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", utils.ReverseAndHexEncodeHash(merkleRoot))
 
 			endTestChan <- true
 		}

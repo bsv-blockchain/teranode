@@ -10,9 +10,10 @@ import "google/protobuf/empty.proto";
 service BlockchainAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc AddBlock (AddBlockRequest) returns (AddBlockResponse) {}
+
+  // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
+  rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
-  rpc ChainTip(google.protobuf.Empty) returns (ChainTipResponse) {}
   rpc GetMedianTime(GetMedianTimeRequest) returns (GetMedianTimeResponse) {}
   rpc SubscribeChainTip (google.protobuf.Empty) returns (stream ChainTipResponse) {}
 }
@@ -26,12 +27,8 @@ message HealthResponse {
 
 // swagger:model AddBlockRequest
 message AddBlockRequest {
-  bytes block = 1;
-}
-
-// swagger:model AddBlockResponse
-message AddBlockResponse {
-  bool ok = 1;
+  bytes header = 1;
+  repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
 }
 
 // swagger:model GetBlockRequest
@@ -41,7 +38,8 @@ message GetBlockRequest {
 
 // swagger:model GetBlockResponse
 message GetBlockResponse {
-  bytes block = 1;
+  bytes header = 1;
+  repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
 }
 
 // swagger:model GetMedianTimeRequest
@@ -51,7 +49,7 @@ message GetMedianTimeRequest {
 
 // swagger:model GetMedianTimeResponse
 message GetMedianTimeResponse {
-  uint64 medianTime = 1;
+  repeated uint32 block_header_time = 1; // This will return the nTimes of the last 11 (+1) blocks
 }
 
 // swagger:model ChainTipResponse

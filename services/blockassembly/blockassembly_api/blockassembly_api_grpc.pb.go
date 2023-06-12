@@ -23,6 +23,8 @@ const (
 	BlockAssemblyAPI_Health_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/Health"
 	BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight"
 	BlockAssemblyAPI_AddTx_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/AddTx"
+	BlockAssemblyAPI_GetMiningCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
+	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -33,6 +35,8 @@ type BlockAssemblyAPIClient interface {
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
+	GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetMiningCandidateResponse, error)
+	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -70,6 +74,24 @@ func (c *blockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest, op
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetMiningCandidateResponse, error) {
+	out := new(GetMiningCandidateResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetMiningCandidate_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error) {
+	out := new(SubmitMiningSolutionResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_SubmitMiningSolution_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility
@@ -78,6 +100,8 @@ type BlockAssemblyAPIServer interface {
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
+	GetMiningCandidate(context.Context, *emptypb.Empty) (*GetMiningCandidateResponse, error)
+	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -93,6 +117,12 @@ func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context,
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *emptypb.Empty) (*GetMiningCandidateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMiningCandidate not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubmitMiningSolution not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 
@@ -161,6 +191,42 @@ func _BlockAssemblyAPI_AddTx_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetMiningCandidate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetMiningCandidate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetMiningCandidate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetMiningCandidate(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockAssemblyAPI_SubmitMiningSolution_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitMiningSolutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).SubmitMiningSolution(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_SubmitMiningSolution_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).SubmitMiningSolution(ctx, req.(*SubmitMiningSolutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -179,6 +245,14 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddTx",
 			Handler:    _BlockAssemblyAPI_AddTx_Handler,
+		},
+		{
+			MethodName: "GetMiningCandidate",
+			Handler:    _BlockAssemblyAPI_GetMiningCandidate_Handler,
+		},
+		{
+			MethodName: "SubmitMiningSolution",
+			Handler:    _BlockAssemblyAPI_SubmitMiningSolution_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

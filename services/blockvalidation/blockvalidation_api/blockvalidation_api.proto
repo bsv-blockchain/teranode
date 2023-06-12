@@ -25,7 +25,7 @@ message HealthResponse {
 message BlockFoundRequest {
   bytes block_header = 1;
   bytes coinbase = 2;
-  bytes subtree_roots = 3;
+  repeated bytes subtree_hashes = 3;
 }
 
 // swagger:model GetSubtreeRequest

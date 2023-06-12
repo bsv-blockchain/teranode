@@ -89,11 +89,10 @@ func TestTwoTransactions(t *testing.T) {
 func TestMerkleRoot(t *testing.T) {
 	subtrees := make([]*util.SubTree, 2)
 
-	subtrees[0] = util.NewTree(1) // height = 1
-	subtrees[1] = util.NewTree(1) // height = 1
+	subtrees[0] = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[1] = util.NewTreeByLeafCount(2) // height = 1
 
-	var empty [32]byte
-	err := subtrees[0].AddNode(empty, 0)
+	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0)
 	require.NoError(t, err)
 
 	hash1, err := chainhash.NewHashFromStr(txIds[1])
