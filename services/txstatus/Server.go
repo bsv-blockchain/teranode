@@ -8,11 +8,9 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus/txstatus_api"
 	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus/aerospike"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus/memory"
-
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -68,27 +66,9 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStatusStoreURL *url.URL) (*Server, error) {
-
-	// Only memory store has been implemented...
-
-	var s txstatus.Store
-	var err error
-
-	if txStatusStoreURL.Scheme == "aerospike" {
-		s, err = aerospike.New(txStatusStoreURL)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-
-		switch txStatusStoreURL.Path {
-		case "/splitbyhash":
-			logger.Infof("[TxStatusStore] using splitbyhash memory store")
-			//s = memory.NewSplitByHash(true)
-		default:
-			logger.Infof("[TxStatusStore] using default memory store")
-			s = memory.New()
-		}
+	s, err := store.New(logger, txStatusStoreURL)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Server{

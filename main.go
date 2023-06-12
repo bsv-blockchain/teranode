@@ -179,7 +179,7 @@ func main() {
 			g.Go(func() (err error) {
 				logger.Infof("Starting Tx Status Client on: %s", txStatusURL.Host)
 
-				txStatusLogger := gocore.Log("txstatus", gocore.NewLogLevelFromString(logLevel))
+				txStatusLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
 				txStatusStore, err = txstatus.New(txStatusLogger, txStatusURL)
 				if err != nil {
 					panic(err)

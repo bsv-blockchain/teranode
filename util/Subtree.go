@@ -1,6 +1,5 @@
 package util
 
-import "C"
 import (
 	"crypto/sha256"
 	"fmt"
