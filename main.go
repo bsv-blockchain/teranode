@@ -176,6 +176,10 @@ func main() {
 		}
 
 		if found {
+			if txStatusURL.Scheme != "memory" {
+				panic("txstatus grpc server only supports memory store")
+			}
+
 			g.Go(func() (err error) {
 				logger.Infof("Starting Tx Status Client on: %s", txStatusURL.Host)
 
@@ -328,6 +332,7 @@ func main() {
 	case <-interrupt:
 		break
 	case <-ctx.Done():
+		logger.Errorf("context cancelled: %v", ctx.Err())
 		break
 	}
 
@@ -362,15 +367,15 @@ func main() {
 		blockAssemblyService.Stop(shutdownCtx)
 	}
 
+	// wait for clean shutdown for 5 seconds, otherwise force exit
 	go func() {
 		// Wait for 5 seconds and then force exit...
 		<-time.NewTimer(time.Second * 5).C
 		os.Exit(3)
 	}()
 
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		logger.Errorf("server returning an error: %v", err)
 		os.Exit(2)
 	}
-
 }

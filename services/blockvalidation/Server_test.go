@@ -34,18 +34,29 @@ func TestOneTransaction(t *testing.T) {
 
 	subtrees[0] = util.NewTree(1)
 
-	var empty [32]byte
-	err := subtrees[0].AddNode(empty, 0)
+	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0)
 	require.NoError(t, err)
 
 	blockValidationService, err := New(p2p.TestLogger{})
 	require.NoError(t, err)
 
+	// this now needs to be here since we do not have the full subtrees in the Block struct
+	// which is used in the CheckMerkleRoot function
+	var coinbaseHash [32]byte
+	copy(coinbaseHash[:], bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	subtrees[0].ReplaceRootNode(coinbaseHash)
+
+	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+	for i, subTree := range subtrees {
+		rootHash := subTree.RootHash()
+		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+	}
+
 	block := &model.Block{
 		Header: &bc.BlockHeader{
 			HashMerkleRoot: bt.ReverseBytes(coinbaseTx.TxIDBytes()),
 		},
-		Subtrees:   subtrees,
+		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
 	}
 
@@ -74,11 +85,23 @@ func TestTwoTransactions(t *testing.T) {
 	blockValidationService, err := New(p2p.TestLogger{})
 	require.NoError(t, err)
 
+	// this now needs to be here since we do not have the full subtrees in the Block struct
+	// which is used in the CheckMerkleRoot function
+	var coinbaseHash [32]byte
+	copy(coinbaseHash[:], bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	subtrees[0].ReplaceRootNode(coinbaseHash)
+
+	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+	for i, subTree := range subtrees {
+		rootHash := subTree.RootHash()
+		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+	}
+
 	block := &model.Block{
 		Header: &bc.BlockHeader{
 			HashMerkleRoot: expectedMerkleRoot.CloneBytes(),
 		},
-		Subtrees:   subtrees,
+		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
 	}
 
@@ -122,6 +145,18 @@ func TestMerkleRoot(t *testing.T) {
 		t.Fail()
 	}
 
+	// this now needs to be here since we do not have the full subtrees in the Block struct
+	// which is used in the CheckMerkleRoot function
+	var coinbaseHash [32]byte
+	copy(coinbaseHash[:], bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	subtrees[0].ReplaceRootNode(coinbaseHash)
+
+	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+	for i, subTree := range subtrees {
+		rootHash := subTree.RootHash()
+		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+	}
+
 	block := &model.Block{
 		Header: &bc.BlockHeader{
 			Version:        1,
@@ -131,7 +166,7 @@ func TestMerkleRoot(t *testing.T) {
 			HashMerkleRoot: merkleRoot.CloneBytes(),
 			Bits:           bits.CloneBytes(),
 		},
-		Subtrees:   subtrees,
+		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
 	}
 

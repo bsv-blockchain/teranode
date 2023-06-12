@@ -47,7 +47,12 @@ func (st *Subtree) IsComplete() bool {
 }
 
 func (st *Subtree) ReplaceRootNode(node [32]byte) [32]byte {
-	st.Nodes[0] = node
+	if len(st.Nodes) < 1 {
+		st.Nodes = append(st.Nodes, node)
+	} else {
+		st.Nodes[0] = node
+	}
+
 	st.rootHash = [32]byte{} // reset rootHash
 
 	return st.RootHash()

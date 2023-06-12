@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 
-	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-bk/crypto"
 	"github.com/libsv/go-bt/v2"
@@ -18,17 +17,17 @@ var (
 )
 
 type Block struct {
-	Header     *bc.BlockHeader
-	CoinbaseTx *bt.Tx
-	Subtrees   []*util.Subtree
-	// Height uint32
+	Header           *bc.BlockHeader
+	CoinbaseTx       *bt.Tx
+	TransactionCount uint64
+	Subtrees         []*chainhash.Hash
 
 	// local
 	hash          *chainhash.Hash
 	subtreeLength uint64
 }
 
-func NewBlock(header *bc.BlockHeader, coinbase *bt.Tx, subtrees []*util.Subtree) (*Block, error) {
+func NewBlock(header *bc.BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) (*Block, error) {
 	return &Block{
 		Header:     header,
 		CoinbaseTx: coinbase,
@@ -71,12 +70,7 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 			return nil, err
 		}
 
-		_ = subtreeHash
-
-		//
-		// TODO load the full subtree from the store ???
-		//
-		block.Subtrees = append(block.Subtrees, util.NewTree(20))
+		block.Subtrees = append(block.Subtrees, subtreeHash)
 	}
 
 	coinbaseTxBytes, _ := io.ReadAll(buf) // read the rest of the bytes as the coinbase tx
@@ -101,26 +95,36 @@ func (b *Block) Hash() *chainhash.Hash {
 	return hash
 }
 
+func (b *Block) SubTreeBytes() ([]byte, error) {
+	// write the subtree list
+	buf := bytes.NewBuffer(nil)
+	err := wire.WriteVarInt(buf, 0, uint64(len(b.Subtrees)))
+	if err != nil {
+		return nil, err
+	}
+	for _, subTree := range b.Subtrees {
+		_, err = buf.Write(subTree[:])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
 func (b *Block) Bytes() ([]byte, error) {
 	// TODO not tested, due to discussion around storing subtrees in the block
 
 	// write the header
 	blockBytes := b.Header.Bytes()
+	buf := bytes.NewBuffer(blockBytes)
 
 	// write the subtree list
-	buf := bytes.NewBuffer(blockBytes)
-	err := wire.WriteVarInt(buf, 0, uint64(len(b.Subtrees)))
+	subtreeBytes, err := b.SubTreeBytes()
 	if err != nil {
 		return nil, err
 	}
-
-	for _, subtree := range b.Subtrees {
-		hash := subtree.RootHash()
-		_, err = buf.Write(hash[:])
-		if err != nil {
-			return nil, err
-		}
-	}
+	buf.Write(subtreeBytes)
 
 	// write the coinbase tx
 	_, err = buf.Write(b.CoinbaseTx.Bytes())

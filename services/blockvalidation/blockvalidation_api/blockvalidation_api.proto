@@ -37,4 +37,3 @@ message GetSubtreeRequest {
 message GetSubtreeResponse {
   bytes subtree_txs = 1;
 }
-

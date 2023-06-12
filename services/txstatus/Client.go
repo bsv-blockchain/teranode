@@ -118,12 +118,12 @@ func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *
 	return nil
 }
 
-func (c *Client) Delete(ctx context.Context, hash *chainhash.Hash) error {
+func (c *Client) Delete(_ context.Context, _ *chainhash.Hash) error {
 	return nil // do not allow to Delete through grpc
 }
 
 func getChainHashesFromBytes(hashes [][]byte) (chainHashes []*chainhash.Hash, err error) {
-	if len(hashes) == 0 {
+	if len(hashes) > 0 {
 		chainHashes = make([]*chainhash.Hash, len(hashes))
 		var hash *chainhash.Hash
 		for index, utxoHashBytes := range hashes {

@@ -47,8 +47,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
 	}
 
 	for _, subtreeHash := range block.Subtrees {
-		h := subtreeHash.RootHash()
-		req.SubtreeHashes = append(req.SubtreeHashes, h[:])
+		req.SubtreeHashes = append(req.SubtreeHashes, subtreeHash[:])
 	}
 
 	if _, err := c.client.AddBlock(ctx, req); err != nil {

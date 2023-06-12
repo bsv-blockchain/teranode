@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
@@ -42,8 +42,9 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	var subtreeCount uint64
 	var subtreeBytes []byte
+	var err error
 
-	if err := s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
+	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&block.Header.Version,
 		&block.Header.Time,
 		&block.Header.Bits,
@@ -59,10 +60,13 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, err
 	}
 
-	block.Subtrees = make([]*util.Subtree, subtreeCount)
+	block.Subtrees = make([]*chainhash.Hash, subtreeCount)
 	for i := uint64(0); i < subtreeCount; i++ {
-		// TODO - read subtree from store ???
-		block.Subtrees[i] = &util.Subtree{}
+		bytes := subtreeBytes[i*32 : (i+1)*32]
+		block.Subtrees[i], err = chainhash.NewHash(bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create hash from bytes: %w", err)
+		}
 	}
 
 	return block, nil

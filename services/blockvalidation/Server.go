@@ -15,7 +15,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bt"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -248,14 +247,18 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	hashes := make([][32]byte, len(block.Subtrees))
 
 	for i, subtree := range block.Subtrees {
-		if i == 0 {
-			// We need to inject the coinbase txid into the first position of the first subtree
-			var coinbaseHash [32]byte
-			copy(coinbaseHash[:], bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()))
-			subtree.ReplaceRootNode(coinbaseHash)
-		}
+		// TODO this cannot be done here anymore, since the block only contains the subtree hashes
+		//
+		//if i == 0 {
+		//	// We need to inject the coinbase txid into the first position of the first subtree
+		//	var coinbaseHash [32]byte
+		//	copy(coinbaseHash[:], bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()))
+		//	// get the full subtree from the store
+		//	fullSubTree := util.SubTree{}
+		//	fullSubTree.ReplaceRootNode(coinbaseHash)
+		//}
 
-		hashes[i] = subtree.RootHash()
+		hashes[i] = [32]byte(subtree[:])
 	}
 
 	// Create a new subtree with the hashes of the subtrees
@@ -267,9 +270,6 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 		}
 	}
 
-	// merkleTree2 := bc.BuildMerkleTreeStore(hashes)
-
-	// calculatedMerkleRoot := merkleTree[len(merkleTree)-1]
 	calculatedMerkleRoot := st.RootHash()
 
 	if !bytes.Equal(calculatedMerkleRoot[:], block.Header.HashMerkleRoot) {
