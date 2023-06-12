@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
@@ -80,9 +81,28 @@ func New(url *url.URL) (*Store, error) {
 		}
 	}
 
-	port, _ := strconv.Atoi(url.Port())
-	hosts := []*aerospike.Host{
-		aerospike.NewHost(url.Hostname(), port),
+	hosts := []*aerospike.Host{}
+	urlHosts := strings.Split(url.Host, ",")
+	for _, host := range urlHosts {
+		hostParts := strings.Split(host, ":")
+		if len(hostParts) == 2 {
+			port, err := strconv.ParseInt(hostParts[1], 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %v", hostParts[1])
+			}
+
+			hosts = append(hosts, &aerospike.Host{
+				Name: hostParts[0],
+				Port: int(port),
+			})
+		} else if len(hostParts) == 1 {
+			hosts = append(hosts, &aerospike.Host{
+				Name: hostParts[0],
+				Port: 3000,
+			})
+		} else {
+			return nil, fmt.Errorf("invalid host %v", host)
+		}
 	}
 
 	fmt.Printf("url %v policy %v\n", url, policy)
