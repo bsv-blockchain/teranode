@@ -93,7 +93,7 @@ func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, p
 		utxoHashesBytes = append(utxoHashesBytes, utxoHash[:])
 	}
 
-	_, err := c.client.Set(ctx, &txstatus_api.SetRequest{
+	_, err := c.client.Create(ctx, &txstatus_api.CreateRequest{
 		Hash:           hash[:],
 		Fee:            fee,
 		ParentTxHashes: parentTxHashesBytes,

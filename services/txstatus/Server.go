@@ -129,7 +129,7 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txstatus_api.Heal
 	}, nil
 }
 
-func (u *Server) Set(ctx context.Context, request *txstatus_api.SetRequest) (*txstatus_api.SetResponse, error) {
+func (u *Server) Create(ctx context.Context, request *txstatus_api.CreateRequest) (*txstatus_api.CreateResponse, error) {
 	prometheusTxStatusSet.Inc()
 
 	hash, err := chainhash.NewHash(request.Hash)
@@ -162,7 +162,7 @@ func (u *Server) Set(ctx context.Context, request *txstatus_api.SetRequest) (*tx
 		return nil, err
 	}
 
-	return &txstatus_api.SetResponse{
+	return &txstatus_api.CreateResponse{
 		Status: txstatus_api.Status_StatusUnconfirmed,
 	}, nil
 }
@@ -229,7 +229,7 @@ func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*tx
 	}, nil
 }
 
-func (u *Server) Delete(ctx context.Context, hash *chainhash.Hash) error {
+func (u *Server) Delete(ctx context.Context, request *txstatus_api.DeleteRequest) (*txstatus_api.DeleteResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }

@@ -10,7 +10,9 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
+	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -43,7 +45,7 @@ type BlockAssembly struct {
 	logger utils.Logger
 
 	utxoStore        utxostore.UTXOStore
-	txStatusClient   txstatus.Client
+	txStatusClient   txstatus_store.Store
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
 }
@@ -68,9 +70,27 @@ func New(logger utils.Logger) *BlockAssembly {
 		panic(err)
 	}
 
-	txStatusClient, err := txstatus.NewClient(context.Background(), logger)
+	txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
 	if err != nil {
 		panic(err)
+	}
+	if !found {
+		panic("no txstatus_store setting found")
+	}
+
+	// TODO abstract into a factory
+	var txStatusStore txstatus_store.Store
+	if txStatusURL.Scheme == "memory" {
+		// the memory store is reached through a grpc client
+		txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		txStatusStore, err = store.New(logger, txStatusURL)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	newSubTreeChan := make(chan *util.SubTree)
@@ -78,7 +98,7 @@ func New(logger utils.Logger) *BlockAssembly {
 	ba := &BlockAssembly{
 		logger:           logger,
 		utxoStore:        s,
-		txStatusClient:   *txStatusClient,
+		txStatusClient:   txStatusStore,
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubTreeChan),
 	}
 

@@ -21,9 +21,10 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	TxStatusAPI_Health_FullMethodName   = "/txstatus_api.TxStatusAPI/Health"
-	TxStatusAPI_Set_FullMethodName      = "/txstatus_api.TxStatusAPI/Set"
+	TxStatusAPI_Create_FullMethodName   = "/txstatus_api.TxStatusAPI/Create"
 	TxStatusAPI_SetMined_FullMethodName = "/txstatus_api.TxStatusAPI/SetMined"
 	TxStatusAPI_Get_FullMethodName      = "/txstatus_api.TxStatusAPI/Get"
+	TxStatusAPI_Delete_FullMethodName   = "/txstatus_api.TxStatusAPI/Delete"
 )
 
 // TxStatusAPIClient is the client API for TxStatusAPI service.
@@ -32,9 +33,10 @@ const (
 type TxStatusAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	Set(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error)
+	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
 	SetMined(ctx context.Context, in *SetMinedRequest, opts ...grpc.CallOption) (*SetMinedResponse, error)
 	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 }
 
 type txStatusAPIClient struct {
@@ -54,9 +56,9 @@ func (c *txStatusAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts 
 	return out, nil
 }
 
-func (c *txStatusAPIClient) Set(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error) {
-	out := new(SetResponse)
-	err := c.cc.Invoke(ctx, TxStatusAPI_Set_FullMethodName, in, out, opts...)
+func (c *txStatusAPIClient) Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error) {
+	out := new(CreateResponse)
+	err := c.cc.Invoke(ctx, TxStatusAPI_Create_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,15 +83,25 @@ func (c *txStatusAPIClient) Get(ctx context.Context, in *GetRequest, opts ...grp
 	return out, nil
 }
 
+func (c *txStatusAPIClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+	out := new(DeleteResponse)
+	err := c.cc.Invoke(ctx, TxStatusAPI_Delete_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TxStatusAPIServer is the server API for TxStatusAPI service.
 // All implementations must embed UnimplementedTxStatusAPIServer
 // for forward compatibility
 type TxStatusAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	Set(context.Context, *SetRequest) (*SetResponse, error)
+	Create(context.Context, *CreateRequest) (*CreateResponse, error)
 	SetMined(context.Context, *SetMinedRequest) (*SetMinedResponse, error)
 	Get(context.Context, *GetRequest) (*GetResponse, error)
+	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
 	mustEmbedUnimplementedTxStatusAPIServer()
 }
 
@@ -100,14 +112,17 @@ type UnimplementedTxStatusAPIServer struct {
 func (UnimplementedTxStatusAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedTxStatusAPIServer) Set(context.Context, *SetRequest) (*SetResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Set not implemented")
+func (UnimplementedTxStatusAPIServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
 func (UnimplementedTxStatusAPIServer) SetMined(context.Context, *SetMinedRequest) (*SetMinedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetMined not implemented")
 }
 func (UnimplementedTxStatusAPIServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedTxStatusAPIServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedTxStatusAPIServer) mustEmbedUnimplementedTxStatusAPIServer() {}
 
@@ -140,20 +155,20 @@ func _TxStatusAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TxStatusAPI_Set_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetRequest)
+func _TxStatusAPI_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TxStatusAPIServer).Set(ctx, in)
+		return srv.(TxStatusAPIServer).Create(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TxStatusAPI_Set_FullMethodName,
+		FullMethod: TxStatusAPI_Create_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TxStatusAPIServer).Set(ctx, req.(*SetRequest))
+		return srv.(TxStatusAPIServer).Create(ctx, req.(*CreateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -194,6 +209,24 @@ func _TxStatusAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TxStatusAPI_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TxStatusAPIServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TxStatusAPI_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TxStatusAPIServer).Delete(ctx, req.(*DeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TxStatusAPI_ServiceDesc is the grpc.ServiceDesc for TxStatusAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -206,8 +239,8 @@ var TxStatusAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TxStatusAPI_Health_Handler,
 		},
 		{
-			MethodName: "Set",
-			Handler:    _TxStatusAPI_Set_Handler,
+			MethodName: "Create",
+			Handler:    _TxStatusAPI_Create_Handler,
 		},
 		{
 			MethodName: "SetMined",
@@ -216,6 +249,10 @@ var TxStatusAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Get",
 			Handler:    _TxStatusAPI_Get_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _TxStatusAPI_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

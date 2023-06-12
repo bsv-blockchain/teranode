@@ -10,9 +10,10 @@ import "google/protobuf/empty.proto";
 service TxStatusAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc Set (SetRequest) returns (SetResponse) {}
+  rpc Create (CreateRequest) returns (CreateResponse) {}
   rpc SetMined (SetMinedRequest) returns (SetMinedResponse) {}
   rpc Get (GetRequest) returns (GetResponse) {}
+  rpc Delete (DeleteRequest) returns (DeleteResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -33,7 +34,7 @@ enum Status {
 }
 
 // swagger:model SetRequest
-message SetRequest {
+message CreateRequest {
   bytes hash = 1;
   uint64 fee = 2;
   repeated bytes ParentTxHashes = 3;
@@ -41,7 +42,7 @@ message SetRequest {
 }
 
 // swagger:model SetResponse
-message SetResponse {
+message CreateResponse {
   Status status = 1;
 }
 
@@ -70,4 +71,14 @@ message GetResponse {
   google.protobuf.Timestamp FirstSeen = 5;
   repeated bytes BlockHashes = 6;
   uint32 BlockHeight = 7;
+}
+
+// swagger:model DeleteRequest
+message DeleteRequest {
+  bytes hash = 1;
+}
+
+// swagger:model DeleteResponse
+message DeleteResponse {
+  Status status = 1;
 }

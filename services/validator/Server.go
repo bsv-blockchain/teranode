@@ -19,8 +19,10 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
+	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
+	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -98,10 +100,27 @@ func NewServer(logger utils.Logger) *Server {
 		panic(err)
 	}
 
-	var txStatusStore *txstatus.Client
-	txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+	txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
 	if err != nil {
 		panic(err)
+	}
+	if !found {
+		panic("no txstatus_store setting found")
+	}
+
+	// TODO abstract into a factory
+	var txStatusStore txstatus_store.Store
+	if txStatusURL.Scheme == "memory" {
+		// the memory store is reached through a grpc client
+		txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		txStatusStore, err = store.New(logger, txStatusURL)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	validator := New(s, txStatusStore)
