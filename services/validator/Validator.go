@@ -17,13 +17,13 @@ import (
 )
 
 type Validator struct {
-	store          utxostore.UTXOStore
+	store          utxostore.Interface
 	blockAssembler blockassembly.Store
 	txStatus       txstatus.Store
 	saveInParallel bool
 }
 
-func New(store utxostore.UTXOStore, txStatus txstatus.Store) Interface {
+func New(store utxostore.Interface, txStatus txstatus.Store) Interface {
 	ba := blockassembly.NewClient()
 
 	return &Validator{

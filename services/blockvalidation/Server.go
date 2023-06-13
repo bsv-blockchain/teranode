@@ -12,8 +12,11 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bc"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -44,6 +47,8 @@ type BlockValidation struct {
 	logger           utils.Logger
 	grpcServer       *grpc.Server
 	blockchainClient *blockchain.Client
+	utxoStore        utxostore.Interface
+	blockStore       blob.Store
 }
 
 func Enabled() bool {
@@ -52,29 +57,17 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) (*BlockValidation, error) {
-	// utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// if !found {
-	// 	panic("no utxostore setting found")
-	// }
-
-	// s, err := utxo.NewStore(logger, utxostoreURL)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
+func New(logger utils.Logger, utxoStore utxostore.Interface, blockStore blob.Store) (*BlockValidation, error) {
 	blockchainClient, err := blockchain.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
 	bVal := &BlockValidation{
-		// utxoStore: s,
+		utxoStore:        utxoStore,
 		logger:           logger,
 		blockchainClient: blockchainClient,
+		blockStore:       blockStore,
 	}
 
 	return bVal, nil
@@ -136,9 +129,10 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 
 	waitGroup := sync.WaitGroup{}
 
-	for _, subtreeRoot := range req.SubtreeHashes {
-		go func(chunk []byte) {
-			isValid := validateSubtree(chunk)
+	for _, subtreeHashBytes := range req.SubtreeHashes {
+		go func(subtreeHashBytes []byte) {
+			subtreeHash, _ := chainhash.NewHash(subtreeHashBytes)
+			isValid := u.validateSubtree(ctx, subtreeHash)
 			if !isValid {
 				// an invalid subtree has been found.
 				// logging, cleanup
@@ -146,10 +140,40 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 			} else {
 				waitGroup.Done()
 			}
-		}(subtreeRoot)
+		}(subtreeHashBytes)
 	}
 
 	waitGroup.Wait()
+
+	blockHeader, err := model.NewBlockHeaderFromBytes(req.BlockHeader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block header from bytes [%w]", err)
+	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(req.Coinbase)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create coinbase tx from bytes [%w]", err)
+	}
+
+	subtrees := make([]*chainhash.Hash, len(req.SubtreeHashes))
+	for i, subtree := range req.SubtreeHashes {
+		subtreeHash, err := chainhash.NewHash(subtree)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
+		}
+		subtrees[i] = subtreeHash
+	}
+
+	block := &model.Block{
+		Header:     blockHeader,
+		CoinbaseTx: coinbaseTx,
+		Subtrees:   subtrees,
+	}
+
+	// this already does some checks...
+	if !block.Valid() {
+		return nil, fmt.Errorf("block is not valid: %s", block.String())
+	}
 
 	// check merkle root
 	// check the solution meets the difficulty requirements
@@ -160,9 +184,18 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 	return &emptypb.Empty{}, nil
 }
 
-func validateSubtree(subtree []byte) bool {
+func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash) bool {
 	// get subtree from store
-	// if not in store get it from the network
+	subtree, err := u.blockStore.Get(ctx, subtreeHash[:])
+	if err != nil {
+		// if not in store get it from the network
+
+		// if not in network return false
+		return false
+	}
+
+	_ = subtree
+
 	// validate the subtree
 	// is the txid in the store?
 	// no - get it from the network

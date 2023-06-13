@@ -37,7 +37,7 @@ func TestOneTransaction(t *testing.T) {
 	err := subtrees[0].AddNode(model.CoinbasePlaceholderHash, 0)
 	require.NoError(t, err)
 
-	blockValidationService, err := New(p2p.TestLogger{})
+	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
 	require.NoError(t, err)
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
@@ -83,7 +83,7 @@ func TestTwoTransactions(t *testing.T) {
 	err = subtrees[0].AddNode(txid1, 0)
 	require.NoError(t, err)
 
-	blockValidationService, err := New(p2p.TestLogger{})
+	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
 	require.NoError(t, err)
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
@@ -172,7 +172,7 @@ func TestMerkleRoot(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	}
 
-	blockValidationService, err := New(p2p.TestLogger{})
+	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
 	require.NoError(t, err)
 
 	err = blockValidationService.CheckMerkleRoot(block)

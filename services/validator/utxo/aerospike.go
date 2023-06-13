@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(url *url.URL) (utxostore.UTXOStore, error) {
+	availableDatabases["aerospike"] = func(url *url.URL) (utxostore.Interface, error) {
 		return aerospike.New(url)
 	}
 }

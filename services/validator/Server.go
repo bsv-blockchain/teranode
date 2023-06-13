@@ -20,9 +20,9 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
-	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -86,20 +86,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger) *Server {
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-
-	s, err := utxo.NewStore(logger, utxostoreURL)
-	if err != nil {
-		panic(err)
-	}
-
+func NewServer(logger utils.Logger, utxoStore utxostore.Interface) *Server {
 	txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
 	if err != nil {
 		panic(err)
@@ -123,7 +110,7 @@ func NewServer(logger utils.Logger) *Server {
 		}
 	}
 
-	validator := New(s, txStatusStore)
+	validator := New(utxoStore, txStatusStore)
 
 	return &Server{
 		logger:    logger,

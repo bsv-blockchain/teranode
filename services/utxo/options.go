@@ -4,10 +4,10 @@ import (
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 )
 
-type Options func(utxostore.UTXOStore)
+type Options func(utxostore.Interface)
 
 func WithDeleteSpends(deleteSpends bool) Options {
-	return func(u utxostore.UTXOStore) {
+	return func(u utxostore.Interface) {
 		u.DeleteSpends(deleteSpends)
 	}
 }

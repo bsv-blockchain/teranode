@@ -9,9 +9,9 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
-var availableDatabases = map[string]func(url *url.URL) (utxostore.UTXOStore, error){}
+var availableDatabases = map[string]func(url *url.URL) (utxostore.Interface, error){}
 
-func NewStore(logger utils.Logger, url *url.URL) (utxostore.UTXOStore, error) {
+func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 	port, err := strconv.Atoi(url.Port())
 	if err != nil {
 		return nil, err
@@ -19,7 +19,7 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.UTXOStore, error) {
 
 	dbInit, ok := availableDatabases[url.Scheme]
 	if ok {
-		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", url.Scheme, url.Hostname(), port)
+		logger.Infof("[Interface] connecting to %s service at %s:%d", url.Scheme, url.Hostname(), port)
 		return dbInit(url)
 	}
 

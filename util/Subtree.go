@@ -11,12 +11,14 @@ import (
 )
 
 type Subtree struct {
+	Height           int
+	Fees             uint64
+	Nodes            []*chainhash.Hash
+	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
+
+	// temporary (calculated) variables
 	rootHash *chainhash.Hash
 	treeSize int
-	Height   int
-	Fees     uint64
-	Nodes    []*chainhash.Hash
-	// store    blob.Store
 }
 
 // NewTree creates a new Subtree with a fixed height
@@ -223,6 +225,19 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		}
 	}
 
+	// write number of conflicting nodes
+	if err = wire.WriteVarInt(buf, 0, uint64(len(st.ConflictingNodes))); err != nil {
+		return nil, fmt.Errorf("unable to write number of conflicting nodes: %v", err)
+	}
+
+	// write conflicting nodes
+	for _, node := range st.ConflictingNodes {
+		_, err = buf.Write(node[:])
+		if err != nil {
+			return nil, fmt.Errorf("unable to write conflicting node: %v", err)
+		}
+	}
+
 	return buf.Bytes(), nil
 }
 
@@ -254,6 +269,21 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		st.Nodes[i], err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return fmt.Errorf("unable to read node: %v", err)
+		}
+	}
+
+	// read number of conflicting nodes
+	numConflictingNodes, err := wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+	}
+
+	// read conflicting nodes
+	st.ConflictingNodes = make([]*chainhash.Hash, numConflictingNodes)
+	for i := uint64(0); i < numConflictingNodes; i++ {
+		st.ConflictingNodes[i], err = chainhash.NewHash(buf.Next(32))
+		if err != nil {
+			return fmt.Errorf("unable to read conflicting node: %v", err)
 		}
 	}
 

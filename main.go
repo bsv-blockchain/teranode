@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
+	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
+	validator_utxostore "github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/getsentry/sentry-go"
@@ -56,6 +58,7 @@ func main() {
 	}
 
 	startBlockAssembly := flag.Bool("blockassembly", false, "start blockassembly service")
+	startBlockValidation := flag.Bool("blockvalidation", false, "start blockvalidation service")
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
 	startTxStatusStore := flag.Bool("txstatusstore", false, "start txstatus store")
@@ -69,6 +72,10 @@ func main() {
 
 	if !*startBlockAssembly {
 		*startBlockAssembly = gocore.Config().GetBool("startBlockAssembly", false)
+	}
+
+	if !*startBlockValidation {
+		*startBlockValidation = gocore.Config().GetBool("startBlockValidation", false)
 	}
 
 	if !*startValidator {
@@ -95,7 +102,7 @@ func main() {
 		*startTxStatusStore = gocore.Config().GetBool("startTxStatusStore", false)
 	}
 
-	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly && !*startSeeder) {
+	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly && !*startSeeder && !*startBlockValidation) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -170,7 +177,7 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	var validatorService *validator.Server
-	var utxoStore *utxo.UTXOStore
+	var utxoStoreServer *utxo.UTXOStore
 	var txStatusStore *txstatus.Server
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
@@ -179,8 +186,19 @@ func main() {
 	var minerServer *miner.Miner
 
 	//----------------------------------------------------------------
-	// These are the main tx and block (subtree) stores
+	// These are the main stores used in the system
 	//
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no utxostore setting found")
+	}
+	utxoStore, err := validator_utxostore.NewStore(logger, utxostoreURL)
+	if err != nil {
+		panic(err)
+	}
 	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
 	if err != nil {
 		panic(err)
@@ -235,11 +253,11 @@ func main() {
 
 	// blockAssembly
 	if *startBlockAssembly {
-		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockassembly_grpcAddress"); found {
 			g.Go(func() error {
-				logger.Infof("Starting Server")
+				logger.Infof("Starting Block Assembly Server")
 
-				baLogger := gocore.Log("block", gocore.NewLogLevelFromString(logLevel))
+				baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
 				blockAssemblyService = blockassembly.New(baLogger, blockStore)
 
 				return blockAssemblyService.Start()
@@ -247,14 +265,31 @@ func main() {
 		}
 	}
 
+	// blockValidation
+	if *startBlockValidation {
+		if _, found = gocore.Config().Get("blockValidation_grpcAddress"); found {
+			g.Go(func() error {
+				logger.Infof("Starting Block Validation Server")
+
+				bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
+				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, blockStore)
+				if err != nil {
+					panic(err)
+				}
+
+				return blockValidationService.Start()
+			})
+		}
+	}
+
 	// validator
 	if *startValidator {
-		if _, found := gocore.Config().Get("validator_grpcAddress"); found {
+		if _, found = gocore.Config().Get("validator_grpcAddress"); found {
 			g.Go(func() error {
-				logger.Infof("Starting Server")
+				logger.Infof("Starting Validator Server")
 
 				validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
-				validatorService = validator.NewServer(validatorLogger)
+				validatorService = validator.NewServer(validatorLogger, utxoStore)
 
 				return validatorService.Start()
 			})
@@ -272,7 +307,7 @@ func main() {
 			g.Go(func() (err error) {
 				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
 
-				var s utxostore.UTXOStore
+				var s utxostore.Interface
 				switch utxostoreURL.Path {
 				case "/splitbyhash":
 					logger.Infof("[UTXOStore] using splitbyhash memory store")
@@ -289,12 +324,12 @@ func main() {
 				}
 
 				utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
-				utxoStore, err = utxo.New(utxoLogger, s)
+				utxoStoreServer, err = utxo.New(utxoLogger, s)
 				if err != nil {
 					panic(err)
 				}
 
-				return utxoStore.Start()
+				return utxoStoreServer.Start()
 			})
 		}
 	}
@@ -376,8 +411,8 @@ func main() {
 		propagationGRPCServer.Stop(shutdownCtx)
 	}
 
-	if utxoStore != nil {
-		utxoStore.Stop(shutdownCtx)
+	if utxoStoreServer != nil {
+		utxoStoreServer.Stop(shutdownCtx)
 	}
 
 	if validatorService != nil {

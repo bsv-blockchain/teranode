@@ -17,7 +17,7 @@ var (
 	hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 )
 
-func testStore(t *testing.T, db utxostore.UTXOStore) {
+func testStore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -42,7 +42,7 @@ func testStore(t *testing.T, db utxostore.UTXOStore) {
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 }
 
-func testSpend(t *testing.T, db utxostore.UTXOStore) {
+func testSpend(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -60,7 +60,7 @@ func testSpend(t *testing.T, db utxostore.UTXOStore) {
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 }
 
-func testRestore(t *testing.T, db utxostore.UTXOStore) {
+func testRestore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
 	resp, err := db.Store(ctx, hash)
@@ -80,7 +80,7 @@ func testRestore(t *testing.T, db utxostore.UTXOStore) {
 	require.Nil(t, resp.SpendingTxID)
 }
 
-func testSanity(t *testing.T, db utxostore.UTXOStore) {
+func testSanity(t *testing.T, db utxostore.Interface) {
 	skipLongTests(t)
 	ctx := context.Background()
 
@@ -121,7 +121,7 @@ func testSanity(t *testing.T, db utxostore.UTXOStore) {
 	}
 }
 
-func benchmark(b *testing.B, db utxostore.UTXOStore) {
+func benchmark(b *testing.B, db utxostore.Interface) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {

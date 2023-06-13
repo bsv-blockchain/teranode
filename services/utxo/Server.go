@@ -88,7 +88,7 @@ type UTXOStore struct {
 	utxostore_api.UnsafeUtxoStoreAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	store      utxostore.UTXOStore
+	store      utxostore.Interface
 }
 
 func Enabled() bool {
@@ -97,7 +97,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, s utxostore.UTXOStore, opts ...Options) (*UTXOStore, error) {
+func New(logger utils.Logger, s utxostore.Interface, opts ...Options) (*UTXOStore, error) {
 	if len(opts) > 0 {
 		for _, opt := range opts {
 			opt(s)
@@ -175,7 +175,7 @@ func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.
 }
 
 func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
-	traceSpan := tracing.Start(ctx, "UTXOStore:Store")
+	traceSpan := tracing.Start(ctx, "Interface:Store")
 	defer traceSpan.Finish()
 
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
@@ -196,7 +196,7 @@ func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) 
 }
 
 func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
-	traceSpan := tracing.Start(ctx, "UTXOStore:Spend")
+	traceSpan := tracing.Start(ctx, "Interface:Spend")
 	defer traceSpan.Finish()
 
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
@@ -228,7 +228,7 @@ func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) 
 }
 
 func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
-	traceSpan := tracing.Start(ctx, "UTXOStore:Reset")
+	traceSpan := tracing.Start(ctx, "Interface:Reset")
 	defer traceSpan.Finish()
 
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
@@ -249,7 +249,7 @@ func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) 
 }
 
 func (u *UTXOStore) Get(ctx context.Context, req *utxostore_api.GetRequest) (*utxostore_api.GetResponse, error) {
-	traceSpan := tracing.Start(ctx, "UTXOStore:Get")
+	traceSpan := tracing.Start(ctx, "Interface:Get")
 	defer traceSpan.Finish()
 
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)

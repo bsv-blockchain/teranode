@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	availableDatabases["foundationdb"] = func(url *url.URL) (utxostore.UTXOStore, error) {
+	availableDatabases["foundationdb"] = func(url *url.URL) (utxostore.Interface, error) {
 		port, err := strconv.Atoi(url.Port())
 		if err != nil {
 			return nil, err

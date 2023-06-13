@@ -105,6 +105,48 @@ func Test_Serialize(t *testing.T) {
 			assert.Equal(t, st.Nodes[i].String(), newSubtree.Nodes[i].String())
 		}
 	})
+
+	t.Run("Serialize with conflicting", func(t *testing.T) {
+		st := NewTree(2)
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNodes([]*chainhash.Hash{
+			hash1,
+			hash2,
+			hash3,
+			hash4,
+		})
+
+		st.ConflictingNodes = []*chainhash.Hash{
+			hash3,
+		}
+
+		serializedBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		newSubtree := NewTree(2)
+		err = newSubtree.Deserialize(serializedBytes)
+		require.NoError(t, err)
+		assert.Equal(t, st.Fees, newSubtree.Fees)
+		assert.Equal(t, st.Size(), newSubtree.Size())
+		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
+
+		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+		for i := 0; i < len(st.Nodes); i++ {
+			assert.Equal(t, st.Nodes[i].String(), newSubtree.Nodes[i].String())
+		}
+
+		assert.Equal(t, len(st.ConflictingNodes), len(newSubtree.ConflictingNodes))
+		for i := 0; i < len(st.ConflictingNodes); i++ {
+			assert.Equal(t, st.ConflictingNodes[i].String(), newSubtree.ConflictingNodes[i].String())
+		}
+	})
 }
 
 // func TestDifference(t *testing.T) {

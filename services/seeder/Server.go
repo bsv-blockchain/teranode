@@ -33,7 +33,7 @@ import (
 type Server struct {
 	seeder_api.UnimplementedSeederAPIServer
 	seederStore store.SeederStore
-	utxoStore   utxostore.UTXOStore
+	utxoStore   utxostore.Interface
 	logger      utils.Logger
 	grpcServer  *grpc.Server
 }

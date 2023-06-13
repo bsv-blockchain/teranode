@@ -90,6 +90,10 @@ func (b *Block) Hash() *chainhash.Hash {
 	return b.hash
 }
 
+func (b *Block) String() string {
+	return b.Hash().String()
+}
+
 func (b *Block) Valid() bool {
 	// TODO what else can we do to validate this block?
 	// - calculate the hash and check it matches the header?

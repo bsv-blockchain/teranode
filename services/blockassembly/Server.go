@@ -50,7 +50,7 @@ type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
 	logger utils.Logger
 
-	utxoStore        utxostore.UTXOStore
+	utxoStore        utxostore.Interface
 	txStatusClient   txstatus_store.Store
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
@@ -129,7 +129,11 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 				continue
 			}
 
-			if err = ba.blockStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes); err != nil {
+			if err = ba.blockStore.Set(context.Background(),
+				subtree.RootHash()[:],
+				subtreeBytes,
+				blob.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
+			); err != nil {
 				logger.Errorf("Failed to store subtree [%s]", err)
 				continue
 			}
