@@ -61,11 +61,11 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	return stp
 }
 
-// Add adds a txid to a channel
-func (stp *SubtreeProcessor) Add(txid chainhash.Hash, fee uint64, optionalWaitCh ...chan struct{}) {
+// Add adds a tx hash to a channel
+func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, optionalWaitCh ...chan struct{}) {
 	if len(optionalWaitCh) > 0 {
 		stp.txChan <- &txIDAndFee{
-			txID:   txid,
+			txID:   hash,
 			fee:    fee,
 			waitCh: optionalWaitCh[0],
 		}
@@ -73,7 +73,7 @@ func (stp *SubtreeProcessor) Add(txid chainhash.Hash, fee uint64, optionalWaitCh
 	}
 
 	stp.txChan <- &txIDAndFee{
-		txID: txid,
+		txID: hash,
 		fee:  fee,
 	}
 }
@@ -82,7 +82,8 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 	// TODO: may need mutex
 	return stp.chainedSubtrees
 }
-func (stp *SubtreeProcessor) GetCompleteSubreesForJob(lastRoot []byte) []*util.Subtree {
+
+func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.Subtree {
 	// TODO: may need mutex
 	var indexToSlice = -1
 

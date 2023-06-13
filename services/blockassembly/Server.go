@@ -299,7 +299,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("failed to convert coinbaseTxHash: %w", err)
 	}
 
-	subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
+	subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.Id)
 	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
