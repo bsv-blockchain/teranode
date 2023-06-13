@@ -29,6 +29,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	    ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
+	    ,b.tx_count
 		,b.subtree_count
 		,b.subtrees
 		FROM blocks b
@@ -40,6 +41,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	}
 
 	var subtreeCount uint64
+	var transactionCount uint64
 	var subtreeBytes []byte
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
@@ -52,6 +54,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&block.Header.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
+		&transactionCount,
 		&subtreeCount,
 		&subtreeBytes,
 	); err != nil {
@@ -69,14 +72,11 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
+	block.TransactionCount = transactionCount
 
-	block.Subtrees = make([]*chainhash.Hash, subtreeCount)
-	for i := uint64(0); i < subtreeCount; i++ {
-		bytes := subtreeBytes[i*32 : (i+1)*32]
-		block.Subtrees[i], err = chainhash.NewHash(bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create hash from bytes: %w", err)
-		}
+	err = block.SubTreesFromBytes(subtreeBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
 
 	return block, nil

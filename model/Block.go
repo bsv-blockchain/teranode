@@ -108,6 +108,32 @@ func (b *Block) SubTreeBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
+	buf := bytes.NewBuffer(subtreesBytes)
+	subTreeCount, err := wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return err
+	}
+
+	var subtreeBytes [32]byte
+	var subtreeHash *chainhash.Hash
+	for i := uint64(0); i < subTreeCount; i++ {
+		_, err = buf.Read(subtreeBytes[:])
+		if err != nil {
+			return err
+		}
+		subtreeHash, err = chainhash.NewHash(subtreeBytes[:])
+		if err != nil {
+			return err
+		}
+		b.Subtrees = append(b.Subtrees, subtreeHash)
+	}
+
+	b.subtreeLength = subTreeCount
+
+	return err
+}
+
 func (b *Block) Bytes() ([]byte, error) {
 	// TODO not tested, due to discussion around storing subtrees in the block
 
