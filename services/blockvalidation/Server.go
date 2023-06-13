@@ -242,26 +242,26 @@ func (u *BlockValidation) CheckPOW(ctx context.Context, block *model.Block) erro
 }
 
 func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
-	hashes := make([][32]byte, len(block.Subtrees))
-
-	for i, subtree := range block.Subtrees {
-		// TODO this cannot be done here anymore, since the block only contains the subtree hashes
-		//
-		//if i == 0 {
-		//	// We need to inject the coinbase txid into the first position of the first subtree
-		//	var coinbaseHash [32]byte
-		//	copy(coinbaseHash[:], bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()))
-		//	// get the full subtree from the store
-		//	fullSubTree := util.SubTree{}
-		//	fullSubTree.ReplaceRootNode(coinbaseHash)
-		//}
-
-		hashes[i] = [32]byte(subtree[:])
-	}
+	//hashes := make([]*chainhash.Hash, len(block.Subtrees))
+	//
+	//for i, subtree := range block.Subtrees {
+	//	// TODO this cannot be done here anymore, since the block only contains the subtree hashes
+	//	//
+	//	//if i == 0 {
+	//	//	// We need to inject the coinbase txid into the first position of the first subtree
+	//	//	var coinbaseHash [32]byte
+	//	//	copy(coinbaseHash[:], bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()))
+	//	//	// get the full subtree from the store
+	//	//	fullSubTree := util.SubTree{}
+	//	//	fullSubTree.ReplaceRootNode(coinbaseHash)
+	//	//}
+	//
+	//	hashes[i] = subtree
+	//}
 
 	// Create a new subtree with the hashes of the subtrees
 	st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(block.Subtrees)))
-	for _, hash := range hashes {
+	for _, hash := range block.Subtrees {
 		err := st.AddNode(hash, 1)
 		if err != nil {
 			return err

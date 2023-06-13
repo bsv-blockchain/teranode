@@ -1,7 +1,7 @@
 package util
 
 // GetBlockSubsidyForHeight func
-func GetBlockSubsidyForHeight(height uint32) uint64 {
+func GetBlockSubsidyForHeight(height uint64) uint64 {
 	halvings := height / 210000
 	// Force block reward to zero when right shift is undefined.
 	if halvings >= 64 {
@@ -12,5 +12,6 @@ func GetBlockSubsidyForHeight(height uint32) uint64 {
 
 	// Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
 	subsidy >>= halvings
+
 	return subsidy
 }

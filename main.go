@@ -178,6 +178,35 @@ func main() {
 	var seederService *seeder.Server
 	var minerServer *miner.Miner
 
+	//----------------------------------------------------------------
+	// These are the main tx and block (subtree) stores
+	//
+	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("txstore config not found")
+	}
+	txStore, err := propagation.NewStore(txStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+
+	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("blockstore config not found")
+	}
+	blockStore, err := propagation.NewStore(blockStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+	//
+	//----------------------------------------------------------------
+
 	// txstatus store
 	if *startTxStatusStore {
 		txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
@@ -210,7 +239,8 @@ func main() {
 			g.Go(func() error {
 				logger.Infof("Starting Server")
 
-				blockAssemblyService = blockassembly.New(gocore.Log("block", gocore.NewLogLevelFromString(logLevel)))
+				baLogger := gocore.Log("block", gocore.NewLogLevelFromString(logLevel))
+				blockAssemblyService = blockassembly.New(baLogger, blockStore)
 
 				return blockAssemblyService.Start()
 			})
@@ -294,30 +324,6 @@ func main() {
 
 	// propagation
 	if *startPropagation {
-		txStoreUrl, err, found := gocore.Config().GetURL("txstore")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("txstore config not found")
-		}
-		txStore, err := propagation.NewStore(txStoreUrl)
-		if err != nil {
-			panic(err)
-		}
-
-		blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("blockstore config not found")
-		}
-		blockStore, err := propagation.NewStore(blockStoreUrl)
-		if err != nil {
-			panic(err)
-		}
-
 		validatorClient, err := validator.NewClient(context.Background(), logger)
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)

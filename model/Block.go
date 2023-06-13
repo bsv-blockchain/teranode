@@ -90,6 +90,12 @@ func (b *Block) Hash() *chainhash.Hash {
 	return b.hash
 }
 
+func (b *Block) Valid() bool {
+	// TODO what else can we do to validate this block?
+	// - calculate the hash and check it matches the header?
+	return b.Header.Valid() && b.CoinbaseTx != nil && len(b.Subtrees) > 0
+}
+
 func (b *Block) SubTreeBytes() ([]byte, error) {
 	// write the subtree list
 	buf := bytes.NewBuffer(nil)

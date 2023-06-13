@@ -2,7 +2,6 @@ package blockassembly
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -15,9 +14,11 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -54,6 +55,7 @@ type BlockAssembly struct {
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
 	blockchainClient *blockchain.Client
+	blockStore       blob.Store
 }
 
 func Enabled() bool {
@@ -62,7 +64,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) *BlockAssembly {
+func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		panic(err)
@@ -112,15 +114,27 @@ func New(logger utils.Logger) *BlockAssembly {
 		txStatusClient:   txStatusStore,
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubtreeChan),
 		blockchainClient: blockchainClient,
+		blockStore:       blockStore,
 	}
 
 	go func() {
+		var subtreeBytes []byte
 		for {
-			<-newSubtreeChan
+			subtree := <-newSubtreeChan
 			// merkleRoot := stp.currentSubtree.ReplaceRootNode(*coinbaseHash)
 			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
 
-			logger.Infof("Received new subtree notification")
+			if subtreeBytes, err = subtree.Serialize(); err != nil {
+				logger.Errorf("Failed to serialize subtree [%s]", err)
+				continue
+			}
+
+			if err = ba.blockStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes); err != nil {
+				logger.Errorf("Failed to store subtree [%s]", err)
+				continue
+			}
+
+			logger.Infof("Received new subtree notification for: %s", subtree.RootHash().String())
 		}
 	}()
 
@@ -211,10 +225,10 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
 
-	// TODO - Get current chaintip and height and open merkle container for it.
-	// chaintip := model.Block{} //ba.blockchainClient.GetBestBlockHeader()
-	height := uint32(0)
-	previousHash := &chainhash.Hash{}
+	chainTip, height, err := ba.blockchainClient.GetChainTip(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting best block header: %w", err)
+	}
 
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := ba.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
@@ -223,22 +237,24 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	for _, subtree := range subtrees {
 		coinbaseValue += subtree.Fees
 	}
-	coinbaseValue += util.GetBlockSubsidyForHeight((height))
+	coinbaseValue += util.GetBlockSubsidyForHeight(height)
 
 	id := subtrees[len(subtrees)-1].RootHash()
 
-	nbits, err := hex.DecodeString("0x1d00ffff")
-	if err != nil {
-		return nil, err
-	}
+	// TODO does this not need to be calculated?
+	nbits := chainTip.Bits
+	//nbits, err := hex.DecodeString("0x1d00ffff")
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	job := &blockassembly_api.GetMiningCandidateResponse{
 		Id:            id[:],
-		PreviousHash:  previousHash.CloneBytes(),
+		PreviousHash:  chainTip.HashPrevBlock.CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nbits,
-		Height:        height,
+		Height:        uint32(height), // should this be an uint64?
 		Time:          uint32(time.Now().Unix()),
 		MerkleProof:   ba.subtreeProcessor.GetMerkleProofForCoinbase(),
 	}
@@ -247,7 +263,9 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	if err != nil {
 		return nil, err
 	}
+
 	jobStore[*storeId] = job
+
 	return job, nil
 }
 
@@ -259,60 +277,80 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 			Ok: false,
 		}, err
 	}
-	job := jobStore[*storeId]
+
+	job, ok := jobStore[*storeId]
+	if !ok {
+		return &blockassembly_api.SubmitMiningSolutionResponse{
+			Ok: false,
+		}, fmt.Errorf("job not found")
+	}
 
 	hashPrevBlock, err := chainhash.NewHash(job.PreviousHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
 	}
 
-	subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
-	subtreesInJob[0].ReplaceRootNode([32]byte(req.CoinbaseTx))
-
-	// TODO: calculate merkle root
-	hashes := make([][32]byte, len(subtreesInJob))
-
-	for i, subtree := range subtreesInJob {
-		hashes[i] = [32]byte(subtree.RootHash())
+	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+	}
+	coinbaseTxIDHash, err := chainhash.NewHashFromStr(coinbaseTx.TxID())
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert coinbaseTxHash: %w", err)
 	}
 
-	// Create a new subtree with the hashes of the subtrees
-	st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
-	for _, hash := range hashes {
-		err := st.AddNode(hash, 1)
+	subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
+	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
+
+	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
+	transactionCount := uint64(0)
+	for i, subtree := range subtreesInJob {
+		rootHash := subtree.RootHash()
+		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+		transactionCount += uint64(subtree.Length())
+	}
+
+	// Create a new subtree with the subtreeHashes of the subtrees
+	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
+	for _, hash := range subtreeHashes {
+		err = topTree.AddNode(hash, 1)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	calculatedMerkleRoot := st.RootHash()
-	mrch, err := chainhash.NewHash(calculatedMerkleRoot[:])
+	calculatedMerkleRoot := topTree.RootHash()
+	hashMerkleRoot, err := chainhash.NewHash(calculatedMerkleRoot[:])
 	if err != nil {
 		return nil, err
 	}
 
-	block := model.Block{
+	block := &model.Block{
 		Header: &model.BlockHeader{
 			Version:        req.Version,
 			HashPrevBlock:  hashPrevBlock,
-			HashMerkleRoot: mrch,
+			HashMerkleRoot: hashMerkleRoot,
 			Timestamp:      req.Time,
 			Bits:           job.NBits,
 			Nonce:          req.Nonce,
 		},
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: transactionCount,
+		Subtrees:         subtreeHashes,
 	}
 
-	// check difficulty in header is low enough
-	ok := block.Header.Valid()
-
-	if !ok {
-		ba.logger.Warnf("Invalid block: %v", block.Header)
+	// check fully valid, including whether difficulty in header is low enough
+	if ok = block.Valid(); !ok {
+		ba.logger.Errorf("Invalid block: %v", block.Header)
 		return &blockassembly_api.SubmitMiningSolutionResponse{
 			Ok: false,
 		}, nil
 	}
 
-	ba.blockchainClient.AddBlock(ctx, &model.Block{})
+	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
+		return nil, fmt.Errorf("failed to add block: %w", err)
+	}
+
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
 	}, nil

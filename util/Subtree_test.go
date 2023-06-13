@@ -1,14 +1,10 @@
 package util
 
 import (
-	"bufio"
-	"crypto/rand"
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,14 +25,14 @@ func TestRootHash(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
 	hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
 	hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
-	_ = st.AddNodes([][32]byte{
-		*hash1,
-		*hash2,
-		*hash3,
-		*hash4,
+	_ = st.AddNodes([]*chainhash.Hash{
+		hash1,
+		hash2,
+		hash3,
+		hash4,
 	})
 	rootHash := st.RootHash()
-	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", utils.ReverseAndHexEncodeHash(rootHash))
+	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
 }
 
 func TestRootHashSimon(t *testing.T) {
@@ -49,14 +45,14 @@ func TestRootHashSimon(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-	_ = st.AddNodes([][32]byte{
-		*hash1,
-		*hash2,
-		*hash3,
-		*hash4,
+	_ = st.AddNodes([]*chainhash.Hash{
+		hash1,
+		hash2,
+		hash3,
+		hash4,
 	})
 	rootHash := st.RootHash()
-	assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", utils.ReverseAndHexEncodeHash(rootHash))
+	assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", rootHash.String())
 }
 
 func TestTwoTransactions(t *testing.T) {
@@ -68,13 +64,47 @@ func TestTwoTransactions(t *testing.T) {
 	hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
 	hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
 
-	_ = st.AddNodes([][32]byte{
-		*hash1,
-		*hash2,
+	_ = st.AddNodes([]*chainhash.Hash{
+		hash1,
+		hash2,
 	})
 
 	rootHash := st.RootHash()
-	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", utils.ReverseAndHexEncodeHash(rootHash))
+	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", rootHash.String())
+}
+
+func Test_Serialize(t *testing.T) {
+	t.Run("Serialize", func(t *testing.T) {
+		st := NewTree(2)
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNodes([]*chainhash.Hash{
+			hash1,
+			hash2,
+			hash3,
+			hash4,
+		})
+		serializedBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		newSubtree := NewTree(2)
+		err = newSubtree.Deserialize(serializedBytes)
+		require.NoError(t, err)
+		assert.Equal(t, st.Fees, newSubtree.Fees)
+		assert.Equal(t, st.Size(), newSubtree.Size())
+		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
+
+		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+		for i := 0; i < len(st.Nodes); i++ {
+			assert.Equal(t, st.Nodes[i].String(), newSubtree.Nodes[i].String())
+		}
+	})
 }
 
 // func TestDifference(t *testing.T) {
@@ -104,10 +134,10 @@ func TestTwoTransactions(t *testing.T) {
 // 	assert.Equal(t, 0, len(diff))
 // }
 
-func TestGenerateData(t *testing.T) {
-	err := generateTestSets()
-	require.NoError(t, err)
-}
+//func TestGenerateData(t *testing.T) {
+//	err := generateTestSets()
+//	require.NoError(t, err)
+//}
 
 // func BenchmarkSubtree_RootHash(b *testing.B) {
 // subtree, err := loadIds(18)
@@ -143,41 +173,41 @@ func TestGenerateData(t *testing.T) {
 // 	return ids, nil
 // }
 
-func generateTestSets() error {
-	f, err := os.Create("ids-20.txt")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	w := bufio.NewWriter(f)
-
-	var f2 *os.File
-	f2, err = os.Create("block.bin")
-	if err != nil {
-		return err
-	}
-	defer f2.Close()
-	w2 := bufio.NewWriter(f2)
-
-	nrOfIds := 60_000_000
-	for i := 0; i < nrOfIds; i++ {
-		txID := make([]byte, 32)
-		_, _ = rand.Read(txID)
-
-		if i%(nrOfIds/1_000_000) == 0 {
-			_, err = w.WriteString(utils.ReverseAndHexEncodeHash([32]byte(txID)) + "\n")
-			if err != nil {
-				return err
-			}
-		}
-		_, err = w2.Write(txID)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
+//func generateTestSets() error {
+//	f, err := os.Create("ids-20.txt")
+//	if err != nil {
+//		return err
+//	}
+//	defer f.Close()
+//	w := bufio.NewWriter(f)
+//
+//	var f2 *os.File
+//	f2, err = os.Create("block.bin")
+//	if err != nil {
+//		return err
+//	}
+//	defer f2.Close()
+//	w2 := bufio.NewWriter(f2)
+//
+//	nrOfIds := 60_000_000
+//	for i := 0; i < nrOfIds; i++ {
+//		txID := make([]byte, 32)
+//		_, _ = rand.Read(txID)
+//
+//		if i%(nrOfIds/1_000_000) == 0 {
+//			_, err = w.WriteString(utils.ReverseAndHexEncodeHash([32]byte(txID)) + "\n")
+//			if err != nil {
+//				return err
+//			}
+//		}
+//		_, err = w2.Write(txID)
+//		if err != nil {
+//			return err
+//		}
+//	}
+//
+//	return nil
+//}
 
 func TestIsPowerOf2(t *testing.T) {
 	// Testing the function

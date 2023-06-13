@@ -38,7 +38,7 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 				// Notified of another miner's validated block, so I need to process it.  This might be internal or external.
 
 			case txReq := <-stp.txChan:
-				err := stp.currentSubtree.AddNode(txReq.txID, txReq.fee)
+				err := stp.currentSubtree.AddNode(&txReq.txID, txReq.fee)
 				if err != nil {
 					panic(err)
 				}
@@ -87,7 +87,7 @@ func (stp *SubtreeProcessor) GetCompleteSubreesForJob(lastRoot []byte) []*util.S
 	var indexToSlice = -1
 
 	for i, subtree := range stp.chainedSubtrees {
-		if subtree.RootHash() == [32]byte(lastRoot) {
+		if *subtree.RootHash() == [32]byte(lastRoot) {
 			indexToSlice = i
 			break
 		}
