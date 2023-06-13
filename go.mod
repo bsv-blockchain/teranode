@@ -18,7 +18,6 @@ require (
 	github.com/lib/pq v1.10.7
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.1
 	github.com/libsv/go-p2p v0.1.1
 	github.com/minio/minio-go/v7 v7.0.52
@@ -49,6 +48,7 @@ require (
 )
 
 require (
+	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	github.com/dolthub/maphash v0.0.0-20221220182448-74e1e1ea1577 // indirect
 	github.com/eapache/go-resiliency v1.3.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230111030713-bf00bc1b83b6 // indirect
@@ -104,7 +104,6 @@ require (
 )
 
 require (
-	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	cloud.google.com/go v0.110.0 // indirect
 	cloud.google.com/go/compute v1.19.0 // indirect
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect

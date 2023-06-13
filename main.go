@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
+	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
@@ -60,6 +61,7 @@ func main() {
 	startTxStatusStore := flag.Bool("txstatusstore", false, "start txstatus store")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
+	startMiner := flag.Bool("miner", false, "start miner service")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
@@ -85,6 +87,10 @@ func main() {
 		*startSeeder = gocore.Config().GetBool("startSeeder", false)
 	}
 
+	if !*startMiner {
+		*startMiner = gocore.Config().GetBool("startMiner", false)
+	}
+
 	if !*startTxStatusStore {
 		*startTxStatusStore = gocore.Config().GetBool("startTxStatusStore", false)
 	}
@@ -107,6 +113,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -seeder=<1|0>")
 		fmt.Println("          whether to start the seeder service")
+		fmt.Println("")
+		fmt.Println("    -miner=<1|0>")
+		fmt.Println("          whether to start the miner service")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
@@ -167,6 +176,7 @@ func main() {
 	var propagationGRPCServer *propagation.PropagationServer
 	var blockAssemblyService *blockassembly.BlockAssembly
 	var seederService *seeder.Server
+	var minerServer *miner.Miner
 
 	// txstatus store
 	if *startTxStatusStore {
@@ -271,6 +281,15 @@ func main() {
 				return seederService.Start()
 			})
 		}
+	}
+
+	// miner
+	if *startMiner {
+		g.Go(func() (err error) {
+			minerServer = miner.NewMiner()
+			minerServer.Start()
+			return nil
+		})
 	}
 
 	// propagation
