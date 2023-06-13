@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 
-	"github.com/libsv/go-bc"
-	"github.com/libsv/go-bk/crypto"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/wire"
@@ -17,7 +15,7 @@ var (
 )
 
 type Block struct {
-	Header           *bc.BlockHeader
+	Header           *BlockHeader
 	CoinbaseTx       *bt.Tx
 	TransactionCount uint64
 	Subtrees         []*chainhash.Hash
@@ -27,7 +25,7 @@ type Block struct {
 	subtreeLength uint64
 }
 
-func NewBlock(header *bc.BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) (*Block, error) {
+func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) (*Block, error) {
 	return &Block{
 		Header:     header,
 		CoinbaseTx: coinbase,
@@ -42,7 +40,7 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 
 	// read the first 80 bytes as the block header
 	blockHeaderBytes := blockBytes[:80]
-	block.Header, err = bc.NewBlockHeaderFromBytes(blockHeaderBytes)
+	block.Header, err = NewBlockHeaderFromBytes(blockHeaderBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +85,10 @@ func (b *Block) Hash() *chainhash.Hash {
 		return b.hash
 	}
 
-	hash, err := chainhash.NewHash(bt.ReverseBytes(crypto.Sha256d(b.Header.Bytes())))
-	if err == nil {
-		b.hash = hash
-	}
+	hash := b.Header.Hash()
+	b.hash = &hash
 
-	return hash
+	return b.hash
 }
 
 func (b *Block) SubTreeBytes() ([]byte, error) {
@@ -116,8 +112,8 @@ func (b *Block) Bytes() ([]byte, error) {
 	// TODO not tested, due to discussion around storing subtrees in the block
 
 	// write the header
-	blockBytes := b.Header.Bytes()
-	buf := bytes.NewBuffer(blockBytes)
+	hash := b.Header.Hash()
+	buf := bytes.NewBuffer(hash[:])
 
 	// write the subtree list
 	subtreeBytes, err := b.SubTreeBytes()
