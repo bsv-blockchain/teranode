@@ -32,7 +32,7 @@ func NewClient() *Store {
 	}
 }
 
-func (s Store) BlockFound(ctx context.Context, txid *chainhash.Hash, utxoHashes []*chainhash.Hash) (bool, error) {
+func (s Store) BlockFound(ctx context.Context, hash *chainhash.Hash, utxoHashes []*chainhash.Hash) (bool, error) {
 	req := &blockvalidation_api.BlockFoundRequest{
 		BlockHeader:   []byte{},
 		Coinbase:      []byte{},

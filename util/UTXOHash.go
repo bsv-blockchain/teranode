@@ -35,14 +35,14 @@ func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, 
 }
 
 func UTXOHashFromInput(input *bt.Input) (*chainhash.Hash, error) {
-	txid, err := chainhash.NewHash(bt.ReverseBytes(input.PreviousTxID()))
+	hash, err := chainhash.NewHash(bt.ReverseBytes(input.PreviousTxID()))
 	if err != nil {
 		return nil, err
 	}
 
-	return UTXOHash(txid, input.PreviousTxOutIndex, *input.PreviousTxScript, input.PreviousTxSatoshis)
+	return UTXOHash(hash, input.PreviousTxOutIndex, *input.PreviousTxScript, input.PreviousTxSatoshis)
 }
 
-func UTXOHashFromOutput(txid *chainhash.Hash, output *bt.Output, vOut uint32) (*chainhash.Hash, error) {
-	return UTXOHash(txid, vOut, *output.LockingScript, output.Satoshis)
+func UTXOHashFromOutput(hash *chainhash.Hash, output *bt.Output, vOut uint32) (*chainhash.Hash, error) {
+	return UTXOHash(hash, vOut, *output.LockingScript, output.Satoshis)
 }

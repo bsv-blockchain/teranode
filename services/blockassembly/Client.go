@@ -32,9 +32,9 @@ func NewClient() *Client {
 	}
 }
 
-func (s Client) Store(ctx context.Context, txid *chainhash.Hash) (bool, error) {
+func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
-		Txid: txid[:],
+		Txid: hash[:],
 	}
 
 	if _, err := s.db.AddTx(ctx, req); err != nil {
