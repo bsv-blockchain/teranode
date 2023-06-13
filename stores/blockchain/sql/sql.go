@@ -1,7 +1,9 @@
 package sql
 
 import (
+	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,9 +11,13 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/stores/blockchain"
 	"github.com/labstack/gommon/random"
 	_ "github.com/lib/pq"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	_ "modernc.org/sqlite"
 )
@@ -63,7 +69,7 @@ func New(storeUrl *url.URL) (blockchain.Store, error) {
 			return nil, fmt.Errorf("failed to create postgres schema: %+v", err)
 		}
 
-	case "sqlite_memory":
+	case "sqlitememory":
 		memory = true
 		fallthrough
 	case "sqlite":
@@ -110,10 +116,17 @@ func New(storeUrl *url.URL) (blockchain.Store, error) {
 		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
 	}
 
-	return &SQL{
+	s := &SQL{
 		db:     db,
 		engine: storeUrl.Scheme,
-	}, nil
+	}
+
+	err = s.insertGenesisTransaction(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert genesis transaction: %+v", err)
+	}
+
+	return s, nil
 }
 
 func (s *SQL) Close() error {
@@ -130,7 +143,7 @@ func createPostgresSchema(db *sql.DB) error {
 	    ,previous_hash  BYTEA NOT NULL
 	    ,merkle_root    BYTEA NOT NULL
         ,block_time     BIGINT NOT NULL
-        ,n_bits         BIGINT NOT NULL
+        ,n_bits         BYTEA NOT NULL
         ,nonce          BIGINT NOT NULL
 	    ,height         BIGINT NOT NULL
         ,chain_work     BYTEA NOT NULL
@@ -151,7 +164,7 @@ func createPostgresSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphanedyn = FALSE;`); err != nil {
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
@@ -199,7 +212,7 @@ func createSqliteSchema(db *sql.DB) error {
 	    ,previous_hash  BLOB NOT NULL
 	    ,merkle_root    BLOB NOT NULL
         ,block_time		BIGINT NOT NULL
-        ,n_bits         BIGINT NOT NULL
+        ,n_bits         BLOB NOT NULL
         ,nonce          BIGINT NOT NULL
 	    ,height         BIGINT NOT NULL
         ,chain_work     BLOB NOT NULL
@@ -220,7 +233,7 @@ func createSqliteSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphanedyn = FALSE;`); err != nil {
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
@@ -228,4 +241,65 @@ func createSqliteSchema(db *sql.DB) error {
 	// TODO check for the genesis block and add it if missing
 
 	return nil
+}
+
+func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
+	q := `
+		SELECT
+	     count(*)
+		FROM blocks b
+	`
+
+	var err error
+	var blockCount uint64
+	if err = s.db.QueryRow(q).Scan(
+		&blockCount,
+	); err != nil {
+		return err
+	}
+
+	if blockCount == 0 {
+		// insert genesis block
+		previousBlock := &chainhash.Hash{}
+		merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+		bits, _ := hex.DecodeString("1d00ffff")
+		subtree, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")
+
+		txID := coinbaseTx.TxID()
+		_ = txID
+
+		genesisBlock := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      1231006505,
+				Nonce:          2083236893,
+				HashPrevBlock:  previousBlock,
+				HashMerkleRoot: merkleRoot,
+				Bits:           bits,
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{subtree},
+		}
+
+		// turn off foreign key checks when inserting the genesis block
+		if s.engine == "sqlite" || s.engine == "sqlitememory" {
+			_, _ = s.db.Exec("PRAGMA foreign_keys = OFF")
+		} else if s.engine == "postgres" {
+			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
+		}
+
+		err = s.StoreBlock(context.Background(), genesisBlock)
+		logger.Infof("genesis block inserted")
+
+		// turn foreign key checks back on
+		if s.engine == "sqlite" || s.engine == "sqlitememory" {
+			_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+		} else if s.engine == "postgres" {
+			_, _ = s.db.Exec("SET session_replication_role = 'origin'")
+		}
+	}
+
+	return err
 }

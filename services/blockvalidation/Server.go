@@ -1,7 +1,6 @@
 package blockvalidation
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -225,13 +225,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block)
 
 func (u *BlockValidation) CheckPOW(ctx context.Context, block *model.Block) error {
 	// TODO Check the nBits value is correct for this block
-	previousBlockHash, err := chainhash.NewHash(block.Header.HashPrevBlock)
-	if err == nil {
-		return err
-	}
 
 	// TODO - replace the following with a call to the blockchain service that gets the correct nBits value for the block
-	_, _ = u.blockchainClient.GetBlock(ctx, previousBlockHash)
+	_, _ = u.blockchainClient.GetBlock(ctx, block.Header.HashPrevBlock)
+
+	header := bc.BlockHeader{}
+	header.Valid()
 
 	// Check that the block header hash is less than the target difficulty.
 	ok := block.Header.Valid()
@@ -271,8 +270,12 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	}
 
 	calculatedMerkleRoot := st.RootHash()
+	calculatedMerkleRootHash, err := chainhash.NewHash(calculatedMerkleRoot[:])
+	if err != nil {
+		return err
+	}
 
-	if !bytes.Equal(calculatedMerkleRoot[:], block.Header.HashMerkleRoot) {
+	if !block.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
 		log.Printf("Expected %x, got %x", block.Header.HashMerkleRoot, calculatedMerkleRoot)
 		return errors.New("merkle root does not match")
 	}

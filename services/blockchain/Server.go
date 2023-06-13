@@ -10,7 +10,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
-	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -122,7 +121,7 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
-	header, err := bc.NewBlockHeaderFromBytes(request.Header)
+	header, err := model.NewBlockHeaderFromBytes(request.Header)
 	if err != nil {
 		return nil, err
 	}

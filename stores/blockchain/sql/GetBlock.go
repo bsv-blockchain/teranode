@@ -8,7 +8,6 @@ import (
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -24,7 +23,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	q := `
 		SELECT
-	    ,b.version
+	     b.version
 		,b.block_time
 		,b.n_bits
 	    ,b.nonce
@@ -37,20 +36,22 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	`
 
 	block := &model.Block{
-		Header: &bc.BlockHeader{},
+		Header: &model.BlockHeader{},
 	}
 
 	var subtreeCount uint64
 	var subtreeBytes []byte
+	var hashPrevBlock []byte
+	var hashMerkleRoot []byte
 	var err error
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&block.Header.Version,
-		&block.Header.Time,
+		&block.Header.Timestamp,
 		&block.Header.Bits,
 		&block.Header.Nonce,
-		&block.Header.HashPrevBlock,
-		&block.Header.HashMerkleRoot,
+		&hashPrevBlock,
+		&hashMerkleRoot,
 		&subtreeCount,
 		&subtreeBytes,
 	); err != nil {
@@ -58,6 +59,15 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 			return nil, store.ErrBlockNotFound
 		}
 		return nil, err
+	}
+
+	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+	}
+	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
 
 	block.Subtrees = make([]*chainhash.Hash, subtreeCount)

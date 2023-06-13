@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
-	"github.com/libsv/go-bc"
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*bc.BlockHeader, error) {
+func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -22,7 +23,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*bc.Blo
 
 	q := `
 		SELECT
-	    ,b.version
+	     b.version
 		,b.block_time
 	    ,b.nonce
 		,b.previous_hash
@@ -32,21 +33,33 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*bc.Blo
 		WHERE b.hash = $1
 	`
 
-	blockHeader := &bc.BlockHeader{}
+	blockHeader := &model.BlockHeader{}
+
+	var hashPrevBlock []byte
+	var hashMerkleRoot []byte
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&blockHeader.Version,
-		&blockHeader.Time,
+		&blockHeader.Timestamp,
 		&blockHeader.Nonce,
-		&blockHeader.HashPrevBlock,
-		&blockHeader.HashMerkleRoot,
+		&hashPrevBlock,
+		&hashMerkleRoot,
 		&blockHeader.Bits,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrBlockNotFound
 		}
 		return nil, err
+	}
+
+	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+	}
+	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
 
 	return blockHeader, nil

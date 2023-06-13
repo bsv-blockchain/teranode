@@ -1,11 +1,11 @@
 package blockvalidation
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bc"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -52,9 +52,10 @@ func TestOneTransaction(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
+	merkleRootHash, _ := chainhash.NewHash(bt.ReverseBytes(coinbaseTx.TxIDBytes()))
 	block := &model.Block{
-		Header: &bc.BlockHeader{
-			HashMerkleRoot: bt.ReverseBytes(coinbaseTx.TxIDBytes()),
+		Header: &model.BlockHeader{
+			HashMerkleRoot: merkleRootHash,
 		},
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
@@ -97,9 +98,10 @@ func TestTwoTransactions(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
+	expectedMerkleRootHash, _ := chainhash.NewHash(expectedMerkleRoot.CloneBytes())
 	block := &model.Block{
-		Header: &bc.BlockHeader{
-			HashMerkleRoot: expectedMerkleRoot.CloneBytes(),
+		Header: &model.BlockHeader{
+			HashMerkleRoot: expectedMerkleRootHash,
 		},
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
@@ -140,7 +142,7 @@ func TestMerkleRoot(t *testing.T) {
 		t.Fail()
 	}
 
-	bits, err := chainhash.NewHashFromStr(bitsStr)
+	bits, err := hex.DecodeString(bitsStr)
 	if err != nil {
 		t.Fail()
 	}
@@ -158,13 +160,13 @@ func TestMerkleRoot(t *testing.T) {
 	}
 
 	block := &model.Block{
-		Header: &bc.BlockHeader{
+		Header: &model.BlockHeader{
 			Version:        1,
-			Time:           1293623863,
+			Timestamp:      1293623863,
 			Nonce:          274148111,
-			HashPrevBlock:  prevBlockHash.CloneBytes(),
-			HashMerkleRoot: merkleRoot.CloneBytes(),
-			Bits:           bits.CloneBytes(),
+			HashPrevBlock:  prevBlockHash,
+			HashMerkleRoot: merkleRoot,
+			Bits:           bits,
 		},
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,

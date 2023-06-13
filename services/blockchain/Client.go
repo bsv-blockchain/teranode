@@ -6,7 +6,6 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
-	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -65,7 +64,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		return nil, err
 	}
 
-	header, err := bc.NewBlockHeaderFromBytes(resp.Header)
+	header, err := model.NewBlockHeaderFromBytes(resp.Header)
 	if err != nil {
 		return nil, err
 	}

@@ -23,9 +23,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	q := `
+	var err error
+	var previousBlockId uint64
+	var previousChainWork []byte
+	var previousOrphaned bool
+	var previousHeight uint64
+
+	coinbaseTxID := block.CoinbaseTx.TxID()
+	if coinbaseTxID == "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b" {
+		previousBlockId = 0
+		previousChainWork = make([]byte, 32)
+		previousOrphaned = false
+		previousHeight = 0
+	} else {
+		q := `
 		SELECT
-	    ,b.id
+	     b.id
 	    ,b.chain_work
 		,b.orphaned
 		,b.height
@@ -33,26 +46,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		WHERE b.hash = $1
 	`
 
-	var err error
-	var previousBlockId uint64
-	var previousChainWork []byte
-	var previousOrphaned bool
-	var previousHeight uint64
-	if err = s.db.QueryRowContext(ctx, q, block.Header.HashPrevBlock[:]).Scan(
-		&previousBlockId,
-		&previousChainWork,
-		&previousOrphaned,
-		&previousHeight,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("previous block not found: %w", store.ErrBlockNotFound)
+		if err = s.db.QueryRowContext(ctx, q, block.Header.HashPrevBlock[:]).Scan(
+			&previousBlockId,
+			&previousChainWork,
+			&previousOrphaned,
+			&previousHeight,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("previous block not found: %w", store.ErrBlockNotFound)
+			}
+			return err
 		}
-		return err
 	}
 
-	q = `
+	q := `
 		INSERT INTO blocks (
-		,parentId
+		 parentId
         ,version
 	    ,hash
 	    ,previous_hash
@@ -83,7 +92,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		,$13
 		,$14
 		,$15
-		,$16
 		)
 		ON CONFLICT DO NOTHING
 		RETURNING id
@@ -106,14 +114,14 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	if err = s.db.QueryRowContext(ctx, q,
 		previousBlockId,
 		block.Header.Version,
-		block.Hash(),
-		block.Header.HashPrevBlock,
-		block.Header.HashMerkleRoot,
-		block.Header.Time,
+		block.Hash().CloneBytes(),
+		block.Header.HashPrevBlock.CloneBytes(),
+		block.Header.HashMerkleRoot.CloneBytes(),
+		block.Header.Timestamp,
 		block.Header.Bits,
 		block.Header.Nonce,
 		previousHeight+1,
-		cumulativeChainWork,
+		cumulativeChainWork.CloneBytes(),
 		block.TransactionCount,
 		len(block.Subtrees),
 		subtreeBytes,
