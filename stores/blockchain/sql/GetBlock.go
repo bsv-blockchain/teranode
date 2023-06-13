@@ -12,7 +12,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint64, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -32,6 +32,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	    ,b.tx_count
 		,b.subtree_count
 		,b.subtrees
+		,b.height
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -45,6 +46,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	var subtreeBytes []byte
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
+	var height uint64
 	var err error
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
@@ -57,27 +59,28 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&transactionCount,
 		&subtreeCount,
 		&subtreeBytes,
+		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, store.ErrBlockNotFound
+			return nil, 0, store.ErrBlockNotFound
 		}
-		return nil, err
+		return nil, 0, err
 	}
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, 0, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
 	}
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
 	block.TransactionCount = transactionCount
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert subtrees: %w", err)
+		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
 
-	return block, nil
+	return block, height, nil
 }

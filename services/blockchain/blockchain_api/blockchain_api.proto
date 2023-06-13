@@ -14,7 +14,8 @@ service BlockchainAPI {
   // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
-  rpc GetMedianTime(GetMedianTimeRequest) returns (GetMedianTimeResponse) {}
+  rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetChainTip(google.protobuf.Empty) returns (ChainTipResponse) {}
   rpc SubscribeChainTip (google.protobuf.Empty) returns (stream ChainTipResponse) {}
 }
 
@@ -45,6 +46,17 @@ message GetBlockResponse {
 // swagger:model GetMedianTimeRequest
 message GetMedianTimeRequest {
   bytes blockHash = 1;
+}
+
+// swagger:model GetBlockHeadersRequest
+message GetBlockHeadersRequest {
+  bytes startHash = 1;
+  uint64 numberOfHeaders = 2;
+}
+
+// swagger:model GetBlockHeadersResponse
+message GetBlockHeadersResponse {
+  repeated bytes blockHeaders = 1;
 }
 
 // swagger:model GetMedianTimeResponse

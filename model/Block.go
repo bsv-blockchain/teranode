@@ -85,8 +85,7 @@ func (b *Block) Hash() *chainhash.Hash {
 		return b.hash
 	}
 
-	hash := b.Header.Hash()
-	b.hash = &hash
+	b.hash = b.Header.Hash()
 
 	return b.hash
 }

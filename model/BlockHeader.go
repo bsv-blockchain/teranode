@@ -65,8 +65,9 @@ func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 	return NewBlockHeaderFromBytes(headerBytes)
 }
 
-func (bh *BlockHeader) Hash() chainhash.Hash {
-	return chainhash.DoubleHashH(bh.Bytes())
+func (bh *BlockHeader) Hash() *chainhash.Hash {
+	hash := chainhash.DoubleHashH(bh.Bytes())
+	return &hash
 }
 
 func (bh *BlockHeader) Valid() bool {

@@ -146,7 +146,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		return nil, err
 	}
 
-	block, err := b.store.GetBlock(ctx, blockHash)
+	block, _, err := b.store.GetBlock(ctx, blockHash)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
-func (b *Blockchain) ChainTip(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.ChainTipResponse, error) {
+func (b *Blockchain) GetChainTip(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.ChainTipResponse, error) {
 	chainTip, height, err := b.store.GetChainTip(ctx)
 	if err != nil {
 		return nil, err
@@ -167,4 +167,62 @@ func (b *Blockchain) ChainTip(ctx context.Context, empty *emptypb.Empty) (*block
 		BlockHeader: chainTip.Bytes(),
 		Height:      height,
 	}, nil
+}
+
+func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHeaders, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+	}, nil
+}
+
+func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeChainTipServer) error {
+	// Start a ticker that executes each 10 seconds
+	// TODO change this to an event when a new chaintip is added
+	timer := time.NewTicker(10 * time.Second)
+
+	var lastHeaderHashStr string
+	for {
+		select {
+		// Exit on stream context done
+		case <-stream.Context().Done():
+			return nil
+		case <-timer.C:
+			header, height, err := b.store.GetChainTip(stream.Context())
+			if err != nil {
+				b.logger.Errorf("error getting chain tip: %s", err.Error())
+				continue
+			}
+			currentHeaderHashStr := header.Hash().String()
+			if currentHeaderHashStr == lastHeaderHashStr {
+				continue
+			}
+
+			// Send the Hardware stats on the stream
+			err = stream.Send(&blockchain_api.ChainTipResponse{
+				BlockHeader: header.Bytes(),
+				Height:      height,
+			})
+			if err != nil {
+				b.logger.Errorf("error sending chain tip: %s", err.Error())
+				continue
+			}
+
+			lastHeaderHashStr = header.Hash().String()
+		}
+	}
 }

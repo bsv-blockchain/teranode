@@ -25,36 +25,54 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	var err error
 	var previousBlockId uint64
 	var previousChainWork []byte
-	var previousOrphaned bool
+	var orphaned bool
 	var previousHeight uint64
+	var height uint64
 
 	coinbaseTxID := block.CoinbaseTx.TxID()
 	if coinbaseTxID == "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b" {
+		// genesis block
 		previousBlockId = 0
 		previousChainWork = make([]byte, 32)
-		previousOrphaned = false
+		orphaned = false
 		previousHeight = 0
+		height = 0
 	} else {
 		q := `
-		SELECT
-	     b.id
-	    ,b.chain_work
-		,b.orphaned
-		,b.height
-		FROM blocks b
-		WHERE b.hash = $1
-	`
-
+			SELECT
+			 b.id
+			,b.chain_work
+			,b.orphaned
+			,b.height
+			FROM blocks b
+			WHERE b.hash = $1
+		`
 		if err = s.db.QueryRowContext(ctx, q, block.Header.HashPrevBlock[:]).Scan(
 			&previousBlockId,
 			&previousChainWork,
-			&previousOrphaned,
+			&orphaned,
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("previous block not found: %w", store.ErrBlockNotFound)
 			}
 			return err
+		}
+		height = previousHeight + 1
+
+		// check whether there is another block with the same height that is not orphaned
+		var activeBlockId uint64
+		q = `
+			SELECT
+			 b.id
+			FROM blocks b
+			WHERE b.height = $1
+			  AND b.orphaned = FALSE
+		`
+		_ = s.db.QueryRowContext(ctx, q, height).Scan(&activeBlockId)
+		if activeBlockId != 0 {
+			// this block is an orphan
+			orphaned = true
 		}
 	}
 
@@ -119,13 +137,13 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		block.Header.Timestamp,
 		block.Header.Bits,
 		block.Header.Nonce,
-		previousHeight+1,
+		height,
 		cumulativeChainWork.CloneBytes(),
 		block.TransactionCount,
 		len(block.Subtrees),
 		subtreeBytes,
 		block.CoinbaseTx.Bytes(),
-		previousOrphaned,
+		orphaned,
 	).Scan(&previousBlockId); err != nil {
 		return err
 	}

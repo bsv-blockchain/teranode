@@ -69,9 +69,83 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		return nil, err
 	}
 
+	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
+	for _, subtreeHash := range resp.SubtreeHashes {
+		hash, err := chainhash.NewHash(subtreeHash)
+		if err != nil {
+			return nil, err
+		}
+		subtreeHashes = append(subtreeHashes, hash)
+	}
+
 	return &model.Block{
-		Header: header,
-		// TODO - convert to merkle subtree
-		// Subtrees: resp.SubtreeHashes,
+		Header:   header,
+		Subtrees: subtreeHashes,
 	}, nil
+}
+
+func (c Client) GetChainTip(ctx context.Context) (*model.BlockHeader, uint64, error) {
+	resp, err := c.client.GetChainTip(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return header, resp.Height, nil
+}
+
+func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error) {
+	resp, err := c.client.GetBlockHeaders(ctx, &blockchain_api.GetBlockHeadersRequest{
+		StartHash:       blockHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, err
+		}
+		headers = append(headers, header)
+	}
+
+	return headers, nil
+}
+
+func (c Client) SubscribeChainTips(ctx context.Context) (chan *model.BlockHeader, error) {
+	stream, err := c.client.SubscribeChainTip(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan *model.BlockHeader)
+	go func() {
+		defer close(ch)
+
+		for {
+			var resp *blockchain_api.ChainTipResponse
+			var header *model.BlockHeader
+
+			resp, err = stream.Recv()
+			if err != nil {
+				return
+			}
+
+			header, err = model.NewBlockHeaderFromBytes(resp.BlockHeader)
+			if err != nil {
+				return
+			}
+
+			ch <- header
+		}
+	}()
+
+	return ch, nil
 }

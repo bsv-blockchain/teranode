@@ -23,7 +23,8 @@ const (
 	BlockchainAPI_Health_FullMethodName            = "/blockchain_api.BlockchainAPI/Health"
 	BlockchainAPI_AddBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/AddBlock"
 	BlockchainAPI_GetBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/GetBlock"
-	BlockchainAPI_GetMedianTime_FullMethodName     = "/blockchain_api.BlockchainAPI/GetMedianTime"
+	BlockchainAPI_GetBlockHeaders_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetChainTip_FullMethodName       = "/blockchain_api.BlockchainAPI/GetChainTip"
 	BlockchainAPI_SubscribeChainTip_FullMethodName = "/blockchain_api.BlockchainAPI/SubscribeChainTip"
 )
 
@@ -36,7 +37,8 @@ type BlockchainAPIClient interface {
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(ctx context.Context, in *AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
-	GetMedianTime(ctx context.Context, in *GetMedianTimeRequest, opts ...grpc.CallOption) (*GetMedianTimeResponse, error)
+	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
+	GetChainTip(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ChainTipResponse, error)
 	SubscribeChainTip(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlockchainAPI_SubscribeChainTipClient, error)
 }
 
@@ -75,9 +77,18 @@ func (c *blockchainAPIClient) GetBlock(ctx context.Context, in *GetBlockRequest,
 	return out, nil
 }
 
-func (c *blockchainAPIClient) GetMedianTime(ctx context.Context, in *GetMedianTimeRequest, opts ...grpc.CallOption) (*GetMedianTimeResponse, error) {
-	out := new(GetMedianTimeResponse)
-	err := c.cc.Invoke(ctx, BlockchainAPI_GetMedianTime_FullMethodName, in, out, opts...)
+func (c *blockchainAPIClient) GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error) {
+	out := new(GetBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeaders_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetChainTip(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ChainTipResponse, error) {
+	out := new(ChainTipResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetChainTip_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +136,8 @@ type BlockchainAPIServer interface {
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(context.Context, *AddBlockRequest) (*emptypb.Empty, error)
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
-	GetMedianTime(context.Context, *GetMedianTimeRequest) (*GetMedianTimeResponse, error)
+	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
+	GetChainTip(context.Context, *emptypb.Empty) (*ChainTipResponse, error)
 	SubscribeChainTip(*emptypb.Empty, BlockchainAPI_SubscribeChainTipServer) error
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
@@ -143,8 +155,11 @@ func (UnimplementedBlockchainAPIServer) AddBlock(context.Context, *AddBlockReque
 func (UnimplementedBlockchainAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
 }
-func (UnimplementedBlockchainAPIServer) GetMedianTime(context.Context, *GetMedianTimeRequest) (*GetMedianTimeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetMedianTime not implemented")
+func (UnimplementedBlockchainAPIServer) GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaders not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetChainTip(context.Context, *emptypb.Empty) (*ChainTipResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetChainTip not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SubscribeChainTip(*emptypb.Empty, BlockchainAPI_SubscribeChainTipServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeChainTip not implemented")
@@ -216,20 +231,38 @@ func _BlockchainAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_GetMedianTime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetMedianTimeRequest)
+func _BlockchainAPI_GetBlockHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeadersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockchainAPIServer).GetMedianTime(ctx, in)
+		return srv.(BlockchainAPIServer).GetBlockHeaders(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockchainAPI_GetMedianTime_FullMethodName,
+		FullMethod: BlockchainAPI_GetBlockHeaders_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).GetMedianTime(ctx, req.(*GetMedianTimeRequest))
+		return srv.(BlockchainAPIServer).GetBlockHeaders(ctx, req.(*GetBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetChainTip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetChainTip(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetChainTip_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetChainTip(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -275,8 +308,12 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetBlock_Handler,
 		},
 		{
-			MethodName: "GetMedianTime",
-			Handler:    _BlockchainAPI_GetMedianTime_Handler,
+			MethodName: "GetBlockHeaders",
+			Handler:    _BlockchainAPI_GetBlockHeaders_Handler,
+		},
+		{
+			MethodName: "GetChainTip",
+			Handler:    _BlockchainAPI_GetChainTip_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
