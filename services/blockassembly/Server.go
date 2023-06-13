@@ -2,13 +2,16 @@ package blockassembly
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus"
 	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
@@ -28,6 +31,7 @@ import (
 
 var (
 	prometheusBlockAssemblyAddTx prometheus.Counter
+	jobStore                     map[chainhash.Hash]*blockassembly_api.GetMiningCandidateResponse
 )
 
 func init() {
@@ -37,6 +41,7 @@ func init() {
 			Help: "Number of txs added to the blockassembly service",
 		},
 	)
+	jobStore = make(map[chainhash.Hash]*blockassembly_api.GetMiningCandidateResponse)
 }
 
 // BlockAssembly type carries the logger within it
@@ -48,6 +53,7 @@ type BlockAssembly struct {
 	txStatusClient   txstatus_store.Store
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
+	blockchainClient *blockchain.Client
 }
 
 func Enabled() bool {
@@ -93,6 +99,11 @@ func New(logger utils.Logger) *BlockAssembly {
 		}
 	}
 
+	blockchainClient, err := blockchain.NewClient()
+	if err != nil {
+		panic(err)
+	}
+
 	newSubtreeChan := make(chan *util.Subtree)
 
 	ba := &BlockAssembly{
@@ -100,6 +111,7 @@ func New(logger utils.Logger) *BlockAssembly {
 		utxoStore:        s,
 		txStatusClient:   txStatusStore,
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubtreeChan),
+		blockchainClient: blockchainClient,
 	}
 
 	go func() {
@@ -197,29 +209,98 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
-// func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
+func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
 
-// 	// TODO - Get current chaintip and height and open merkle container for it.
-// 	chaintip := &chainhash.Hash{}
-// 	height := uint32(0)
-// 	previousHash := &chainhash.Hash{}
+	// TODO - Get current chaintip and height and open merkle container for it.
+	// chaintip := model.Block{} //ba.blockchainClient.GetBestBlockHeader()
+	height := uint32(0)
+	previousHash := &chainhash.Hash{}
 
-// 	// Get the list of completed containers for the current chaintip and height...
-// subtrees, err := merkle.GetContainersForCandidate(chaintip, height)
-// 	if err != nil {
-// 		panic(err)
-// 	}
+	// Get the list of completed containers for the current chaintip and height...
+	subtrees := ba.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
+	var coinbaseValue uint64
 
-// 	return &blockassembly_api.GetMiningCandidateResponse{
-// 		Id:             fmt.Sprintf("%d-%d", height, time.Now().UnixNano()),
-// 		PreviousHash:   previousHash.CloneBytes(),
-// 		CoinbaseValue:  0, // TODO ba.Fees,
-// 		Version:        1,
-// 		NBits:          uint32(0x1d00ffff),
-// 		Height:         uint32(height),
-// 		Time:           uint32(time.Now().Unix()),
-// 		NumTx:          uint64(0),
-// 		MerkleProof:    []string{},
-// 		MerkleSubtrees:subtrees,
-// 	}, nil
-// }
+	for _, subtree := range subtrees {
+		coinbaseValue += subtree.Fees
+	}
+	coinbaseValue += util.GetBlockSubsidyForHeight((height))
+
+	id := subtrees[len(subtrees)-1].RootHash()
+
+	nbits, err := hex.DecodeString("0x1d00ffff")
+	if err != nil {
+		return nil, err
+	}
+
+	job := &blockassembly_api.GetMiningCandidateResponse{
+		Id:            id[:],
+		PreviousHash:  previousHash.CloneBytes(),
+		CoinbaseValue: coinbaseValue,
+		Version:       1,
+		NBits:         nbits,
+		Height:        height,
+		Time:          uint32(time.Now().Unix()),
+		MerkleProof:   ba.subtreeProcessor.GetMerkleProofForCoinbase(),
+	}
+
+	storeId, err := chainhash.NewHash(id[:])
+	if err != nil {
+		return nil, err
+	}
+	jobStore[*storeId] = job
+	return job, nil
+}
+
+func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+
+	storeId, err := chainhash.NewHash(req.Id[:])
+	if err != nil {
+		return &blockassembly_api.SubmitMiningSolutionResponse{
+			Ok: false,
+		}, nil
+	}
+	job := jobStore[*storeId]
+
+	hashPrevBlock, err := chainhash.NewHash(job.PreviousHash)
+	if err != nil {
+		// return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+	}
+
+	// subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
+
+	block := model.Block{
+		Header: &model.BlockHeader{
+			Version:       req.Version,
+			HashPrevBlock: hashPrevBlock,
+			// HashMerkleRoot: req.MerkleRoot,
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      req.Time,
+			Bits:           job.NBits,
+			Nonce:          req.Nonce,
+		},
+	}
+
+	// TODO - Validate the solution and submit it to the blockchain
+
+	// target, err := util.CalculateTarget(job.NBits)
+	// if err != nil {
+	// 	return &blockassembly_api.SubmitMiningSolutionResponse{
+	// 		Ok: false,
+	// 	}
+	// }
+
+	// check difficulty in header is low enough
+	ok := block.Header.Valid()
+
+	if !ok {
+		ba.logger.Warnf("Invalid block: %v", block.Header)
+		return &blockassembly_api.SubmitMiningSolutionResponse{
+			Ok: false,
+		}, nil
+	}
+
+	ba.blockchainClient.AddBlock(ctx, &model.Block{})
+	return &blockassembly_api.SubmitMiningSolutionResponse{
+		Ok: true,
+	}, nil
+}

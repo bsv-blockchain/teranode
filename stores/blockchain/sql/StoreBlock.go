@@ -3,7 +3,6 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -135,8 +134,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {
-	nBits := binary.BigEndian.Uint32(block.Header.Bits)
-	newWork, err := util.CalculateWork(chainWork, nBits)
+	newWork, err := util.CalculateWork(chainWork, block.Header.Bits)
 	if err != nil {
 		return nil, err
 	}

@@ -1,13 +1,14 @@
 package util
 
 import (
+	"encoding/binary"
 	"math/big"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
-func CalculateWork(prevWork *chainhash.Hash, nBits uint32) (*chainhash.Hash, error) {
+func CalculateWork(prevWork *chainhash.Hash, nBits []byte) (*chainhash.Hash, error) {
 	target, err := CalculateTarget(nBits)
 	if err != nil {
 		return nil, err
@@ -26,10 +27,11 @@ func CalculateWork(prevWork *chainhash.Hash, nBits uint32) (*chainhash.Hash, err
 	return hash, nil
 }
 
-func CalculateTarget(nBits uint32) (*big.Int, error) {
+func CalculateTarget(nBits []byte) (*big.Int, error) {
+	nb := binary.BigEndian.Uint32(nBits)
 	// nBits in Bitcoin protocol is in little-endian, so reverse if necessary
-	exponent := nBits >> 24
-	mantissa := nBits & 0x007FFFFF
+	exponent := nb >> 24
+	mantissa := nb & 0x007FFFFF
 
 	// Invalid nBits
 	if exponent <= 3 {

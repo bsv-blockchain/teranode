@@ -78,6 +78,20 @@ func (stp *SubtreeProcessor) Add(txid chainhash.Hash, fee uint64, optionalWaitCh
 	}
 }
 
+func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
+	// TODO: may need mutex
+	return stp.chainedSubtrees
+}
+func (stp *SubtreeProcessor) GetCompleteSubreesForJob(lastRoot []byte) []*util.Subtree {
+	// TODO: may need mutex
+	return stp.chainedSubtrees
+}
+
+func (stp *SubtreeProcessor) GetMerkleProofForCoinbase() [][]byte {
+	// TODO: get the merkle path for the coinbase
+	return nil
+}
+
 // Report new height
 func (stp *SubtreeProcessor) Report(height uint64) {
 

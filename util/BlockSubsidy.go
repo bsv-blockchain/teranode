@@ -1,7 +1,7 @@
 package util
 
 // GetBlockSubsidyForHeight func
-func GetBlockSubsidyForHeight(height uint64) uint64 {
+func GetBlockSubsidyForHeight(height uint32) uint64 {
 	halvings := height / 210000
 	// Force block reward to zero when right shift is undefined.
 	if halvings >= 64 {
