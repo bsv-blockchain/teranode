@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"sync"
 	"time"
@@ -261,7 +260,7 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	}
 
 	// Create a new subtree with the hashes of the subtrees
-	st := util.NewTreeByLeafCount(ceilPowerOfTwo(len(block.Subtrees)))
+	st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(block.Subtrees)))
 	for _, hash := range hashes {
 		err := st.AddNode(hash, 1)
 		if err != nil {
@@ -281,18 +280,4 @@ func (u *BlockValidation) CheckMerkleRoot(block *model.Block) error {
 	}
 
 	return nil
-}
-
-func ceilPowerOfTwo(num int) int {
-	if num <= 0 {
-		return 1
-	}
-
-	// Find the position of the most significant bit
-	msbPos := uint(math.Ceil(math.Log2(float64(num))))
-
-	// Calculate the power of 2 with the next higher position
-	ceilValue := int(math.Pow(2, float64(msbPos)))
-
-	return ceilValue
 }

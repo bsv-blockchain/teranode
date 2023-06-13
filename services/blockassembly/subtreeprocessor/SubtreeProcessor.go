@@ -84,7 +84,19 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 }
 func (stp *SubtreeProcessor) GetCompleteSubreesForJob(lastRoot []byte) []*util.Subtree {
 	// TODO: may need mutex
-	return stp.chainedSubtrees
+	var indexToSlice = -1
+
+	for i, subtree := range stp.chainedSubtrees {
+		if subtree.RootHash() == [32]byte(lastRoot) {
+			indexToSlice = i
+			break
+		}
+	}
+	if indexToSlice != -1 {
+		return stp.chainedSubtrees[:indexToSlice+1]
+	}
+
+	return nil
 }
 
 func (stp *SubtreeProcessor) GetMerkleProofForCoinbase() [][]byte {

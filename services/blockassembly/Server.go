@@ -257,37 +257,50 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	if err != nil {
 		return &blockassembly_api.SubmitMiningSolutionResponse{
 			Ok: false,
-		}, nil
+		}, err
 	}
 	job := jobStore[*storeId]
 
 	hashPrevBlock, err := chainhash.NewHash(job.PreviousHash)
 	if err != nil {
-		// return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
 	}
 
-	// subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
+	subtreesInJob := ba.subtreeProcessor.GetCompleteSubreesForJob(job.Id)
+	subtreesInJob[0].ReplaceRootNode([32]byte(req.CoinbaseTx))
+
+	// TODO: calculate merkle root
+	hashes := make([][32]byte, len(subtreesInJob))
+
+	for i, subtree := range subtreesInJob {
+		hashes[i] = [32]byte(subtree.RootHash())
+	}
+
+	// Create a new subtree with the hashes of the subtrees
+	st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
+	for _, hash := range hashes {
+		err := st.AddNode(hash, 1)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	calculatedMerkleRoot := st.RootHash()
+	mrch, err := chainhash.NewHash(calculatedMerkleRoot[:])
+	if err != nil {
+		return nil, err
+	}
 
 	block := model.Block{
 		Header: &model.BlockHeader{
-			Version:       req.Version,
-			HashPrevBlock: hashPrevBlock,
-			// HashMerkleRoot: req.MerkleRoot,
-			HashMerkleRoot: &chainhash.Hash{},
+			Version:        req.Version,
+			HashPrevBlock:  hashPrevBlock,
+			HashMerkleRoot: mrch,
 			Timestamp:      req.Time,
 			Bits:           job.NBits,
 			Nonce:          req.Nonce,
 		},
 	}
-
-	// TODO - Validate the solution and submit it to the blockchain
-
-	// target, err := util.CalculateTarget(job.NBits)
-	// if err != nil {
-	// 	return &blockassembly_api.SubmitMiningSolutionResponse{
-	// 		Ok: false,
-	// 	}
-	// }
 
 	// check difficulty in header is low enough
 	ok := block.Header.Valid()
