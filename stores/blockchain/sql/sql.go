@@ -12,7 +12,6 @@ import (
 	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/stores/blockchain"
 	"github.com/labstack/gommon/random"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
@@ -31,7 +30,7 @@ func init() {
 	gocore.NewStat("blockchain")
 }
 
-func New(storeUrl *url.URL) (blockchain.Store, error) {
+func New(storeUrl *url.URL) (*SQL, error) {
 	var db *sql.DB
 	var err error
 
