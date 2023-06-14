@@ -2,8 +2,11 @@ package validator
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"strconv"
 
+	"github.com/Shopify/sarama"
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -14,24 +17,55 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-bitcoin"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type Validator struct {
-	store          utxostore.Interface
-	blockAssembler blockassembly.Store
-	txStatus       txstatus.Store
-	saveInParallel bool
+	logger          utils.Logger
+	store           utxostore.Interface
+	blockAssembler  blockassembly.Store
+	txStatus        txstatus.Store
+	kafkaProducer   sarama.SyncProducer
+	kafkaTopic      string
+	kafkaPartitions int
+	saveInParallel  bool
 }
 
-func New(store utxostore.Interface, txStatus txstatus.Store) Interface {
+func New(logger utils.Logger, store utxostore.Interface, txStatus txstatus.Store) (Interface, error) {
 	ba := blockassembly.NewClient()
 
-	return &Validator{
+	validator := &Validator{
+		logger:         logger,
 		store:          store,
 		blockAssembler: ba,
 		txStatus:       txStatus,
 		saveInParallel: true,
 	}
+
+	kafkaURL, _, found := gocore.Config().GetURL("blockassembly_kafkaBrokers")
+	if found {
+		_, producer, err := util.ConnectToKafka(kafkaURL)
+		if err != nil {
+			return nil, fmt.Errorf("unable to connect to kafka: %v", err)
+		}
+
+		//defer func() {
+		//	_ = clusterAdmin.Close()
+		//	_ = producer.Close()
+		//}()
+
+		validator.kafkaProducer = producer
+		validator.kafkaTopic = kafkaURL.Path[1:]
+		validator.kafkaPartitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions"))
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse partitions: %v", err)
+		}
+
+		logger.Infof("[VALIDATOR] connected to kafka at %s", kafkaURL.Host)
+	}
+
+	return validator, nil
 }
 
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
@@ -171,11 +205,17 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 	// register transaction in tx status store
 	if err = v.txStatus.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
-		fmt.Printf("error sending tx to txstatus: %v", err)
+		v.logger.Errorf("error sending tx to txstatus: %v", err)
 	}
 
-	if _, err = v.blockAssembler.Store(ctx, txIDChainHash); err != nil {
-		fmt.Printf("error sending tx to block assembler: %v", err)
+	if v.kafkaProducer != nil {
+		if err = v.publishToKafka(txIDChainHash); err != nil {
+			v.logger.Errorf("error sending tx to kafka: %v", err)
+		}
+	} else {
+		if _, err = v.blockAssembler.Store(ctx, txIDChainHash); err != nil {
+			v.logger.Errorf("error sending tx to block assembler: %v", err)
+		}
 	}
 
 	// if v.saveInParallel {
@@ -217,6 +257,22 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// 		}
 	// 	}
 	// }
+
+	return nil
+}
+
+func (v *Validator) publishToKafka(txIDBytes *chainhash.Hash) error {
+	// partition is the first byte of the txid - max 2^8 partitions = 256
+	partition := binary.LittleEndian.Uint32(txIDBytes[:]) % uint32(v.kafkaPartitions)
+	_, _, err := v.kafkaProducer.SendMessage(&sarama.ProducerMessage{
+		Topic:     v.kafkaTopic,
+		Partition: int32(partition),
+		Key:       sarama.ByteEncoder(txIDBytes[:]),
+		Value:     sarama.ByteEncoder(txIDBytes[:]),
+	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

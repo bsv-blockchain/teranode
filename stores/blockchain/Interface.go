@@ -20,6 +20,6 @@ type Store interface {
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint64, error)
 	GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
 	StoreBlock(ctx context.Context, block *model.Block) error
-	GetChainTip(ctx context.Context) (*model.BlockHeader, uint64, error) // blockHeader, blockHeight
+	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) // blockHeader, blockHeight
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error)
 }

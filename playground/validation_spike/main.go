@@ -11,6 +11,7 @@ import (
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/ordishs/verifysignature"
@@ -79,7 +80,7 @@ func main() {
 
 	ns := &NullStore{}
 
-	v := validator.New(ns, nil)
+	v, _ := validator.New(p2p.TestLogger{}, ns, nil)
 
 	start := time.Now()
 

@@ -84,8 +84,8 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	}, nil
 }
 
-func (c Client) GetChainTip(ctx context.Context) (*model.BlockHeader, uint64, error) {
-	resp, err := c.client.GetChainTip(ctx, &emptypb.Empty{})
+func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -120,7 +120,7 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 }
 
 func (c Client) SubscribeChainTips(ctx context.Context) (chan *model.BlockHeader, error) {
-	stream, err := c.client.SubscribeChainTip(ctx, &emptypb.Empty{})
+	stream, err := c.client.SubscribeBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (c Client) SubscribeChainTips(ctx context.Context) (chan *model.BlockHeader
 		defer close(ch)
 
 		for {
-			var resp *blockchain_api.ChainTipResponse
+			var resp *blockchain_api.BestBlockHeaderResponse
 			var header *model.BlockHeader
 
 			resp, err = stream.Recv()

@@ -12,7 +12,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetChainTip(ctx context.Context) (*model.BlockHeader, uint64, error) {
+func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -40,7 +40,7 @@ func (s *SQL) GetChainTip(ctx context.Context) (*model.BlockHeader, uint64, erro
 
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
-	var height uint64
+	var height uint32
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q).Scan(

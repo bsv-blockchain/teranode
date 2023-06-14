@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"net/url"
+	"strconv"
+	"sync/atomic"
 	"time"
 
+	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
@@ -147,6 +152,66 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 
 // Start function
 func (ba *BlockAssembly) Start() error {
+
+	kafkaBrokers, ok := gocore.Config().Get("blockassembly_kafkaBrokers")
+	if ok {
+		ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s", kafkaBrokers)
+		kafkaURL, err := url.Parse(kafkaBrokers)
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly] Kafka failed to start: %s", err)
+		} else {
+			workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
+			ba.logger.Infof("[BlockAssembly] Kafka consumer started with %d workers", workers)
+
+			var clusterAdmin sarama.ClusterAdmin
+
+			// create the workers to process all messages
+			n := atomic.Uint64{}
+			workerCh := make(chan []byte)
+			for i := 0; i < workers; i++ {
+				go func() {
+					for txIDBytes := range workerCh {
+						if _, err = ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
+							Txid: txIDBytes,
+						}); err != nil {
+							ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
+						} else {
+							n.Add(1)
+						}
+					}
+				}()
+			}
+
+			go func() {
+				clusterAdmin, _, err = util.ConnectToKafka(kafkaURL)
+				if err != nil {
+					log.Fatal("[BlockAssembly] unable to connect to kafka: ", err)
+				}
+				defer func() { _ = clusterAdmin.Close() }()
+
+				topic := kafkaURL.Path[1:]
+				partitions, err := strconv.Atoi(kafkaURL.Query().Get("partitions"))
+				if err != nil {
+					log.Fatal("[BlockAssembly] unable to parse Kafka partitions: ", err)
+				}
+				replicationFactor, err := strconv.Atoi(kafkaURL.Query().Get("replication"))
+				if err != nil {
+					log.Fatal("[BlockAssembly] unable to parse Kafka replication factor: ", err)
+				}
+
+				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+					NumPartitions:     int32(partitions),
+					ReplicationFactor: int16(replicationFactor),
+				}, false)
+
+				err = util.StartKafkaGroupListener(ba.logger, kafkaURL, "validators", workerCh)
+				if err != nil {
+					ba.logger.Errorf("[BlockAssembly] Kafka listener failed to start: %s", err)
+				}
+			}()
+		}
+	}
+
 	address, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		return errors.New("no blockassembly_grpcAddress setting found")
@@ -229,7 +294,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
 
-	chainTip, height, err := ba.blockchainClient.GetChainTip(ctx)
+	chainTipBlockHeader, height, err := ba.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting best block header: %w", err)
 	}
@@ -246,7 +311,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	id := subtrees[len(subtrees)-1].RootHash()
 
 	// TODO does this not need to be calculated?
-	nbits := chainTip.Bits
+	nbits := chainTipBlockHeader.Bits
 	//nbits, err := hex.DecodeString("0x1d00ffff")
 	//if err != nil {
 	//	return nil, err
@@ -254,7 +319,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 
 	job := &blockassembly_api.GetMiningCandidateResponse{
 		Id:            id[:],
-		PreviousHash:  chainTip.HashPrevBlock.CloneBytes(),
+		PreviousHash:  chainTipBlockHeader.HashPrevBlock.CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nbits,

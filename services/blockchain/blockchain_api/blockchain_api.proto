@@ -15,8 +15,8 @@ service BlockchainAPI {
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
-  rpc GetChainTip(google.protobuf.Empty) returns (ChainTipResponse) {}
-  rpc SubscribeChainTip (google.protobuf.Empty) returns (stream ChainTipResponse) {}
+  rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
+  rpc SubscribeBestBlockHeader (google.protobuf.Empty) returns (stream BestBlockHeaderResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -64,8 +64,8 @@ message GetMedianTimeResponse {
   repeated uint32 block_header_time = 1; // This will return the nTimes of the last 11 (+1) blocks
 }
 
-// swagger:model ChainTipResponse
-message ChainTipResponse {
+// swagger:model BestBlockHeaderResponse
+message BestBlockHeaderResponse {
   bytes blockHeader = 1;
-  uint64 height = 2;
+  uint32 height = 2;
 }

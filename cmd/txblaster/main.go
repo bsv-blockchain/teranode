@@ -12,7 +12,6 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
 	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -115,30 +115,15 @@ func main() {
 			log.Fatalf("unable to parse kafka url: %v", err)
 		}
 
-		brokersUrl := []string{kafkaURL.Host}
-
-		config := sarama.NewConfig()
-		config.Version = sarama.V2_1_0_0
-
-		var clusterAdmin sarama.ClusterAdmin
-		clusterAdmin, err = sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
-		if err != nil {
-			log.Fatal("Error while creating cluster admin: ", err.Error())
-		}
-		defer func() { _ = clusterAdmin.Close() }()
-
-		partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
-		replicationFactor, _ := gocore.Config().GetInt("validator_kafkaReplicationFactor", 1)
-		_ = clusterAdmin.CreateTopic("txs", &sarama.TopicDetail{
-			NumPartitions:     int32(partitions),
-			ReplicationFactor: int16(replicationFactor),
-		}, false)
-
-		producer, err := ConnectProducer(brokersUrl)
+		clusterAdmin, producer, err := util.ConnectToKafka(kafkaURL)
 		if err != nil {
 			log.Fatalf("unable to connect to kafka: %v", err)
 		}
-		defer producer.Close()
+
+		defer func() {
+			_ = clusterAdmin.Close()
+			_ = producer.Close()
+		}()
 
 		kafkaProducer = producer
 		kafkaTopic = kafkaURL.Path[1:]
@@ -441,18 +426,4 @@ func sendTransaction(txID string, txExtendedBytes []byte) error {
 	}
 
 	return nil
-}
-
-func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
-	config := sarama.NewConfig()
-	config.Producer.Return.Successes = true
-	config.Producer.RequiredAcks = sarama.WaitForAll
-	config.Producer.Retry.Max = 5
-	config.Producer.Partitioner = sarama.NewManualPartitioner
-	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.
-	conn, err := sarama.NewSyncProducer(brokersUrl, config)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
 }

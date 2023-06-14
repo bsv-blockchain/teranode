@@ -9,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/txstatus/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -49,7 +50,10 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v := validator.New(ns, memory.New())
+	v, err := validator.New(p2p.TestLogger{}, ns, memory.New())
+	if err != nil {
+		panic(err)
+	}
 
 	b.ResetTimer()
 

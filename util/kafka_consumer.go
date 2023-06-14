@@ -1,4 +1,4 @@
-package validator
+package util
 
 import (
 	"github.com/Shopify/sarama"

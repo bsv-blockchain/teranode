@@ -157,13 +157,13 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
-func (b *Blockchain) GetChainTip(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.ChainTipResponse, error) {
-	chainTip, height, err := b.store.GetChainTip(ctx)
+func (b *Blockchain) GetChainTip(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
+	chainTip, height, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &blockchain_api.ChainTipResponse{
+	return &blockchain_api.BestBlockHeaderResponse{
 		BlockHeader: chainTip.Bytes(),
 		Height:      height,
 	}, nil
@@ -190,7 +190,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
-func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeChainTipServer) error {
+func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeBestBlockHeaderServer) error {
 	// Start a ticker that executes each 10 seconds
 	// TODO change this to an event when a new chaintip is added
 	timer := time.NewTicker(10 * time.Second)
@@ -202,7 +202,7 @@ func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.B
 		case <-stream.Context().Done():
 			return nil
 		case <-timer.C:
-			header, height, err := b.store.GetChainTip(stream.Context())
+			header, height, err := b.store.GetBestBlockHeader(stream.Context())
 			if err != nil {
 				b.logger.Errorf("error getting chain tip: %s", err.Error())
 				continue
@@ -213,7 +213,7 @@ func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.B
 			}
 
 			// Send the Hardware stats on the stream
-			err = stream.Send(&blockchain_api.ChainTipResponse{
+			err = stream.Send(&blockchain_api.BestBlockHeaderResponse{
 				BlockHeader: header.Bytes(),
 				Height:      height,
 			})

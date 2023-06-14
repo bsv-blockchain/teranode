@@ -10,9 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"os/signal"
-	"strings"
-	"sync"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,6 +22,7 @@ import (
 	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -110,7 +109,10 @@ func NewServer(logger utils.Logger, utxoStore utxostore.Interface) *Server {
 		}
 	}
 
-	validator := New(utxoStore, txStatusStore)
+	validator, err := New(logger, utxoStore, txStatusStore)
+	if err != nil {
+		panic(err)
+	}
 
 	return &Server{
 		logger:    logger,
@@ -130,6 +132,8 @@ func (v *Server) Start() error {
 		} else {
 			workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 			v.logger.Infof("[Validator] Kafka consumer started with %d workers", workers)
+
+			var clusterAdmin sarama.ClusterAdmin
 
 			n := atomic.Uint64{}
 			workerCh := make(chan []byte)
@@ -155,26 +159,30 @@ func (v *Server) Start() error {
 			}
 
 			go func() {
-				config := sarama.NewConfig()
-				config.Version = sarama.V2_1_0_0
-
-				var clusterAdmin sarama.ClusterAdmin
-				clusterAdmin, err = sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
+				clusterAdmin, _, err = util.ConnectToKafka(kafkaURL)
 				if err != nil {
-					log.Fatal("Error while creating cluster admin: ", err.Error())
+					log.Fatal("[Validator] unable to connect to kafka: ", err)
 				}
 				defer func() { _ = clusterAdmin.Close() }()
 
-				partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
-				replicationFactor, _ := gocore.Config().GetInt("validator_kafkaReplicationFactor", 1)
-				_ = clusterAdmin.CreateTopic("txs", &sarama.TopicDetail{
+				topic := kafkaURL.Path[1:]
+				partitions, err := strconv.Atoi(kafkaURL.Query().Get("partitions"))
+				if err != nil {
+					log.Fatal("[Validator] unable to parse Kafka partitions: ", err)
+				}
+				replicationFactor, err := strconv.Atoi(kafkaURL.Query().Get("replication"))
+				if err != nil {
+					log.Fatal("[Validator] unable to parse Kafka replication factor: ", err)
+				}
+
+				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 					NumPartitions:     int32(partitions),
 					ReplicationFactor: int16(replicationFactor),
 				}, false)
 
-				err = v.startKafkaGroupListener(kafkaURL, workerCh)
+				err = util.StartKafkaGroupListener(v.logger, kafkaURL, "validators", workerCh)
 				if err != nil {
-					v.logger.Errorf("Kafka validator failed to start: %s", err)
+					v.logger.Errorf("[Validator] Kafka listener failed to start: %s", err)
 				}
 			}()
 		}
@@ -212,139 +220,6 @@ func (v *Server) Start() error {
 	}
 
 	return nil
-}
-
-// startKafkaListener
-func (v *Server) _(kafkaURL *url.URL, workerCh chan []byte) error { // nolint:unused
-	config := sarama.NewConfig()
-	config.Consumer.Return.Errors = true
-
-	// Create new consumer
-	brokersUrl := []string{kafkaURL.Host}
-	conn, err := sarama.NewConsumer(brokersUrl, config)
-	if err != nil {
-		return err
-	}
-
-	topic := kafkaURL.Path[1:]
-
-	// Calling ConsumePartition. It will open one connection per broker
-	// and share it for all partitions that live on it.
-	consumer, err := conn.ConsumePartition(topic, 0, sarama.OffsetOldest)
-	if err != nil {
-		panic(err)
-	}
-
-	v.kafkaSignal = make(chan os.Signal, 1)
-	signal.Notify(v.kafkaSignal, syscall.SIGINT, syscall.SIGTERM)
-	// Count how many message processed
-	msgCount := 0
-
-	// Get signal for finish
-	doneCh := make(chan struct{})
-
-	go func() {
-		v.kafkaConsumer(consumer, doneCh, workerCh)
-	}()
-
-	<-doneCh
-	v.logger.Infof("Processed", msgCount, "messages with Kafka")
-
-	if err = conn.Close(); err != nil {
-		panic(err)
-	}
-
-	return nil
-}
-
-func (v *Server) startKafkaGroupListener(kafkaURL *url.URL, workerCh chan []byte) error {
-	config := sarama.NewConfig()
-	config.Consumer.Return.Errors = true
-
-	/**
-	 * Set up a new Sarama consumer group
-	 */
-	consumer := KafkaConsumer{
-		ready:    make(chan bool),
-		workerCh: workerCh,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	brokersUrl := strings.Split(kafkaURL.Host, ",")
-	client, err := sarama.NewConsumerGroup(brokersUrl, "validators", config)
-	if err != nil {
-		log.Panicf("Error creating consumer group client: %v", err)
-	}
-
-	topics := []string{kafkaURL.Path[1:]}
-
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			// `Consume` should be called inside an infinite loop, when a
-			// server-side re-balance happens, the consumer session will need to be
-			// recreated to get the new claims
-			if err = client.Consume(ctx, topics, &consumer); err != nil {
-				log.Panicf("Error from consumer: %v", err)
-			}
-			// check if context was cancelled, signalling that the consumer should stop
-			if ctx.Err() != nil {
-				return
-			}
-			consumer.ready = make(chan bool)
-		}
-	}()
-
-	<-consumer.ready // Await till the consumer has been set up
-	v.logger.Infof("[Validator] Kafka consumer up and running!...")
-
-	sigusr1 := make(chan os.Signal, 1)
-	signal.Notify(sigusr1, syscall.SIGUSR1)
-
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-
-	keepRunning := true
-	for keepRunning {
-		select {
-		case <-ctx.Done():
-			v.logger.Infof("[Validator] terminating: context cancelled")
-			keepRunning = false
-		case <-sigterm:
-			v.logger.Infof("[Validator] terminating: via signal")
-			keepRunning = false
-		case <-sigusr1:
-			//toggleConsumptionFlow(client, &consumptionIsPaused)
-		}
-	}
-	cancel()
-	wg.Wait()
-	if err = client.Close(); err != nil {
-		v.logger.Errorf("[Validator] Error closing client: %v", err)
-	}
-
-	return nil
-}
-
-func (v *Server) kafkaConsumer(consumer sarama.PartitionConsumer, doneCh chan struct{}, workerCh chan []byte) {
-	for {
-		select {
-		case err := <-consumer.Errors():
-			v.logger.Errorf("[Validator] Kafka error: %s", err.Error())
-		case msg := <-consumer.Messages():
-			if len(msg.Value) > 32 {
-				//if msg.Offset%1000 == 0 {
-				v.logger.Infof("[Validator] Received message %d for tx %s", msg.Offset, utils.ReverseAndHexEncodeSlice(msg.Key))
-				//}
-				workerCh <- msg.Value
-			}
-		case <-v.kafkaSignal:
-			v.logger.Infof("[Validator] Interrupt is detected")
-			doneCh <- struct{}{}
-		}
-	}
 }
 
 func (v *Server) Stop(ctx context.Context) {

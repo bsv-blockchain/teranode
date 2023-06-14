@@ -32,4 +32,5 @@ func printUrl(u *url.URL) {
 	password, _ := u.User.Password()
 	fmt.Printf("Password: %v\n", password)
 	fmt.Printf("RawQuery: %v\n", u.RawQuery)
+	fmt.Printf("Query some: %v\n", u.Query().Get("some"))
 }

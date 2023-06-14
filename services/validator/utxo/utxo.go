@@ -19,7 +19,7 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 
 	dbInit, ok := availableDatabases[url.Scheme]
 	if ok {
-		logger.Infof("[Interface] connecting to %s service at %s:%d", url.Scheme, url.Hostname(), port)
+		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", url.Scheme, url.Hostname(), port)
 		return dbInit(url)
 	}
 
