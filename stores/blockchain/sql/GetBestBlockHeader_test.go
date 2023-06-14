@@ -19,7 +19,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 
 		tip, height, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
-		assert.Equal(t, uint64(0), height)
+		assert.Equal(t, uint32(0), height)
 		assert.Equal(t, uint32(1), tip.Version)
 
 		assertGenesis(t, tip)
@@ -42,7 +42,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 		require.NoError(t, err)
 
 		// block 2 should be the tip
-		assert.Equal(t, uint64(2), height)
+		assert.Equal(t, uint32(2), height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 		assert.Equal(t, uint32(1), tip.Version)
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)
@@ -73,7 +73,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 		require.NoError(t, err)
 
 		// block 2 (000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd) should be the tip
-		assert.Equal(t, uint64(2), height)
+		assert.Equal(t, uint32(2), height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 		assert.Equal(t, uint32(1), tip.Version)
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)

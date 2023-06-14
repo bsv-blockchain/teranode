@@ -72,6 +72,47 @@ func TestTwoTransactions(t *testing.T) {
 	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", rootHash.String())
 }
 
+func TestSubtree_GetMerkleProof(t *testing.T) {
+	st := NewTree(3)
+	if st.Size() != 8 {
+		t.Errorf("expected size to be 4, got %d", st.Size())
+	}
+
+	txIDS := []string{
+		"4634057867994ae379e82b408cc9eb145a6e921b95ca38f2ced7eb880685a290",
+		"7f87fe1100963977975cef49344e442b4fa3dd9d41de19bc94609c100210ca05",
+		"a28c1021f07263101f5a5052c6a7bdc970ac1d0ab09d8d20aa7a4a61ad9d6597",
+		"dcd31c71368f757f65105d68ee1a2e5598db84900e28dabecba23651c5cda468",
+		"7bac32882547cbb540914f48c6ac99ac682ef001c3aa3d4dcdb5951c8db79678",
+		"67c0f4eb336057ecdf940497a75fcbd1a131e981edf568b54eed2f944889e441",
+	}
+
+	var txHash *chainhash.Hash
+	for _, txID := range txIDS {
+		txHash, _ = chainhash.NewHashFromStr(txID)
+		_ = st.AddNode(txHash, 101)
+	}
+
+	proof, err := st.GetMerkleProof(1)
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(proof))
+	assert.Equal(t, "4634057867994ae379e82b408cc9eb145a6e921b95ca38f2ced7eb880685a290", proof[0].String())
+	assert.Equal(t, "a9e6413abb02b534ff5250cbabdc673480656d0e053cfd23fd010241d5e045f2", proof[1].String())
+	assert.Equal(t, "63fd0f07ff87223f688d0809f46a8118f185bab04d300406513acdc8832bad5e", proof[2].String())
+	assert.Equal(t, "68e239fc6684a224142add79ebed60569baedf667c6be03a5f8719aba44a488b", st.RootHash().String())
+
+	proof, err = st.GetMerkleProof(4)
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(proof))
+	assert.Equal(t, "67c0f4eb336057ecdf940497a75fcbd1a131e981edf568b54eed2f944889e441", proof[0].String())
+	assert.Equal(t, "e2a6065233b307b77a5f73f9f27843d42e48d5e061567416b4508517ef2dd452", proof[1].String())
+	assert.Equal(t, "bfd8a13a5cb1ba128319ee95e09a7e2ff67a52d0c9af8485bfffae737e32d6bf", proof[2].String())
+	assert.Equal(t, "68e239fc6684a224142add79ebed60569baedf667c6be03a5f8719aba44a488b", st.RootHash().String())
+
+	proof, err = st.GetMerkleProof(6)
+	require.Error(t, err) // out of range
+}
+
 func Test_Serialize(t *testing.T) {
 	t.Run("Serialize", func(t *testing.T) {
 		st := NewTree(2)
