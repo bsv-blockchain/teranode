@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,7 +38,6 @@ import (
 
 var (
 	prometheusBlockAssemblyAddTx prometheus.Counter
-	jobStore                     map[chainhash.Hash]*blockassembly_api.GetMiningCandidateResponse
 )
 
 func init() {
@@ -47,7 +47,6 @@ func init() {
 			Help: "Number of txs added to the blockassembly service",
 		},
 	)
-	jobStore = make(map[chainhash.Hash]*blockassembly_api.GetMiningCandidateResponse)
 }
 
 // BlockAssembly type carries the logger within it
@@ -61,6 +60,8 @@ type BlockAssembly struct {
 	grpcServer       *grpc.Server
 	blockchainClient *blockchain.Client
 	blockStore       blob.Store
+	jobStoreMutex    sync.RWMutex
+	jobStore         map[chainhash.Hash]*model.MiningCandidate
 }
 
 func Enabled() bool {
@@ -120,6 +121,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubtreeChan),
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
+		jobStore:         make(map[chainhash.Hash]*model.MiningCandidate),
 	}
 
 	go func() {
@@ -292,38 +294,35 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
-func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*blockassembly_api.GetMiningCandidateResponse, error) {
+func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*model.MiningCandidate, error) {
 
-	chainTipBlockHeader, height, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	bestBlockHeader, bestBlockHeight, err := ba.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting best block header: %w", err)
 	}
 
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := ba.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
-	var coinbaseValue uint64
 
+	var coinbaseValue uint64
 	for _, subtree := range subtrees {
 		coinbaseValue += subtree.Fees
 	}
-	coinbaseValue += util.GetBlockSubsidyForHeight(height)
+	coinbaseValue += util.GetBlockSubsidyForHeight(bestBlockHeight + 1)
 
+	// Get the hash of the last subtree in the list...
 	id := subtrees[len(subtrees)-1].RootHash()
 
-	// TODO does this not need to be calculated?
-	nbits := chainTipBlockHeader.Bits
-	//nbits, err := hex.DecodeString("0x1d00ffff")
-	//if err != nil {
-	//	return nil, err
-	//}
+	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
+	nBits := bestBlockHeader.Bits
 
-	job := &blockassembly_api.GetMiningCandidateResponse{
-		Id:            id[:],
-		PreviousHash:  chainTipBlockHeader.HashPrevBlock.CloneBytes(),
+	job := &model.MiningCandidate{
+		Id:            id.CloneBytes(),
+		PreviousHash:  bestBlockHeader.HashPrevBlock.CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
-		NBits:         nbits,
-		Height:        uint32(height), // should this be an uint64?
+		NBits:         nBits,
+		Height:        uint32(bestBlockHeight + 1), // should this be an uint64?
 		Time:          uint32(time.Now().Unix()),
 		MerkleProof:   ba.subtreeProcessor.GetMerkleProofForCoinbase(),
 	}
@@ -333,7 +332,9 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		return nil, err
 	}
 
-	jobStore[*storeId] = job
+	ba.jobStoreMutex.Lock()
+	ba.jobStore[*storeId] = job
+	ba.jobStoreMutex.Unlock()
 
 	return job, nil
 }
@@ -342,16 +343,15 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
-		return &blockassembly_api.SubmitMiningSolutionResponse{
-			Ok: false,
-		}, err
+		return nil, err
 	}
 
-	job, ok := jobStore[*storeId]
+	ba.jobStoreMutex.RLock()
+	job, ok := ba.jobStore[*storeId]
+	ba.jobStoreMutex.RUnlock()
+
 	if !ok {
-		return &blockassembly_api.SubmitMiningSolutionResponse{
-			Ok: false,
-		}, fmt.Errorf("job not found")
+		return nil, fmt.Errorf("job not found")
 	}
 
 	hashPrevBlock, err := chainhash.NewHash(job.PreviousHash)
@@ -411,9 +411,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// check fully valid, including whether difficulty in header is low enough
 	if ok = block.Valid(); !ok {
 		ba.logger.Errorf("Invalid block: %v", block.Header)
-		return &blockassembly_api.SubmitMiningSolutionResponse{
-			Ok: false,
-		}, nil
+		return nil, fmt.Errorf("invalid block")
 	}
 
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {

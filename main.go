@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
@@ -57,6 +58,7 @@ func main() {
 		logger.Fatalf("sentry.Init: %s", err)
 	}
 
+	startBlockchain := flag.Bool("blockchain", false, "start blockchain service")
 	startBlockAssembly := flag.Bool("blockassembly", false, "start blockassembly service")
 	startBlockValidation := flag.Bool("blockvalidation", false, "start blockvalidation service")
 	startValidator := flag.Bool("validator", false, "start validator service")
@@ -69,6 +71,10 @@ func main() {
 	help := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
+
+	if !*startBlockchain {
+		*startBlockchain = gocore.Config().GetBool("startBlockchain", false)
+	}
 
 	if !*startBlockAssembly {
 		*startBlockAssembly = gocore.Config().GetBool("startBlockAssembly", false)
@@ -114,6 +120,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -utxostore=<1|0>")
 		fmt.Println("          whether to start the utxo store service")
+		fmt.Println("")
+		fmt.Println("    -blockchain=<1|0>")
+		fmt.Println("          whether to start the blockchain service")
 		fmt.Println("")
 		fmt.Println("    -blockassembly=<1|0>")
 		fmt.Println("          whether to start the blockassembly service")
@@ -176,6 +185,7 @@ func main() {
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	var blockchainService *blockchain.Blockchain
 	var validatorService *validator.Server
 	var utxoStoreServer *utxo.UTXOStore
 	var txStatusStore *txstatus.Server
@@ -224,6 +234,18 @@ func main() {
 	}
 	//
 	//----------------------------------------------------------------
+
+	// blockchain
+	if *startBlockchain {
+		blockchainService, err = blockchain.New(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		g.Go(func() error {
+			return blockchainService.Start()
+		})
+	}
 
 	// txstatus store
 	if *startTxStatusStore {
@@ -425,6 +447,10 @@ func main() {
 
 	if blockAssemblyService != nil {
 		blockAssemblyService.Stop(shutdownCtx)
+	}
+
+	if blockchainService != nil {
+		blockchainService.Stop(shutdownCtx)
 	}
 
 	// wait for clean shutdown for 5 seconds, otherwise force exit

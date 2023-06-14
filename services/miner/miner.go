@@ -1,6 +1,7 @@
 package miner
 
 import (
+	"context"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
@@ -36,9 +37,13 @@ func (m *Miner) Start() {
 		select {
 		case <-candidateTimer.C:
 			candidateTimer.Reset(candidateRequestInterval * time.Second)
-			// candidate := m.blockAssemblyClient.GetMiningCandidate()
+			candidate, err := m.blockAssemblyClient.GetMiningCandidate(context.Background())
+			if err != nil {
+				m.logger.Errorf("Error getting mining candidate: %v", err)
+				continue
+			}
 
-			// m.logger.Infof("Got candidate: %v", candidate)
+			m.logger.Infof("Got candidate: %v", candidate)
 
 		case <-blockFoundTimer.C:
 			blockFoundTimer.Reset(blockFoundInterval * time.Second)

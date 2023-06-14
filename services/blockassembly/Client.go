@@ -3,10 +3,12 @@ package blockassembly
 import (
 	"context"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Client struct {
@@ -42,4 +44,15 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
+	req := &emptypb.Empty{}
+
+	res, err := s.db.GetMiningCandidate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }

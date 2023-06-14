@@ -157,7 +157,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
-func (b *Blockchain) GetChainTip(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
+func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
 	chainTip, height, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
@@ -190,7 +190,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
-func (b *Blockchain) SubscribeChainTip(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeBestBlockHeaderServer) error {
+func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeBestBlockHeaderServer) error {
 	// Start a ticker that executes each 10 seconds
 	// TODO change this to an event when a new chaintip is added
 	timer := time.NewTicker(10 * time.Second)

@@ -8,6 +8,7 @@ package blockassembly_api
 
 import (
 	context "context"
+	model "github.com/TAAL-GmbH/ubsv/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -35,7 +36,7 @@ type BlockAssemblyAPIClient interface {
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
-	GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetMiningCandidateResponse, error)
+	GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
 }
 
@@ -74,8 +75,8 @@ func (c *blockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest, op
 	return out, nil
 }
 
-func (c *blockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetMiningCandidateResponse, error) {
-	out := new(GetMiningCandidateResponse)
+func (c *blockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*model.MiningCandidate, error) {
+	out := new(model.MiningCandidate)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetMiningCandidate_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -100,7 +101,7 @@ type BlockAssemblyAPIServer interface {
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
-	GetMiningCandidate(context.Context, *emptypb.Empty) (*GetMiningCandidateResponse, error)
+	GetMiningCandidate(context.Context, *emptypb.Empty) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
@@ -118,7 +119,7 @@ func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context,
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
 }
-func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *emptypb.Empty) (*GetMiningCandidateResponse, error) {
+func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *emptypb.Empty) (*model.MiningCandidate, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMiningCandidate not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error) {

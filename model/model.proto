@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "github.com/TAAL-GmbH/ubsv/model";
+
+package model;
+
+// swagger:model MiningCandidate
+message MiningCandidate {
+  bytes id = 1;
+  bytes previous_hash = 2;
+  uint64 coinbase_value = 3;
+  uint32 version = 4;
+  bytes nBits = 5;
+  uint32 time = 6;
+  uint32 height = 7;
+  repeated bytes merkle_proof = 8;
+}
+
