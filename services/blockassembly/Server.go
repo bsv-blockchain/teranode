@@ -319,15 +319,25 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
 	nBits := bestBlockHeader.Bits
 
+	coinbaseMerkleProof, err := ba.subtreeProcessor.GetMerkleProofForCoinbase()
+	if err != nil {
+		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
+	}
+
+	var coinbaseMerkleProofBytes [][]byte
+	for _, hash := range coinbaseMerkleProof {
+		coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
+	}
+
 	job := &model.MiningCandidate{
 		Id:            id.CloneBytes(),
 		PreviousHash:  bestBlockHeader.HashPrevBlock.CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits,
-		Height:        uint32(bestBlockHeight + 1), // should this be an uint64?
+		Height:        bestBlockHeight + 1,
 		Time:          uint32(time.Now().Unix()),
-		MerkleProof:   ba.subtreeProcessor.GetMerkleProofForCoinbase(),
+		MerkleProof:   coinbaseMerkleProofBytes,
 	}
 
 	storeId, err := chainhash.NewHash(id[:])

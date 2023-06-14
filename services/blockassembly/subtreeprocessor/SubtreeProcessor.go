@@ -1,6 +1,8 @@
 package subtreeprocessor
 
 import (
+	"fmt"
+
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
@@ -100,9 +102,31 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 	return nil
 }
 
-func (stp *SubtreeProcessor) GetMerkleProofForCoinbase() [][]byte {
-	// TODO: get the merkle path for the coinbase
-	return nil
+func (stp *SubtreeProcessor) GetMerkleProofForCoinbase() ([]*chainhash.Hash, error) {
+	if len(stp.chainedSubtrees) == 0 {
+		return nil, fmt.Errorf("no subtrees available")
+	}
+
+	merkleProof, err := stp.chainedSubtrees[0].GetMerkleProof(0)
+	if err != nil {
+		return nil, fmt.Errorf("failed creating merkle proof for subtree: %v", err)
+	}
+
+	// Create a new tree with the subtreeHashes of the subtrees
+	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(stp.chainedSubtrees)))
+	for _, subtree := range stp.chainedSubtrees {
+		err = topTree.AddNode(subtree.RootHash(), subtree.Fees)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	topMerkleProof, err := topTree.GetMerkleProof(0)
+	if err != nil {
+		return nil, fmt.Errorf("failed creating merkle proofs for toptree: %v", err)
+	}
+
+	return append(merkleProof, topMerkleProof...), nil
 }
 
 // Report new height

@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -16,7 +17,7 @@ var (
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
 
-	txIds []string = []string{
+	txIds = []string{
 		"fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4",
 		"6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4",
 		"e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d",
@@ -81,4 +82,88 @@ func TestRotate(t *testing.T) {
 	assert.Equal(t, 1, len(stp.chainedSubtrees))
 
 	<-endTestChan
+}
+
+func TestGetMerkleProofForCoinbase(t *testing.T) {
+	// block 69060
+	txIDs := []string{
+		"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
+		"1c518b6671f8d349e96c56d4e7fe831a46f398c4bb46ca7778b2152ee6ba6f27",
+		"1e7aa360e3e84aff86515e66976b5b12e622c134b776242927e62de7effdc989",
+		"344efe10fa4084c7f4f17c91bf3da72b9139c342aea074d75d8656a99ac3693f",
+		"59814dce8ee8f9149074da4d0528fd3593b418b36b73ffafc15436646aa23c26",
+		"687ea838f8b8d2924ff99859c37edd33dcd8069bfd5e92aca66734580aa29c94",
+		"9f312fb2b31b6b511fabe0934a98c4d5ac4421b4bc99312f25e6c104912d9159",
+		"c1d3a483ff04b90ab103d62afb3423447981d59f8e96b29022bc39c62ed9d9ab",
+		"c467b87936d3ffd5b2e03a4dbde5cd66910a245b56c8cddff7eafa776ba39bbf",
+		"07c09335f887a2da94efbc9730106abb1b50cc63a95b24edc9f8bb3e63c380c7",
+		"1bb1b0ffdd0fa0450f900f647e713855e76e2b17683372741b6ef29575ddc99b",
+		"6a613e159f1a9dbfa0321b657103f55dc28ecee201a2a43ab833c2e0c95117db",
+		"fe1345fb6b3efe6225e95dc9324f6d21ddb304ad76d92381d999abec07161c7f",
+		"e61cb73244eba0b774e640fef50818322842b41d89f7daa0c771b6e9fc2c6c34",
+		"2a73facff0bc80e1b32d9dc6ff24fa75b711de5987eb30bbd34109bfa06de352",
+		"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
+	}
+
+	t.Run("merkle proof for coinbase", func(t *testing.T) {
+		newSubtreeChan := make(chan *util.Subtree)
+		var wg sync.WaitGroup
+		wg.Add(2) // we are expecting 2 subtrees
+		go func() {
+			for {
+				// just read the subtrees of the processor
+				<-newSubtreeChan
+				wg.Done()
+			}
+		}()
+
+		_ = os.Setenv("merkle_items_per_subtree", "8")
+		stp := NewSubtreeProcessor(newSubtreeChan)
+		for _, txid := range txIDs {
+			hash, err := chainhash.NewHashFromStr(txid)
+			require.NoError(t, err)
+
+			stp.Add(*hash, 1, nil)
+		}
+		wg.Wait()
+		assertMerkleProof(t, stp)
+	})
+
+	t.Run("merkle proof for coinbase with 4 subtrees", func(t *testing.T) {
+		newSubtreeChan := make(chan *util.Subtree)
+		var wg sync.WaitGroup
+		wg.Add(4) // we are expecting 4 subtrees
+		go func() {
+			for {
+				// just read the subtrees of the processor
+				<-newSubtreeChan
+				wg.Done()
+			}
+		}()
+
+		_ = os.Setenv("merkle_items_per_subtree", "4")
+		stp := NewSubtreeProcessor(newSubtreeChan)
+		for _, txid := range txIDs {
+			hash, err := chainhash.NewHashFromStr(txid)
+			require.NoError(t, err)
+
+			stp.Add(*hash, 1, nil)
+		}
+		wg.Wait()
+		assertMerkleProof(t, stp)
+	})
+}
+
+func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
+	// get the merkle proof for the coinbase
+	merkleProof, err := stp.GetMerkleProofForCoinbase()
+	require.NoError(t, err)
+
+	assert.Len(t, merkleProof, 4)
+
+	// https://api.whatsonchain.com/v1/bsv/main/tx/4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc/proof
+	assert.Equal(t, "1c518b6671f8d349e96c56d4e7fe831a46f398c4bb46ca7778b2152ee6ba6f27", merkleProof[0].String())
+	assert.Equal(t, "3d50320a08dce920978ddbfa2fc069f4c939126ce51d9e3fd658b88f0147da02", merkleProof[1].String())
+	assert.Equal(t, "f2168f2ee84f04ff5c49bf9e0043099667d48c013cf7b32dbc09ab75ef0bed68", merkleProof[2].String())
+	assert.Equal(t, "a2a7873a982e3112bc98960e06971bf2b7e62a56585d324bd1ac7d9a6d79cce8", merkleProof[3].String())
 }
