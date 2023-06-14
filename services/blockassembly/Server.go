@@ -311,7 +311,10 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	coinbaseValue += util.GetBlockSubsidyForHeight(bestBlockHeight + 1)
 
 	// Get the hash of the last subtree in the list...
-	id := subtrees[len(subtrees)-1].RootHash()
+	id := &chainhash.Hash{}
+	if len(subtrees) > 0 {
+		id = subtrees[len(subtrees)-1].RootHash()
+	}
 
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
 	nBits := bestBlockHeader.Bits
