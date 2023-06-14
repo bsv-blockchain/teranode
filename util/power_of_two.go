@@ -15,3 +15,24 @@ func CeilPowerOfTwo(num int) int {
 
 	return ceilValue
 }
+
+func IsPowerOfTwo(num int) bool {
+	if num <= 0 {
+		return false
+	}
+	return (num & (num - 1)) == 0
+}
+
+// NextPowerOfTwo returns the next highest power of two from a given number if
+// it is not already a power of two.  This is a helper function used during the
+// calculation of a merkle tree.
+func NextPowerOfTwo(n int) int {
+	// Return the number if it's already a power of 2.
+	if n&(n-1) == 0 {
+		return n
+	}
+
+	// Figure out and return the next power of two.
+	exponent := uint(math.Log2(float64(n))) + 1
+	return 1 << exponent // 2^exponent
+}

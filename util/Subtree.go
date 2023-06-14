@@ -32,7 +32,7 @@ func NewTree(height int) *Subtree {
 }
 
 func NewTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
-	if !isPowerOfTwo(maxNumberOfLeaves) {
+	if !IsPowerOfTwo(maxNumberOfLeaves) {
 		panic("numberOfLeaves must be a power of two")
 	}
 
@@ -126,7 +126,7 @@ func (st *Subtree) Difference(ids txMap) ([]*chainhash.Hash, error) {
 
 func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 	// Calculate how many entries are re?n array of that size.
-	nextPoT := st.nextPowerOfTwo(len(st.Nodes))
+	nextPoT := NextPowerOfTwo(len(st.Nodes))
 	arraySize := nextPoT*2 - 1
 	// we do not include the original nodes in the merkle tree
 	merkles := make([]*chainhash.Hash, arraySize-len(st.Nodes))
@@ -175,27 +175,6 @@ func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 	}
 
 	return merkles, nil
-}
-
-func isPowerOfTwo(num int) bool {
-	if num <= 0 {
-		return false
-	}
-	return (num & (num - 1)) == 0
-}
-
-// nextPowerOfTwo returns the next highest power of two from a given number if
-// it is not already a power of two.  This is a helper function used during the
-// calculation of a merkle tree.
-func (st *Subtree) nextPowerOfTwo(n int) int {
-	// Return the number if it's already a power of 2.
-	if n&(n-1) == 0 {
-		return n
-	}
-
-	// Figure out and return the next power of two.
-	exponent := uint(math.Log2(float64(n))) + 1
-	return 1 << exponent // 2^exponent
 }
 
 func (st *Subtree) Serialize() ([]byte, error) {
