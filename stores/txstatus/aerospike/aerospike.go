@@ -163,13 +163,13 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 		utxoHashesInterface[i] = v[:]
 	}
 
-	bins := aerospike.BinMap{
-		"fee":            int(fee),
-		"parentTxHashes": parentTxHashesInterface,
-		"utxoHashes":     utxoHashesInterface,
-		"firstSeen":      time.Now().Unix(),
+	bins := []*aerospike.Bin{
+		aerospike.NewBin("fee", int(fee)),
+		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
+		aerospike.NewBin("utxoHashes", utxoHashesInterface),
+		aerospike.NewBin("firstSeen", time.Now().Unix()),
 	}
-	err = s.client.Put(policy, key, bins)
+	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		return err
 	}

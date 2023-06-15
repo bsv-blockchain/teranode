@@ -116,10 +116,8 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		return nil, err
 	}
 
-	bins := aerospike.BinMap{
-		"txid": []byte{},
-	}
-	err = s.client.Put(policy, key, bins)
+	bin := aerospike.NewBin("txid", []byte{})
+	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
 		// check whether we already set this utxo
 		prometheusUtxoGet.Inc()
@@ -181,11 +179,9 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	if err != nil {
 		return nil, err
 	}
-	bins := aerospike.BinMap{
-		"txid": txID.CloneBytes(),
-	}
 
-	err = s.client.Put(policy, key, bins)
+	bin := aerospike.NewBin("txid", txID.CloneBytes())
+	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
 		// check whether we had the same value set as before
 		prometheusUtxoGet.Inc()

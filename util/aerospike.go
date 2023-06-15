@@ -44,6 +44,7 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	policy := aerospike.NewClientPolicy()
 	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
+	policy.MaxErrorRate = 0
 
 	if url.User != nil {
 		policy.AuthMode = 2
