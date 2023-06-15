@@ -123,7 +123,7 @@ func (u *PropagationServer) Start() error {
 		}
 	}
 
-	u.logger.Infof("GRPC server listening on %s", address)
+	u.logger.Infof("Propagation GRPC service listening on %s", address)
 	if err = u.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}

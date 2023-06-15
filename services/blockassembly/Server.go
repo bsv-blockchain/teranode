@@ -239,7 +239,7 @@ func (ba *BlockAssembly) Start() error {
 	// Register reflection service on gRPC server.
 	reflection.Register(ba.grpcServer)
 
-	ba.logger.Infof("GRPC server listening on %s", address)
+	ba.logger.Infof("BlockAssembler GRPC service listening on %s", address)
 
 	if err = ba.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
@@ -330,7 +330,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	}
 
 	job := &model.MiningCandidate{
-		Id:            id.CloneBytes(),
+		Id:            id[:],
 		PreviousHash:  bestBlockHeader.HashPrevBlock.CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,

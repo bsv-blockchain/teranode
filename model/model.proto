@@ -15,4 +15,3 @@ message MiningCandidate {
   uint32 height = 7;
   repeated bytes merkle_proof = 8;
 }
-

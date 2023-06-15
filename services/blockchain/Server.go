@@ -97,7 +97,7 @@ func (b *Blockchain) Start() error {
 	// Register reflection service on gRPC server.
 	reflection.Register(b.grpcServer)
 
-	b.logger.Infof("GRPC server listening on %s", address)
+	b.logger.Infof("Blockchain GRPC service listening on %s", address)
 
 	if err = b.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)

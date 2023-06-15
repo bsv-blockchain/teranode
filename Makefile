@@ -30,6 +30,12 @@ gen:
 	--proto_path=. \
 	--go_out=. \
 	--go_opt=paths=source_relative \
+	model/model.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	services/validator/validator_api/validator_api.proto
@@ -90,14 +96,6 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/blockchain/blockchain_api/blockchain_api.proto
 
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
-	model/model.proto
-
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/blockassembly/blockassembly_api/*.pb.go
@@ -108,7 +106,7 @@ clean_gen:
 	rm -f ./services/propagation/propagation_api/*.pb.go
 	rm -f ./services/txstatus/txstatus_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
-	rm -f ./model/model/*.pb.go
+	rm -f ./model/*.pb.go
 
 .PHONY: clean
 clean:
@@ -118,9 +116,8 @@ clean:
 .PHONY: install
 install:
 	# arch -arm64 brew install golangci-lint
-	brew install pre-commit
+	arch -arm64 brew install pre-commit
 	pre-commit install
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-

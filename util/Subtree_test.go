@@ -111,6 +111,7 @@ func TestSubtree_GetMerkleProof(t *testing.T) {
 
 	proof, err = st.GetMerkleProof(6)
 	require.Error(t, err) // out of range
+	assert.Len(t, proof, 0)
 }
 
 func Test_Serialize(t *testing.T) {
