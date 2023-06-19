@@ -13,9 +13,9 @@ func main() {
 	policy := aerospike.NewClientPolicy()
 
 	hosts := []*aerospike.Host{
-		{Name: "192.168.86.103", Port: 3000}, // hardcoded for testing
-		{Name: "192192.168.9.0", Port: 3000}, // hardcoded for testing
-		{Name: "192.168.55.153", Port: 3000}, // hardcoded for testing
+		{Name: "utxo-store-0.ubsv.internal", Port: 3000}, // hardcoded for testing
+		{Name: "utxo-store-1.ubsv.internal", Port: 3000}, // hardcoded for testing
+		{Name: "utxo-store-2.ubsv.internal", Port: 3000}, // hardcoded for testing
 	}
 
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
