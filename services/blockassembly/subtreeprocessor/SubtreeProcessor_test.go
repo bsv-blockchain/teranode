@@ -1,9 +1,12 @@
 package subtreeprocessor
 
 import (
+	"crypto/rand"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -25,7 +28,7 @@ var (
 )
 
 func TestRotate(t *testing.T) {
-	os.Setenv("merkle_items_per_subtree", "4")
+	os.Setenv("initial_merkle_items_per_subtree", "4")
 
 	newSubtreeChan := make(chan *util.Subtree)
 	endTestChan := make(chan bool)
@@ -117,7 +120,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		_ = os.Setenv("merkle_items_per_subtree", "8")
+		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
 		stp := NewSubtreeProcessor(newSubtreeChan)
 		for _, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
@@ -141,7 +144,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		_ = os.Setenv("merkle_items_per_subtree", "4")
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 		stp := NewSubtreeProcessor(newSubtreeChan)
 		for _, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
@@ -166,4 +169,243 @@ func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 	assert.Equal(t, "3d50320a08dce920978ddbfa2fc069f4c939126ce51d9e3fd658b88f0147da02", merkleProof[1].String())
 	assert.Equal(t, "f2168f2ee84f04ff5c49bf9e0043099667d48c013cf7b32dbc09ab75ef0bed68", merkleProof[2].String())
 	assert.Equal(t, "a2a7873a982e3112bc98960e06971bf2b7e62a56585d324bd1ac7d9a6d79cce8", merkleProof[3].String())
+}
+
+/*
+*
+The reset method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
+*
+*/
+func TestReset(t *testing.T) {
+
+	n := 18
+	txIds := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		txid, err := generateTxID()
+		if err != nil {
+			t.Errorf("error generating txid: %s", err)
+		}
+
+		txIds[i] = txid
+	}
+
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+	newSubtreeChan := make(chan *util.Subtree)
+	var wg sync.WaitGroup
+	wg.Add(4) // we are expecting 4 subtrees
+	go func() {
+		for {
+			// just read the subtrees of the processor
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	stp := NewSubtreeProcessor(newSubtreeChan)
+	for _, txid := range txIds {
+		hash, err := chainhash.NewHashFromStr(txid)
+		require.NoError(t, err)
+
+		stp.Add(*hash, 1, nil)
+	}
+	wg.Wait()
+	// sleep for 1 second
+	// this is to make sure the subtrees are added to the chain
+	time.Sleep(1 * time.Second)
+
+	// there should be 4 chained subtrees
+	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+	assert.Equal(t, 2, stp.currentSubtree.Length())
+
+	stp.currentItemsPerFile = 2
+
+	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be reset
+	// new itemm per file is 2 so there should be 4 subtrees in the chain
+	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	require.NoError(t, err)
+	assert.Equal(t, 5, len(stp.chainedSubtrees))
+	assert.Equal(t, 1, stp.currentSubtree.Length())
+}
+
+func TestIncompleteSubtreeReset(t *testing.T) {
+
+	n := 17
+	txIds := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		txid, err := generateTxID()
+		if err != nil {
+			t.Errorf("error generating txid: %s", err)
+		}
+
+		txIds[i] = txid
+	}
+
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+	newSubtreeChan := make(chan *util.Subtree)
+	var wg sync.WaitGroup
+	wg.Add(4) // we are expecting 4 subtrees
+	go func() {
+		for {
+			// just read the subtrees of the processor
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	stp := NewSubtreeProcessor(newSubtreeChan)
+	for _, txid := range txIds {
+		hash, err := chainhash.NewHashFromStr(txid)
+		require.NoError(t, err)
+
+		stp.Add(*hash, 1, nil)
+	}
+	wg.Wait()
+	// sleep for 1 second
+	// this is to make sure the subtrees are added to the chain
+	time.Sleep(1 * time.Second)
+
+	// there should be 4 chained subtrees
+	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+	// and 1 tx in the current subtree
+	assert.Equal(t, 1, stp.currentSubtree.Length())
+
+	stp.currentItemsPerFile = 2
+
+	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be rese
+	// new itemm per file is 2 so there should be 5 subtrees in the chain
+	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	require.NoError(t, err)
+	assert.Equal(t, 5, len(stp.chainedSubtrees))
+	assert.Equal(t, 0, stp.currentSubtree.Length())
+}
+
+// current subtree should have 1 tx which due to the new added coinbase placeholder
+func TestSubtreeResetNewCurrent(t *testing.T) {
+
+	n := 16
+	txIds := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		txid, err := generateTxID()
+		if err != nil {
+			t.Errorf("error generating txid: %s", err)
+		}
+
+		txIds[i] = txid
+	}
+
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+	newSubtreeChan := make(chan *util.Subtree)
+	var wg sync.WaitGroup
+	wg.Add(4) // we are expecting 4 subtrees
+	go func() {
+		for {
+			// just read the subtrees of the processor
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	stp := NewSubtreeProcessor(newSubtreeChan)
+	for _, txid := range txIds {
+		hash, err := chainhash.NewHashFromStr(txid)
+		require.NoError(t, err)
+
+		stp.Add(*hash, 1, nil)
+	}
+	wg.Wait()
+	// sleep for 1 second
+	// this is to make sure the subtrees are added to the chain
+	time.Sleep(1 * time.Second)
+
+	// there should be 4 chained subtrees
+	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+	// and 0 tx in the current subtree
+	assert.Equal(t, 0, stp.currentSubtree.Length())
+
+	stp.currentItemsPerFile = 2
+
+	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be reset
+	// new itemm per file is 2 so there should be 4 subtrees in the chain
+	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	require.NoError(t, err)
+	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 1, stp.currentSubtree.Length())
+}
+
+func TestResetLarge(t *testing.T) {
+
+	n := 1049576
+	txIds := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		txid, err := generateTxID()
+		if err != nil {
+			t.Errorf("error generating txid: %s", err)
+		}
+
+		txIds[i] = txid
+	}
+
+	_ = os.Setenv("initial_merkle_items_per_subtree", "262144")
+	newSubtreeChan := make(chan *util.Subtree)
+	var wg sync.WaitGroup
+	wg.Add(4) // we are expecting 4 subtrees
+	go func() {
+		for {
+			// just read the subtrees of the processor
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	stp := NewSubtreeProcessor(newSubtreeChan)
+	for _, txid := range txIds {
+		hash, err := chainhash.NewHashFromStr(txid)
+		require.NoError(t, err)
+
+		stp.Add(*hash, 1, nil)
+	}
+	wg.Wait()
+	// sleep for 1 second
+	// this is to make sure the subtrees are added to the chain
+	time.Sleep(1 * time.Second)
+
+	// there should be 4 chained subtrees
+	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	// one of the subtrees should contain 262144 items
+	assert.Equal(t, 262144, stp.chainedSubtrees[0].Size())
+	// there should be no remaining items in the current subtree
+	assert.Equal(t, 1000, stp.currentSubtree.Length())
+
+	stp.currentItemsPerFile = 65536
+
+	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be reset
+	// new itemm per file is 65536 so there should be 8 subtrees in the chain
+	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	require.NoError(t, err)
+	assert.Equal(t, 8, len(stp.chainedSubtrees))
+	// one of the subtrees should contain 262144 items
+	assert.Equal(t, 65536, stp.chainedSubtrees[0].Size())
+	assert.Equal(t, 1001, stp.currentSubtree.Length())
+}
+
+// generateTxID generates a random 32-byte hexadecimal string.
+func generateTxID() (string, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", b), nil
 }

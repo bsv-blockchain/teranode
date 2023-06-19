@@ -430,6 +430,11 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
+	// reset the subtrees
+	err = ba.subtreeProcessor.Reset(job.Id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reset subtree processor: %w", err)
+	}
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
