@@ -58,4 +58,4 @@ ENV LD_LIBRARY_PATH=.
 # ENTRYPOINT ["./ubsv.run"]
 
 # Wrap the ubsv.run in the Delve debugger
-ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
+ENTRYPOINT ["./ubsv.run"]
