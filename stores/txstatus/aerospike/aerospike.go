@@ -183,6 +183,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	policy := aerospike.NewWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, "txstatus", hash[:])
 	if err != nil {
@@ -213,7 +214,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	return nil
 }
 
-func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
+func (s *Store) Delete(_ context.Context, _ *chainhash.Hash) error {
 	//TODO implement me
 	prometheusTxStatusDelete.Inc()
 	panic("implement me")

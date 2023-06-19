@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospike
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -174,6 +175,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
