@@ -25,8 +25,6 @@ func main() {
 
 	defer client.Close()
 
-	fmt.Printf("Connected %v\n", client.IsConnected())
-
 	namespace := "test" // aUrl.Path[1:]
 	fmt.Printf("Namespace %s\n", namespace)
 

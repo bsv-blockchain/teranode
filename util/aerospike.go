@@ -89,7 +89,5 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 		return nil, err
 	}
 
-	fmt.Printf("Connected %v", client.IsConnected())
-
 	return client, nil
 }
