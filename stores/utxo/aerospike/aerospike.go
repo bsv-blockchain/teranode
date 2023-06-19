@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -175,7 +174,8 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
+	// TODO fix expiry
+	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
@@ -192,8 +192,8 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 			return nil, getErr
 		}
 		valueBytes, ok := value.Bins["txid"].([]byte)
-		if ok {
-			if [32]byte(valueBytes) == [32]byte(txID[:]) {
+		if ok && len(valueBytes) == 32 {
+			if [32]byte(valueBytes) == *txID {
 				prometheusUtxoReSpend.Inc()
 				return &utxostore.UTXOResponse{
 					Status: int(utxostore_api.Status_OK),
