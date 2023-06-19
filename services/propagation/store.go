@@ -10,6 +10,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/minio"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/s3"
 )
 
 func NewStore(storeUrl *url.URL) (propagationStore blob.Store, err error) {
@@ -35,6 +36,11 @@ func NewStore(storeUrl *url.URL) (propagationStore blob.Store, err error) {
 		propagationStore, err = minio.New(storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating minio block store: %v", err)
+		}
+	case "s3":
+		propagationStore, err = s3.New(storeUrl)
+		if err != nil {
+			return nil, fmt.Errorf("error creating s3 block store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)

@@ -1,0 +1,169 @@
+package s3
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"net/url"
+	"time"
+
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
+)
+
+type S3 struct {
+	client     *s3.S3
+	uploader   *s3manager.Uploader
+	downloader *s3manager.Downloader
+	bucket     string
+	logger     utils.Logger
+}
+
+func New(s3URL *url.URL) (*S3, error) {
+	logLevel, _ := gocore.Config().Get("logLevel")
+	logger := gocore.Log("s3", gocore.NewLogLevelFromString(logLevel))
+
+	// connect to aws s3 server
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(s3URL.Query().Get("region"))},
+	)
+
+	// Create S3 service client
+	client := s3.New(sess)
+
+	// Setup the S3 Upload Manager. Also see the SDK doc for the Upload Manager
+	// for more information on configuring part size, and concurrency.
+	//
+	// http://docs.aws.amazon.com/sdk-for-go/api/service/s3/s3manager/#NewUploader
+	uploader := s3manager.NewUploader(sess)
+
+	downloader := s3manager.NewDownloader(sess)
+
+	//client, err := s
+	if err != nil {
+		return nil, err
+	}
+
+	s3 := &S3{
+		client:     client,
+		uploader:   uploader,
+		downloader: downloader,
+		bucket:     s3URL.Path[1:], // remove leading slash
+		logger:     logger,
+	}
+
+	return s3, nil
+}
+
+func (g *S3) Close(_ context.Context) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("Close").AddTime(start)
+	}()
+	traceSpan := tracing.Start(context.Background(), "s3:Close")
+	defer traceSpan.Finish()
+
+	// return g.client.Close()
+	return nil
+}
+
+func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("Set").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:Set")
+	defer traceSpan.Finish()
+
+	buf := bytes.NewBuffer(value)
+	uploadInput := &s3manager.UploadInput{
+		Bucket: aws.String(g.bucket),
+		Key:    aws.String(utils.ReverseAndHexEncodeSlice(key)),
+		Body:   buf,
+	}
+
+	// Expires
+	options := blob.NewSetOptions(opts...)
+	if options.TTL > 0 {
+		expires := time.Now().Add(options.TTL)
+		uploadInput.Expires = &expires
+	}
+
+	_, err := g.uploader.Upload(uploadInput)
+	if err != nil {
+		traceSpan.RecordError(err)
+		return fmt.Errorf("failed to set data: %w", err)
+	}
+
+	return nil
+}
+
+func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("SetTTL").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:SetTTL")
+	defer traceSpan.Finish()
+
+	// TODO implement
+	return nil
+}
+
+func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("Get").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:Get")
+	defer traceSpan.Finish()
+
+	buf := aws.NewWriteAtBuffer([]byte{})
+	_, err := g.downloader.Download(buf,
+		&s3.GetObjectInput{
+			Bucket: aws.String(g.bucket),
+			Key:    aws.String(utils.ReverseAndHexEncodeSlice(hash)),
+		})
+	if err != nil {
+		traceSpan.RecordError(err)
+		return nil, fmt.Errorf("failed to get data: %w", err)
+	}
+
+	return buf.Bytes(), err
+}
+
+func (g *S3) Del(ctx context.Context, hash []byte) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("Del").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:Del")
+	defer traceSpan.Finish()
+
+	key := utils.ReverseAndHexEncodeSlice(hash)
+	_, err := g.client.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		traceSpan.RecordError(err)
+		return fmt.Errorf("unable to del data: %w", err)
+	}
+
+	err = g.client.WaitUntilObjectNotExists(&s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		traceSpan.RecordError(err)
+		return fmt.Errorf("failed to del data: %w", err)
+	}
+
+	return nil
+}
