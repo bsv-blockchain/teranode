@@ -9,10 +9,7 @@ import (
 )
 
 func CalculateWork(prevWork *chainhash.Hash, nBits []byte) (*chainhash.Hash, error) {
-	target, err := CalculateTarget(nBits)
-	if err != nil {
-		return nil, err
-	}
+	target := CalculateTarget(nBits)
 
 	// Work done is proportional to 1/difficulty
 	work := new(big.Int).Div(new(big.Int).Lsh(big.NewInt(1), 256), target)
@@ -27,7 +24,7 @@ func CalculateWork(prevWork *chainhash.Hash, nBits []byte) (*chainhash.Hash, err
 	return hash, nil
 }
 
-func CalculateTarget(nBits []byte) (*big.Int, error) {
+func CalculateTarget(nBits []byte) *big.Int {
 	nb := binary.BigEndian.Uint32(nBits)
 	// nBits in Bitcoin protocol is in little-endian, so reverse if necessary
 	exponent := nb >> 24
@@ -36,11 +33,11 @@ func CalculateTarget(nBits []byte) (*big.Int, error) {
 	// Invalid nBits
 	if exponent <= 3 {
 		mantissa >>= 8 * (3 - exponent)
-		return big.NewInt(int64(mantissa)), nil
+		return big.NewInt(int64(mantissa))
 	}
 
 	target := big.NewInt(int64(mantissa))
 	target.Lsh(target, uint(8*(exponent-3)))
 
-	return target, nil
+	return target
 }
