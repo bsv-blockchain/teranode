@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
@@ -26,6 +28,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,6 +55,15 @@ var version string
 var commit string
 var kafkaProducer sarama.SyncProducer
 var kafkaTopic string
+var ipv6MulticastConn *net.UDPConn
+
+type ipv6MulticastMsg struct {
+	conn            *net.UDPConn
+	IDBytes         []byte
+	txExtendedBytes []byte
+}
+
+var ipv6MulticastChan = make(chan ipv6MulticastMsg)
 
 var (
 	prometheusProcessedTransactions prometheus.Counter
@@ -99,6 +111,8 @@ func main() {
 	useHTTPFlag := flag.Bool("http", false, "use http instead of grpc to send transactions")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
+	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
+	ipv6Interface := flag.String("ipv6Interface", "en0", "IPv6 multicast interface - if applicable")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 
 	flag.Parse()
@@ -110,6 +124,7 @@ func main() {
 	}
 
 	if kafka != nil && *kafka != "" {
+		logger.Infof("Connecting to kafka at %s", *kafka)
 		kafkaURL, err := url.Parse(*kafka)
 		if err != nil {
 			log.Fatalf("unable to parse kafka url: %v", err)
@@ -127,6 +142,50 @@ func main() {
 
 		kafkaProducer = producer
 		kafkaTopic = kafkaURL.Path[1:]
+	}
+
+	logger.Infof("Using %s ipv6Address", *ipv6Address)
+
+	if ipv6Address != nil && *ipv6Address != "" {
+		logger.Infof("Using ipv6 multicast interface %s at address %s", *ipv6Interface, *ipv6Address)
+		en0, err := net.InterfaceByName(*ipv6Interface)
+		if err != nil {
+			log.Fatalf("error resolving interface: %v", err)
+		}
+
+		addr := &net.UDPAddr{
+			IP:   net.ParseIP(*ipv6Address),
+			Port: 9999,
+			Zone: en0.Name,
+		}
+
+		logger.Infof("Starting IPv6 multicast on %s", addr.String())
+		ipv6MulticastConn, err = net.DialUDP("udp6", nil, addr)
+		if err != nil {
+			log.Fatalf("error dialing address: %v", err)
+		}
+
+		go func() {
+			for {
+				msg := <-ipv6MulticastChan
+
+				r := bytes.NewReader(msg.txExtendedBytes)
+				msgTx := &wire.MsgExtendedTx{}
+				err = msgTx.Deserialize(r)
+				if err != nil {
+					logger.Errorf("error deserializing tx %s: %v", utils.ReverseAndHexEncodeSlice(msg.IDBytes), err)
+					continue
+				}
+
+				if err = wire.WriteMessage(msg.conn, msgTx, wire.ProtocolVersion, wire.MainNet); err != nil {
+					if errors.Is(err, io.EOF) {
+						logger.Infof("[%s] Connection closed", msg.conn.RemoteAddr())
+						continue
+					}
+					logger.Errorf("[%s] Failed to write message: %v", msg.conn.RemoteAddr(), err)
+				}
+			}
+		}()
 	}
 
 	printProgress = uint64(*printFlag)
@@ -324,7 +383,12 @@ func fireTransactions(u *bt.UTXO, keySet *extra.KeySet) error {
 			prometheusInvalidTransactions.Inc()
 			return err
 		}
-
+	} else if ipv6MulticastConn != nil {
+		err := sendOnIpv6Multicast(ipv6MulticastConn, tx.TxIDBytes(), tx.ExtendedBytes())
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			return err
+		}
 	} else {
 		err := sendTransaction(tx.TxID(), tx.ExtendedBytes())
 		if err != nil {
@@ -372,6 +436,26 @@ func publishToKafka(producer sarama.SyncProducer, topic string, txIDBytes []byte
 			txPs = float64(counterLoad) / ts
 		}
 		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(startTime).Seconds(), int(txPs))
+	}
+
+	return nil
+}
+
+func sendOnIpv6Multicast(conn *net.UDPConn, IDBytes []byte, txExtendedBytes []byte) error {
+	ipv6MulticastChan <- ipv6MulticastMsg{
+		conn:            conn,
+		IDBytes:         IDBytes,
+		txExtendedBytes: txExtendedBytes,
+	}
+
+	counterLoad := counter.Add(1)
+	if printProgress > 0 && counterLoad%printProgress == 0 {
+		txPs := float64(0)
+		ts := time.Since(startTime).Seconds()
+		if ts > 0 {
+			txPs = float64(counterLoad) / ts
+		}
+		fmt.Printf("Time for %d transactions to ipv6: %.2fs (%d tx/s)\r", counterLoad, time.Since(startTime).Seconds(), int(txPs))
 	}
 
 	return nil

@@ -1,13 +1,16 @@
 package propagation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
@@ -15,6 +18,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +34,10 @@ var (
 	prometheusInvalidTransactions   prometheus.Counter
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
+
+	// ipv6 multicast constants
+	maxDatagramSize = 512 //100 * 1024 * 1024
+	ipv6Port        = 9999
 )
 
 func init() {
@@ -85,6 +93,14 @@ func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Cli
 // Start function
 func (u *PropagationServer) Start() error {
 
+	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
+	if ok {
+		err := u.StartUDP6Listeners(context.Background(), ipv6Addresses)
+		if err != nil {
+			return fmt.Errorf("error starting ipv6 listeners: %v", err)
+		}
+	}
+
 	address, ok := gocore.Config().Get("propagation_grpcAddress") //, "localhost:8001")
 	if !ok {
 		return errors.New("no propagation_grpcAddress setting found")
@@ -126,6 +142,84 @@ func (u *PropagationServer) Start() error {
 	u.logger.Infof("Propagation GRPC service listening on %s", address)
 	if err = u.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
+	}
+
+	return nil
+}
+
+func (u *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error {
+	u.logger.Infof("Starting UDP6 listeners on %s", ipv6Addresses)
+
+	ipv6Interface, ok := gocore.Config().Get("ipv6_interface", "en0")
+	if !ok {
+		// default to en0
+		ipv6Interface = "en0"
+	}
+
+	useInterface, err := net.InterfaceByName(ipv6Interface)
+	if err != nil {
+		return fmt.Errorf("error resolving interface: %v", err)
+	}
+
+	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
+		var conn *net.UDPConn
+		conn, err = net.ListenMulticastUDP("udp6", useInterface, &net.UDPAddr{
+			IP:   net.ParseIP(ipv6Address),
+			Port: ipv6Port,
+			Zone: useInterface.Name,
+		})
+		if err != nil {
+			log.Fatalf("error starting listener: %v", err)
+		}
+
+		go func(conn *net.UDPConn) {
+			// Loop forever reading from the socket
+			//var numBytes int
+			var src *net.UDPAddr
+			//var oobn int
+			//var flags int
+			var msg wire.Message
+			var b []byte
+			var oobB []byte
+			var msgTx *wire.MsgExtendedTx
+
+			buffer := make([]byte, maxDatagramSize)
+			for {
+				_, _, _, src, err = conn.ReadMsgUDP(buffer, oobB)
+				if err != nil {
+					log.Fatal("ReadFromUDP failed:", err)
+				}
+				//u.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
+
+				reader := bytes.NewReader(buffer)
+				msg, b, err = wire.ReadMessage(reader, wire.ProtocolVersion, wire.MainNet)
+				if err != nil {
+					u.logger.Errorf("wire.ReadMessage failed: %v", err)
+				}
+				u.logger.Infof("read %d bytes into wire message from %s", len(b), src.String())
+				//u.logger.Infof("wire message type: %v", msg)
+
+				msgTx, ok = msg.(*wire.MsgExtendedTx)
+				if ok {
+					u.logger.Infof("received %d bytes from %s", len(b), src.String())
+
+					txBytes := bytes.NewBuffer(nil)
+					if err = msgTx.Serialize(txBytes); err != nil {
+						u.logger.Errorf("error serializing transaction: %v", err)
+						continue
+					}
+
+					// Process the received bytes
+					go func(txb []byte) {
+						if _, err = u.Set(ctx, &propagation_api.SetRequest{
+							Tx: txb,
+						}); err != nil {
+							u.logger.Errorf("error processing transaction: %v", err)
+						}
+					}(txBytes.Bytes())
+				}
+			}
+		}(conn)
 	}
 
 	return nil
