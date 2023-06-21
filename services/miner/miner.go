@@ -110,16 +110,8 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 		nonce++
 	}
 
-	// Create a new block
-	// block := bt.NewBlock()
-	// block.Header.Version = 1
-	// block.Header.Timestamp = time.Now()
-	// block.Header.Bits = candidate.Bits
-	// block.Header.Nonce = 0
-	// block.Header.MerkleRoot = candidate.MerkleRoot
-	// block.Header.PreviousBlockHash = candidate.PreviousBlockHash
-	// block.Header.Coinbase1 = a
-	// block.Header.Coinbase2 = b
-
-	// m.blockAssemblyClient.Store(ctx context.Context, hash *chainhash.Hash)
+	err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), candidate.Id, coinbaseTx.Bytes(), uint32(time.Now().Unix()), nonce, 1)
+	if err != nil {
+		m.logger.Errorf("Error submitting mining solution: %v", err)
+	}
 }

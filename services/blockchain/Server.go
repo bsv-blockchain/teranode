@@ -10,6 +10,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -126,8 +127,24 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
+	btCoinbaseTx, err := bt.NewTxFromBytes(request.CoinbaseTx)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeHashes := make([]*chainhash.Hash, len(request.SubtreeHashes))
+	for i, subtreeHash := range request.SubtreeHashes {
+		subtreeHashes[i], err = chainhash.NewHash(subtreeHash)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	block := &model.Block{
-		Header: header,
+		Header:           header,
+		CoinbaseTx:       btCoinbaseTx,
+		Subtrees:         subtreeHashes,
+		TransactionCount: request.TransactionCount,
 	}
 
 	err = b.store.StoreBlock(ctx, block)

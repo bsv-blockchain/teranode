@@ -26,7 +26,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 	     b.version
 		,b.block_time
 	    ,b.nonce
-		,b.previous_hash
+		,b.hash
 		,b.merkle_root
 		,b.n_bits
 		,b.height

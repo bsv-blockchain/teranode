@@ -56,3 +56,18 @@ func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate,
 
 	return res, nil
 }
+
+func (s Client) SubmitMiningSolution(ctx context.Context, id []byte, coinbaseTx []byte, time, nonce, version uint32) error {
+	_, err := s.db.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
+		Id:         id,
+		Nonce:      nonce,
+		CoinbaseTx: coinbaseTx,
+		Time:       time,
+		Version:    version,
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

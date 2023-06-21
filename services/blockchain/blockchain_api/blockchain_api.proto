@@ -30,6 +30,8 @@ message HealthResponse {
 message AddBlockRequest {
   bytes header = 1;
   repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
+  bytes coinbase_tx = 3;
+  uint64 transaction_count = 4;
 }
 
 // swagger:model GetBlockRequest

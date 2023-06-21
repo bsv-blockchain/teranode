@@ -41,8 +41,10 @@ func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, err
 
 func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
 	req := &blockchain_api.AddBlockRequest{
-		Header:        block.Header.Bytes(),
-		SubtreeHashes: make([][]byte, 0),
+		Header:           block.Header.Bytes(),
+		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		SubtreeHashes:    make([][]byte, 0),
+		TransactionCount: block.TransactionCount,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
