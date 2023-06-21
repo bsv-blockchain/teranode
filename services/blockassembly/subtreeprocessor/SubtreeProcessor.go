@@ -78,7 +78,6 @@ func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, optionalWaitCh
 		}
 		return
 	}
-
 	stp.txChan <- &txIDAndFee{
 		txID: hash,
 		fee:  fee,
@@ -136,6 +135,9 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 
 // Reset the subtrees when a new block is found
 func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
+	stp.Lock()
+	defer stp.Unlock()
+
 	// clear incomplete subtrees
 	stp.incompleteSubtrees = make(map[chainhash.Hash]*util.Subtree, 0)
 
@@ -145,8 +147,6 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 	var indexToSlice = -1
 
 	// we need to shuffle all the transaction along because of the new coinbase placeholder
-	stp.Lock()
-	defer stp.Unlock()
 
 	if lastRoot == nil {
 		return errors.New("you must pass in the last root")
@@ -165,6 +165,8 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 
 	chainedSubtrees := stp.chainedSubtrees[indexToSlice:]
 	chainedSubtrees = append(chainedSubtrees, stp.currentSubtree)
+
+	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
 	stp.chainedSubtrees = make([]*util.Subtree, 0)
 	stp.Add(*model.CoinbasePlaceholderHash, 0)

@@ -224,9 +224,14 @@ func TestReset(t *testing.T) {
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new itemm per file is 2 so there should be 4 subtrees in the chain
+	wg.Add(5) // we are expecting 2 more subtrees
+
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
 	require.NoError(t, err)
+	wg.Wait()
+	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
+	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
@@ -276,10 +281,13 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 
 	stp.currentItemsPerFile = 2
 
+	wg.Add(5) // we are expecting 4 subtrees
+
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be rese
 	// new itemm per file is 2 so there should be 5 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	wg.Wait()
 	require.NoError(t, err)
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 0, stp.currentSubtree.Length())
@@ -332,13 +340,16 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 
 	stp.currentItemsPerFile = 2
 
+	wg.Add(4) // we are expecting 4 subtrees
+
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new itemm per file is 2 so there should be 4 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	wg.Wait()
 	require.NoError(t, err)
 	assert.Equal(t, 4, len(stp.chainedSubtrees))
-	assert.Equal(t, 1, stp.currentSubtree.Length())
+	assert.Equal(t, 2, stp.currentSubtree.Length())
 }
 
 func TestResetLarge(t *testing.T) {
@@ -388,10 +399,15 @@ func TestResetLarge(t *testing.T) {
 
 	stp.currentItemsPerFile = 65536
 
+	wg.Add(8) // we are expecting 4 subtrees
+
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new itemm per file is 65536 so there should be 8 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	wg.Wait()
+	time.Sleep(1 * time.Second)
+
 	require.NoError(t, err)
 	assert.Equal(t, 8, len(stp.chainedSubtrees))
 	// one of the subtrees should contain 262144 items
