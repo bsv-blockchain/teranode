@@ -159,7 +159,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 
 func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 	// get the merkle proof for the coinbase
-	merkleProof, err := stp.GetMerkleProofForCoinbase()
+	merkleProof, err := util.GetMerkleProofForCoinbase(stp.chainedSubtrees) //
 	require.NoError(t, err)
 
 	assert.Len(t, merkleProof, 4)

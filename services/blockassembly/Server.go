@@ -319,7 +319,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
 	nBits := bestBlockHeader.Bits
 
-	coinbaseMerkleProof, err := ba.subtreeProcessor.GetMerkleProofForCoinbase()
+	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
 	if err != nil {
 		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
 	}

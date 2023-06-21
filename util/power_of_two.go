@@ -1,6 +1,9 @@
 package util
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 func CeilPowerOfTwo(num int) int {
 	if num <= 0 {
@@ -35,4 +38,14 @@ func NextPowerOfTwo(n int) int {
 	// Figure out and return the next power of two.
 	exponent := uint(math.Log2(float64(n))) + 1
 	return 1 << exponent // 2^exponent
+}
+
+// NextLowerPowerOfTwo finds the next power of 2 that is less than x.
+func NextLowerPowerOfTwo(x uint) uint {
+	if x == 0 {
+		return 0
+	}
+
+	// bit length minus one gives the exponent of the next lower (or equal) power of 2
+	return 1 << (bits.Len(x) - 1)
 }
