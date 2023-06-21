@@ -39,6 +39,10 @@ func NewTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
 	return NewTree(int(height))
 }
+func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
+	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
+	return NewTree(int(height))
+}
 
 func (st *Subtree) Size() int {
 	return cap(st.Nodes)
@@ -326,5 +330,6 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		return fmt.Errorf("root hash mismatch")
 	}
 
+	// TODO: look up the fee for the last tx and subtract it from the last chainedSubtree and add it to the currentSubtree
 	return nil
 }
