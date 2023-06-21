@@ -43,13 +43,7 @@ var kafkaProducer sarama.SyncProducer
 var kafkaTopic string
 var ipv6MulticastConn *net.UDPConn
 
-type ipv6MulticastMsg struct {
-	conn            *net.UDPConn
-	IDBytes         []byte
-	txExtendedBytes []byte
-}
-
-var ipv6MulticastChan = make(chan ipv6MulticastMsg)
+var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
@@ -123,7 +117,7 @@ func main() {
 			for {
 				msg := <-ipv6MulticastChan
 
-				r := bytes.NewReader(msg.txExtendedBytes)
+				r := bytes.NewReader(msg.TxExtendedBytes)
 				msgTx := &wire.MsgExtendedTx{}
 				err = msgTx.Deserialize(r)
 				if err != nil {
@@ -131,12 +125,12 @@ func main() {
 					continue
 				}
 
-				if err = wire.WriteMessage(msg.conn, msgTx, wire.ProtocolVersion, wire.MainNet); err != nil {
+				if err = wire.WriteMessage(msg.Conn, msgTx, wire.ProtocolVersion, wire.MainNet); err != nil {
 					if errors.Is(err, io.EOF) {
-						logger.Infof("[%s] Connection closed", msg.conn.RemoteAddr())
+						logger.Infof("[%s] Connection closed", msg.Conn.RemoteAddr())
 						continue
 					}
-					logger.Errorf("[%s] Failed to write message: %v", msg.conn.RemoteAddr(), err)
+					logger.Errorf("[%s] Failed to write message: %v", msg.Conn.RemoteAddr(), err)
 				}
 			}
 		}()
@@ -236,6 +230,7 @@ func main() {
 			kafkaProducer,
 			kafkaTopic,
 			ipv6MulticastConn,
+			ipv6MulticastChan,
 			printProgress,
 		)
 

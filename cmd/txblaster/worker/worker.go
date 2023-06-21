@@ -58,10 +58,10 @@ func init() {
 	)
 }
 
-type ipv6MulticastMsg struct {
-	conn            *net.UDPConn
+type Ipv6MulticastMsg struct {
+	Conn            *net.UDPConn
 	IDBytes         []byte
-	txExtendedBytes []byte
+	TxExtendedBytes []byte
 }
 
 type Worker struct {
@@ -76,7 +76,7 @@ type Worker struct {
 	kafkaProducer        sarama.SyncProducer
 	kafkaTopic           string
 	ipv6MulticastConn    *net.UDPConn
-	ipv6MulticastChan    chan ipv6MulticastMsg
+	ipv6MulticastChan    chan Ipv6MulticastMsg
 	printProgress        uint64
 }
 
@@ -90,6 +90,7 @@ func NewWorker(
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
+	ipv6MulticastChan chan Ipv6MulticastMsg,
 	printProgress uint64,
 ) *Worker {
 
@@ -106,7 +107,7 @@ func NewWorker(
 		kafkaProducer:        kafkaProducer,
 		kafkaTopic:           kafkaTopic,
 		ipv6MulticastConn:    ipv6MulticastConn,
-		ipv6MulticastChan:    make(chan ipv6MulticastMsg),
+		ipv6MulticastChan:    ipv6MulticastChan,
 		printProgress:        printProgress,
 	}
 }
@@ -261,10 +262,10 @@ func (w *Worker) publishToKafka(producer sarama.SyncProducer, topic string, txID
 }
 
 func (w *Worker) sendOnIpv6Multicast(conn *net.UDPConn, IDBytes []byte, txExtendedBytes []byte) error {
-	w.ipv6MulticastChan <- ipv6MulticastMsg{
-		conn:            conn,
+	w.ipv6MulticastChan <- Ipv6MulticastMsg{
+		Conn:            conn,
 		IDBytes:         IDBytes,
-		txExtendedBytes: txExtendedBytes,
+		TxExtendedBytes: txExtendedBytes,
 	}
 
 	counterLoad := counter.Add(1)
