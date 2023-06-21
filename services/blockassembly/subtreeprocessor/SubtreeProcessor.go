@@ -24,6 +24,7 @@ type SubtreeProcessor struct {
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
 	sync.Mutex
+	incompleteSubtrees map[chainhash.Hash]*util.Subtree
 }
 
 func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
@@ -35,6 +36,7 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 		incomingBlockChan:   make(chan string),
 		chainedSubtrees:     make([]*util.Subtree, 0),
 		currentSubtree:      util.NewTreeByLeafCount(initialItemsPerFile),
+		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
 	}
 
 	go func() {
@@ -86,6 +88,26 @@ func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, optionalWaitCh
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
 	// TODO: may need mutex
+	stp.Lock()
+	defer stp.Unlock()
+
+	if len(stp.chainedSubtrees) == 0 {
+		// no chained subtrees so get a sub-subtree from the current subtree
+		if stp.currentSubtree.Length() == 0 {
+			return nil
+		}
+
+		subsubtree := util.NewIncompleteTreeByLeafCount(stp.currentSubtree.Length())
+		subsubtree.Nodes = stp.currentSubtree.Nodes
+		subsubtree.Height = stp.currentSubtree.Height
+		subsubtree.Fees = stp.currentSubtree.Fees
+
+		subsubArray := make([]*util.Subtree, 0)
+		subsubArray = append(subsubArray, subsubtree)
+		stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
+		return subsubArray
+	}
+
 	return stp.chainedSubtrees
 }
 
@@ -102,7 +124,14 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 	if indexToSlice != -1 {
 		return stp.chainedSubtrees[:indexToSlice+1]
 	}
-
+	// check the incomplete subtrees
+	key, err := chainhash.NewHash(lastRoot)
+	if err != nil {
+		return nil
+	}
+	if stp.incompleteSubtrees[*key] != nil {
+		return []*util.Subtree{stp.incompleteSubtrees[*key]}
+	}
 	return nil
 }
 
@@ -135,6 +164,9 @@ func (stp *SubtreeProcessor) GetMerkleProofForCoinbase() ([]*chainhash.Hash, err
 
 // Reset the subtrees when a new block is found
 func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
+	// clear incomplete subtrees
+	stp.incompleteSubtrees = make(map[chainhash.Hash]*util.Subtree, 0)
+
 	//TODO: calculate new items per file size
 
 	// indexToSlice is where to remove the mined transactions from
@@ -159,61 +191,25 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 		return errors.New("the last root hash %x was not found in the chained subtrees")
 	}
 
-	// flatten the trees
-	flat := make([]*chainhash.Hash, len(stp.chainedSubtrees[indexToSlice:])*len(stp.chainedSubtrees[0].Nodes)+len(stp.currentSubtree.Nodes)+1)
-	flat[0] = model.CoinbasePlaceholderHash
-	// loop through all the chained subtrees from the index to slice
-	flatIndex := 1 // already added the coinbase place holder
-	for i := indexToSlice; i < len(stp.chainedSubtrees); i++ {
-		// loop through all the nodes in the subtree
-		for _, node := range stp.chainedSubtrees[i].Nodes {
-			if node == nil {
-				panic(fmt.Sprintf("chained subtree node %d is nil", i))
-			}
-			flat[flatIndex] = node
-			flatIndex++
+	chainedSubtrees := stp.chainedSubtrees[indexToSlice:]
+	chainedSubtrees = append(chainedSubtrees, stp.currentSubtree)
+
+	stp.chainedSubtrees = make([]*util.Subtree, 0)
+	stp.Add(*model.CoinbasePlaceholderHash, 0)
+
+	fees := uint64(0)
+	for _, subtree := range chainedSubtrees {
+		for _, node := range subtree.Nodes {
+			stp.Add(*node, 0)
 		}
-	}
-	// add the current subtree to flat
-	for j, node := range stp.currentSubtree.Nodes {
-		if node == nil {
-			panic(fmt.Sprintf("current subtree node %d is nil", j))
-		}
-		flat[flatIndex] = node
-		flatIndex++
+		fees += subtree.Fees
 	}
 
-	// now split into the new size
-	newSize := stp.currentItemsPerFile
-	stp.chainedSubtrees = nil
-
-	var tmpOverflow []*chainhash.Hash
-
-	if len(flat)%newSize != 0 {
-		// we have a remainder so we need to add it to the current subtree
-		// but this could take the current subtree over the limit
-		// so we need to split it
-		splitIndex := len(flat) - len(flat)%newSize
-		tmpOverflow = flat[splitIndex:]
-		flat = flat[:splitIndex]
-	}
-	// loop through all the txs in flat
-	for i := 0; i < len(flat); i += newSize {
-		s := util.NewTreeByLeafCount(newSize)
-		for j := i; j < i+newSize; j++ {
-			s.Nodes = append(s.Nodes, flat[j])
-		}
-		stp.chainedSubtrees = append(stp.chainedSubtrees, s)
-	}
-
-	if len(tmpOverflow) > 0 {
-		// add remainder to the current subtree
-		s := util.NewTreeByLeafCount(stp.currentItemsPerFile)
-		s.Nodes = append(s.Nodes, tmpOverflow...)
-		// TODO add fees etc
-		stp.currentSubtree = s
+	if len(stp.chainedSubtrees) > 0 {
+		stp.chainedSubtrees[len(stp.chainedSubtrees)-1].Fees = fees
 	} else {
-		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+		stp.currentSubtree.Fees = fees
 	}
+
 	return nil
 }
