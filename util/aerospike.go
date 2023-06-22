@@ -51,7 +51,6 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	policy.MaxErrorRate = 0
 	policy.Timeout = 60
 	policy.MinConnectionsPerNode = 200
-	policy.IdleTimeout = 15 * time.Second
 
 	if url.User != nil {
 		policy.AuthMode = 2
