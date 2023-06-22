@@ -9,6 +9,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		policy := aero.NewWritePolicy(0, 0)
+		policy := util.GetAerospikeWritePolicy(0, 0)
 		_, err = client.Delete(policy, key)
 		require.NoError(t, err)
 	})
@@ -53,7 +54,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 
@@ -79,7 +80,7 @@ func TestAerospike(t *testing.T) {
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
 
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
 		require.Equal(t, uint32(2), value.Generation)
@@ -103,7 +104,7 @@ func TestAerospike(t *testing.T) {
 		resp, err = db.Reset(context.Background(), hash)
 		require.NoError(t, err)
 
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, []byte{}, value.Bins["txid"].([]byte))
 		require.Equal(t, uint32(1), value.Generation)
@@ -111,7 +112,7 @@ func TestAerospike(t *testing.T) {
 }
 
 func cleanDB(t *testing.T, client *aero.Client, key *aero.Key) {
-	policy := aero.NewWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)
 }

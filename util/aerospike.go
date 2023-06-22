@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 )
@@ -42,11 +43,14 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	}
 
 	policy := aerospike.NewClientPolicy()
-	policy.LimitConnectionsToQueueSize = false
+	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
+	// todo optimize read policies
+	// todo optimize write policies
+	policy.LimitConnectionsToQueueSize = true
 	policy.ConnectionQueueSize = 1024
 	policy.MaxErrorRate = 0
 	policy.MinConnectionsPerNode = 200
-	policy.IdleTimeout = 250000 // server will keep connections alive for 5min or 300000
+	policy.IdleTimeout = 15 * time.Second
 
 	if url.User != nil {
 		policy.AuthMode = 2
@@ -92,4 +96,90 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	}
 
 	return client, nil
+}
+
+// AerospikeReadPolicyOptions represents functional options for modifying Aerospike read policies.
+type AerospikeReadPolicyOptions func(*aerospike.BasePolicy)
+
+// WithTotalTimeout sets the total timeout for the Aerospike read policy.
+func WithTotalTimeout(timeout time.Duration) AerospikeReadPolicyOptions {
+	return func(policy *aerospike.BasePolicy) {
+		policy.TotalTimeout = timeout
+	}
+}
+
+// WithSocketTimeout sets the socket timeout for the Aerospike read policy.
+func WithSocketTimeout(timeout time.Duration) AerospikeReadPolicyOptions {
+	return func(policy *aerospike.BasePolicy) {
+		policy.SocketTimeout = timeout
+	}
+}
+
+// WithMaxRetries sets the maximum number of retries for the Aerospike read policy.
+func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
+	return func(policy *aerospike.BasePolicy) {
+		policy.MaxRetries = retries
+	}
+}
+
+// GetAerospikeReadPolicy creates a new Aerospike read policy with the provided options applied. Used to manage
+// default connection parameters
+// If no options are provided, the policy will use the default values:
+//   - TotalTimeout:     50 milliseconds
+//   - SocketTimeout:    50 milliseconds
+//   - MaxRetries:       1
+func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
+	readPolicy := aerospike.NewPolicy()
+	readPolicy.TotalTimeout = 500 * time.Millisecond
+	readPolicy.SocketTimeout = 500 * time.Millisecond
+	readPolicy.MaxRetries = 1
+
+	// Apply the provided options
+	for _, opt := range options {
+		opt(readPolicy)
+	}
+
+	return readPolicy
+}
+
+// AerospikeWritePolicyOptions represents functional options for modifying Aerospike write policies.
+type AerospikeWritePolicyOptions func(*aerospike.WritePolicy)
+
+// WithTotalTimeoutWrite sets the total timeout for the Aerospike write policy.
+func WithTotalTimeoutWrite(timeout time.Duration) AerospikeWritePolicyOptions {
+	return func(policy *aerospike.WritePolicy) {
+		policy.BasePolicy.TotalTimeout = timeout
+	}
+}
+
+// WithSocketTimeoutWrite sets the socket timeout for the Aerospike write policy.
+func WithSocketTimeoutWrite(timeout time.Duration) AerospikeWritePolicyOptions {
+	return func(policy *aerospike.WritePolicy) {
+		policy.BasePolicy.SocketTimeout = timeout
+	}
+}
+
+// WithMaxRetriesWrite sets the maximum number of retries for the Aerospike write policy.
+func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
+	return func(policy *aerospike.WritePolicy) {
+		policy.BasePolicy.MaxRetries = retries
+	}
+}
+
+// GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied. Used to manage
+// default connection parameters
+// If no options are provided, the policy will use the default values:
+//   - TotalTimeout:     50 milliseconds
+//   - SocketTimeout:    25 milliseconds
+func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
+	writePolicy := aerospike.NewWritePolicy(generation, expiration)
+	writePolicy.TotalTimeout = 500 * time.Millisecond
+	writePolicy.SocketTimeout = 250 * time.Millisecond
+
+	// Apply the provided options
+	for _, opt := range options {
+		opt(writePolicy)
+	}
+
+	return writePolicy
 }

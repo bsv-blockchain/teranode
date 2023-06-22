@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/util"
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -53,7 +54,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		policy := aero.NewWritePolicy(0, 0)
+		policy := util.GetAerospikeWritePolicy(0, 0)
 		_, err = client.Delete(policy, key)
 		require.NoError(t, err)
 	})
@@ -65,7 +66,7 @@ func TestAerospike(t *testing.T) {
 
 		var value *aero.Record
 		// raw aerospike get
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(101), uint64(value.Bins["fee"].(int)))
@@ -83,7 +84,7 @@ func TestAerospike(t *testing.T) {
 		err = db.SetMined(context.Background(), hash, blockHash)
 		require.NoError(t, err)
 
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(2), value.Generation)
 		assert.Len(t, value.Bins["blockHashes"].([]interface{}), 1)
@@ -92,7 +93,7 @@ func TestAerospike(t *testing.T) {
 		err = db.SetMined(context.Background(), hash, blockHash2)
 		require.NoError(t, err)
 
-		value, err = client.Get(aero.NewPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(3), value.Generation)
 		assert.Len(t, value.Bins["blockHashes"].([]interface{}), 2)
@@ -127,7 +128,7 @@ func TestAerospike(t *testing.T) {
 }
 
 func cleanDB(t *testing.T, client *aero.Client, key *aero.Key) {
-	policy := aero.NewWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)
 }

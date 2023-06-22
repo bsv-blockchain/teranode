@@ -2,8 +2,7 @@ package main
 
 import (
 	"fmt"
-	"time"
-
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/aerospike/aerospike-client-go/v6"
 )
 
@@ -29,8 +28,7 @@ func main() {
 	namespace := "test" // aUrl.Path[1:]
 	fmt.Printf("Namespace %s\n", namespace)
 
-	wPolicy := aerospike.NewWritePolicy(0, 0)
-	wPolicy.TotalTimeout = 3 * time.Second
+	wPolicy := util.GetAerospikeWritePolicy(0, 0)
 	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 	wPolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

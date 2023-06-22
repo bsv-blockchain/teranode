@@ -5,10 +5,6 @@ package aerospike
 import (
 	"context"
 	"fmt"
-	"math"
-	"net/url"
-	"time"
-
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -18,6 +14,8 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"math"
+	"net/url"
 )
 
 var (
@@ -109,8 +107,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 }
 
 func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := aerospike.NewWritePolicy(0, math.MaxUint32)
-	policy.TotalTimeout = 3 * time.Second
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -174,8 +171,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	}
 
 	//expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
-	policy := aerospike.NewWritePolicy(1, 0)
-	policy.TotalTimeout = 3 * time.Second
+	policy := util.GetAerospikeWritePolicy(1, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
@@ -224,8 +220,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 }
 
 func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := aerospike.NewWritePolicy(2, 0)
-	policy.TotalTimeout = 3 * time.Second
+	policy := util.GetAerospikeWritePolicy(2, 0)
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

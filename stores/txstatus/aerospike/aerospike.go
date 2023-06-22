@@ -80,7 +80,9 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, 
 	}
 
 	var value *aerospike.Record
-	value, aeroErr = s.client.Get(aerospike.NewPolicy(), key)
+
+	readPolicy := util.GetAerospikeReadPolicy()
+	value, aeroErr = s.client.Get(readPolicy, key)
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -144,8 +146,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, 
 }
 
 func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
-	policy := aerospike.NewWritePolicy(0, 0)
-	policy.TotalTimeout = 3 * time.Second
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -181,8 +182,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	policy := aerospike.NewWritePolicy(0, 0)
-	policy.TotalTimeout = 3 * time.Second
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
@@ -192,7 +192,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
-	readPolicy := aerospike.NewPolicy()
+	readPolicy := util.GetAerospikeReadPolicy()
 	record, err := s.client.Get(readPolicy, key, "blockHashes")
 	if err != nil {
 		return err
