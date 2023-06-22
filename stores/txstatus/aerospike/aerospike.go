@@ -145,6 +145,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, 
 
 func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
 	policy := aerospike.NewWritePolicy(0, 0)
+	policy.TotalTimeout = 3 * time.Second
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -181,6 +182,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	policy := aerospike.NewWritePolicy(0, 0)
+	policy.TotalTimeout = 3 * time.Second
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
