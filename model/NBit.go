@@ -1,0 +1,56 @@
+package model
+
+import (
+	"encoding/binary"
+	"math/big"
+
+	"github.com/ordishs/go-utils"
+)
+
+type NBit [4]byte // nBits is 4 bytes array held internal in little endian format
+
+func NewNBitFromSlice(nBits []byte) NBit {
+	if len(nBits) != 4 {
+		panic("nBits should be 4 bytes long")
+	}
+
+	var nBit NBit
+	copy(nBit[:], nBits)
+
+	return nBit
+}
+
+func NewNBitFromString(nBitStr string) NBit {
+	nBits, err := utils.DecodeAndReverseHexString(nBitStr)
+	if err != nil {
+		panic("error decoding nBitStr: " + err.Error())
+	}
+
+	return NewNBitFromSlice(nBits)
+}
+
+func (b NBit) String() string {
+	return utils.ReverseAndHexEncodeSlice(b[:])
+}
+
+func (b NBit) CloneBytes() []byte {
+	return b[:]
+}
+
+func (b NBit) CalculateTarget() *big.Int {
+	nb := binary.LittleEndian.Uint32(b[:])
+
+	exponent := nb >> 24
+	mantissa := nb & 0x007FFFFF
+
+	// Invalid nBits
+	if exponent <= 3 {
+		mantissa >>= 8 * (3 - exponent)
+		return big.NewInt(int64(mantissa))
+	}
+
+	target := big.NewInt(int64(mantissa))
+	target.Lsh(target, uint(8*(exponent-3)))
+
+	return target
+}

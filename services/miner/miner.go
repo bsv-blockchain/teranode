@@ -2,12 +2,12 @@ package miner
 
 import (
 	"context"
+	"log"
 	"math/big"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
-	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -82,20 +82,42 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 
 	merkleRoot := BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
 
-	target := util.CalculateTarget(candidate.NBits)
+	target := model.NewNBitFromSlice(candidate.NBits).CalculateTarget()
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
 	var nonce uint32
+
 	for {
+		var (
+			block1          = "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000"
+			block1Header    = block1[:160]
+			version         = block1Header[:8]
+			previousHash2   = block1Header[8:72]
+			merkleRootHash2 = block1Header[72:136]
+			time2           = block1Header[136:144]
+			nBits           = block1Header[144:152]
+			nonce2          = block1Header[152:160]
+		)
+		log.Printf("Version: %s", version)
+		log.Printf("Previous hash: %s", previousHash2)
+		log.Printf("Merkle root hash: %s", merkleRootHash2)
+		log.Printf("Time: %s", time2)
+		log.Printf("nBits: %s", nBits)
+		log.Printf("Nonce: %s", nonce2)
+
+		log.Printf("Block1 header: %s", block1Header)
+
 		blockHeader := model.BlockHeader{
 			Version:        candidate.Version,
 			HashPrevBlock:  previousHash,
 			HashMerkleRoot: merkleRootHash,
 			Timestamp:      candidate.Time,
-			Bits:           candidate.NBits,
+			Bits:           model.NewNBitFromSlice(candidate.NBits),
 			Nonce:          nonce,
 		}
+
+		log.Printf("Block header: %x", blockHeader.Bytes())
 
 		//  57896037716911750921221705069588091649609539881711309849342236841432341020672
 		// 105246604674077689286984806481918053301334584768133419539070562900731587447610
@@ -111,6 +133,9 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 			m.logger.Infof("Miner Block merkleroot: %s", blockHeader.HashMerkleRoot.String())
 			break
 		}
+
+		// TODO: remove this when Siggi gets a laptop without a fan...
+		time.Sleep(10 * time.Millisecond)
 
 		nonce++
 	}

@@ -33,7 +33,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: bits,
+				Bits: model.NewNBitFromSlice(bits),
 			},
 		})
 		require.NoError(t, err)
@@ -46,7 +46,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: bits,
+				Bits: model.NewNBitFromSlice(bits),
 			},
 		})
 		require.NoError(t, err)
@@ -61,7 +61,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: bitsBytes,
+				Bits: model.NewNBitFromSlice(bitsBytes),
 			},
 		})
 		require.NoError(t, err)

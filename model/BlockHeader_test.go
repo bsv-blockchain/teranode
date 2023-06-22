@@ -24,7 +24,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.HashPrevBlock.String())
 		assert.Equal(t, "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098", blockHeader.HashMerkleRoot.String())
 		assert.Equal(t, uint32(1231469665), blockHeader.Timestamp)
-		assert.Equal(t, "1d00ffff", hex.EncodeToString(blockHeader.Bits))
+		assert.Equal(t, "1d00ffff", blockHeader.Bits.String())
 		assert.Equal(t, uint32(2573394689), blockHeader.Nonce)
 	})
 
@@ -38,7 +38,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.HashPrevBlock.String())
 		assert.Equal(t, "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098", blockHeader.HashMerkleRoot.String())
 		assert.Equal(t, uint32(1231469665), blockHeader.Timestamp)
-		assert.Equal(t, "1d00ffff", hex.EncodeToString(blockHeader.Bits))
+		assert.Equal(t, "1d00ffff", blockHeader.Bits.String())
 		assert.Equal(t, uint32(2573394689), blockHeader.Nonce)
 	})
 

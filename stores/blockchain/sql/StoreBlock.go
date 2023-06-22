@@ -135,7 +135,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		block.Header.HashPrevBlock.CloneBytes(),
 		block.Header.HashMerkleRoot.CloneBytes(),
 		block.Header.Timestamp,
-		block.Header.Bits,
+		block.Header.Bits.CloneBytes(),
 		block.Header.Nonce,
 		height,
 		cumulativeChainWork.CloneBytes(),

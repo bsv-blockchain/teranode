@@ -7,13 +7,12 @@ import (
 	"math/big"
 
 	"github.com/libsv/go-bc"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
 type BlockHeader struct {
 	// Version of the block.  This is not the same as the protocol version.
-	Version uint32
+	Version uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 
 	// Hash of the previous block header in the blockchain.
 	HashPrevBlock *chainhash.Hash
@@ -22,13 +21,13 @@ type BlockHeader struct {
 	HashMerkleRoot *chainhash.Hash
 
 	// Time the block was created im unix time.
-	Timestamp uint32
+	Timestamp uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 
 	// Difficulty target for the block.
-	Bits []byte
+	Bits NBit // This is the target threshold in little endian - this is the way it is store in a bitcoin block.
 
 	// Nonce used to generate the block.
-	Nonce uint32
+	Nonce uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 }
 
 func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
@@ -50,7 +49,7 @@ func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: hashMerkleRoot,
 		Timestamp:      binary.LittleEndian.Uint32(headerBytes[68:72]),
-		Bits:           bt.ReverseBytes(headerBytes[72:76]),
+		Bits:           NewNBitFromSlice(headerBytes[72:76]),
 		Nonce:          binary.LittleEndian.Uint32(headerBytes[76:]),
 	}, nil
 }
@@ -70,7 +69,7 @@ func (bh *BlockHeader) Hash() *chainhash.Hash {
 }
 
 func (bh *BlockHeader) Valid() (bool, error) {
-	target, err := bc.ExpandTargetFromAsInt(hex.EncodeToString(bh.Bits))
+	target, err := bc.ExpandTargetFromAsInt(bh.Bits.String())
 	if err != nil {
 		return false, err
 	}
@@ -79,9 +78,9 @@ func (bh *BlockHeader) Valid() (bool, error) {
 	bn.SetBytes(bh.Hash()[:])
 
 	//fmt.Printf("Block header: %#v\n", bh)
-	//fmt.Printf("Block header hash: %s\n", bh.Hash().String())
+	fmt.Printf("Block header hash: %s\n", bh.Hash().String())
 	//fmt.Printf("Block header previous hash: %s\n", bh.HashPrevBlock.String())
-	//fmt.Printf("Block header merkleroot: %s\n", bh.HashMerkleRoot.String())
+	fmt.Printf("Block header merkleroot: %s\n", bh.HashMerkleRoot.String())
 
 	compare := bn.Cmp(target)
 	if compare < 0 {
@@ -97,7 +96,7 @@ func (bh *BlockHeader) Bytes() []byte {
 	blockHeaderBytes = append(blockHeaderBytes, bh.HashPrevBlock.CloneBytes()...)
 	blockHeaderBytes = append(blockHeaderBytes, bh.HashMerkleRoot.CloneBytes()...)
 	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Timestamp)...)
-	blockHeaderBytes = append(blockHeaderBytes, bt.ReverseBytes(bh.Bits)...)
+	blockHeaderBytes = append(blockHeaderBytes, bh.Bits.CloneBytes()...)
 	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Nonce)...)
 
 	return blockHeaderBytes

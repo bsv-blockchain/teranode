@@ -166,7 +166,7 @@ func TestMerkleRoot(t *testing.T) {
 			Nonce:          274148111,
 			HashPrevBlock:  prevBlockHash,
 			HashMerkleRoot: merkleRoot,
-			Bits:           bits,
+			Bits:           model.NewNBitFromSlice(bits),
 		},
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
