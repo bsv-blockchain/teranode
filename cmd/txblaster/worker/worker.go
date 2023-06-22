@@ -28,6 +28,7 @@ var (
 	prometheusInvalidTransactions   prometheus.Counter
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
+	prometheusTransactionErrors     *prometheus.CounterVec
 )
 
 func init() {
@@ -54,6 +55,16 @@ func init() {
 		prometheus.HistogramOpts{
 			Name: "tx_blaster_transactions_size",
 			Help: "Size of transactions processed by the tx blaster",
+		},
+	)
+	prometheusTransactionErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "aerospike_utxo_errors",
+			Help: "Number of utxo reset calls done to aerospike",
+		},
+		[]string{
+			"function", //function raising the error
+			"error",    // error returned
 		},
 	)
 }
@@ -116,6 +127,8 @@ func (w *Worker) Start(ctx context.Context) error {
 	// create new private key
 	keySet, err := extra.New()
 	if err != nil {
+	    prometheusUtxoErrors.WithLabelValues("Start", err.Error()).Inc()
+		fmt.Printf("Failed to create new key: %v", err)
 		return err
 	}
 
@@ -125,6 +138,8 @@ func (w *Worker) Start(ctx context.Context) error {
 		NumberOfOutputs:      uint32(w.numberOfOutputs),
 		SatoshisPerOutput:    w.satoshisPerOutput,
 	}); err != nil {
+	    prometheusUtxoErrors.WithLabelValues("Start", err.Error()).Inc()
+		fmt.Printf("Failed to create spendable transaction: %v", err)
 		return err
 	}
 
@@ -132,6 +147,8 @@ func (w *Worker) Start(ctx context.Context) error {
 		PrivateKey: keySet.PrivateKey.Serialise(),
 	})
 	if err != nil {
+	    prometheusUtxoErrors.WithLabelValues("Start", err.Error()).Inc()
+		fmt.Printf("Failed to create next spendable transaction: %v", err)
 		return err
 	}
 
@@ -139,6 +156,8 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
+	    prometheusUtxoErrors.WithLabelValues("Start", err.Error()).Inc()
+		fmt.Printf("Failed to create private key from pub key: %v", err)
 		panic(err)
 	}
 

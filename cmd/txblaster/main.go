@@ -240,6 +240,7 @@ func main() {
 	}
 
 	if err := g.Wait(); err != nil {
+        log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
 		panic(err)
 	}
 }

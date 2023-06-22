@@ -125,7 +125,7 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-		fmt.Printf("Faile to store new aerospike key: %v", err)
+		fmt.Printf("Failed to store new aerospike key: %v", err)
 		return nil, err
 	}
 

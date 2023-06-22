@@ -49,6 +49,7 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	policy.LimitConnectionsToQueueSize = true
 	policy.ConnectionQueueSize = 1024
 	policy.MaxErrorRate = 0
+	policy.Timeout = 20
 	policy.MinConnectionsPerNode = 200
 	policy.IdleTimeout = 15 * time.Second
 
@@ -130,8 +131,8 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 //   - MaxRetries:       1
 func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
-	readPolicy.TotalTimeout = 500 * time.Millisecond
-	readPolicy.SocketTimeout = 500 * time.Millisecond
+	readPolicy.TotalTimeout = 2 * time.Second
+	readPolicy.SocketTimeout = 1*time.Second + 500*time.Millisecond
 	readPolicy.MaxRetries = 1
 
 	// Apply the provided options
@@ -173,8 +174,8 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 //   - SocketTimeout:    25 milliseconds
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
-	writePolicy.TotalTimeout = 500 * time.Millisecond
-	writePolicy.SocketTimeout = 250 * time.Millisecond
+	writePolicy.TotalTimeout = 1 * time.Second
+	writePolicy.SocketTimeout = 500 * time.Millisecond
 
 	// Apply the provided options
 	for _, opt := range options {
