@@ -7,7 +7,6 @@ import (
 	"math/big"
 
 	"github.com/libsv/go-bc"
-	"github.com/libsv/go-bk/crypto"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
@@ -70,17 +69,26 @@ func (bh *BlockHeader) Hash() *chainhash.Hash {
 	return &hash
 }
 
-func (bh *BlockHeader) Valid() bool {
+func (bh *BlockHeader) Valid() (bool, error) {
 	target, err := bc.ExpandTargetFromAsInt(hex.EncodeToString(bh.Bits))
 	if err != nil {
-		return false
+		return false, err
 	}
 
-	digest := bt.ReverseBytes(crypto.Sha256d(bh.Bytes()))
 	var bn = big.NewInt(0)
-	bn.SetBytes(digest)
+	bn.SetBytes(bh.Hash()[:])
 
-	return bn.Cmp(target) < 0
+	//fmt.Printf("Block header: %#v\n", bh)
+	//fmt.Printf("Block header hash: %s\n", bh.Hash().String())
+	//fmt.Printf("Block header previous hash: %s\n", bh.HashPrevBlock.String())
+	//fmt.Printf("Block header merkleroot: %s\n", bh.HashMerkleRoot.String())
+
+	compare := bn.Cmp(target)
+	if compare < 0 {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("block header does not meet target %d: %s >? %s ", compare, target.String(), bn.String())
 }
 
 func (bh *BlockHeader) Bytes() []byte {

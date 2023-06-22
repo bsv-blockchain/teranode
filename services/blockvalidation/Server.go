@@ -171,8 +171,8 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 	}
 
 	// this already does some checks...
-	if !block.Valid() {
-		return nil, fmt.Errorf("block is not valid: %s", block.String())
+	if ok, err := block.Valid(); !ok {
+		return nil, fmt.Errorf("block is not valid: %s - %v", block.String(), err)
 	}
 
 	// check merkle root
@@ -265,7 +265,8 @@ func (u *BlockValidation) CheckPOW(ctx context.Context, block *model.Block) erro
 	header.Valid()
 
 	// Check that the block header hash is less than the target difficulty.
-	ok := block.Header.Valid()
+	ok, err := block.Header.Valid()
+	u.logger.Debugf("block header valid: %v - %v", ok, err)
 
 	if !ok {
 		return model.ErrInvalidPOW

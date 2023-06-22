@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/libsv/go-bt/v2"
@@ -94,10 +95,23 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid() bool {
+func (b *Block) Valid() (bool, error) {
 	// TODO what else can we do to validate this block?
 	// - calculate the hash and check it matches the header?
-	return b.Header.Valid() && b.CoinbaseTx != nil && len(b.Subtrees) > 0
+	headerValid, err := b.Header.Valid()
+	if !headerValid {
+		return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
+	}
+
+	if b.CoinbaseTx == nil {
+		return false, fmt.Errorf("block has no coinbase tx")
+	}
+
+	if len(b.Subtrees) == 0 {
+		return false, fmt.Errorf("block has no subtrees")
+	}
+
+	return true, nil
 }
 
 func (b *Block) SubTreeBytes() ([]byte, error) {

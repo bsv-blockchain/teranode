@@ -189,3 +189,42 @@ func Test_Serialize(t *testing.T) {
 		}
 	})
 }
+
+func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
+	t.Run("", func(t *testing.T) {
+		hashes := make([]*chainhash.Hash, 8)
+		hashes[0], _ = chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		hashes[1], _ = chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		hashes[2], _ = chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		hashes[3], _ = chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+		hashes[4], _ = chainhash.NewHashFromStr("87af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		hashes[5], _ = chainhash.NewHashFromStr("6ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		hashes[6], _ = chainhash.NewHashFromStr("2070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		hashes[7], _ = chainhash.NewHashFromStr("c3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+
+		subtree := NewTreeByLeafCount(8)
+		for _, hash := range hashes {
+			_ = subtree.AddNode(hash, 111)
+		}
+
+		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		require.NoError(t, err)
+
+		expectedMerkleStore := []string{
+			"2207df31366e6fdd96a7ef3286278422c1c6dd3d74c3f85bbcfee82a8d31da25",
+			"c32db78e5f8437648888713982ea3d49628dbde0b4b48857147f793b55d26f09",
+			"4cfd8f882dc64dd7a123d545785bd2670c981493ea85ec058e6428cb95f04fa7",
+			"0bb2f84f4071e1a04f61bb04a10dc17affcf7fd558945a3a31b1d1f0fb6ec121",
+			"b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225",
+			"1e3cfb94c292e8fc2ac692c4c4db4ea73784978ff47424668233a7f491e218a3",
+			"86867b9f3e7dcb4bdf5b5cc99322122fe492bc466621f3709d4e389e7e14c16c",
+		}
+
+		actualMerkleStore := make([]string, len(merkleStore))
+		for idx, merkle := range merkleStore {
+			actualMerkleStore[idx] = merkle.String()
+		}
+
+		assert.Equal(t, expectedMerkleStore, actualMerkleStore)
+	})
+}

@@ -56,6 +56,7 @@ func NewServer(logger utils.Logger) *Server {
 		panic("no utxostore setting found")
 	}
 
+	// TODO online it seems the Seeder keeps connecting to aerospike
 	s, err := utxo.NewStore(logger, utxostoreURL)
 	if err != nil {
 		panic(err)

@@ -422,9 +422,9 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	// check fully valid, including whether difficulty in header is low enough
-	if ok = block.Valid(); !ok {
-		ba.logger.Errorf("Invalid block: %v", block.Header)
-		return nil, fmt.Errorf("invalid block")
+	if ok, err = block.Valid(); !ok {
+		ba.logger.Errorf("Invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
+		return nil, fmt.Errorf("invalid block: %v", err)
 	}
 
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {

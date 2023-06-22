@@ -2,7 +2,6 @@ package miner
 
 import (
 	"context"
-	"encoding/binary"
 	"math/big"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -83,27 +83,32 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	merkleRoot := BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
 
 	target := util.CalculateTarget(candidate.NBits)
-	r := make([]byte, 32)
-
-	m.logger.Infof("%x", r)
-	m.logger.Infof("%s", target.String())
-
-	timeBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(timeBytes, candidate.Time)
+	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
+	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
 	var nonce uint32
-	nonceBytes := make([]byte, 4)
-
 	for {
-		binary.LittleEndian.PutUint32(nonceBytes, nonce)
+		blockHeader := model.BlockHeader{
+			Version:        candidate.Version,
+			HashPrevBlock:  previousHash,
+			HashMerkleRoot: merkleRootHash,
+			Timestamp:      candidate.Time,
+			Bits:           candidate.NBits,
+			Nonce:          nonce,
+		}
 
-		header := BuildBlockHeader(candidate.Version, candidate.PreviousHash, merkleRoot, timeBytes, candidate.NBits, nonceBytes)
-		hash := Sha256d(header)
+		//  57896037716911750921221705069588091649609539881711309849342236841432341020672
+		// 105246604674077689286984806481918053301334584768133419539070562900731587447610
 
 		var hashInt big.Int
-		hashInt.SetBytes(hash[:])
+		hashInt.SetBytes(blockHeader.Hash()[:])
 
 		if hashInt.Cmp(target) == -1 {
+			m.logger.Infof("Miner Block found! target was %s > %s", target.String(), hashInt.String())
+			m.logger.Infof("Miner Block header: %#v", blockHeader)
+			m.logger.Infof("Miner Block header hash: %s", blockHeader.Hash().String())
+			m.logger.Infof("Miner Block previous hash: %s", blockHeader.HashPrevBlock.String())
+			m.logger.Infof("Miner Block merkleroot: %s", blockHeader.HashMerkleRoot.String())
 			break
 		}
 
