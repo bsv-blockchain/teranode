@@ -8,41 +8,42 @@ import (
 )
 
 var (
-	block0Header = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c"
+	block1       = "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000"
+	block1Header = block1[:160]
 )
 
 func TestNewBlockHeaderFromBytes(t *testing.T) {
-	t.Run("block 0 from bytes", func(t *testing.T) {
-		blockHeaderBytes, _ := hex.DecodeString(block0Header)
+	t.Run("block 1 from bytes", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			t.Error(err)
 		}
 
 		assert.Equal(t, uint32(1), blockHeader.Version)
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", blockHeader.HashPrevBlock.String())
-		assert.Equal(t, "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", blockHeader.HashMerkleRoot.String())
-		assert.Equal(t, uint32(1231006505), blockHeader.Timestamp)
+		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.HashPrevBlock.String())
+		assert.Equal(t, "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098", blockHeader.HashMerkleRoot.String())
+		assert.Equal(t, uint32(1231469665), blockHeader.Timestamp)
 		assert.Equal(t, "1d00ffff", hex.EncodeToString(blockHeader.Bits))
-		assert.Equal(t, uint32(2083236893), blockHeader.Nonce)
+		assert.Equal(t, uint32(2573394689), blockHeader.Nonce)
 	})
 
 	t.Run("block 0 from string", func(t *testing.T) {
-		blockHeader, err := NewBlockHeaderFromString(block0Header)
+		blockHeader, err := NewBlockHeaderFromString(block1Header)
 		if err != nil {
 			t.Error(err)
 		}
 
 		assert.Equal(t, uint32(1), blockHeader.Version)
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", blockHeader.HashPrevBlock.String())
-		assert.Equal(t, "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", blockHeader.HashMerkleRoot.String())
-		assert.Equal(t, uint32(1231006505), blockHeader.Timestamp)
+		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.HashPrevBlock.String())
+		assert.Equal(t, "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098", blockHeader.HashMerkleRoot.String())
+		assert.Equal(t, uint32(1231469665), blockHeader.Timestamp)
 		assert.Equal(t, "1d00ffff", hex.EncodeToString(blockHeader.Bits))
-		assert.Equal(t, uint32(2083236893), blockHeader.Nonce)
+		assert.Equal(t, uint32(2573394689), blockHeader.Nonce)
 	})
 
 	t.Run("block bytes", func(t *testing.T) {
-		blockHeaderBytes, _ := hex.DecodeString(block0Header)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			t.Error(err)
@@ -52,12 +53,12 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 	})
 
 	t.Run("block hash", func(t *testing.T) {
-		blockHeaderBytes, _ := hex.DecodeString(block0Header)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			t.Error(err)
 		}
 
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.Hash().String())
+		assert.Equal(t, "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", blockHeader.Hash().String())
 	})
 }
