@@ -12,6 +12,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -240,7 +241,7 @@ func main() {
 	}
 
 	if err := g.Wait(); err != nil {
-        log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
+		log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
 		panic(err)
 	}
 }
