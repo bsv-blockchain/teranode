@@ -29,12 +29,18 @@ type SubtreeProcessor struct {
 func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
+	firstSubtree := util.NewTreeByLeafCount(initialItemsPerFile)
+	// We add a placeholder for the coinbase tx because we know this is the first subtree in the chain
+	if err := firstSubtree.AddNode(model.CoinbasePlaceholderHash, 0); err != nil {
+		panic(err)
+	}
+
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,
 		txChan:              make(chan *txIDAndFee, 100_000),
 		incomingBlockChan:   make(chan string),
 		chainedSubtrees:     make([]*util.Subtree, 0),
-		currentSubtree:      util.NewTreeByLeafCount(initialItemsPerFile),
+		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
 	}
 
