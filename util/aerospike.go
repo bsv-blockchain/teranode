@@ -45,6 +45,8 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
 	policy.MaxErrorRate = 0
+	policy.MinConnectionsPerNode = 200
+	policy.IdleTimeout = 250000 // server will keep connections alive for 5min or 300000
 
 	if url.User != nil {
 		policy.AuthMode = 2
