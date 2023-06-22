@@ -5,6 +5,7 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
@@ -107,7 +108,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 }
 
 func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := aerospike.NewWritePolicy(0, 0)
+	policy := aerospike.NewWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -170,12 +171,11 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}
 
+	//expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
 	policy := aerospike.NewWritePolicy(1, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	// TODO fix expiry
-	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
