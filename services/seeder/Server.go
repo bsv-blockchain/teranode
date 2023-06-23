@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"net"
+	"runtime/debug"
 	"time"
 
 	seeder_api "github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
@@ -169,26 +170,26 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 		// Create a random 32 byte array
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
-			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "ByteArrayCreation")
+			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "ByteArrayCreation").Inc()
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
 		txid, err := chainhash.NewHash(b)
 		if err != nil {
-			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "NewHash")
+			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "NewHash").Inc()
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
 		lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
 		if err != nil {
-			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "NewP2PKHFromPubKeyBytes")
+			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "NewP2PKHFromPubKeyBytes").Inc()
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
 		for j := uint32(0); j < req.NumberOfOutputs; j++ {
 			hash, err := util.UTXOHash(txid, j, *lockingScript, req.SatoshisPerOutput)
 			if err != nil {
-				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "UTXOHash")
+				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "UTXOHash").Inc()
 				return nil, status.Error(codes.Internal, err.Error())
 			}
 
@@ -197,14 +198,16 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 
 			g.Go(func() error {
 				if _, err := v.utxoStore.Store(ctx, hash); err != nil {
+					v.logger.Fatalf("Error occurred in tx blaster: %v\n%s\n", err, debug.Stack())
+					prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
 					return status.Error(codes.Internal, err.Error())
 				}
-				prometheusSeederSuccessfulOps.WithLabelValues("CreateSpendableTransactions", "Store")
+				prometheusSeederSuccessfulOps.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
 				return nil
 			})
 
 			if err := g.Wait(); err != nil {
-				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "Store")
+				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "StoreRoutine").Inc()
 				return nil, err
 			}
 		}
@@ -215,11 +218,11 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 			SatoshisPerOutput: int64(req.SatoshisPerOutput),
 			PrivateKey:        privateKey,
 		}); err != nil {
-			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "PushingTx")
+			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "PushingTx").Inc()
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
-	prometheusSeederSuccessfulOps.WithLabelValues("CreateSpendableTransactions", "SeedingComplete")
+	prometheusSeederSuccessfulOps.WithLabelValues("CreateSpendableTransactions", "SeedingComplete").Inc()
 	return &emptypb.Empty{}, nil
 }
 
@@ -268,11 +271,11 @@ func (v *Server) ShowAllSpendableTransactions(_ *emptypb.Empty, stream seeder_ap
 			SatoshisPerOutput: uint64(tx.SatoshisPerOutput),
 			PrivateKey:        tx.PrivateKey.Serialise(),
 		}); err != nil {
-			prometheusSeederErrors.WithLabelValues("ShowAllSpendableTransactions", "Send")
+			prometheusSeederErrors.WithLabelValues("ShowAllSpendableTransactions", "Send").Inc()
 			return err
 		}
 
 	}
-	prometheusSeederSuccessfulOps.WithLabelValues("ShowAllSpendableTransactions", "Send")
+	prometheusSeederSuccessfulOps.WithLabelValues("ShowAllSpendableTransactions", "Send").Inc()
 	return nil
 }
