@@ -50,7 +50,7 @@ func init() {
 	prometheusSeederSuccessfulOps = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "seeder_successful_ops",
-			Help: "Number of transactions processed by the tx blaster",
+			Help: "Number of successful seeder ops",
 		},
 		[]string{
 			"function",  //function tracking the operation
@@ -59,8 +59,8 @@ func init() {
 	)
 	prometheusSeederErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "aerospike_txstatus_errors",
-			Help: "Number of txstatus errors",
+			Name: "seeder_errors",
+			Help: "Number of seeder errors",
 		},
 		[]string{
 			"function", //function raising the error
