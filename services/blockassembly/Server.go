@@ -382,9 +382,9 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.Id)
-	ba.logger.Infof("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
+	ba.logger.Debugf("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
 	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
-	ba.logger.Infof("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
+	ba.logger.Debugf("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
 	transactionCount := uint64(0)
@@ -404,7 +404,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	merkleProofs, _ := topTree.BuildMerkleTreeStoreFromBytes()
-	ba.logger.Infof("SERVER SUBTREE HASHES: %v", subtreeHashes)
+	ba.logger.Debugf("SERVER SUBTREE HASHES: %v", subtreeHashes)
 	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesInJob)
 	if err != nil {
 		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
@@ -418,10 +418,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 	fmt.Printf("SERVER merkle proof: %v", cmp)
 	bMmerkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), cmpB)
-	ba.logger.Infof("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
+	ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
 
-	ba.logger.Infof("SERVER Coinbase: %s", coinbaseTx.TxID())
-	ba.logger.Infof("SERVER MERKLE PROOfS: %v", merkleProofs)
+	ba.logger.Debugf("SERVER Coinbase: %s", coinbaseTx.TxID())
+	ba.logger.Debugf("SERVER MERKLE PROOfS: %v", merkleProofs)
 
 	calculatedMerkleRoot := topTree.RootHash()
 	hashMerkleRoot, err := chainhash.NewHash(calculatedMerkleRoot[:])
@@ -429,7 +429,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, err
 	}
 
-	ba.logger.Infof("SERVER MERKLE ROOT: %s", hashMerkleRoot.String())
+	ba.logger.Debugf("SERVER MERKLE ROOT: %s", hashMerkleRoot.String())
 
 	block := &model.Block{
 		Header: &model.BlockHeader{
