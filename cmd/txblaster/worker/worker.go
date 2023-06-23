@@ -29,6 +29,7 @@ var (
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
 	prometheusTransactionErrors     *prometheus.CounterVec
+	logger                          = gocore.Log("worker", gocore.NewLogLevelFromString("DEBUG"))
 )
 
 func init() {
@@ -105,7 +106,7 @@ func NewWorker(
 	printProgress uint64,
 ) *Worker {
 
-	// logger.Infof("Received transaction with txid %x and %d outputs", res.Txid, res.NumberOfOutputs)
+	//logger.Debugf("Received transaction with txid %x and %d outputs", res.Txid, res.NumberOfOutputs)
 
 	return &Worker{
 		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
@@ -128,7 +129,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	keySet, err := extra.New()
 	if err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		fmt.Printf("Failed to create new key: %v\n", err)
+		logger.Errorf("Failed to create new key: %v", err)
 		return err
 	}
 
@@ -139,7 +140,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		SatoshisPerOutput:    w.satoshisPerOutput,
 	}); err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		fmt.Printf("Failed to create spendable transaction: %v\n", err)
+		logger.Errorf("Failed to create spendable transaction: %v", err)
 		return err
 	}
 
@@ -148,7 +149,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	})
 	if err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		fmt.Printf("Failed to create next spendable transaction: %v\n", err)
+		logger.Errorf("Failed to create next spendable transaction: %v", err)
 		return err
 	}
 
@@ -157,12 +158,12 @@ func (w *Worker) Start(ctx context.Context) error {
 	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		fmt.Printf("Failed to create private key from pub key: %v\n", err)
+		logger.Errorf("Failed to create private key from pub key: %v", err)
 		panic(err)
 	}
 
 	go func(numberOfOutputs uint32) {
-		// logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 		for i := uint32(0); i < numberOfOutputs; i++ {
 			u := &bt.UTXO{
 				TxID:          bt.ReverseBytes(res.Txid),

@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"github.com/ordishs/gocore"
 	"net/url"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*aerospike.Client
+var logger = gocore.Log("uaero", gocore.NewLogLevelFromString("DEBUG"))
 
 func init() {
 	aerospikeConnections = make(map[string]*aerospike.Client)
@@ -23,15 +25,16 @@ func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	defer aerospikeConnectionMutex.Unlock()
 
 	var err error
-	client, ok := aerospikeConnections[url.Host]
-	if !ok {
+	client, found := aerospikeConnections[url.Host]
+	if !found {
+		logger.Infof("[AEROSPIKE] Creating aerospike client for host: %v", url.Host)
 		client, err = getAerospikeClient(url)
 		if err != nil {
 			return nil, err
 		}
 		aerospikeConnections[url.Host] = client
 	} else {
-		fmt.Printf("[AEROSPIKE] Reusing aerospike connection: %v\n", url.Host)
+		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
 
 	return client, nil
@@ -46,9 +49,11 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = false
-	policy.ConnectionQueueSize = 1024
+	policy.LimitConnectionsToQueueSize = true
+	policy.ConnectionQueueSize = 512
 	policy.MaxErrorRate = 0
+	policy.MinConnectionsPerNode = 256
+	policy.IdleTimeout = 4 * time.Minute
 
 	if url.User != nil {
 		policy.AuthMode = 2
