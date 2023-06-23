@@ -125,7 +125,7 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-		fmt.Printf("Failed to store new aerospike key: %v", err)
+		fmt.Printf("Failed to store new aerospike key: %v\n", err)
 		return nil, err
 	}
 
@@ -157,12 +157,12 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 
 		prometheusUtxoErrors.WithLabelValues("Store", getErr.Error()).Inc()
 		if getErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
-			fmt.Printf("Failed to find aerospike key in utxostore: %v", err)
+			fmt.Printf("Failed to find aerospike key in utxostore: %v\n", err)
 			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil // todo fix should raise error
 		}
-		fmt.Printf("Error occurred in aerospike store: %v", getErr)
+		fmt.Printf("Error occurred in aerospike store: %v\n", getErr)
 		return nil, err
 	}
 
@@ -177,7 +177,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			fmt.Printf("ERROR panic in aerospike Spend: %v", recoverErr)
+			fmt.Printf("ERROR panic in aerospike Spend: %v\n", recoverErr)
 		}
 	}()
 
@@ -195,7 +195,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Spend: %v", err)
+		fmt.Printf("ERROR panic in aerospike Spend: %v\n", err)
 		return nil, err
 	}
 
@@ -228,7 +228,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Spend PutBins: %v", err)
+		fmt.Printf("ERROR panic in aerospike Spend PutBins: %v\n", err)
 		return nil, err
 	}
 
@@ -247,14 +247,14 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Reset: %v", err)
+		fmt.Printf("ERROR panic in aerospike Reset: %v\n", err)
 		return nil, err
 	}
 
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Reset delete key: %v", err)
+		fmt.Printf("ERROR panic in aerospike Reset delete key: %v\n", err)
 		return nil, err
 	}
 

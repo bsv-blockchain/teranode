@@ -192,7 +192,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 			utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
 			if utxoErr != nil {
-				fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
+				fmt.Printf("error getting output utxo hash: %s\n", utxoErr.Error())
 				//return err
 			}
 
