@@ -46,7 +46,7 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = true
+	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
 	policy.MaxErrorRate = 0
 	policy.MinConnectionsPerNode = 200
@@ -129,8 +129,6 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 //   - MaxRetries:       1
 func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
-	readPolicy.TotalTimeout = 2 * time.Second
-	readPolicy.SocketTimeout = 1*time.Second + 500*time.Millisecond
 	readPolicy.MaxRetries = 1
 
 	// Apply the provided options
@@ -172,8 +170,6 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 //   - SocketTimeout:    25 milliseconds
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
-	writePolicy.TotalTimeout = 1 * time.Second
-	writePolicy.SocketTimeout = 500 * time.Millisecond
 
 	// Apply the provided options
 	for _, opt := range options {

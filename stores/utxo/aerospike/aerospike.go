@@ -82,7 +82,7 @@ func init() {
 	prometheusUtxoErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "aerospike_utxo_errors",
-			Help: "Number of utxo reset calls done to aerospike",
+			Help: "Number of utxo errors",
 		},
 		[]string{
 			"function", //function raising the error
