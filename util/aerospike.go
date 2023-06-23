@@ -49,11 +49,9 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = true
-	policy.ConnectionQueueSize = 512
+	policy.LimitConnectionsToQueueSize = false
+	policy.ConnectionQueueSize = 1024
 	policy.MaxErrorRate = 0
-	policy.MinConnectionsPerNode = 256
-	policy.IdleTimeout = 4 * time.Minute
 
 	if url.User != nil {
 		policy.AuthMode = 2
