@@ -166,12 +166,13 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// Revert all the spends
 		for _, hash = range reservedUtxos {
-			if _, err = v.store.Reset(reverseUtxoSpan.Ctx, hash); err != nil {
-				reverseUtxoSpan.RecordError(err)
+			if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
+				reverseUtxoSpan.RecordError(errReset)
+				v.logger.Errorf(errReset.Error())
 			}
 		}
 
-		return err
+		return fmt.Errorf("validator: UTXO Store spend failed: %v", err)
 	}
 	utxoSpan.Finish()
 
