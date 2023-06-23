@@ -1,4 +1,4 @@
-package miner
+package util
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildMerkleRootFromCoinbase(t *testing.T) {
-	t.Run("", func(t *testing.T) {
+	t.Run("block 797330 - tx 0", func(t *testing.T) {
 		merkleBranchesStr := []string{
 			"e736164db06b4ca5e1020bca8ddba837ecaa029d2caef7e57cf84e4383d66cad",
 			"19dd8d4640891daef573cdf059c7539ff5d9dd8e06697c000925fd2015cee7d4",

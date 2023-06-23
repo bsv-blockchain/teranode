@@ -47,6 +47,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
+	var nBits []byte
 	for rows.Next() {
 		var blockHeader model.BlockHeader
 		err = rows.Scan(
@@ -55,7 +56,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			&blockHeader.Nonce,
 			&hashPrevBlock,
 			&hashMerkleRoot,
-			&blockHeader.Bits,
+			&nBits,
 		)
 		if err != nil {
 			return nil, err
@@ -69,6 +70,8 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 		}
+
+		blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 		blockHeaders = append(blockHeaders, &blockHeader)
 	}

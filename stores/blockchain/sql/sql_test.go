@@ -73,6 +73,6 @@ func assertGenesis(t *testing.T, blockHeader *model.BlockHeader) {
 	assert.Equal(t, &chainhash.Hash{}, blockHeader.HashPrevBlock)
 	assert.Equal(t, "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", blockHeader.HashMerkleRoot.String())
 	assert.Equal(t, uint32(1231006505), blockHeader.Timestamp)
-	assert.Equal(t, []byte{0x1d, 0x0, 0xff, 0xff}, blockHeader.Bits.CloneBytes())
+	assert.Equal(t, []byte{0xff, 0xff, 0x0, 0x1d}, blockHeader.Bits.CloneBytes())
 	assert.Equal(t, uint32(2083236893), blockHeader.Nonce)
 }

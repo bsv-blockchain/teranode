@@ -8,6 +8,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -80,7 +81,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 		return
 	}
 
-	merkleRoot := BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
+	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
 
 	target := model.NewNBitFromSlice(candidate.NBits).CalculateTarget()
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
@@ -117,7 +118,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 			Nonce:          nonce,
 		}
 
-		log.Printf("Block header: %x", blockHeader.Bytes())
+		//log.Printf("Block header: %x", blockHeader.Bytes())
 
 		//  57896037716911750921221705069588091649609539881711309849342236841432341020672
 		// 105246604674077689286984806481918053301334584768133419539070562900731587447610
@@ -131,10 +132,18 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 			m.logger.Infof("Miner Block header hash: %s", blockHeader.Hash().String())
 			m.logger.Infof("Miner Block previous hash: %s", blockHeader.HashPrevBlock.String())
 			m.logger.Infof("Miner Block merkleroot: %s", blockHeader.HashMerkleRoot.String())
+			mp := make([]string, len(candidate.MerkleProof))
+			for idx, mpp := range candidate.MerkleProof {
+				h, _ := chainhash.NewHash(mpp)
+				mp[idx] = h.String()
+			}
+			m.logger.Infof("Miner Block coinbase hash: %s", coinbaseTx.TxID())
+			m.logger.Infof("Miner Block merkleproofs: %v", mp)
 			break
 		}
 
 		// TODO: remove this when Siggi gets a laptop without a fan...
+		// 😂
 		time.Sleep(10 * time.Millisecond)
 
 		nonce++

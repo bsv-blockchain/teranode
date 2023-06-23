@@ -37,6 +37,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
+	var nBits []byte
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
@@ -45,7 +46,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		&blockHeader.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
-		&blockHeader.Bits,
+		&nBits,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrBlockNotFound
@@ -61,6 +62,8 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
+
+	blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 	return blockHeader, nil
 }

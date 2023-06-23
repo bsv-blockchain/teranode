@@ -23,10 +23,10 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 
 	q := `
 		SELECT
-	   b.version
+	     b.version
 		,b.block_time
-	  ,b.nonce
-		,b.hash
+	    ,b.nonce
+		,b.previous_hash
 		,b.merkle_root
 		,b.n_bits
 		,b.height
@@ -41,6 +41,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
 	var height uint32
+	var nBits []byte
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q).Scan(
@@ -49,7 +50,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 		&blockHeader.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
-		&blockHeader.Bits,
+		&nBits,
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -57,6 +58,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 		}
 		return nil, 0, err
 	}
+
+	blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {

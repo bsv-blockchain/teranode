@@ -11,6 +11,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -413,6 +414,78 @@ func TestResetLarge(t *testing.T) {
 	// one of the subtrees should contain 262144 items
 	assert.Equal(t, 65536, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 1001, stp.currentSubtree.Length())
+}
+
+func TestCompareMerkleProofsToSubtrees(t *testing.T) {
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+	coinbaseHash, _ := chainhash.NewHashFromStr("cc6da767edfd473466d70a747348eee48f649d3173f762be0f41ac3bd418e681")
+
+	hashes := make([]*chainhash.Hash, 8)
+	hashes[0], _ = chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+	hashes[1], _ = chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+	hashes[2], _ = chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+	hashes[3], _ = chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+	hashes[4], _ = chainhash.NewHashFromStr("87af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+	hashes[5], _ = chainhash.NewHashFromStr("6ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+	hashes[6], _ = chainhash.NewHashFromStr("2070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+	hashes[7], _ = chainhash.NewHashFromStr("c3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+
+	expectedMerkleRoot := "5411959ea670debee6ab3408b1a51b67f175e30fccf4fac48f55f20b1e935705"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	newSubtreeChan := make(chan *util.Subtree)
+	go func() {
+		// just read and discard
+		for {
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	subtreeProcessor := NewSubtreeProcessor(newSubtreeChan)
+	for _, hash := range hashes {
+		subtreeProcessor.Add(*hash, 111)
+	}
+	// add 1 more hash to create the second subtree
+	subtreeProcessor.Add(*hashes[0], 111)
+
+	wg.Wait()
+
+	subtrees := subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
+	assert.Len(t, subtrees, 2)
+
+	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
+	require.NoError(t, err)
+	cmp := make([]string, len(coinbaseMerkleProof))
+	cmpB := make([][]byte, len(coinbaseMerkleProof))
+	for idx, hash := range coinbaseMerkleProof {
+		cmp[idx] = hash.String()
+		cmpB[idx] = hash.CloneBytes()
+	}
+
+	assert.Equal(t, []string{
+		"7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d",
+		"c32db78e5f8437648888713982ea3d49628dbde0b4b48857147f793b55d26f09",
+		"1e3cfb94c292e8fc2ac692c4c4db4ea73784978ff47424668233a7f491e218a3",
+	}, cmp)
+
+	merkleRootFromProofs := util.BuildMerkleRootFromCoinbase(coinbaseHash[:], cmpB)
+	assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeSlice(merkleRootFromProofs))
+
+	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtrees)))
+	for idx, subtree := range subtrees {
+		if idx == 0 {
+			subtree.ReplaceRootNode(coinbaseHash)
+		}
+		err = topTree.AddNode(subtree.RootHash(), 1)
+		require.NoError(t, err)
+	}
+
+	calculatedMerkleRoot := topTree.RootHash()
+	assert.Equal(t, expectedMerkleRoot, calculatedMerkleRoot.String())
+
 }
 
 // generateTxID generates a random 32-byte hexadecimal string.

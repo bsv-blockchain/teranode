@@ -47,12 +47,13 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
 	var height uint64
+	var nBits []byte
 	var err error
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&block.Header.Version,
 		&block.Header.Timestamp,
-		&block.Header.Bits,
+		&nBits,
 		&block.Header.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
@@ -66,6 +67,8 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		}
 		return nil, 0, err
 	}
+
+	block.Header.Bits = model.NewNBitFromSlice(nBits)
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
