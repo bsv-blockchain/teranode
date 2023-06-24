@@ -75,7 +75,7 @@ func (bh *BlockHeader) Valid() (bool, error) {
 	}
 
 	var bn = big.NewInt(0)
-	bn.SetBytes(bh.Hash()[:])
+	bn.SetString(bh.Hash().String(), 16)
 
 	//fmt.Printf("Block header: %#v\n", bh)
 	fmt.Printf("Block header hash: %s\n", bh.Hash().String())

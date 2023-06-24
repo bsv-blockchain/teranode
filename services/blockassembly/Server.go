@@ -336,7 +336,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
 		Height:        bestBlockHeight + 1,
-		Time:          uint32(time.Now().Unix()),
+		Time:          1231469665, // TEMP uint32(time.Now().Unix()),
 		MerkleProof:   coinbaseMerkleProofBytes,
 	}
 
