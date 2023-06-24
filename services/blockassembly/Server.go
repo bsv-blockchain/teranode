@@ -331,7 +331,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 
 	job := &model.MiningCandidate{
 		Id:            id[:],
-		PreviousHash:  bestBlockHeader.HashPrevBlock.CloneBytes(),
+		PreviousHash:  bestBlockHeader.Hash().CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
@@ -353,6 +353,8 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	// TODO Should this all happen in the subtreeProcessor? There could be timing issues between adding block and
+	// resetting for the next mining job etc. - also we are continually adding new subtrees and transactions etc.
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
@@ -382,9 +384,9 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.Id)
-	ba.logger.Debugf("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
+	//ba.logger.Debugf("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
 	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
-	ba.logger.Debugf("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
+	//ba.logger.Debugf("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
 	transactionCount := uint64(0)
@@ -403,8 +405,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		}
 	}
 
-	merkleProofs, _ := topTree.BuildMerkleTreeStoreFromBytes()
-	ba.logger.Debugf("SERVER SUBTREE HASHES: %v", subtreeHashes)
+	//merkleProofs, _ := topTree.BuildMerkleTreeStoreFromBytes()
+	//ba.logger.Debugf("SERVER SUBTREE HASHES: %v", subtreeHashes)
 	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesInJob)
 	if err != nil {
 		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
@@ -417,11 +419,11 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		cmpB[idx] = hash.CloneBytes()
 	}
 	fmt.Printf("SERVER merkle proof: %v", cmp)
-	bMmerkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), cmpB)
-	ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
+	//bMmerkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), cmpB)
+	//ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
 
-	ba.logger.Debugf("SERVER Coinbase: %s", coinbaseTx.TxID())
-	ba.logger.Debugf("SERVER MERKLE PROOfS: %v", merkleProofs)
+	//ba.logger.Debugf("SERVER Coinbase: %s", coinbaseTx.TxID())
+	//ba.logger.Debugf("SERVER MERKLE PROOfS: %v", merkleProofs)
 
 	calculatedMerkleRoot := topTree.RootHash()
 	hashMerkleRoot, err := chainhash.NewHash(calculatedMerkleRoot[:])
@@ -429,7 +431,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, err
 	}
 
-	ba.logger.Debugf("SERVER MERKLE ROOT: %s", hashMerkleRoot.String())
+	//ba.logger.Debugf("SERVER MERKLE ROOT: %s", hashMerkleRoot.String())
 
 	block := &model.Block{
 		Header: &model.BlockHeader{
@@ -457,8 +459,16 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// reset the subtrees
 	err = ba.subtreeProcessor.Reset(job.Id)
 	if err != nil {
+		// TODO if this happens, why might actually start mining the next block with the same subtrees and transactions
+		// this would be VERY bad
 		return nil, fmt.Errorf("failed to reset subtree processor: %w", err)
 	}
+
+	// remove job, we have already mined a block with it
+	// TODO do we need to remove the rest of the jobs as well? Our subtree processor is completely different now
+	ba.jobStoreMutex.Lock()
+	delete(ba.jobStore, *storeId)
+	ba.jobStoreMutex.Unlock()
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,

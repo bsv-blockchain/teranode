@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -26,6 +27,10 @@ type SubtreeProcessor struct {
 	incompleteSubtrees map[chainhash.Hash]*util.Subtree
 }
 
+var (
+	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
+)
+
 func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
@@ -39,7 +44,7 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 		currentItemsPerFile: initialItemsPerFile,
 		txChan:              make(chan *txIDAndFee, 100_000),
 		incomingBlockChan:   make(chan string),
-		chainedSubtrees:     make([]*util.Subtree, 0),
+		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
 	}
@@ -49,6 +54,7 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 			select {
 			case <-stp.incomingBlockChan:
 				// Notified of another miner's validated block, so I need to process it.  This might be internal or external.
+				// TODO if we get a block in and the txChan buffer is still full of txs?
 
 			case txReq := <-stp.txChan:
 				err := stp.currentSubtree.AddNode(&txReq.txID, txReq.fee)
@@ -109,6 +115,7 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 		subsubArray := make([]*util.Subtree, 0)
 		subsubArray = append(subsubArray, subsubtree)
 		stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
+
 		return subsubArray
 	}
 
@@ -128,14 +135,17 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 	if indexToSlice != -1 {
 		return stp.chainedSubtrees[:indexToSlice+1]
 	}
+
 	// check the incomplete subtrees
 	key, err := chainhash.NewHash(lastRoot)
 	if err != nil {
 		return nil
 	}
+
 	if stp.incompleteSubtrees[*key] != nil {
 		return []*util.Subtree{stp.incompleteSubtrees[*key]}
 	}
+
 	return nil
 }
 
@@ -143,9 +153,6 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 	stp.Lock()
 	defer stp.Unlock()
-
-	// clear incomplete subtrees
-	stp.incompleteSubtrees = make(map[chainhash.Hash]*util.Subtree, 0)
 
 	//TODO: calculate new items per file size
 
@@ -157,32 +164,62 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 	if lastRoot == nil {
 		return errors.New("you must pass in the last root")
 	}
+
+	lastRootHash, err := chainhash.NewHash(lastRoot)
+	if err != nil {
+		return fmt.Errorf("error converting last root hash %x to chainhash.Hash: %v", lastRoot, err)
+	}
+
 	// find the index of the last root in the block that was just mined
 	for i, subtree := range stp.chainedSubtrees {
-		if *subtree.RootHash() == [32]byte(lastRoot) {
+		if *subtree.RootHash() == *lastRootHash {
 			indexToSlice = i + 1
 			break
 		}
 	}
 
-	if indexToSlice == -1 {
+	// create SET to look up the transactions that need to be removed from the incomplete subtrees
+	var incompleteSubtreeFilterMap map[chainhash.Hash]struct{}
+	if stp.incompleteSubtrees[*lastRootHash] != nil {
+		incompleteSubtreeFilterMap = make(map[chainhash.Hash]struct{}, stp.incompleteSubtrees[*lastRootHash].Length())
+		for _, node := range stp.incompleteSubtrees[*lastRootHash].Nodes {
+			incompleteSubtreeFilterMap[*node] = struct{}{}
+		}
+	} else if indexToSlice == -1 {
 		return errors.New("the last root hash %x was not found in the chained subtrees")
 	}
 
-	chainedSubtrees := stp.chainedSubtrees[indexToSlice:]
-	chainedSubtrees = append(chainedSubtrees, stp.currentSubtree)
+	chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees)+1)
+	if indexToSlice == -1 {
+		// chained subtree not found, this mean that the last root hash pointed to an incomplete subtree
+		chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
+	} else {
+		chainedSubtrees = append(stp.chainedSubtrees[indexToSlice:], stp.currentSubtree)
+	}
 
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
-	stp.chainedSubtrees = make([]*util.Subtree, 0)
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.Add(*model.CoinbasePlaceholderHash, 0)
 
 	fees := uint64(0)
-	for _, subtree := range chainedSubtrees {
-		for _, node := range subtree.Nodes {
-			stp.Add(*node, 0)
+	if indexToSlice == -1 {
+		// this prevents repeating the map lookup in every iteration of the loop, if indexToSlice == -1
+		for _, subtree := range chainedSubtrees {
+			for _, node := range subtree.Nodes {
+				if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
+					stp.Add(*node, 0)
+				}
+			}
+			fees += subtree.Fees
 		}
-		fees += subtree.Fees
+	} else {
+		for _, subtree := range chainedSubtrees {
+			for _, node := range subtree.Nodes {
+				stp.Add(*node, 0)
+			}
+			fees += subtree.Fees
+		}
 	}
 
 	if len(stp.chainedSubtrees) > 0 {
@@ -190,6 +227,9 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 	} else {
 		stp.currentSubtree.Fees = fees
 	}
+
+	// clear incomplete subtrees
+	stp.incompleteSubtrees = make(map[chainhash.Hash]*util.Subtree, 0)
 
 	return nil
 }
