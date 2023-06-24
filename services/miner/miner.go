@@ -91,7 +91,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 		return
 	}
 
-	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
+	merkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), candidate.MerkleProof)
 
 	target := model.NewNBitFromSlice(candidate.NBits).CalculateTarget()
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)

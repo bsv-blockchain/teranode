@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -56,10 +55,6 @@ func TestRotate(t *testing.T) {
 
 	waitCh := make(chan struct{})
 	defer close(waitCh)
-
-	// Add a placeholder for the coinbase
-	stp.Add(model.CoinbasePlaceholder, 0, waitCh)
-	<-waitCh
 
 	for _, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)

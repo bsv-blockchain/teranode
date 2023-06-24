@@ -189,7 +189,9 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 		return errors.New("the last root hash %x was not found in the chained subtrees")
 	}
 
-	chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees)+1)
+	// SAO - I commented out the following line because the linter was complaining about it
+	// chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees)+1)
+	var chainedSubtrees []*util.Subtree
 	if indexToSlice == -1 {
 		// chained subtree not found, this mean that the last root hash pointed to an incomplete subtree
 		chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
