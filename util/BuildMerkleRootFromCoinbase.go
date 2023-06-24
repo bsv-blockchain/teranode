@@ -10,5 +10,11 @@ func BuildMerkleRootFromCoinbase(coinbaseHash []byte, merkleBranches [][]byte) [
 		hash := Sha256d(concat)
 		acc = hash[:]
 	}
+
+	// Reverse the byte array
+	for i, j := 0, len(acc)-1; i < j; i, j = i+1, j-1 {
+		acc[i], acc[j] = acc[j], acc[i]
+	}
+
 	return acc
 }

@@ -64,18 +64,26 @@ func (m *Miner) Start() {
 
 func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	// Create a new coinbase transaction
-	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
-	if err != nil {
-		m.logger.Errorf("Error creating coinbase transaction: %v", err)
-		return
-	}
+	/*
+		a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
+		if err != nil {
+			m.logger.Errorf("Error creating coinbase transaction: %v", err)
+			return
+		}
 
-	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
-	extranonce := make([]byte, 12)
-	a = append(a, extranonce...)
-	a = append(a, b...)
+		// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
+		extranonce := make([]byte, 12)
+		a = append(a, extranonce...)
+		a = append(a, b...)
 
-	coinbaseTx, err := bt.NewTxFromBytes(a)
+		coinbaseTx, err := bt.NewTxFromBytes(a)
+		if err != nil {
+			m.logger.Errorf("Error decoding coinbase transaction: %v", err)
+			return
+		}
+	*/
+	// TEMP - use the same coinbase transaction as block 1
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
 	if err != nil {
 		m.logger.Errorf("Error decoding coinbase transaction: %v", err)
 		return
@@ -87,8 +95,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
-	var nonce uint32
-
+	var nonce uint32 = 2573394689
 	for {
 		var (
 			block1          = "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000"
@@ -113,20 +120,25 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 			Version:        candidate.Version,
 			HashPrevBlock:  previousHash,
 			HashMerkleRoot: merkleRootHash,
-			Timestamp:      candidate.Time,
+			Timestamp:      1231469665, //candidate.Time,
 			Bits:           model.NewNBitFromSlice(candidate.NBits),
 			Nonce:          nonce,
 		}
 
-		//log.Printf("Block header: %x", blockHeader.Bytes())
+		log.Printf("BlockX header: %x", blockHeader.Bytes())
+
+		log.Printf("BlockX hash: %s", blockHeader.Hash().String())
 
 		//  57896037716911750921221705069588091649609539881711309849342236841432341020672
 		// 105246604674077689286984806481918053301334584768133419539070562900731587447610
 
 		var hashInt big.Int
-		hashInt.SetBytes(blockHeader.Hash()[:])
+		hashInt.SetString(blockHeader.Hash().String(), 16)
 
-		if hashInt.Cmp(target) == -1 {
+		log.Printf("Target:  %032x", target.Bytes())
+		log.Printf("HashInt: %032x", hashInt.Bytes())
+
+		if hashInt.Cmp(target) <= 0 {
 			m.logger.Infof("Miner Block found! target was %s > %s", target.String(), hashInt.String())
 			m.logger.Infof("Miner Block header: %#v", blockHeader)
 			m.logger.Infof("Miner Block header hash: %s", blockHeader.Hash().String())

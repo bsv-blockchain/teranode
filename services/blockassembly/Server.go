@@ -331,7 +331,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 
 	job := &model.MiningCandidate{
 		Id:            id[:],
-		PreviousHash:  bestBlockHeader.HashPrevBlock.CloneBytes(),
+		PreviousHash:  bestBlockHeader.Hash().CloneBytes(),
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
