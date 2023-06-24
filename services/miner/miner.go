@@ -3,7 +3,6 @@ package miner
 import (
 	"context"
 	"log"
-	"math/big"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -93,7 +92,6 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 
 	merkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), candidate.MerkleProof)
 
-	target := model.NewNBitFromSlice(candidate.NBits).CalculateTarget()
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
@@ -110,12 +108,13 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 
 		log.Printf("BlockX hash: %s", blockHeader.Hash().String())
 
-		var hashInt big.Int
-		hashInt.SetString(blockHeader.Hash().String(), 16)
-		// hashInt.SetBytes(bt.ReverseBytes(blockHeader.Hash()[:]))
+		headerValid, err := blockHeader.Valid()
+		if err != nil {
+			m.logger.Errorf("invalid block header: %s - %v", blockHeader.Hash().String(), err)
+			return
+		}
 
-		compare := hashInt.Cmp(target)
-		if compare <= 0 {
+		if headerValid { // header is valid if the hash is less than the target
 			break
 		}
 

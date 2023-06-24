@@ -74,11 +74,6 @@ func (bh *BlockHeader) Valid() (bool, error) {
 	var bn = big.NewInt(0)
 	bn.SetString(bh.Hash().String(), 16)
 
-	//fmt.Printf("Block header: %#v\n", bh)
-	fmt.Printf("Block header hash: %s\n", bh.Hash().String())
-	//fmt.Printf("Block header previous hash: %s\n", bh.HashPrevBlock.String())
-	fmt.Printf("Block header merkleroot: %s\n", bh.HashMerkleRoot.String())
-
 	compare := bn.Cmp(target)
 	if compare < 0 {
 		return true, nil
