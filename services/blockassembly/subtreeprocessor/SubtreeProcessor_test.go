@@ -118,11 +118,15 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
 		stp := NewSubtreeProcessor(newSubtreeChan)
-		for _, txid := range txIDs {
+		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
 
-			stp.Add(*hash, 1, nil)
+			if i == 0 {
+				stp.currentSubtree.ReplaceRootNode(hash)
+			} else {
+				stp.Add(*hash, 1, nil)
+			}
 		}
 		wg.Wait()
 		assertMerkleProof(t, stp)
@@ -142,11 +146,15 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 		stp := NewSubtreeProcessor(newSubtreeChan)
-		for _, txid := range txIDs {
+		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
 
-			stp.Add(*hash, 1, nil)
+			if i == 0 {
+				stp.currentSubtree.ReplaceRootNode(hash)
+			} else {
+				stp.Add(*hash, 1, nil)
+			}
 		}
 		wg.Wait()
 		assertMerkleProof(t, stp)
@@ -199,11 +207,15 @@ func TestReset(t *testing.T) {
 	}()
 
 	stp := NewSubtreeProcessor(newSubtreeChan)
-	for _, txid := range txIds {
+	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1, nil)
+		if i == 0 {
+			stp.currentSubtree.ReplaceRootNode(hash)
+		} else {
+			stp.Add(*hash, 1, nil)
+		}
 	}
 	wg.Wait()
 	// sleep for 1 second
@@ -258,11 +270,15 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 	}()
 
 	stp := NewSubtreeProcessor(newSubtreeChan)
-	for _, txid := range txIds {
+	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1, nil)
+		if i == 0 {
+			stp.currentSubtree.ReplaceRootNode(hash)
+		} else {
+			stp.Add(*hash, 1, nil)
+		}
 	}
 	wg.Wait()
 	// sleep for 1 second
@@ -317,11 +333,15 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 	}()
 
 	stp := NewSubtreeProcessor(newSubtreeChan)
-	for _, txid := range txIds {
+	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1, nil)
+		if i == 0 {
+			stp.currentSubtree.ReplaceRootNode(hash)
+		} else {
+			stp.Add(*hash, 1, nil)
+		}
 	}
 	wg.Wait()
 	// sleep for 1 second
@@ -375,11 +395,15 @@ func TestResetLarge(t *testing.T) {
 	}()
 
 	stp := NewSubtreeProcessor(newSubtreeChan)
-	for _, txid := range txIds {
+	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1, nil)
+		if i == 0 {
+			stp.currentSubtree.ReplaceRootNode(hash)
+		} else {
+			stp.Add(*hash, 1, nil)
+		}
 	}
 	wg.Wait()
 	// sleep for 1 second
@@ -440,8 +464,12 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	}()
 
 	subtreeProcessor := NewSubtreeProcessor(newSubtreeChan)
-	for _, hash := range hashes {
-		subtreeProcessor.Add(*hash, 111)
+	for i, hash := range hashes {
+		if i == 0 {
+			subtreeProcessor.currentSubtree.ReplaceRootNode(hash)
+		} else {
+			subtreeProcessor.Add(*hash, 111)
+		}
 	}
 	// add 1 more hash to create the second subtree
 	subtreeProcessor.Add(*hashes[0], 111)
