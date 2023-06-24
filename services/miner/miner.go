@@ -39,6 +39,8 @@ func (m *Miner) Start() {
 	candidateTimer := time.NewTimer(candidateRequestInterval * time.Second)
 	blockFoundTimer := time.NewTimer(blockFoundInterval * time.Second)
 
+	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
+
 	for {
 		select {
 		case <-candidateTimer.C:
@@ -89,7 +91,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 		return
 	}
 
-	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDBytes(), candidate.MerkleProof)
+	merkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), candidate.MerkleProof)
 
 	target := model.NewNBitFromSlice(candidate.NBits).CalculateTarget()
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
@@ -110,20 +112,10 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 
 		var hashInt big.Int
 		hashInt.SetString(blockHeader.Hash().String(), 16)
+		// hashInt.SetBytes(bt.ReverseBytes(blockHeader.Hash()[:]))
 
-		if hashInt.Cmp(target) <= 0 {
-			// m.logger.Infof("Miner Block found! target was %s > %s", target.String(), hashInt.String())
-			// m.logger.Infof("Miner Block header: %#v", blockHeader)
-			// m.logger.Infof("Miner Block header hash: %s", blockHeader.Hash().String())
-			// m.logger.Infof("Miner Block previous hash: %s", blockHeader.HashPrevBlock.String())
-			// m.logger.Infof("Miner Block merkleroot: %s", blockHeader.HashMerkleRoot.String())
-			// mp := make([]string, len(candidate.MerkleProof))
-			// for idx, mpp := range candidate.MerkleProof {
-			// 	h, _ := chainhash.NewHash(mpp)
-			// 	mp[idx] = h.String()
-			// }
-			// m.logger.Infof("Miner Block coinbase hash: %s", coinbaseTx.TxID())
-			// m.logger.Infof("Miner Block merkleproofs: %v", mp)
+		compare := hashInt.Cmp(target)
+		if compare <= 0 {
 			break
 		}
 

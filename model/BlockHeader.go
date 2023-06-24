@@ -69,10 +69,7 @@ func (bh *BlockHeader) Hash() *chainhash.Hash {
 }
 
 func (bh *BlockHeader) Valid() (bool, error) {
-	target, err := bc.ExpandTargetFromAsInt(bh.Bits.String())
-	if err != nil {
-		return false, err
-	}
+	target := bh.Bits.CalculateTarget()
 
 	var bn = big.NewInt(0)
 	bn.SetString(bh.Hash().String(), 16)
