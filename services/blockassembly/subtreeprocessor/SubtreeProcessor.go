@@ -17,10 +17,17 @@ type txIDAndFee struct {
 	waitCh chan struct{}
 }
 
+type resetRequest struct {
+	lastRoot []byte
+	errChan  chan error
+}
+
 type SubtreeProcessor struct {
 	currentItemsPerFile int
 	txChan              chan *txIDAndFee
 	incomingBlockChan   chan string
+	getSubtreesChan     chan chan []*util.Subtree
+	resetChan           chan resetRequest
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
 	sync.Mutex
@@ -44,6 +51,8 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 		currentItemsPerFile: initialItemsPerFile,
 		txChan:              make(chan *txIDAndFee, 100_000),
 		incomingBlockChan:   make(chan string),
+		getSubtreesChan:     make(chan chan []*util.Subtree),
+		resetChan:           make(chan resetRequest),
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
@@ -55,6 +64,17 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 			case <-stp.incomingBlockChan:
 				// Notified of another miner's validated block, so I need to process it.  This might be internal or external.
 				// TODO if we get a block in and the txChan buffer is still full of txs?
+
+			case getSubtreesChan := <-stp.getSubtreesChan:
+				chainedSubtrees := make([]*util.Subtree, len(stp.chainedSubtrees))
+				copy(chainedSubtrees, stp.chainedSubtrees)
+
+				getSubtreesChan <- chainedSubtrees
+
+			case resetReq := <-stp.resetChan:
+				// Reset the state of the subtree processor to the state of the subtree that contains the resetHash
+				err := stp.reset(resetReq.lastRoot)
+				resetReq.errChan <- err
 
 			case txReq := <-stp.txChan:
 				err := stp.currentSubtree.AddNode(&txReq.txID, txReq.fee)
@@ -97,29 +117,35 @@ func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, optionalWaitCh
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
-	// TODO: may need mutex
-	stp.Lock()
-	defer stp.Unlock()
+	fmt.Printf("GetCompletedSubtreesForMiningCandidate\n")
+	var subtrees []*util.Subtree
+	subtreesChan := make(chan []*util.Subtree)
 
-	if len(stp.chainedSubtrees) == 0 {
-		// no chained subtrees so get a sub-subtree from the current subtree
-		if stp.currentSubtree.Length() == 0 {
-			return nil
-		}
+	// get the subtrees from channel
+	stp.getSubtreesChan <- subtreesChan
 
-		subsubtree := util.NewIncompleteTreeByLeafCount(stp.currentSubtree.Length())
-		subsubtree.Nodes = stp.currentSubtree.Nodes
-		subsubtree.Height = stp.currentSubtree.Height
-		subsubtree.Fees = stp.currentSubtree.Fees
+	subtrees = <-subtreesChan
 
-		subsubArray := make([]*util.Subtree, 0)
-		subsubArray = append(subsubArray, subsubtree)
-		stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
-
-		return subsubArray
+	if len(subtrees) == 0 {
+		// TODO implement incomplete subtrees
+		//	// no chained subtrees so get a sub-subtree from the current subtree
+		//	if stp.currentSubtree.Length() == 0 {
+		//		return nil
+		//	}
+		//
+		//	subsubtree := util.NewIncompleteTreeByLeafCount(stp.currentSubtree.Length())
+		//	subsubtree.Nodes = stp.currentSubtree.Nodes
+		//	subsubtree.Height = stp.currentSubtree.Height
+		//	subsubtree.Fees = stp.currentSubtree.Fees
+		//
+		//	subsubArray := make([]*util.Subtree, 0)
+		//	subsubArray = append(subsubArray, subsubtree)
+		//	stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
+		//
+		//	return subsubArray
 	}
 
-	return stp.chainedSubtrees
+	return subtrees
 }
 
 func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.Subtree {
@@ -151,8 +177,17 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 
 // Reset the subtrees when a new block is found
 func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
-	stp.Lock()
-	defer stp.Unlock()
+	errChan := make(chan error)
+	stp.resetChan <- resetRequest{
+		lastRoot: lastRoot,
+		errChan:  errChan,
+	}
+
+	return <-errChan
+}
+
+func (stp *SubtreeProcessor) reset(lastRoot []byte) error {
+	fmt.Printf("resetting the subtrees with last root %x\n", lastRoot)
 
 	//TODO: calculate new items per file size
 

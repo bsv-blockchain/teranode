@@ -336,7 +336,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
 		Height:        bestBlockHeight + 1,
-		Time:          1231469665, // TEMP uint32(time.Now().Unix()),
+		Time:          uint32(time.Now().Unix()),
 		MerkleProof:   coinbaseMerkleProofBytes,
 	}
 
@@ -418,7 +418,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		cmp[idx] = hash.String()
 		cmpB[idx] = hash.CloneBytes()
 	}
-	fmt.Printf("SERVER merkle proof: %v", cmp)
+	//fmt.Printf("SERVER merkle proof: %v", cmp)
 	//bMmerkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), cmpB)
 	//ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
 

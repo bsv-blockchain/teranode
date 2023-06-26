@@ -2,7 +2,6 @@ package miner
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -36,7 +35,6 @@ func NewMiner() *Miner {
 
 func (m *Miner) Start() {
 	candidateTimer := time.NewTimer(candidateRequestInterval * time.Second)
-	blockFoundTimer := time.NewTimer(blockFoundInterval * time.Second)
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
@@ -49,15 +47,9 @@ func (m *Miner) Start() {
 				m.logger.Errorf("Error getting mining candidate: %v", err)
 				continue
 			}
-
-			m.Mine(candidate)
-
 			m.logger.Infof(candidate.Stringify())
 
-		case <-blockFoundTimer.C:
-			blockFoundTimer.Reset(blockFoundInterval * time.Second)
-			m.logger.Infof("Submitting mining solution...")
-			// m.blockAssemblyClient.SubmitMiningSolution()
+			m.Mine(candidate)
 		}
 	}
 
@@ -65,26 +57,19 @@ func (m *Miner) Start() {
 
 func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	// Create a new coinbase transaction
-	/*
-		a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
-		if err != nil {
-			m.logger.Errorf("Error creating coinbase transaction: %v", err)
-			return
-		}
 
-		// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
-		extranonce := make([]byte, 12)
-		a = append(a, extranonce...)
-		a = append(a, b...)
+	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
+	if err != nil {
+		m.logger.Errorf("Error creating coinbase transaction: %v", err)
+		return
+	}
 
-		coinbaseTx, err := bt.NewTxFromBytes(a)
-		if err != nil {
-			m.logger.Errorf("Error decoding coinbase transaction: %v", err)
-			return
-		}
-	*/
-	// TEMP - use the same coinbase transaction as block 1
-	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
+	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
+	extranonce := make([]byte, 12)
+	a = append(a, extranonce...)
+	a = append(a, b...)
+
+	coinbaseTx, err := bt.NewTxFromBytes(a)
 	if err != nil {
 		m.logger.Errorf("Error decoding coinbase transaction: %v", err)
 		return
@@ -95,7 +80,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
-	var nonce uint32 = 2573394689 // TEMP hardcode the nonce
+	var nonce uint32
 	for {
 		blockHeader := model.BlockHeader{
 			Version:        candidate.Version,
@@ -106,14 +91,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 			Nonce:          nonce,
 		}
 
-		log.Printf("BlockX hash: %s", blockHeader.Hash().String())
-
-		headerValid, err := blockHeader.Valid()
-		if err != nil {
-			m.logger.Errorf("invalid block header: %s - %v", blockHeader.Hash().String(), err)
-			return
-		}
-
+		headerValid, _ := blockHeader.Valid()
 		if headerValid { // header is valid if the hash is less than the target
 			break
 		}
@@ -125,6 +103,7 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 		nonce++
 	}
 
+	m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
 	err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), candidate.Id, coinbaseTx.Bytes(), candidate.Time, nonce, 1)
 	if err != nil {
 		m.logger.Errorf("Error submitting mining solution: %v", err)

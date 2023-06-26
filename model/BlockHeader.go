@@ -79,7 +79,7 @@ func (bh *BlockHeader) Valid() (bool, error) {
 		return true, nil
 	}
 
-	return false, fmt.Errorf("block header does not meet target %d: %s >? %s ", compare, target.String(), bn.String())
+	return false, fmt.Errorf("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }
 
 func (bh *BlockHeader) Bytes() []byte {
