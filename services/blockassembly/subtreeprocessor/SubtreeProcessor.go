@@ -8,6 +8,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -32,13 +33,14 @@ type SubtreeProcessor struct {
 	currentSubtree      *util.Subtree
 	sync.Mutex
 	incompleteSubtrees map[chainhash.Hash]*util.Subtree
+	logger             utils.Logger
 }
 
 var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
 	firstSubtree := util.NewTreeByLeafCount(initialItemsPerFile)
@@ -56,6 +58,7 @@ func NewSubtreeProcessor(newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
+		logger:              logger,
 	}
 
 	go func() {
@@ -117,7 +120,7 @@ func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, optionalWaitCh
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
-	fmt.Printf("GetCompletedSubtreesForMiningCandidate\n")
+	stp.logger.Infof("GetCompletedSubtreesForMiningCandidate")
 	var subtrees []*util.Subtree
 	subtreesChan := make(chan []*util.Subtree)
 
@@ -187,7 +190,7 @@ func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
 }
 
 func (stp *SubtreeProcessor) reset(lastRoot []byte) error {
-	fmt.Printf("resetting the subtrees with last root %x\n", lastRoot)
+	stp.logger.Infof("resetting the subtrees with last root %s\n", utils.ReverseAndHexEncodeSlice(lastRoot))
 
 	//TODO: calculate new items per file size
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +52,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 
 	waitCh := make(chan struct{})
 	defer close(waitCh)
@@ -117,7 +118,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		}()
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
-		stp := NewSubtreeProcessor(newSubtreeChan)
+		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -145,7 +146,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		}()
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-		stp := NewSubtreeProcessor(newSubtreeChan)
+		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -206,7 +207,7 @@ func TestReset(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -269,7 +270,7 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -332,7 +333,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -394,7 +395,7 @@ func TestResetLarge(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -463,7 +464,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	subtreeProcessor := NewSubtreeProcessor(newSubtreeChan)
+	subtreeProcessor := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash)

@@ -118,7 +118,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 		logger:           logger,
 		utxoStore:        s,
 		txStatusClient:   txStatusStore,
-		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(newSubtreeChan),
+		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(logger, newSubtreeChan),
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
 		jobStore:         make(map[chainhash.Hash]*model.MiningCandidate),
