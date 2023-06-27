@@ -61,6 +61,11 @@ func New(s3URL *url.URL) (*S3, error) {
 	return s3, nil
 }
 
+func (g *S3) generateKey(key []byte) *string {
+	var reverseHexEncodedKey = utils.ReverseAndHexEncodeSlice(key)
+	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
+}
+
 func (g *S3) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
@@ -84,7 +89,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Opt
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3manager.UploadInput{
 		Bucket: aws.String(g.bucket),
-		Key:    aws.String(utils.ReverseAndHexEncodeSlice(key)),
+		Key:    g.generateKey(key),
 		Body:   buf,
 	}
 
@@ -128,7 +133,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	_, err := g.downloader.Download(buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
-			Key:    aws.String(utils.ReverseAndHexEncodeSlice(hash)),
+			Key:    g.generateKey(hash),
 		})
 	if err != nil {
 		traceSpan.RecordError(err)
@@ -145,11 +150,11 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
+	var key = g.generateKey(hash)
 
-	key := utils.ReverseAndHexEncodeSlice(hash)
 	_, err := g.client.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
-		Key:    aws.String(key),
+		Key:    key,
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
@@ -158,7 +163,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 
 	err = g.client.WaitUntilObjectNotExists(&s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
-		Key:    aws.String(key),
+		Key:    key,
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
