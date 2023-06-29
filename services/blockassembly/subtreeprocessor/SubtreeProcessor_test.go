@@ -232,7 +232,7 @@ func TestReset(t *testing.T) {
 
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
-	// new itemm per file is 2 so there should be 4 subtrees in the chain
+	// new items per file is 2 so there should be 4 subtrees in the chain
 	wg.Add(5) // we are expecting 2 more subtrees
 
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
@@ -297,8 +297,8 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 	wg.Add(5) // we are expecting 4 subtrees
 
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be rese
-	// new itemm per file is 2 so there should be 5 subtrees in the chain
+	// this means half the subtrees will be reset
+	// new items per file is 2 so there should be 5 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
 	wg.Wait()
 	require.NoError(t, err)
@@ -361,7 +361,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
-	// new itemm per file is 2 so there should be 4 subtrees in the chain
+	// new items per file is 2 so there should be 4 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
 	wg.Wait()
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestResetLarge(t *testing.T) {
 
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
-	// new itemm per file is 65536 so there should be 8 subtrees in the chain
+	// new items per file is 65536 so there should be 8 subtrees in the chain
 	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
 	wg.Wait()
 	time.Sleep(1 * time.Second)

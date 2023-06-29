@@ -129,24 +129,24 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 
 	subtrees = <-subtreesChan
 
-	if len(subtrees) == 0 {
-		// TODO implement incomplete subtrees
-		//	// no chained subtrees so get a sub-subtree from the current subtree
-		//	if stp.currentSubtree.Length() == 0 {
-		//		return nil
-		//	}
-		//
-		//	subsubtree := util.NewIncompleteTreeByLeafCount(stp.currentSubtree.Length())
-		//	subsubtree.Nodes = stp.currentSubtree.Nodes
-		//	subsubtree.Height = stp.currentSubtree.Height
-		//	subsubtree.Fees = stp.currentSubtree.Fees
-		//
-		//	subsubArray := make([]*util.Subtree, 0)
-		//	subsubArray = append(subsubArray, subsubtree)
-		//	stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
-		//
-		//	return subsubArray
-	}
+	// if len(subtrees) == 0 {
+	// TODO implement incomplete subtrees
+	//	// no chained subtrees so get a sub-subtree from the current subtree
+	//	if stp.currentSubtree.Length() == 0 {
+	//		return nil
+	//	}
+	//
+	//	subsubtree := util.NewIncompleteTreeByLeafCount(stp.currentSubtree.Length())
+	//	subsubtree.Nodes = stp.currentSubtree.Nodes
+	//	subsubtree.Height = stp.currentSubtree.Height
+	//	subsubtree.Fees = stp.currentSubtree.Fees
+	//
+	//	subsubArray := make([]*util.Subtree, 0)
+	//	subsubArray = append(subsubArray, subsubtree)
+	//	stp.incompleteSubtrees[*subsubtree.RootHash()] = subsubtree
+	//
+	//	return subsubArray
+	//}
 
 	return subtrees
 }

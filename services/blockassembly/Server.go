@@ -273,15 +273,17 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	txMetadata, err := ba.txStatusClient.Get(ctx, txid)
-	if err != nil {
-		return nil, err
-	}
+	if gocore.Config().GetBool("blockassembly_skip_utxostore", false) {
+		txMetadata, err := ba.txStatusClient.Get(ctx, txid)
+		if err != nil {
+			return nil, err
+		}
 
-	// Add all the utxo hashes to the utxostore
-	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
-			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
+		// Add all the utxo hashes to the utxostore
+		for _, hash := range txMetadata.UtxoHashes {
+			if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
+				return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
+			}
 		}
 	}
 
@@ -419,8 +421,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		cmpB[idx] = hash.CloneBytes()
 	}
 	//fmt.Printf("SERVER merkle proof: %v", cmp)
-	//bMmerkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), cmpB)
-	//ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMmerkleRoot))
+	//bMerkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), cmpB)
+	//ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMerkleRoot))
 
 	//ba.logger.Debugf("SERVER Coinbase: %s", coinbaseTx.TxID())
 	//ba.logger.Debugf("SERVER MERKLE PROOfS: %v", merkleProofs)
