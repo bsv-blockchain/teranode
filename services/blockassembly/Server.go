@@ -273,12 +273,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	if gocore.Config().GetBool("blockassembly_skip_utxostore", false) {
-		txMetadata, err := ba.txStatusClient.Get(ctx, txid)
-		if err != nil {
-			return nil, err
-		}
+	txMetadata, err := ba.txStatusClient.Get(ctx, txid)
+	if err != nil {
+		return nil, err
+	}
 
+	if gocore.Config().GetBool("blockassembly_skip_utxostore", false) {
 		// Add all the utxo hashes to the utxostore
 		for _, hash := range txMetadata.UtxoHashes {
 			if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
