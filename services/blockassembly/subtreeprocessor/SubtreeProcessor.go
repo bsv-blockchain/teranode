@@ -2,7 +2,6 @@ package subtreeprocessor
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -18,9 +17,15 @@ type txIDAndFee struct {
 	waitCh chan struct{}
 }
 
+type Job struct {
+	ID              *chainhash.Hash
+	Subtrees        []*util.Subtree
+	MiningCandidate *model.MiningCandidate
+}
+
 type resetRequest struct {
-	lastRoot []byte
-	errChan  chan error
+	job     *Job
+	errChan chan error
 }
 
 type SubtreeProcessor struct {
@@ -29,6 +34,7 @@ type SubtreeProcessor struct {
 	incomingBlockChan   chan string
 	getSubtreesChan     chan chan []*util.Subtree
 	resetChan           chan resetRequest
+	newSubtreeChan      chan *util.Subtree
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
 	sync.Mutex
@@ -55,6 +61,7 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 		incomingBlockChan:   make(chan string),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
 		resetChan:           make(chan resetRequest),
+		newSubtreeChan:      newSubtreeChan,
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
@@ -65,34 +72,25 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 		for {
 			select {
 			case <-stp.incomingBlockChan:
+				logger.Infof("[SubtreeProcessor] received block from another miner")
 				// Notified of another miner's validated block, so I need to process it.  This might be internal or external.
 				// TODO if we get a block in and the txChan buffer is still full of txs?
 
 			case getSubtreesChan := <-stp.getSubtreesChan:
+				logger.Infof("[SubtreeProcessor] get current subtrees")
 				chainedSubtrees := make([]*util.Subtree, len(stp.chainedSubtrees))
 				copy(chainedSubtrees, stp.chainedSubtrees)
 
 				getSubtreesChan <- chainedSubtrees
 
 			case resetReq := <-stp.resetChan:
+				logger.Infof("[SubtreeProcessor] reset subtree processor")
 				// Reset the state of the subtree processor to the state of the subtree that contains the resetHash
-				err := stp.reset(resetReq.lastRoot)
+				err := stp.reset(resetReq.job)
 				resetReq.errChan <- err
 
 			case txReq := <-stp.txChan:
-				err := stp.currentSubtree.AddNode(&txReq.txID, txReq.fee)
-				if err != nil {
-					panic(err)
-				}
-
-				if stp.currentSubtree.IsComplete() {
-					stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
-					// Send the subtree to the newSubtreeChan
-					newSubtreeChan <- stp.currentSubtree
-
-					stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
-				}
-
+				stp.addNode(txReq.txID, txReq.fee)
 				if txReq.waitCh != nil {
 					txReq.waitCh <- struct{}{}
 				}
@@ -101,6 +99,21 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 	}()
 
 	return stp
+}
+
+func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
+	err := stp.currentSubtree.AddNode(&txID, fee)
+	if err != nil {
+		panic(err)
+	}
+
+	if stp.currentSubtree.IsComplete() {
+		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
+		// Send the subtree to the newSubtreeChan
+		stp.newSubtreeChan <- stp.currentSubtree
+
+		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	}
 }
 
 // Add adds a tx hash to a channel
@@ -179,84 +192,68 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 }
 
 // Reset the subtrees when a new block is found
-func (stp *SubtreeProcessor) Reset(lastRoot []byte) error {
+func (stp *SubtreeProcessor) Reset(job *Job) error {
 	errChan := make(chan error)
 	stp.resetChan <- resetRequest{
-		lastRoot: lastRoot,
-		errChan:  errChan,
+		job:     job,
+		errChan: errChan,
 	}
 
 	return <-errChan
 }
 
-func (stp *SubtreeProcessor) reset(lastRoot []byte) error {
-	stp.logger.Infof("resetting the subtrees with last root %s\n", utils.ReverseAndHexEncodeSlice(lastRoot))
-
-	//TODO: calculate new items per file size
-
-	// indexToSlice is where to remove the mined transactions from
-	var indexToSlice = -1
+func (stp *SubtreeProcessor) reset(job *Job) error {
+	stp.logger.Infof("resetting the subtrees with last root %s", utils.ReverseAndHexEncodeHash(*job.ID))
+	stp.logger.Debugf("resetting subtrees: %v", job.Subtrees)
 
 	// we need to shuffle all the transaction along because of the new coinbase placeholder
 
-	if lastRoot == nil {
-		return errors.New("you must pass in the last root")
+	if job.ID == nil {
+		return errors.New("you must pass in the job ID")
 	}
 
-	lastRootHash, err := chainhash.NewHash(lastRoot)
-	if err != nil {
-		return fmt.Errorf("error converting last root hash %x to chainhash.Hash: %v", lastRoot, err)
+	// check that all the subtrees are still in the processor
+	// this should still be locked in the go routines so we should be safe
+	subtreesMap := make(map[chainhash.Hash]struct{}, len(stp.chainedSubtrees))
+	for _, subtree := range stp.chainedSubtrees {
+		subtreesMap[*subtree.RootHash()] = struct{}{}
 	}
-
-	// find the index of the last root in the block that was just mined
-	for i, subtree := range stp.chainedSubtrees {
-		if *subtree.RootHash() == *lastRootHash {
-			indexToSlice = i + 1
-			break
+	for _, subtree := range job.Subtrees {
+		if _, ok := subtreesMap[*subtree.RootHash()]; !ok {
+			return errors.New("the subtree is not in the processor: " + subtree.RootHash().String())
 		}
 	}
 
 	// create SET to look up the transactions that need to be removed from the incomplete subtrees
 	var incompleteSubtreeFilterMap map[chainhash.Hash]struct{}
-	if stp.incompleteSubtrees[*lastRootHash] != nil {
-		incompleteSubtreeFilterMap = make(map[chainhash.Hash]struct{}, stp.incompleteSubtrees[*lastRootHash].Length())
-		for _, node := range stp.incompleteSubtrees[*lastRootHash].Nodes {
+	if stp.incompleteSubtrees[*job.ID] != nil {
+		incompleteSubtreeFilterMap = make(map[chainhash.Hash]struct{}, stp.incompleteSubtrees[*job.ID].Length())
+		for _, node := range stp.incompleteSubtrees[*job.ID].Nodes {
 			incompleteSubtreeFilterMap[*node] = struct{}{}
 		}
-	} else if indexToSlice == -1 {
-		return errors.New("the last root hash %x was not found in the chained subtrees")
-	}
-
-	// SAO - I commented out the following line because the linter was complaining about it
-	// chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees)+1)
-	var chainedSubtrees []*util.Subtree
-	if indexToSlice == -1 {
-		// chained subtree not found, this mean that the last root hash pointed to an incomplete subtree
-		chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
-	} else {
-		chainedSubtrees = append(stp.chainedSubtrees[indexToSlice:], stp.currentSubtree)
 	}
 
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
-
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.Add(*model.CoinbasePlaceholderHash, 0)
+
+	// add first coinbase placeholder transaction
+	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholderHash, 0)
 
 	fees := uint64(0)
-	if indexToSlice == -1 {
-		// this prevents repeating the map lookup in every iteration of the loop, if indexToSlice == -1
-		for _, subtree := range chainedSubtrees {
+	if incompleteSubtreeFilterMap != nil {
+		// this prevents repeating the map lookup in every iteration of the loop
+		for _, subtree := range job.Subtrees {
 			for _, node := range subtree.Nodes {
 				if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
-					stp.Add(*node, 0)
+					stp.addNode(*node, 0)
 				}
 			}
 			fees += subtree.Fees
 		}
 	} else {
-		for _, subtree := range chainedSubtrees {
+		for _, subtree := range job.Subtrees {
 			for _, node := range subtree.Nodes {
-				stp.Add(*node, 0)
+				stp.addNode(*node, 0)
 			}
 			fees += subtree.Fees
 		}

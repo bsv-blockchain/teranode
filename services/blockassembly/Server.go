@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -85,7 +86,7 @@ type BlockAssembly struct {
 	blockchainClient *blockchain.Client
 	blockStore       blob.Store
 	jobStoreMutex    sync.RWMutex
-	jobStore         map[chainhash.Hash]*model.MiningCandidate
+	jobStore         map[chainhash.Hash]*subtreeprocessor.Job
 }
 
 func Enabled() bool {
@@ -145,7 +146,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(logger, newSubtreeChan),
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
-		jobStore:         make(map[chainhash.Hash]*model.MiningCandidate),
+		jobStore:         make(map[chainhash.Hash]*subtreeprocessor.Job),
 	}
 
 	go func() {
@@ -169,7 +170,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 				continue
 			}
 
-			logger.Infof("Received new subtree notification for: %s", subtree.RootHash().String())
+			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}
 	}()
 
@@ -349,7 +350,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	// Get the hash of the last subtree in the list...
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
-		id = subtrees[len(subtrees)-1].RootHash()
+		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
+		topTree := util.NewTree(height)
+		for _, subtree := range subtrees {
+			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees)
+		}
+		id = topTree.RootHash()
 	}
 
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
@@ -365,7 +371,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
 	}
 
-	job := &model.MiningCandidate{
+	miningCandidate := &model.MiningCandidate{
 		Id:            id[:],
 		PreviousHash:  bestBlockHeader.Hash().CloneBytes(),
 		CoinbaseValue: coinbaseValue,
@@ -376,16 +382,15 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		MerkleProof:   coinbaseMerkleProofBytes,
 	}
 
-	storeId, err := chainhash.NewHash(id[:])
-	if err != nil {
-		return nil, err
-	}
-
 	ba.jobStoreMutex.Lock()
-	ba.jobStore[*storeId] = job
+	ba.jobStore[*id] = &subtreeprocessor.Job{
+		ID:              id,
+		Subtrees:        subtrees,
+		MiningCandidate: miningCandidate,
+	}
 	ba.jobStoreMutex.Unlock()
 
-	return job, nil
+	return miningCandidate, nil
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
@@ -405,7 +410,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("job not found")
 	}
 
-	hashPrevBlock, err := chainhash.NewHash(job.PreviousHash)
+	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
 	}
@@ -419,7 +424,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("failed to convert coinbaseTxHash: %w", err)
 	}
 
-	subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.Id)
+	//subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.ID[:])
+	subtreesInJob := job.Subtrees
 	//ba.logger.Debugf("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
 	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
 	//ba.logger.Debugf("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
@@ -475,7 +481,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
 			Timestamp:      req.Time,
-			Bits:           model.NewNBitFromSlice(job.NBits),
+			Bits:           model.NewNBitFromSlice(job.MiningCandidate.NBits),
 			Nonce:          req.Nonce,
 		},
 		CoinbaseTx:       coinbaseTx,
@@ -489,15 +495,17 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("invalid block: %v", err)
 	}
 
-	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
-		return nil, fmt.Errorf("failed to add block: %w", err)
-	}
 	// reset the subtrees
-	err = ba.subtreeProcessor.Reset(job.Id)
+	err = ba.subtreeProcessor.Reset(job)
 	if err != nil {
 		// TODO if this happens, why might actually start mining the next block with the same subtrees and transactions
 		// this would be VERY bad
 		return nil, fmt.Errorf("failed to reset subtree processor: %w", err)
+	}
+
+	// only add block to blockchain if the reset was successful - otherwise we risk mining the same transactions
+	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
+		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
 
 	// remove job, we have already mined a block with it

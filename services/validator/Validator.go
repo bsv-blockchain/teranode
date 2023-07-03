@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	"github.com/Shopify/sarama"
-	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default"
+	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
@@ -69,6 +69,14 @@ func New(logger utils.Logger, store utxostore.Interface, txStatus txstatus.Store
 }
 
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
+	defer func() {
+		if r := recover(); r != nil {
+			// TODO cleanup any utxo stuff that might have been changed
+
+			v.logger.Errorf("[VALIDATOR] Validate recover: %v", r)
+		}
+	}()
+
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	defer traceSpan.Finish()
 
