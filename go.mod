@@ -9,7 +9,7 @@ require (
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go/v6 v6.12.0
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230424201535-3e1f89b1cd42
+	github.com/apple/foundationdb/bindings/go v0.0.0-20230621034922-cb03d918ac80
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.1.0

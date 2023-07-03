@@ -38,21 +38,17 @@ func (m *Miner) Start() {
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
-	for {
-		select {
-		case <-candidateTimer.C:
-			candidateTimer.Reset(candidateRequestInterval * time.Second)
-			candidate, err := m.blockAssemblyClient.GetMiningCandidate(context.Background())
-			if err != nil {
-				m.logger.Errorf("Error getting mining candidate: %v", err)
-				continue
-			}
-			m.logger.Infof(candidate.Stringify())
-
-			m.Mine(candidate)
+	for range candidateTimer.C {
+		candidateTimer.Reset(candidateRequestInterval * time.Second)
+		candidate, err := m.blockAssemblyClient.GetMiningCandidate(context.Background())
+		if err != nil {
+			m.logger.Errorf("Error getting mining candidate: %v", err)
+			continue
 		}
-	}
+		m.logger.Infof(candidate.Stringify())
 
+		m.Mine(candidate)
+	}
 }
 
 func (m *Miner) Mine(candidate *model.MiningCandidate) {

@@ -37,7 +37,10 @@ import (
 )
 
 var (
-	prometheusBlockAssemblyAddTx prometheus.Counter
+	prometheusBlockAssemblyAddTx          prometheus.Counter
+	prometheusTxStatusGetDuration         prometheus.Histogram
+	prometheusUtxoStoreDuration           prometheus.Histogram
+	prometheusSubtreeAddToChannelDuration prometheus.Histogram
 )
 
 func init() {
@@ -45,6 +48,27 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blockassembly_add_tx",
 			Help: "Number of txs added to the blockassembly service",
+		},
+	)
+
+	prometheusTxStatusGetDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "blockassembly_tx_status_get_duration",
+			Help: "Duration of reading txstatus from tx store",
+		},
+	)
+
+	prometheusUtxoStoreDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "blockassembly_utxo_store_duration",
+			Help: "Duration of storing new utxos by BlockAssembler",
+		},
+	)
+
+	prometheusSubtreeAddToChannelDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "blockassembly_add_tx_to_channel_duration",
+			Help: "Duration of writing tx to subtree processor channel",
 		},
 	)
 }
@@ -273,21 +297,31 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
+	startTime := time.Now()
+
 	txMetadata, err := ba.txStatusClient.Get(ctx, txid)
 	if err != nil {
 		return nil, err
 	}
 
-	if gocore.Config().GetBool("blockassembly_skip_utxostore", false) {
-		// Add all the utxo hashes to the utxostore
-		for _, hash := range txMetadata.UtxoHashes {
-			if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
-				return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
-			}
+	prometheusTxStatusGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
+
+	startTime = time.Now()
+
+	// Add all the utxo hashes to the utxostore
+	for _, hash := range txMetadata.UtxoHashes {
+		if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
+			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
 		}
 	}
 
+	prometheusUtxoStoreDuration.Observe(float64(time.Since(startTime).Microseconds()))
+
+	startTime = time.Now()
+
 	ba.subtreeProcessor.Add(*txid, txMetadata.Fee)
+
+	prometheusSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	prometheusBlockAssemblyAddTx.Inc()
 

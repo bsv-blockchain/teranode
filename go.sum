@@ -78,6 +78,8 @@ github.com/alecthomas/units v0.0.0-20190717042225-c3de453c63f4/go.mod h1:ybxpYRF
 github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d/go.mod h1:rBZYJk541a8SKzHPHnH3zbiI+7dagKZ0cgpgrD7Fyho=
 github.com/apple/foundationdb/bindings/go v0.0.0-20230424201535-3e1f89b1cd42 h1:D6+OoeJkRzze4hODzrRArl3JSCX3V6Z3v01NY5DvSJ8=
 github.com/apple/foundationdb/bindings/go v0.0.0-20230424201535-3e1f89b1cd42/go.mod h1:w63jdZTFCtvdjsUj5yrdKgjxaAD5uXQX6hJ7EaiLFRs=
+github.com/apple/foundationdb/bindings/go v0.0.0-20230621034922-cb03d918ac80 h1:/ELKxo/fpwiRVqse7NOp2dSCguWFe1Dehgs9PxnxQrk=
+github.com/apple/foundationdb/bindings/go v0.0.0-20230621034922-cb03d918ac80/go.mod h1:w63jdZTFCtvdjsUj5yrdKgjxaAD5uXQX6hJ7EaiLFRs=
 github.com/armon/consul-api v0.0.0-20180202201655-eb2c6b5be1b6/go.mod h1:grANhF5doyWs3UAsr3K4I6qtAmlQcZDesFNEHPZAzj8=
 github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a/go.mod h1:lB+ZfQJz7igIIfQNfa7Ml4HSf2uFQQRzpGGRXenZAgY=
 github.com/aws/aws-sdk-go v1.44.235 h1:5MS1ZW1Pr27mmHFqqjuXYwGMlNTW/g6DqU5ekamPMeU=
