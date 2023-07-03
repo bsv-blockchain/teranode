@@ -198,7 +198,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 
 			g.Go(func() error {
 				if _, err := v.utxoStore.Store(ctx, hash); err != nil {
-					v.logger.Fatalf("Error occurred in tx blaster: %v\n%s\n", err, debug.Stack())
+					v.logger.Fatalf("Error occurred in seeder: %v\n%s\n", err, debug.Stack())
 					prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
 					return status.Error(codes.Internal, err.Error())
 				}

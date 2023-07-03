@@ -153,6 +153,13 @@ func main() {
 		}
 	}()
 
+	go func() {
+		statisticsServerAddr, found := gocore.Config().Get("gocore_stats_addr")
+		if found {
+			gocore.StartStatsServer(statisticsServerAddr)
+		}
+	}()
+
 	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
 	if ok && prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
