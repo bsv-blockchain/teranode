@@ -8,6 +8,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/badger"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/kinesiss3"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/minio"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/s3"
@@ -41,6 +42,11 @@ func NewStore(storeUrl *url.URL) (propagationStore blob.Store, err error) {
 		propagationStore, err = s3.New(storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 block store: %v", err)
+		}
+	case "kinesiss3":
+		propagationStore, err = kinesiss3.New(storeUrl)
+		if err != nil {
+			return nil, fmt.Errorf("error creating kinesiss3 block store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
