@@ -1,7 +1,6 @@
 package kinesiss3
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -97,37 +96,6 @@ func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...b
 
 	if err != nil {
 		return err
-	}
-
-	return nil
-}
-
-func (g *KinesisS3) Set_old(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
-	start := gocore.CurrentNanos()
-	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Set").AddTime(start)
-	}()
-	traceSpan := tracing.Start(ctx, "s3:Set")
-	defer traceSpan.Finish()
-
-	buf := bytes.NewBuffer(value)
-	uploadInput := &s3manager.UploadInput{
-		Bucket: aws.String(g.bucket),
-		Key:    g.generateKey(key),
-		Body:   buf,
-	}
-
-	// Expires
-	options := blob.NewSetOptions(opts...)
-	if options.TTL > 0 {
-		expires := time.Now().Add(options.TTL)
-		uploadInput.Expires = &expires
-	}
-
-	_, err := g.uploader.Upload(uploadInput)
-	if err != nil {
-		traceSpan.RecordError(err)
-		return fmt.Errorf("failed to set data: %w", err)
 	}
 
 	return nil

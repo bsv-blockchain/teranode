@@ -5,6 +5,9 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"math"
+	"net/url"
+
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -14,8 +17,6 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"math"
-	"net/url"
 )
 
 var (
