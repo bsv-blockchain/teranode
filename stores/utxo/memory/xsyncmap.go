@@ -73,6 +73,20 @@ func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UT
 	}, nil
 }
 
+func (m *XsyncMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	var h *chainhash.Hash
+	for _, h = range hashes {
+		_, err := m.Store(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxostore.BatchResponse{
+		Status: 0,
+	}, nil
+}
+
 func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	if existingTxID, ok := m.m.Load(*hash); ok {
 		if existingTxID.IsEqual(&chainhash.Hash{}) {

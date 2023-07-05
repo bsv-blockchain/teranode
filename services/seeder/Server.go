@@ -6,11 +6,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"net"
-	"runtime/debug"
-	"time"
 
 	seeder_api "github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/services/seeder/store"
@@ -23,7 +23,6 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -186,33 +185,24 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
+		hashes := make([]*chainhash.Hash, req.NumberOfOutputs)
+		var hash *chainhash.Hash
 		for j := uint32(0); j < req.NumberOfOutputs; j++ {
-			hash, err := util.UTXOHash(txid, j, *lockingScript, req.SatoshisPerOutput)
+			hash, err = util.UTXOHash(txid, j, *lockingScript, req.SatoshisPerOutput)
 			if err != nil {
 				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "UTXOHash").Inc()
-				return nil, status.Error(codes.Internal, err.Error())
-			}
-
-			ctx := context.Background()
-			g, ctx := errgroup.WithContext(ctx)
-
-			g.Go(func() error {
-				if _, err := v.utxoStore.Store(ctx, hash); err != nil {
-					v.logger.Fatalf("Error occurred in seeder: %v\n%s\n", err, debug.Stack())
-					prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
-					return status.Error(codes.Internal, err.Error())
-				}
-				prometheusSeederSuccessfulOps.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
-				return nil
-			})
-
-			if err := g.Wait(); err != nil {
-				prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "StoreRoutine").Inc()
 				return nil, err
 			}
+			hashes[j] = hash
 		}
 
-		if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
+		_, err = v.utxoStore.BatchStore(ctx, hashes)
+		if err != nil {
+			prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "BatchStore").Inc()
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		if err = v.seederStore.Push(context.Background(), &store.SpendableTransaction{
 			Txid:              txid,
 			NumberOfOutputs:   int32(req.NumberOfOutputs),
 			SatoshisPerOutput: int64(req.SatoshisPerOutput),

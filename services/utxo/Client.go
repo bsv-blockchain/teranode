@@ -51,6 +51,19 @@ func (s *Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	}, nil
 }
 
+func (s *Store) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	for _, h := range hash {
+		_, err := s.Store(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxostore.BatchResponse{
+		Status: 0,
+	}, nil
+}
+
 func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	response, err := s.db.Spend(ctx, &utxostore_api.SpendRequest{
 		UxtoHash:     hash[:],

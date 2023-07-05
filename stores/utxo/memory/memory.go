@@ -73,6 +73,20 @@ func (m *Memory) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXO
 	}, nil
 }
 
+func (m *Memory) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	var h *chainhash.Hash
+	for _, h = range hashes {
+		_, err := m.Store(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxostore.BatchResponse{
+		Status: 0,
+	}, nil
+}
+
 func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

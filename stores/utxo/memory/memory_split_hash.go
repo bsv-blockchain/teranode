@@ -59,6 +59,20 @@ func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*utxostore
 	}, nil
 }
 
+func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	var h *chainhash.Hash
+	for _, h = range hashes {
+		_, err := m.Store(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxostore.BatchResponse{
+		Status: 0,
+	}, nil
+}
+
 func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 

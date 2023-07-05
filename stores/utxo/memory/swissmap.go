@@ -68,6 +68,20 @@ func (m *SwissMap) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UT
 	}, nil
 }
 
+func (m *SwissMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	var h *chainhash.Hash
+	for _, h = range hashes {
+		_, err := m.Store(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxostore.BatchResponse{
+		Status: 0,
+	}, nil
+}
+
 func (m *SwissMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -174,6 +174,41 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 	}, nil
 }
 
+func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
+	batchWritePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	batchWritePolicy.Generation = 0
+
+	batchPolicy := aerospike.NewBatchPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(hashes))
+	for _, hash := range hashes {
+		key, _ := aerospike.NewKey(s.namespace, "utxo", hash[:])
+
+		bin := aerospike.NewBin("txid", []byte{})
+		record := aerospike.NewBatchWrite(batchWritePolicy, key,
+			aerospike.PutOp(bin),
+		)
+
+		// Add to batch
+		batchRecords = append(batchRecords, record)
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
+		return nil, err
+	}
+
+	prometheusUtxoStore.Inc()
+
+	return &utxostore.BatchResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
+}
+
 func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *utxostore.UTXOResponse, err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
