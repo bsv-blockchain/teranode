@@ -170,7 +170,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 				continue
 			}
 
-			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
+			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Size())
 		}
 	}()
 

@@ -217,6 +217,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		v.logger.Errorf("error sending tx to txstatus: %v", err)
 	}
 
+	// TODO make sure we do not add a transaction twice to the block assembly
+
 	if v.kafkaProducer != nil {
 		if err = v.publishToKafka(txIDChainHash); err != nil {
 			v.logger.Errorf("error sending tx to kafka: %v", err)

@@ -34,7 +34,8 @@ type SubtreeProcessor struct {
 	incomingBlockChan   chan string
 	getSubtreesChan     chan chan []*util.Subtree
 	resetChan           chan resetRequest
-	newSubtreeChan      chan *util.Subtree
+	appendSubtreeChan   chan *util.Subtree // used when appending a new subtree to the chainedSubtrees list
+	newSubtreeChan      chan *util.Subtree // used to notify of a new subtree
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
 	sync.Mutex
@@ -61,6 +62,7 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 		incomingBlockChan:   make(chan string),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
 		resetChan:           make(chan resetRequest),
+		appendSubtreeChan:   make(chan *util.Subtree, 100),
 		newSubtreeChan:      newSubtreeChan,
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
@@ -82,6 +84,12 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 				copy(chainedSubtrees, stp.chainedSubtrees)
 
 				getSubtreesChan <- chainedSubtrees
+
+			case subtree := <-stp.appendSubtreeChan:
+				logger.Infof("[SubtreeProcessor] append subtree")
+				stp.chainedSubtrees = append(stp.chainedSubtrees, subtree)
+				// Send the subtree to the newSubtreeChan
+				stp.newSubtreeChan <- subtree
 
 			case resetReq := <-stp.resetChan:
 				logger.Infof("[SubtreeProcessor] reset subtree processor")
@@ -108,11 +116,9 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
 	}
 
 	if stp.currentSubtree.IsComplete() {
-		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
-		// Send the subtree to the newSubtreeChan
-		stp.newSubtreeChan <- stp.currentSubtree
-
+		subtree := stp.currentSubtree
 		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+		stp.appendSubtreeChan <- subtree
 	}
 }
 
@@ -214,14 +220,20 @@ func (stp *SubtreeProcessor) reset(job *Job) error {
 
 	// check that all the subtrees are still in the processor
 	// this should still be locked in the go routines so we should be safe
-	subtreesMap := make(map[chainhash.Hash]struct{}, len(stp.chainedSubtrees))
-	for _, subtree := range stp.chainedSubtrees {
-		subtreesMap[*subtree.RootHash()] = struct{}{}
+	subtreesMap := make(map[chainhash.Hash]int, len(stp.chainedSubtrees))
+	for idx, subtree := range stp.chainedSubtrees {
+		subtreesMap[*subtree.RootHash()] = idx
 	}
+
 	for _, subtree := range job.Subtrees {
 		if _, ok := subtreesMap[*subtree.RootHash()]; !ok {
 			return errors.New("the subtree is not in the processor: " + subtree.RootHash().String())
 		}
+	}
+
+	jobSubtreesMap := make(map[chainhash.Hash]int, len(job.Subtrees))
+	for idx, subtree := range job.Subtrees {
+		jobSubtreesMap[*subtree.RootHash()] = idx
 	}
 
 	// create SET to look up the transactions that need to be removed from the incomplete subtrees
@@ -233,16 +245,33 @@ func (stp *SubtreeProcessor) reset(job *Job) error {
 		}
 	}
 
+	currentSubtree := stp.currentSubtree
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+
+	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	for _, subtree := range chainedSubtrees {
+		_, ok := jobSubtreesMap[*subtree.RootHash()]
+		if ok {
+			chainedSubtrees = append(chainedSubtrees, subtree)
+		}
+	}
+
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholderHash, 0)
 
 	fees := uint64(0)
+	for _, node := range currentSubtree.Nodes {
+		if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
+			stp.addNode(*node, 0)
+		}
+	}
+	fees += currentSubtree.Fees
+
 	if incompleteSubtreeFilterMap != nil {
 		// this prevents repeating the map lookup in every iteration of the loop
-		for _, subtree := range job.Subtrees {
+		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
 					stp.addNode(*node, 0)
@@ -251,7 +280,7 @@ func (stp *SubtreeProcessor) reset(job *Job) error {
 			fees += subtree.Fees
 		}
 	} else {
-		for _, subtree := range job.Subtrees {
+		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				stp.addNode(*node, 0)
 			}
