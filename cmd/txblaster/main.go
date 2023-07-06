@@ -240,7 +240,13 @@ func main() {
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	// start http health check server
+	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+
+	if err = g.Wait(); err != nil {
 		log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
 		panic(err)
 	}
