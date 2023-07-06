@@ -2,12 +2,13 @@ package util
 
 import (
 	"fmt"
-	"github.com/ordishs/gocore"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ordishs/gocore"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 )
@@ -172,6 +173,7 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 //   - SocketTimeout:    25 milliseconds
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
+	writePolicy.TotalTimeout = 5 * time.Second
 
 	// Apply the provided options
 	for _, opt := range options {
