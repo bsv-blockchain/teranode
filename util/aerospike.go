@@ -174,6 +174,7 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
 	writePolicy.TotalTimeout = 5 * time.Second
+	writePolicy.SocketTimeout = 5 * time.Second // these are the same because writes have 0 retries as of now
 
 	// Apply the provided options
 	for _, opt := range options {
