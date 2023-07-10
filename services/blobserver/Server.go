@@ -14,6 +14,8 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	logger     utils.Logger
+	grpcAddr   string
+	httpAddr   string
 	grpcServer *grpc_impl.GRPC
 	httpServer *http_impl.HTTP
 }
@@ -26,8 +28,8 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer() (*Server, error) {
-	_, grpcOk := gocore.Config().Get("blobserver_grpcAddress")
-	_, httpOk := gocore.Config().Get("blobserver_httpAddress")
+	grpcAddr, grpcOk := gocore.Config().Get("blobserver_grpcAddress")
+	httpAddr, httpOk := gocore.Config().Get("blobserver_httpAddress")
 
 	if !grpcOk && !httpOk {
 		return nil, errors.New("no blobserver_grpcAddress or blobserver_httpAddress setting found")
@@ -39,7 +41,9 @@ func NewServer() (*Server, error) {
 	}
 
 	s := &Server{
-		logger: gocore.Log("blob"),
+		logger:   gocore.Log("blob"),
+		grpcAddr: grpcAddr,
+		httpAddr: httpAddr,
 	}
 
 	if grpcOk {
@@ -61,15 +65,14 @@ func NewServer() (*Server, error) {
 
 // Start function
 func (v *Server) Start() error {
-	// TODO add address
 	if v.grpcServer != nil {
-		if err := v.grpcServer.Start(""); err != nil {
+		if err := v.grpcServer.Start(v.grpcAddr); err != nil {
 			return err
 		}
 	}
 
 	if v.httpServer != nil {
-		if err := v.httpServer.Start(""); err != nil {
+		if err := v.httpServer.Start(v.httpAddr); err != nil {
 			return err
 		}
 	}
