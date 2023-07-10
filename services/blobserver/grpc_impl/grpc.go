@@ -67,11 +67,7 @@ func (g *GRPC) Start(addr string) error {
 
 	g.logger.Infof("BlobServer GRPC service listening on %s", addr)
 
-	go func() {
-		_ = g.grpcServer.Serve(lis)
-	}()
-
-	return nil
+	return g.grpcServer.Serve(lis)
 }
 
 func (g *GRPC) Stop(ctx context.Context) error {

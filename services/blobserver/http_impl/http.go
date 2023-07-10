@@ -37,7 +37,7 @@ func New(repository *repository.Repository) (*HTTP, error) {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/tx/{hash}", func(c echo.Context) error {
+	e.GET("/tx/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -48,12 +48,12 @@ func New(repository *repository.Repository) (*HTTP, error) {
 			return err
 		}
 
-		prometheusBlobServerHttpGetTransaction.WithLabelValues("200").Inc()
+		prometheusBlobServerHttpGetTransaction.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
 
-	e.GET("/subtree/{hash}", func(c echo.Context) error {
+	e.GET("/subtree/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -64,12 +64,12 @@ func New(repository *repository.Repository) (*HTTP, error) {
 			return err
 		}
 
-		prometheusBlobServerHttpGetSubtree.WithLabelValues("200").Inc()
+		prometheusBlobServerHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
 
-	e.GET("/header/{hash}", func(c echo.Context) error {
+	e.GET("/header/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -80,12 +80,12 @@ func New(repository *repository.Repository) (*HTTP, error) {
 			return err
 		}
 
-		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("200").Inc()
+		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
 
-	e.GET("/block/{hash}", func(c echo.Context) error {
+	e.GET("/block/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -96,12 +96,12 @@ func New(repository *repository.Repository) (*HTTP, error) {
 			return err
 		}
 
-		prometheusBlobServerHttpGetBlock.WithLabelValues("200").Inc()
+		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
 
-	e.GET("/utxo/{hash}", func(c echo.Context) error {
+	e.GET("/utxo/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -112,7 +112,7 @@ func New(repository *repository.Repository) (*HTTP, error) {
 			return err
 		}
 
-		prometheusBlobServerHttpGetUTXO.WithLabelValues("200").Inc()
+		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
@@ -125,11 +125,7 @@ func New(repository *repository.Repository) (*HTTP, error) {
 }
 
 func (h *HTTP) Start(addr string) error {
-	go func() {
-		h.e.Logger.Error(h.e.Start(":1323"))
-	}()
-
-	return nil
+	return h.e.Start(addr)
 }
 
 func (h *HTTP) Stop(ctx context.Context) error {

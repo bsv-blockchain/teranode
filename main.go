@@ -111,6 +111,10 @@ func main() {
 		*startMiner = gocore.Config().GetBool("startMiner", false)
 	}
 
+	if !*startBlobServer {
+		*startBlobServer = gocore.Config().GetBool("startBlobServer", false)
+	}
+
 	if !*startTxMetaStore {
 		*startTxMetaStore = gocore.Config().GetBool("startTxMetaStore", false)
 	}

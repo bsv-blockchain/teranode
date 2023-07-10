@@ -11,6 +11,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 // Server type carries the logger within it
@@ -67,16 +68,23 @@ func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.S
 
 // Start function
 func (v *Server) Start() error {
+	g, _ := errgroup.WithContext(context.Background())
+
 	if v.grpcServer != nil {
-		if err := v.grpcServer.Start(v.grpcAddr); err != nil {
-			return err
-		}
+		g.Go(func() error {
+			return v.grpcServer.Start(v.grpcAddr)
+		})
 	}
 
 	if v.httpServer != nil {
-		if err := v.httpServer.Start(v.httpAddr); err != nil {
-			return err
-		}
+		g.Go(func() error {
+			return v.httpServer.Start(v.httpAddr)
+		})
+
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	return nil
