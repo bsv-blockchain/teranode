@@ -18,7 +18,6 @@ require (
 	github.com/lib/pq v1.10.7
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.1
 	github.com/libsv/go-p2p v0.1.3
 	github.com/minio/minio-go/v7 v7.0.52
