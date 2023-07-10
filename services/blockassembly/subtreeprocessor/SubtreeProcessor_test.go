@@ -29,7 +29,7 @@ var (
 )
 
 func TestRotate(t *testing.T) {
-	os.Setenv("initial_merkle_items_per_subtree", "4")
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 
 	newSubtreeChan := make(chan *util.Subtree)
 	endTestChan := make(chan bool)
@@ -117,6 +117,9 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
+		waitCh := make(chan struct{})
+		defer close(waitCh)
+
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
 		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 		for i, txid := range txIDs {
@@ -126,7 +129,8 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash)
 			} else {
-				stp.Add(*hash, 1, nil)
+				stp.Add(*hash, 1, waitCh)
+				<-waitCh
 			}
 		}
 		wg.Wait()
@@ -145,6 +149,9 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
+		waitCh := make(chan struct{})
+		defer close(waitCh)
+
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 		for i, txid := range txIDs {
@@ -154,7 +161,8 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash)
 			} else {
-				stp.Add(*hash, 1, nil)
+				stp.Add(*hash, 1, waitCh)
+				<-waitCh
 			}
 		}
 		wg.Wait()
@@ -207,6 +215,9 @@ func TestReset(t *testing.T) {
 		}
 	}()
 
+	waitCh := make(chan struct{})
+	defer close(waitCh)
+
 	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -215,7 +226,8 @@ func TestReset(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash)
 		} else {
-			stp.Add(*hash, 1, nil)
+			stp.Add(*hash, 1, waitCh)
+			<-waitCh
 		}
 	}
 	wg.Wait()
@@ -278,6 +290,9 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 		}
 	}()
 
+	waitCh := make(chan struct{})
+	defer close(waitCh)
+
 	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -286,7 +301,8 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash)
 		} else {
-			stp.Add(*hash, 1, nil)
+			stp.Add(*hash, 1, waitCh)
+			<-waitCh
 		}
 	}
 	wg.Wait()
@@ -348,6 +364,9 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 		}
 	}()
 
+	waitCh := make(chan struct{})
+	defer close(waitCh)
+
 	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -356,7 +375,8 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash)
 		} else {
-			stp.Add(*hash, 1, nil)
+			stp.Add(*hash, 1, waitCh)
+			<-waitCh
 		}
 	}
 	wg.Wait()
@@ -417,6 +437,9 @@ func TestResetLarge(t *testing.T) {
 		}
 	}()
 
+	waitCh := make(chan struct{})
+	defer close(waitCh)
+
 	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -425,7 +448,8 @@ func TestResetLarge(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash)
 		} else {
-			stp.Add(*hash, 1, nil)
+			stp.Add(*hash, 1, waitCh)
+			<-waitCh
 		}
 	}
 	wg.Wait()

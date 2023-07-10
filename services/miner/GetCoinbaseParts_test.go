@@ -51,7 +51,7 @@ func TestUnsupportedAddressToScript(t *testing.T) {
 	if err == nil {
 		t.Errorf("Expected an error")
 	} else {
-		expected := "Address 27BvY7rFguYQvEL872Y7Fo77Y3EBApC2EK is not supported"
+		expected := "address 27BvY7rFguYQvEL872Y7Fo77Y3EBApC2EK is not supported"
 		if fmt.Sprint(err) != expected {
 			t.Errorf("Expected %s, got %s", expected, err)
 		}

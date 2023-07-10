@@ -359,7 +359,9 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	}
 
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
-	nBits := bestBlockHeader.Bits
+	// nBits := bestBlockHeader.Bits
+	// TEMP for testing only - moved from blockchain sql store
+	nBits := model.NewNBitFromString("2000ffff") // TEMP We want hashes with 2 leading zeros
 
 	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
 	if err != nil {

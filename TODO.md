@@ -6,3 +6,6 @@ TODO:
 - Bloomfilter experiment - Liam
 - Aerospike: create all blocks from all miners while ingesting subtrees - Simon
 - Aerospike: shared memory map for cleanup - Siggi
+
+DONE:
+- Test skeleton for block assembly Server - Siggi
