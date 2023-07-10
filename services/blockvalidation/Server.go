@@ -46,7 +46,7 @@ type BlockValidation struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger           utils.Logger
 	grpcServer       *grpc.Server
-	blockchainClient *blockchain.Client
+	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
 	blockStore       blob.Store
 }

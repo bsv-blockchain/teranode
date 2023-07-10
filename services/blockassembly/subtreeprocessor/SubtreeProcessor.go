@@ -249,7 +249,7 @@ func (stp *SubtreeProcessor) reset(job *Job) error {
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	for _, subtree := range chainedSubtrees {
+	for _, subtree := range stp.chainedSubtrees {
 		_, ok := jobSubtreesMap[*subtree.RootHash()]
 		if ok {
 			chainedSubtrees = append(chainedSubtrees, subtree)

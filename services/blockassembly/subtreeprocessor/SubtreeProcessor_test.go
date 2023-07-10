@@ -235,9 +235,17 @@ func TestReset(t *testing.T) {
 	// new items per file is 2 so there should be 4 subtrees in the chain
 	wg.Add(5) // we are expecting 2 more subtrees
 
-	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	jobId, _ := chainhash.NewHashFromStr("123")
+	err := stp.Reset(&Job{
+		ID: jobId,
+		Subtrees: []*util.Subtree{
+			stp.chainedSubtrees[0],
+			stp.chainedSubtrees[1],
+		},
+	})
 	require.NoError(t, err)
 	wg.Wait()
+
 	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
@@ -299,7 +307,14 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new items per file is 2 so there should be 5 subtrees in the chain
-	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	jobId, _ := chainhash.NewHashFromStr("123")
+	err := stp.Reset(&Job{
+		ID: jobId,
+		Subtrees: []*util.Subtree{
+			stp.chainedSubtrees[0],
+			stp.chainedSubtrees[1],
+		},
+	})
 	wg.Wait()
 	require.NoError(t, err)
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
@@ -362,11 +377,18 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new items per file is 2 so there should be 4 subtrees in the chain
-	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	jobId, _ := chainhash.NewHashFromStr("123")
+	err := stp.Reset(&Job{
+		ID: jobId,
+		Subtrees: []*util.Subtree{
+			stp.chainedSubtrees[0],
+			stp.chainedSubtrees[1],
+		},
+	})
 	wg.Wait()
 	require.NoError(t, err)
 	assert.Equal(t, 4, len(stp.chainedSubtrees))
-	assert.Equal(t, 2, stp.currentSubtree.Length())
+	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
 func TestResetLarge(t *testing.T) {
@@ -425,7 +447,14 @@ func TestResetLarge(t *testing.T) {
 	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be reset
 	// new items per file is 65536 so there should be 8 subtrees in the chain
-	err := stp.Reset(stp.chainedSubtrees[1].RootHash()[:])
+	jobId, _ := chainhash.NewHashFromStr("123")
+	err := stp.Reset(&Job{
+		ID: jobId,
+		Subtrees: []*util.Subtree{
+			stp.chainedSubtrees[0],
+			stp.chainedSubtrees[1],
+		},
+	})
 	wg.Wait()
 	time.Sleep(1 * time.Second)
 

@@ -16,7 +16,7 @@ type Client struct {
 	client blockchain_api.BlockchainAPIClient
 }
 
-func NewClient() (*Client, error) {
+func NewClient() (ClientI, error) {
 	ctx := context.Background()
 
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
@@ -121,7 +121,7 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	return headers, nil
 }
 
-func (c Client) SubscribeChainTips(ctx context.Context) (chan *model.BlockHeader, error) {
+func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *model.BlockHeader, error) {
 	stream, err := c.client.SubscribeBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, err

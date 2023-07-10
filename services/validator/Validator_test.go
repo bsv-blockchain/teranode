@@ -15,6 +15,10 @@ import (
 
 type NullStore struct{}
 
+func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+	return nil, nil
+}
+
 func (ns *NullStore) DeleteSpends(deleteSpends bool) {
 	// No nothing
 }

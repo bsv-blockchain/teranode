@@ -83,7 +83,7 @@ type BlockAssembly struct {
 	txStatusClient   txstatus_store.Store
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
-	blockchainClient *blockchain.Client
+	blockchainClient blockchain.ClientI
 	blockStore       blob.Store
 	jobStoreMutex    sync.RWMutex
 	jobStore         map[chainhash.Hash]*subtreeprocessor.Job
