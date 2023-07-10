@@ -11,16 +11,16 @@ import (
 
 type Memory struct {
 	mu       sync.Mutex
-	txStatus map[chainhash.Hash]txmeta.Status
+	txStatus map[chainhash.Hash]txmeta.Data
 }
 
 func New() *Memory {
 	return &Memory{
-		txStatus: make(map[chainhash.Hash]txmeta.Status),
+		txStatus: make(map[chainhash.Hash]txmeta.Data),
 	}
 }
 
-func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
+func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	m.mu.Lock()
 	status, ok := m.txStatus[*hash]
 	m.mu.Unlock()
@@ -41,7 +41,7 @@ func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, par
 		return txmeta.ErrAlreadyExists
 	}
 
-	s := txmeta.Status{
+	s := txmeta.Data{
 		Status:         txmeta.Validated,
 		Fee:            fee,
 		FirstSeen:      time.Now(),
@@ -60,7 +60,7 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 
 	s, ok := m.txStatus[*hash]
 	if !ok {
-		s = txmeta.Status{}
+		s = txmeta.Data{}
 	}
 
 	s.Status = txmeta.Confirmed

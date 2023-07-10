@@ -105,7 +105,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Create(context.Background(), hash, 103, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash})
 		require.NoError(t, err)
 
-		var value *txmeta.Status
+		var value *txmeta.Data
 		value, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)

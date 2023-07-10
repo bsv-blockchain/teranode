@@ -40,7 +40,7 @@ func (s TxStatus) String() string {
 	}
 }
 
-type Status struct {
+type Data struct {
 	Status         TxStatus
 	Fee            uint64
 	UtxoHashes     []*chainhash.Hash
@@ -51,7 +51,7 @@ type Status struct {
 }
 
 type Store interface {
-	Get(ctx context.Context, hash *chainhash.Hash) (*Status, error)
+	Get(ctx context.Context, hash *chainhash.Hash) (*Data, error)
 	Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error
 	SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error

@@ -71,7 +71,7 @@ func New(url *url.URL) (*Store, error) {
 	}, nil
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 
 	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
@@ -134,7 +134,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Status, er
 	}
 
 	// transform the aerospike interface{} into the correct types
-	status := &txmeta.Status{
+	status := &txmeta.Data{
 		Fee:            uint64(value.Bins["fee"].(int)),
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,

@@ -44,7 +44,7 @@ func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.Cal
 	return resp, nil
 }
 
-func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
+func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	resp, err := c.client.Get(ctx, &txmeta_api.GetRequest{
 		Hash: hash[:],
 	})
@@ -70,7 +70,7 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Status,
 		return nil, err
 	}
 
-	return &txmeta.Status{
+	return &txmeta.Data{
 		Status:         txmeta.TxStatus(resp.Status),
 		Fee:            resp.Fee,
 		UtxoHashes:     utxoHashes,
