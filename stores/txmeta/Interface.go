@@ -1,4 +1,4 @@
-package txstatus
+package txmeta
 
 import (
 	"context"

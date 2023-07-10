@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-option go_package = ".;txstatus_api";
+option go_package = ".;txmeta_api";
 
-package txstatus_api;
+package txmeta_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-service TxStatusAPI {
+service TxMetaAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Create (CreateRequest) returns (CreateResponse) {}

@@ -13,7 +13,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
 	blockchainstore "github.com/TAAL-GmbH/ubsv/stores/blockchain"
-	txstatusstore "github.com/TAAL-GmbH/ubsv/stores/txstatus/memory"
+	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p"
@@ -24,7 +24,7 @@ import (
 
 type baTestItems struct {
 	utxoStore        *utxostore.Memory
-	txStatusStore    *txstatusstore.Memory
+	txMetaStore      *txmetastore.Memory
 	blobStore        *memory.Memory
 	newSubtreeChan   chan *util.Subtree
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
@@ -63,31 +63,31 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		require.NoError(t, ba.txStatusStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
+		require.NoError(t, ba.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
 		_, err := ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
 			Txid: tx1.CloneBytes(),
 		})
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txStatusStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
+		require.NoError(t, ba.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
 		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
 			Txid: tx2.CloneBytes(),
 		})
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txStatusStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
+		require.NoError(t, ba.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
 		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
 			Txid: tx3.CloneBytes(),
 		})
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txStatusStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
+		require.NoError(t, ba.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
 		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
 			Txid: tx4.CloneBytes(),
 		})
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txStatusStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
+		require.NoError(t, ba.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
 		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
 			Txid: tx5.CloneBytes(),
 		})
@@ -100,9 +100,9 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items := baTestItems{}
 
-	items.utxoStore = utxostore.New(false)    // utxo memory store
-	items.txStatusStore = txstatusstore.New() // tx status memory store
-	items.blobStore = memory.New()            // blob memory store
+	items.utxoStore = utxostore.New(false) // utxo memory store
+	items.txMetaStore = txmetastore.New()  // tx status memory store
+	items.blobStore = memory.New()         // blob memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan *util.Subtree)
@@ -122,7 +122,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		UnimplementedBlockAssemblyAPIServer: blockassembly_api.UnimplementedBlockAssemblyAPIServer{},
 		logger:                              p2p.TestLogger{},
 		utxoStore:                           items.utxoStore,
-		txStatusClient:                      items.txStatusStore,
+		txMetaClient:                        items.txMetaStore,
 		subtreeProcessor:                    items.subtreeProcessor,
 		grpcServer:                          nil,
 		blockchainClient:                    blockchainClient,

@@ -18,11 +18,11 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
-	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -39,7 +39,7 @@ import (
 
 var (
 	prometheusBlockAssemblyAddTx          prometheus.Counter
-	prometheusTxStatusGetDuration         prometheus.Histogram
+	prometheusTxMetaGetDuration           prometheus.Histogram
 	prometheusUtxoStoreDuration           prometheus.Histogram
 	prometheusSubtreeAddToChannelDuration prometheus.Histogram
 )
@@ -52,10 +52,10 @@ func init() {
 		},
 	)
 
-	prometheusTxStatusGetDuration = promauto.NewHistogram(
+	prometheusTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name: "blockassembly_tx_status_get_duration",
-			Help: "Duration of reading txstatus from tx store",
+			Name: "blockassembly_tx_meta_get_duration",
+			Help: "Duration of reading tx meta data from txmeta store",
 		},
 	)
 
@@ -80,7 +80,7 @@ type BlockAssembly struct {
 	logger utils.Logger
 
 	utxoStore        utxostore.Interface
-	txStatusClient   txstatus_store.Store
+	txMetaClient     txmeta_store.Store
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
@@ -109,24 +109,24 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 		panic(err)
 	}
 
-	txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
 		panic(err)
 	}
 	if !found {
-		panic("no txstatus_store setting found")
+		panic("no txmeta_store setting found")
 	}
 
 	// TODO abstract into a factory
-	var txStatusStore txstatus_store.Store
-	if txStatusURL.Scheme == "memory" {
+	var txMetaStore txmeta_store.Store
+	if txMetaStoreURL.Scheme == "memory" {
 		// the memory store is reached through a grpc client
-		txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
 		if err != nil {
 			panic(err)
 		}
 	} else {
-		txStatusStore, err = store.New(logger, txStatusURL)
+		txMetaStore, err = store.New(logger, txMetaStoreURL)
 		if err != nil {
 			panic(err)
 		}
@@ -142,7 +142,7 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 	ba := &BlockAssembly{
 		logger:           logger,
 		utxoStore:        s,
-		txStatusClient:   txStatusStore,
+		txMetaClient:     txMetaStore,
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(logger, newSubtreeChan),
 		blockchainClient: blockchainClient,
 		subtreeStore:     subtreeStore,
@@ -300,12 +300,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 	startTime := time.Now()
 
-	txMetadata, err := ba.txStatusClient.Get(ctx, txid)
+	txMetadata, err := ba.txMetaClient.Get(ctx, txid)
 	if err != nil {
 		return nil, err
 	}
 
-	prometheusTxStatusGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	startTime = time.Now()
 

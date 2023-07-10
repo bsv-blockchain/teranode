@@ -1,10 +1,10 @@
-package txstatus
+package txmeta
 
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/txstatus/txstatus_api"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/txmeta_api"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -13,13 +13,13 @@ import (
 )
 
 type Client struct {
-	client txstatus_api.TxStatusAPIClient
+	client txmeta_api.TxMetaAPIClient
 	logger utils.Logger
 }
 
 func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
-	txstatus_grpcAddress, _ := gocore.Config().Get("txstatus_grpcAddress")
-	conn, err := utils.GetGRPCClient(ctx, txstatus_grpcAddress, &utils.ConnectionOptions{
+	txmeta_grpcAddress, _ := gocore.Config().Get("txmeta_grpcAddress")
+	conn, err := utils.GetGRPCClient(ctx, txmeta_grpcAddress, &utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		MaxRetries:  3,
 	})
@@ -27,7 +27,7 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		return nil, err
 	}
 
-	client := txstatus_api.NewTxStatusAPIClient(conn)
+	client := txmeta_api.NewTxMetaAPIClient(conn)
 
 	return &Client{
 		client: client,
@@ -35,7 +35,7 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*txstatus_api.HealthResponse, error) {
+func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*txmeta_api.HealthResponse, error) {
 	resp, err := c.client.Health(ctx, in, opts...)
 	if err != nil {
 		return nil, err
@@ -44,8 +44,8 @@ func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.Cal
 	return resp, nil
 }
 
-func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txstatus.Status, error) {
-	resp, err := c.client.Get(ctx, &txstatus_api.GetRequest{
+func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
+	resp, err := c.client.Get(ctx, &txmeta_api.GetRequest{
 		Hash: hash[:],
 	})
 	if err != nil {
@@ -70,8 +70,8 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txstatus.Statu
 		return nil, err
 	}
 
-	return &txstatus.Status{
-		Status:         txstatus.TxStatus(resp.Status),
+	return &txmeta.Status{
+		Status:         txmeta.TxStatus(resp.Status),
 		Fee:            resp.Fee,
 		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
@@ -93,7 +93,7 @@ func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, p
 		utxoHashesBytes = append(utxoHashesBytes, utxoHash[:])
 	}
 
-	_, err := c.client.Create(ctx, &txstatus_api.CreateRequest{
+	_, err := c.client.Create(ctx, &txmeta_api.CreateRequest{
 		Hash:           hash[:],
 		Fee:            fee,
 		ParentTxHashes: parentTxHashesBytes,
@@ -107,7 +107,7 @@ func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, p
 }
 
 func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	_, err := c.client.SetMined(ctx, &txstatus_api.SetMinedRequest{
+	_, err := c.client.SetMined(ctx, &txmeta_api.SetMinedRequest{
 		Hash:      hash[:],
 		BlockHash: blockHash[:],
 	})

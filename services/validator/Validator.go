@@ -10,7 +10,7 @@ import (
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -25,21 +25,21 @@ type Validator struct {
 	logger          utils.Logger
 	store           utxostore.Interface
 	blockAssembler  blockassembly.Store
-	txStatus        txstatus.Store
+	txMetaStore     txmeta.Store
 	kafkaProducer   sarama.SyncProducer
 	kafkaTopic      string
 	kafkaPartitions int
 	saveInParallel  bool
 }
 
-func New(logger utils.Logger, store utxostore.Interface, txStatus txstatus.Store) (Interface, error) {
+func New(logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
 	ba := blockassembly.NewClient()
 
 	validator := &Validator{
 		logger:         logger,
 		store:          store,
 		blockAssembler: ba,
-		txStatus:       txStatus,
+		txMetaStore:    txMetaStore,
 		saveInParallel: true,
 	}
 
@@ -213,8 +213,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// we should probably recover and add it to a retry queue
 
 	// register transaction in tx status store
-	if err = v.txStatus.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
-		v.logger.Errorf("error sending tx to txstatus: %v", err)
+	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
+		v.logger.Errorf("error sending tx to tx meta store: %v", err)
 	}
 
 	// TODO make sure we do not add a transaction twice to the block assembly

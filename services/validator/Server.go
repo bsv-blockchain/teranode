@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
-	txstatus_store "github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -86,30 +86,30 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger, utxoStore utxostore.Interface) *Server {
-	txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
 		panic(err)
 	}
 	if !found {
-		panic("no txstatus_store setting found")
+		panic("no txmeta_store setting found")
 	}
 
 	// TODO abstract into a factory
-	var txStatusStore txstatus_store.Store
-	if txStatusURL.Scheme == "memory" {
+	var txMetaStore txmetastore.Store
+	if txMetaStoreURL.Scheme == "memory" {
 		// the memory store is reached through a grpc client
-		txStatusStore, err = txstatus.NewClient(context.Background(), logger)
+		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
 		if err != nil {
 			panic(err)
 		}
 	} else {
-		txStatusStore, err = store.New(logger, txStatusURL)
+		txMetaStore, err = store.New(logger, txMetaStoreURL)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	validator, err := New(logger, utxoStore, txStatusStore)
+	validator, err := New(logger, utxoStore, txMetaStore)
 	if err != nil {
 		panic(err)
 	}

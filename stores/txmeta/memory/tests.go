@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +16,7 @@ var (
 	// hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 )
 
-func testStore(t *testing.T, db txstatus.Store) {
+func testStore(t *testing.T, db txmeta.Store) {
 	ctx := context.Background()
 
 	err := db.Create(ctx, hash, 100, nil, nil)
@@ -24,17 +24,17 @@ func testStore(t *testing.T, db txstatus.Store) {
 
 	resp, err := db.Get(ctx, hash)
 	require.NoError(t, err)
-	require.Equal(t, txstatus.Validated, resp.Status)
+	require.Equal(t, txmeta.Validated, resp.Status)
 
 	err = db.Create(ctx, hash, 100, nil, nil)
-	require.Error(t, err, txstatus.ErrAlreadyExists)
+	require.Error(t, err, txmeta.ErrAlreadyExists)
 }
 
-func testSanity(t *testing.T, db txstatus.Store) {
+func testSanity(t *testing.T, db txmeta.Store) {
 	skipLongTests(t)
 }
 
-func benchmark(b *testing.B, db txstatus.Store) {
+func benchmark(b *testing.B, db txmeta.Store) {
 	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -53,7 +53,7 @@ func benchmark(b *testing.B, db txstatus.Store) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if status.Status != txstatus.Validated {
+			if status.Status != txmeta.Validated {
 				b.Fatal(status)
 			}
 		}

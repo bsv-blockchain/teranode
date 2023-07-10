@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -50,7 +50,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, err)
 
 	var key *aero.Key
-	key, err = aero.NewKey("test", "txstatus", hash[:])
+	key, err = aero.NewKey("test", "txmeta", hash[:])
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -105,7 +105,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Create(context.Background(), hash, 103, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash})
 		require.NoError(t, err)
 
-		var value *txstatus.Status
+		var value *txmeta.Status
 		value, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)

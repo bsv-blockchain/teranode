@@ -86,7 +86,7 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/txstatus/txstatus_api/txstatus_api.proto
+	services/txmeta/txmeta_api/txmeta_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -112,7 +112,7 @@ clean_gen:
 	rm -f ./services/validator/validator_api/*.pb.go
 	rm -f ./services/utxo/utxostore_api/*.pb.go
 	rm -f ./services/propagation/propagation_api/*.pb.go
-	rm -f ./services/txstatus/txstatus_api/*.pb.go
+	rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
 	rm -f ./services/blobserver_api/*.pb.go
 	rm -f ./model/*.pb.go

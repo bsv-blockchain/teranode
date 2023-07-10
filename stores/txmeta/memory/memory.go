@@ -5,28 +5,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
 type Memory struct {
 	mu       sync.Mutex
-	txStatus map[chainhash.Hash]txstatus.Status
+	txStatus map[chainhash.Hash]txmeta.Status
 }
 
 func New() *Memory {
 	return &Memory{
-		txStatus: make(map[chainhash.Hash]txstatus.Status),
+		txStatus: make(map[chainhash.Hash]txmeta.Status),
 	}
 }
 
-func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, error) {
+func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
 	m.mu.Lock()
 	status, ok := m.txStatus[*hash]
 	m.mu.Unlock()
 
 	if !ok {
-		return nil, txstatus.ErrNotFound
+		return nil, txmeta.ErrNotFound
 	}
 
 	return &status, nil
@@ -38,11 +38,11 @@ func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, par
 
 	_, ok := m.txStatus[*hash]
 	if ok {
-		return txstatus.ErrAlreadyExists
+		return txmeta.ErrAlreadyExists
 	}
 
-	s := txstatus.Status{
-		Status:         txstatus.Validated,
+	s := txmeta.Status{
+		Status:         txmeta.Validated,
 		Fee:            fee,
 		FirstSeen:      time.Now(),
 		ParentTxHashes: parentTxHashes,
@@ -60,16 +60,16 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 
 	s, ok := m.txStatus[*hash]
 	if !ok {
-		s = txstatus.Status{}
+		s = txmeta.Status{}
 	}
 
-	s.Status = txstatus.Confirmed
+	s.Status = txmeta.Confirmed
 
 	if s.BlockHashes == nil {
 		s.BlockHashes = make([]*chainhash.Hash, 0)
 	}
 
-	s.Status = txstatus.Confirmed
+	s.Status = txmeta.Confirmed
 	s.BlockHashes = append(s.BlockHashes, blockHash)
 
 	m.txStatus[*hash] = s

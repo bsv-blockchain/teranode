@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/validator"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus/memory"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"

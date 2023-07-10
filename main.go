@@ -17,7 +17,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	validator_utxostore "github.com/TAAL-GmbH/ubsv/services/validator/utxo"
@@ -63,7 +63,7 @@ func main() {
 	startBlockValidation := flag.Bool("blockvalidation", false, "start blockvalidation service")
 	startValidator := flag.Bool("validator", false, "start validator service")
 	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
-	startTxStatusStore := flag.Bool("txstatusstore", false, "start txstatus store")
+	startTxMetaStore := flag.Bool("txmeta", false, "start txmeta store service")
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	startMiner := flag.Bool("miner", false, "start miner service")
@@ -104,8 +104,8 @@ func main() {
 		*startMiner = gocore.Config().GetBool("startMiner", false)
 	}
 
-	if !*startTxStatusStore {
-		*startTxStatusStore = gocore.Config().GetBool("startTxStatusStore", false)
+	if !*startTxMetaStore {
+		*startTxMetaStore = gocore.Config().GetBool("startTxMetaStore", false)
 	}
 
 	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly && !*startSeeder && !*startBlockValidation) {
@@ -195,7 +195,7 @@ func main() {
 	var blockchainService *blockchain.Blockchain
 	var validatorService *validator.Server
 	var utxoStoreServer *utxo.UTXOStore
-	var txStatusStore *txstatus.Server
+	var txMetaStore *txmeta.Server
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
 	var blockAssemblyService *blockassembly.BlockAssembly
@@ -254,28 +254,28 @@ func main() {
 		})
 	}
 
-	// txstatus store
-	if *startTxStatusStore {
-		txStatusURL, err, found := gocore.Config().GetURL("txstatus_store")
+	// txmeta store
+	if *startTxMetaStore {
+		txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
 		if err != nil {
 			panic(err)
 		}
 
 		if found {
-			if txStatusURL.Scheme != "memory" {
-				panic("txstatus grpc server only supports memory store")
+			if txMetaStoreURL.Scheme != "memory" {
+				panic("txmeta grpc server only supports memory store")
 			}
 
 			g.Go(func() (err error) {
-				logger.Infof("Starting Tx Status Client on: %s", txStatusURL.Host)
+				logger.Infof("Starting Tx Status Client on: %s", txMetaStoreURL.Host)
 
-				txStatusLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
-				txStatusStore, err = txstatus.New(txStatusLogger, txStatusURL)
+				txMetaLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
+				txMetaStore, err = txmeta.New(txMetaLogger, txMetaStoreURL)
 				if err != nil {
 					panic(err)
 				}
 
-				return txStatusStore.Start()
+				return txMetaStore.Start()
 			})
 		}
 	}

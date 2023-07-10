@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
@@ -17,35 +17,35 @@ import (
 )
 
 var (
-	prometheusTxStatusGet      prometheus.Counter
-	prometheusTxStatusSet      prometheus.Counter
-	prometheusTxStatusSetMined prometheus.Counter
-	prometheusTxStatusDelete   prometheus.Counter
+	prometheusTxMetaGet      prometheus.Counter
+	prometheusTxMetaSet      prometheus.Counter
+	prometheusTxMetaSetMined prometheus.Counter
+	prometheusTxMetaDelete   prometheus.Counter
 )
 
 func init() {
-	prometheusTxStatusGet = promauto.NewCounter(
+	prometheusTxMetaGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txstatus_get",
-			Help: "Number of txstatus get calls done to aerospike",
+			Name: "aerospike_txmeta_get",
+			Help: "Number of txmeta get calls done to aerospike",
 		},
 	)
-	prometheusTxStatusSet = promauto.NewCounter(
+	prometheusTxMetaSet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txstatus_set",
-			Help: "Number of txstatus set calls done to aerospike",
+			Name: "aerospike_txmeta_set",
+			Help: "Number of txmeta set calls done to aerospike",
 		},
 	)
-	prometheusTxStatusSetMined = promauto.NewCounter(
+	prometheusTxMetaSetMined = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txstatus_set_mined",
-			Help: "Number of txstatus set_mined calls done to aerospike",
+			Name: "aerospike_txmeta_set_mined",
+			Help: "Number of txmeta set_mined calls done to aerospike",
 		},
 	)
-	prometheusTxStatusDelete = promauto.NewCounter(
+	prometheusTxMetaDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txstatus_delete",
-			Help: "Number of txstatus delete calls done to aerospike",
+			Name: "aerospike_txmeta_delete",
+			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
 }
@@ -71,10 +71,10 @@ func New(url *url.URL) (*Store, error) {
 	}, nil
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, error) {
-	prometheusTxStatusGet.Inc()
+func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Status, error) {
+	prometheusTxMetaGet.Inc()
 
-	key, aeroErr := aerospike.NewKey(s.namespace, "txstatus", hash[:])
+	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -134,7 +134,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txstatus.Status, 
 	}
 
 	// transform the aerospike interface{} into the correct types
-	status := &txstatus.Status{
+	status := &txmeta.Status{
 		Fee:            uint64(value.Bins["fee"].(int)),
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,
@@ -150,7 +150,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aerospike.NewKey(s.namespace, "txstatus", hash[:])
+	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 		return err
 	}
 
-	prometheusTxStatusSet.Inc()
+	prometheusTxMetaSet.Inc()
 
 	return nil
 }
@@ -187,7 +187,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
-	key, err := aerospike.NewKey(s.namespace, "txstatus", hash[:])
+	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
 		return err
 	}
@@ -211,13 +211,13 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
-	prometheusTxStatusSetMined.Inc()
+	prometheusTxMetaSetMined.Inc()
 
 	return nil
 }
 
 func (s *Store) Delete(_ context.Context, _ *chainhash.Hash) error {
 	//TODO implement me
-	prometheusTxStatusDelete.Inc()
+	prometheusTxMetaDelete.Inc()
 	panic("implement me")
 }

@@ -1,4 +1,4 @@
-package txstatus
+package txmeta
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/txstatus/store"
-	"github.com/TAAL-GmbH/ubsv/services/txstatus/txstatus_api"
-	"github.com/TAAL-GmbH/ubsv/stores/txstatus"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/txmeta_api"
+	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -23,50 +23,50 @@ import (
 )
 
 var (
-	prometheusTxStatusHealth   prometheus.Counter
-	prometheusTxStatusSet      prometheus.Counter
-	prometheusTxStatusSetMined prometheus.Counter
-	prometheusTxStatusGet      prometheus.Counter
+	prometheusTxMetaHealth   prometheus.Counter
+	prometheusTxMetaSet      prometheus.Counter
+	prometheusTxMetaSetMined prometheus.Counter
+	prometheusTxMetaGet      prometheus.Counter
 )
 
 func init() {
-	prometheusTxStatusHealth = promauto.NewCounter(
+	prometheusTxMetaHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "txstatus_health",
-			Help: "Number of calls done to txstatus health",
+			Name: "txmeta_health",
+			Help: "Number of calls done to txmeta health",
 		},
 	)
-	prometheusTxStatusSet = promauto.NewCounter(
+	prometheusTxMetaSet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "txstatus_set",
-			Help: "Number of calls done to txstatus set",
+			Name: "txmeta_set",
+			Help: "Number of calls done to txmeta set",
 		},
 	)
-	prometheusTxStatusSetMined = promauto.NewCounter(
+	prometheusTxMetaSetMined = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "txstatus_set_mined",
-			Help: "Number of calls done to txstatus set mined",
+			Name: "txmeta_set_mined",
+			Help: "Number of calls done to txmeta set mined",
 		},
 	)
-	prometheusTxStatusGet = promauto.NewCounter(
+	prometheusTxMetaGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "txstatus_get",
-			Help: "Number of calls done to txstatus get",
+			Name: "txmeta_get",
+			Help: "Number of calls done to txmeta get",
 		},
 	)
 }
 
 // Server type carries the logger within it
 type Server struct {
-	txstatus_api.UnsafeTxStatusAPIServer
+	txmeta_api.UnsafeTxMetaAPIServer
 	logger     utils.Logger
 	grpcServer *grpc.Server
-	store      txstatus.Store
+	store      txmeta.Store
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStatusStoreURL *url.URL) (*Server, error) {
-	s, err := store.New(logger, txStatusStoreURL)
+func New(logger utils.Logger, txMetaStoreURL *url.URL) (*Server, error) {
+	s, err := store.New(logger, txMetaStoreURL)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +79,9 @@ func New(logger utils.Logger, txStatusStoreURL *url.URL) (*Server, error) {
 
 // Start function
 func (u *Server) Start() error {
-	address, _, ok := gocore.Config().GetURL("txstatus_store")
+	address, _, ok := gocore.Config().GetURL("txmeta_store")
 	if !ok {
-		return errors.New("no txstatus_store setting found")
+		return errors.New("no txmeta_store setting found")
 	}
 
 	var err error
@@ -99,12 +99,12 @@ func (u *Server) Start() error {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
 
-	txstatus_api.RegisterTxStatusAPIServer(u.grpcServer, u)
+	txmeta_api.RegisterTxMetaAPIServer(u.grpcServer, u)
 
 	// Register reflection service on gRPC server.
 	reflection.Register(u.grpcServer)
 
-	u.logger.Infof("TxStatus GRPC service listening on %s", address)
+	u.logger.Infof("Tx Meta Store GRPC service listening on %s", address)
 
 	if err = u.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
@@ -120,17 +120,17 @@ func (u *Server) Stop(ctx context.Context) {
 	u.grpcServer.GracefulStop()
 }
 
-func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txstatus_api.HealthResponse, error) {
-	prometheusTxStatusHealth.Inc()
+func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
+	prometheusTxMetaHealth.Inc()
 
-	return &txstatus_api.HealthResponse{
+	return &txmeta_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (u *Server) Create(ctx context.Context, request *txstatus_api.CreateRequest) (*txstatus_api.CreateResponse, error) {
-	prometheusTxStatusSet.Inc()
+func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) (*txmeta_api.CreateResponse, error) {
+	prometheusTxMetaSet.Inc()
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -162,13 +162,13 @@ func (u *Server) Create(ctx context.Context, request *txstatus_api.CreateRequest
 		return nil, err
 	}
 
-	return &txstatus_api.CreateResponse{
-		Status: txstatus_api.Status_StatusUnconfirmed,
+	return &txmeta_api.CreateResponse{
+		Status: txmeta_api.Status_StatusUnconfirmed,
 	}, nil
 }
 
-func (u *Server) SetMined(ctx context.Context, request *txstatus_api.SetMinedRequest) (*txstatus_api.SetMinedResponse, error) {
-	prometheusTxStatusSetMined.Inc()
+func (u *Server) SetMined(ctx context.Context, request *txmeta_api.SetMinedRequest) (*txmeta_api.SetMinedResponse, error) {
+	prometheusTxMetaSetMined.Inc()
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -185,13 +185,13 @@ func (u *Server) SetMined(ctx context.Context, request *txstatus_api.SetMinedReq
 		return nil, err
 	}
 
-	return &txstatus_api.SetMinedResponse{
-		Status: txstatus_api.Status_StatusConfirmed,
+	return &txmeta_api.SetMinedResponse{
+		Status: txmeta_api.Status_StatusConfirmed,
 	}, nil
 }
 
-func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*txstatus_api.GetResponse, error) {
-	prometheusTxStatusGet.Inc()
+func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txmeta_api.GetResponse, error) {
+	prometheusTxMetaGet.Inc()
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -218,8 +218,8 @@ func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*tx
 		blockHashes[index] = blockHash.CloneBytes()
 	}
 
-	return &txstatus_api.GetResponse{
-		Status:         txstatus_api.Status(tx.Status),
+	return &txmeta_api.GetResponse{
+		Status:         txmeta_api.Status(tx.Status),
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,
@@ -229,7 +229,7 @@ func (u *Server) Get(ctx context.Context, request *txstatus_api.GetRequest) (*tx
 	}, nil
 }
 
-func (u *Server) Delete(ctx context.Context, request *txstatus_api.DeleteRequest) (*txstatus_api.DeleteResponse, error) {
+func (u *Server) Delete(ctx context.Context, request *txmeta_api.DeleteRequest) (*txmeta_api.DeleteResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }
