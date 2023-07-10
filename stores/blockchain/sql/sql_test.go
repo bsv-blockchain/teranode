@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"encoding/hex"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -13,7 +12,7 @@ import (
 var (
 	hashPrevBlock, _  = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	hashMerkleRoot, _ = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
-	bits, _           = hex.DecodeString("1d00ffff")
+	bits              = model.NewNBitFromString("1d00ffff")
 	coinbaseTx, _     = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
 	subtree, _        = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
 
@@ -27,7 +26,7 @@ var (
 			Nonce:          2573394689,
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
-			Bits:           model.NewNBitFromSlice(bits),
+			Bits:           bits,
 		},
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
@@ -42,7 +41,7 @@ var (
 			Nonce:          1639830024,
 			HashPrevBlock:  block2PrevBlockHash,
 			HashMerkleRoot: block2MerkleRootHash,
-			Bits:           model.NewNBitFromSlice(bits),
+			Bits:           bits,
 		},
 		CoinbaseTx:       coinbaseTx2,
 		TransactionCount: 1,
@@ -57,7 +56,7 @@ var (
 			Nonce:          1639830025,
 			HashPrevBlock:  block2PrevBlockHash,
 			HashMerkleRoot: block2MerkleRootHash,
-			Bits:           model.NewNBitFromSlice(bits),
+			Bits:           bits,
 		},
 		CoinbaseTx:       coinbaseTx2,
 		TransactionCount: 1,

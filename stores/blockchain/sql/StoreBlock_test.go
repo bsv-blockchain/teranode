@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"encoding/hex"
 	"net/url"
 	"testing"
 
@@ -33,7 +32,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: model.NewNBitFromSlice(bits),
+				Bits: bits,
 			},
 		})
 		require.NoError(t, err)
@@ -46,7 +45,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: model.NewNBitFromSlice(bits),
+				Bits: bits,
 			},
 		})
 		require.NoError(t, err)
@@ -57,11 +56,9 @@ func Test_getCumulativeChainWork(t *testing.T) {
 		work, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000001473b8614ab22c164d42204")
 		require.NoError(t, err)
 
-		bitsBytes, _ := hex.DecodeString("1810b7f0")
-
 		chainWork, err := getCumulativeChainWork(work, &model.Block{
 			Header: &model.BlockHeader{
-				Bits: model.NewNBitFromSlice(bitsBytes),
+				Bits: model.NewNBitFromString("1810b7f0"),
 			},
 		})
 		require.NoError(t, err)

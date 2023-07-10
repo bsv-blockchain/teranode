@@ -48,7 +48,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)
 		assert.Equal(t, "9b0fc92260312ce44e74ef369f5c66bbb85848f2eddd5a7a1cde251e54ccfdd5", tip.HashMerkleRoot.String())
 		assert.Equal(t, uint32(1231469744), tip.Timestamp)
-		assert.Equal(t, []byte{0x1d, 0x0, 0xff, 0xff}, tip.Bits.CloneBytes())
+		assert.Equal(t, []byte{0xff, 0xff, 0x0, 0x1d}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(1639830024), tip.Nonce)
 	})
 
@@ -79,7 +79,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)
 		assert.Equal(t, "9b0fc92260312ce44e74ef369f5c66bbb85848f2eddd5a7a1cde251e54ccfdd5", tip.HashMerkleRoot.String())
 		assert.Equal(t, uint32(1231469744), tip.Timestamp)
-		assert.Equal(t, []byte{0x1d, 0x0, 0xff, 0xff}, tip.Bits.CloneBytes())
+		assert.Equal(t, []byte{0xff, 0xff, 0x0, 0x1d}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(1639830024), tip.Nonce)
 	})
 }

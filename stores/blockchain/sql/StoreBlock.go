@@ -128,6 +128,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		return fmt.Errorf("failed to calculate cumulative chain work: %w", err)
 	}
 
+	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hashMerkleRoot, _ := chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
+	nbits := model.NewNBitFromString("1d00ffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: hashMerkleRoot,
+		Timestamp:      1231469665,
+		Bits:           nbits,
+		Nonce:          2573394689,
+	}
+	_ = blockHeader
+
+	blockHeader2 := block.Header
+	_ = blockHeader2
+
 	if err = s.db.QueryRowContext(ctx, q,
 		previousBlockId,
 		block.Header.Version,

@@ -34,7 +34,6 @@ type SubtreeProcessor struct {
 	incomingBlockChan   chan string
 	getSubtreesChan     chan chan []*util.Subtree
 	resetChan           chan resetRequest
-	appendSubtreeChan   chan *util.Subtree // used when appending a new subtree to the chainedSubtrees list
 	newSubtreeChan      chan *util.Subtree // used to notify of a new subtree
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
@@ -62,7 +61,6 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 		incomingBlockChan:   make(chan string),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
 		resetChan:           make(chan resetRequest),
-		appendSubtreeChan:   make(chan *util.Subtree, 100),
 		newSubtreeChan:      newSubtreeChan,
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
@@ -84,12 +82,6 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 				copy(chainedSubtrees, stp.chainedSubtrees)
 
 				getSubtreesChan <- chainedSubtrees
-
-			case subtree := <-stp.appendSubtreeChan:
-				logger.Infof("[SubtreeProcessor] append subtree")
-				stp.chainedSubtrees = append(stp.chainedSubtrees, subtree)
-				// Send the subtree to the newSubtreeChan
-				stp.newSubtreeChan <- subtree
 
 			case resetReq := <-stp.resetChan:
 				logger.Infof("[SubtreeProcessor] reset subtree processor")
@@ -118,7 +110,13 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
 	if stp.currentSubtree.IsComplete() {
 		subtree := stp.currentSubtree
 		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
-		stp.appendSubtreeChan <- subtree
+
+		// Add the subtree to the chain
+		// this needs to happen here, so we can wait for the append to complete
+		stp.logger.Infof("[SubtreeProcessor] append subtree")
+		stp.chainedSubtrees = append(stp.chainedSubtrees, subtree)
+		// Send the subtree to the newSubtreeChan
+		stp.newSubtreeChan <- subtree
 	}
 }
 
