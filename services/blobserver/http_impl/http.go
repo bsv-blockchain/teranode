@@ -3,9 +3,11 @@ package http_impl
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/blobserver"
+	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -19,11 +21,14 @@ var (
 )
 
 type HTTP struct {
-	db *blobserver.DAO
-	e  *echo.Echo
+	logger utils.Logger
+	db     *dao.DAO
+	e      *echo.Echo
 }
 
-func New(db *blobserver.DAO) *HTTP {
+func New(db *dao.DAO) (*HTTP, error) {
+	logger := gocore.Log("b_http")
+
 	e := echo.New()
 	e.HideBanner = true
 
@@ -108,15 +113,18 @@ func New(db *blobserver.DAO) *HTTP {
 	})
 
 	return &HTTP{
-		db: db,
-		e:  e,
-	}
+		logger: logger,
+		db:     db,
+		e:      e,
+	}, nil
 }
 
-func (h *HTTP) Start(addr string) {
+func (h *HTTP) Start(addr string) error {
 	go func() {
 		h.e.Logger.Error(h.e.Start(":1323"))
 	}()
+
+	return nil
 }
 
 func (h *HTTP) Stop(ctx context.Context) error {

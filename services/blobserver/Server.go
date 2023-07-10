@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/http_impl"
 	"github.com/ordishs/gocore"
@@ -30,7 +31,7 @@ func NewServer() (*Server, error) {
 		return nil, errors.New("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	db, err := NewDAO()
+	db, err := dao.NewDAO()
 	if err != nil {
 		panic(err)
 	}
@@ -38,11 +39,17 @@ func NewServer() (*Server, error) {
 	s := &Server{}
 
 	if grpcOk {
-		s.grpcServer = grpc_impl.New(db)
+		s.grpcServer, err = grpc_impl.New(db)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if httpOk {
-		s.httpServer = http_impl.New(db)
+		s.httpServer, err = http_impl.New(db)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return s, nil
@@ -50,12 +57,13 @@ func NewServer() (*Server, error) {
 
 // Start function
 func (v *Server) Start() error {
+	// TODO add address
 	if v.grpcServer != nil {
-		v.grpcServer.Start()
+		v.grpcServer.Start("")
 	}
 
 	if v.httpServer != nil {
-		v.httpServer.Start()
+		v.httpServer.Start("")
 	}
 
 	return nil

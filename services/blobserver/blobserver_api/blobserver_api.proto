@@ -37,7 +37,7 @@ message Blob {
 // swagger:model HashOrHeight
 message HashOrHeight {
   oneof value {
-    Hash hash = 1;
-    uint64 height = 2;
+    bytes hash = 1;
+    uint32 height = 2;
   }
 }

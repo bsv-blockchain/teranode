@@ -1,4 +1,4 @@
-package blobserver
+package dao
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 type DAO struct {
 	UtxoStore utxostore.Interface
-	// Txlake           *Txlake
+	// TxStore           *TxStore
 	BlockchainClient *blockchain.Client
 	// SubtreeStore     blockstore.Interface
 }
