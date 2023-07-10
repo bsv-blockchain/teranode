@@ -7,11 +7,13 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/http_impl"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 // Server type carries the logger within it
 type Server struct {
+	logger     utils.Logger
 	grpcServer *grpc_impl.GRPC
 	httpServer *http_impl.HTTP
 }
@@ -36,7 +38,9 @@ func NewServer() (*Server, error) {
 		panic(err)
 	}
 
-	s := &Server{}
+	s := &Server{
+		logger: gocore.Log("blob"),
+	}
 
 	if grpcOk {
 		s.grpcServer, err = grpc_impl.New(db)
@@ -59,11 +63,15 @@ func NewServer() (*Server, error) {
 func (v *Server) Start() error {
 	// TODO add address
 	if v.grpcServer != nil {
-		v.grpcServer.Start("")
+		if err := v.grpcServer.Start(""); err != nil {
+			return err
+		}
 	}
 
 	if v.httpServer != nil {
-		v.httpServer.Start("")
+		if err := v.httpServer.Start(""); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -74,10 +82,14 @@ func (v *Server) Stop(ctx context.Context) {
 	defer cancel()
 
 	if v.grpcServer != nil {
-		v.grpcServer.Stop(ctx)
+		if err := v.grpcServer.Stop(ctx); err != nil {
+			v.logger.Errorf("error stopping grpc server", "error", err)
+		}
 	}
 
 	if v.httpServer != nil {
-		v.httpServer.Stop(ctx)
+		if err := v.httpServer.Stop(ctx); err != nil {
+			v.logger.Errorf("error stopping http server", "error", err)
+		}
 	}
 }

@@ -12,7 +12,7 @@ import (
 type DAO struct {
 	UtxoStore utxostore.Interface
 	// TxStore           *TxStore
-	BlockchainClient *blockchain.Client
+	BlockchainClient blockchain.ClientI
 	// SubtreeStore     blockstore.Interface
 }
 
