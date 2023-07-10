@@ -84,7 +84,7 @@ type BlockAssembly struct {
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
-	blockStore       blob.Store
+	subtreeStore     blob.Store
 	jobStoreMutex    sync.RWMutex
 	jobStore         map[chainhash.Hash]*subtreeprocessor.Job
 }
@@ -95,7 +95,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
+func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		panic(err)
@@ -145,7 +145,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 		txStatusClient:   txStatusStore,
 		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(logger, newSubtreeChan),
 		blockchainClient: blockchainClient,
-		blockStore:       blockStore,
+		subtreeStore:     subtreeStore,
 		jobStore:         make(map[chainhash.Hash]*subtreeprocessor.Job),
 	}
 
@@ -161,7 +161,7 @@ func New(logger utils.Logger, blockStore blob.Store) *BlockAssembly {
 				continue
 			}
 
-			if err = ba.blockStore.Set(context.Background(),
+			if err = ba.subtreeStore.Set(context.Background(),
 				subtree.RootHash()[:],
 				subtreeBytes,
 				blob.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined

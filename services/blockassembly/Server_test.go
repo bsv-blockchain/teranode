@@ -126,7 +126,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		subtreeProcessor:                    items.subtreeProcessor,
 		grpcServer:                          nil,
 		blockchainClient:                    blockchainClient,
-		blockStore:                          items.blobStore,
+		subtreeStore:                        items.blobStore,
 		jobStoreMutex:                       sync.RWMutex{},
 		jobStore:                            make(map[chainhash.Hash]*subtreeprocessor.Job),
 	}

@@ -228,14 +228,14 @@ func main() {
 		panic(err)
 	}
 
-	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
 	if err != nil {
 		panic(err)
 	}
 	if !found {
-		panic("blockstore config not found")
+		panic("subtreestore config not found")
 	}
-	blockStore, err := propagation.NewStore(blockStoreUrl)
+	subtreeStore, err := propagation.NewStore(subtreeStoreUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -287,7 +287,7 @@ func main() {
 				logger.Infof("Starting Block Assembly Server")
 
 				baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
-				blockAssemblyService = blockassembly.New(baLogger, blockStore)
+				blockAssemblyService = blockassembly.New(baLogger, subtreeStore)
 
 				return blockAssemblyService.Start()
 			})
@@ -301,7 +301,7 @@ func main() {
 				logger.Infof("Starting Block Validation Server")
 
 				bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
-				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, blockStore)
+				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, subtreeStore)
 				if err != nil {
 					panic(err)
 				}
@@ -397,7 +397,7 @@ func main() {
 			logger.Infof("Starting Propagation")
 
 			p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
-			propagationServer = propagation.NewServer(p2pLogger, txStore, blockStore, validatorClient)
+			propagationServer = propagation.NewServer(p2pLogger, txStore, subtreeStore, validatorClient)
 
 			return propagationServer.Start(ctx)
 		})

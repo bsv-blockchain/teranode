@@ -24,7 +24,7 @@ type Server struct {
 	validatorClient *validator.Client
 }
 
-func NewServer(logger utils.Logger, txStore blob.Store, blockStore blob.Store, validatorClient *validator.Client) *Server {
+func NewServer(logger utils.Logger, txStore blob.Store, subtreeStore blob.Store, validatorClient *validator.Client) *Server {
 	return &Server{
 		logger:          logger,
 		validatorClient: validatorClient,

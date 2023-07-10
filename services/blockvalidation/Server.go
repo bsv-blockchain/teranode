@@ -48,7 +48,7 @@ type BlockValidation struct {
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
-	blockStore       blob.Store
+	subtreeStore     blob.Store
 }
 
 func Enabled() bool {
@@ -57,7 +57,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, utxoStore utxostore.Interface, blockStore blob.Store) (*BlockValidation, error) {
+func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store) (*BlockValidation, error) {
 	blockchainClient, err := blockchain.NewClient()
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, blockStore blob.Sto
 		utxoStore:        utxoStore,
 		logger:           logger,
 		blockchainClient: blockchainClient,
-		blockStore:       blockStore,
+		subtreeStore:     subtreeStore,
 	}
 
 	return bVal, nil
@@ -186,7 +186,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, req *blockvalidation_a
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash) bool {
 	// get subtree from store
-	subtree, err := u.blockStore.Get(ctx, subtreeHash[:])
+	subtree, err := u.subtreeStore.Get(ctx, subtreeHash[:])
 	if err != nil {
 		// if not in store get it from the network
 
