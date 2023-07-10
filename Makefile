@@ -96,6 +96,14 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/blockchain/blockchain_api/blockchain_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/blobserver/blobserver_api/blobserver_api.proto
+
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/blockassembly/blockassembly_api/*.pb.go
@@ -106,6 +114,7 @@ clean_gen:
 	rm -f ./services/propagation/propagation_api/*.pb.go
 	rm -f ./services/txstatus/txstatus_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
+	rm -f ./services/blobserver_api/*.pb.go
 	rm -f ./model/*.pb.go
 
 .PHONY: clean

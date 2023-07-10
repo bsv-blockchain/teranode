@@ -1,0 +1,27 @@
+@startuml
+
+actor Service
+entity Miner
+database SubtreeStore
+database TransactionStore
+
+Service -> SubtreeStore: Check subtree
+alt Subtree not in store
+    Service -> Miner: Request subtree
+    Miner -> Service: Return subtree
+    Service -> SubtreeStore: Store received subtree
+end
+
+Service -> SubtreeStore: Get transaction hashes from subtree
+
+loop For each transaction hash
+    Service -> TransactionStore: Check transaction hash
+    alt Transaction not in store
+        Service -> Miner: Request transaction
+        Miner -> Service: Return transaction
+        Service -> Service: Validate transaction
+        Service -> TransactionStore: Store validated transaction
+    end
+end
+
+@enduml

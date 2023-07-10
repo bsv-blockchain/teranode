@@ -16,7 +16,7 @@ while (Any transaction hashes left?) is (yes)
     :Request transaction from miner;
     :Receive transaction from miner;
     :Validate transaction;
-    :Add transaction to transaction store;
+    :Store validated transaction;
   endif
 endwhile
 

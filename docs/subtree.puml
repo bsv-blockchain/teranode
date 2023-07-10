@@ -1,0 +1,36 @@
+@startuml Flow
+
+start
+:Incoming subtree;
+if (Blessed?) then (yes)
+  
+else (no)
+  While (more transactions)
+    :load txn from metastore;
+    if (found?) then (no)
+      :load tnx from tx lake;
+      if (found?) then (no)
+        :load txn from raw;
+        if (found?) then (no)
+          :load txn from raw;
+          :parse txn;
+          :store txn in raw;
+        endif
+        :parse txn;
+        :store txn in tx lake;
+      endif
+    endif
+    :process txn;
+
+  endwhile
+  repeat
+    :read data;
+    :generate diagrams;
+  repeat while (more data?) is (yes)
+    :process only
+  __sequence__ and __activity__ diagrams;
+endif
+
+stop
+
+@enduml

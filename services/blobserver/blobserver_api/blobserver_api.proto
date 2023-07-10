@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+option go_package = ".;blobserver_api";
+
+package blobserver_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service BlobServerAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc GetTransaction(Hash) returns (Blob) {}
+  rpc GetSubtree (Hash) returns (Blob) {}
+  rpc GetBlockHeader (HashOrHeight) returns (Blob) {}
+  rpc GetBlock (HashOrHeight) returns (Blob) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model Hash
+message Hash {
+  bytes hash = 1;
+}
+
+// swagger:model Blob
+message Blob {
+  bytes blob = 1;
+}
+
+// swagger:model HashOrHeight
+message HashOrHeight {
+  oneof value {
+    Hash hash = 1;
+    uint64 height = 2;
+  }
+}
