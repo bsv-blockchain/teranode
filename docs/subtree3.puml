@@ -1,0 +1,26 @@
+@startuml
+
+:Receive subtree from miner;
+
+if (Is subtree in subtree store?) then (yes)
+else (no)
+  :Request subtree from miner;
+  :Receive subtree from miner;
+endif
+
+:Walk through transaction hashes in subtree;
+
+while (Any transaction hashes left?) is (yes)
+  if (Is transaction hash in transaction store?) then (yes)
+  else (no)
+    :Request transaction from miner;
+    :Receive transaction from miner;
+    :Validate transaction;
+    :Add transaction to transaction store;
+  endif
+endwhile
+
+:Validate subtree;
+:Add subtree to subtree store;
+
+@enduml
