@@ -25,6 +25,7 @@ const (
 	BlobServerAPI_GetSubtree_FullMethodName     = "/blobserver_api.BlobServerAPI/GetSubtree"
 	BlobServerAPI_GetBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBlockHeader"
 	BlobServerAPI_GetBlock_FullMethodName       = "/blobserver_api.BlobServerAPI/GetBlock"
+	BlobServerAPI_GetUTXO_FullMethodName        = "/blobserver_api.BlobServerAPI/GetUTXO"
 )
 
 // BlobServerAPIClient is the client API for BlobServerAPI service.
@@ -37,6 +38,7 @@ type BlobServerAPIClient interface {
 	GetSubtree(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
 	GetBlockHeader(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
 	GetBlock(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
+	GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
 }
 
 type blobServerAPIClient struct {
@@ -92,6 +94,15 @@ func (c *blobServerAPIClient) GetBlock(ctx context.Context, in *HashOrHeight, op
 	return out, nil
 }
 
+func (c *blobServerAPIClient) GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error) {
+	out := new(Blob)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetUTXO_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlobServerAPIServer is the server API for BlobServerAPI service.
 // All implementations must embed UnimplementedBlobServerAPIServer
 // for forward compatibility
@@ -102,6 +113,7 @@ type BlobServerAPIServer interface {
 	GetSubtree(context.Context, *Hash) (*Blob, error)
 	GetBlockHeader(context.Context, *HashOrHeight) (*Blob, error)
 	GetBlock(context.Context, *HashOrHeight) (*Blob, error)
+	GetUTXO(context.Context, *Hash) (*Blob, error)
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
 
@@ -123,6 +135,9 @@ func (UnimplementedBlobServerAPIServer) GetBlockHeader(context.Context, *HashOrH
 }
 func (UnimplementedBlobServerAPIServer) GetBlock(context.Context, *HashOrHeight) (*Blob, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetUTXO(context.Context, *Hash) (*Blob, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUTXO not implemented")
 }
 func (UnimplementedBlobServerAPIServer) mustEmbedUnimplementedBlobServerAPIServer() {}
 
@@ -227,6 +242,24 @@ func _BlobServerAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlobServerAPI_GetUTXO_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Hash)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetUTXO(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetUTXO_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetUTXO(ctx, req.(*Hash))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlobServerAPI_ServiceDesc is the grpc.ServiceDesc for BlobServerAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -253,6 +286,10 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlock",
 			Handler:    _BlobServerAPI_GetBlock_Handler,
+		},
+		{
+			MethodName: "GetUTXO",
+			Handler:    _BlobServerAPI_GetUTXO_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

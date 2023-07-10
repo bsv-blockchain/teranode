@@ -18,6 +18,7 @@ require (
 	github.com/lib/pq v1.10.7
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
+	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.1
 	github.com/libsv/go-p2p v0.1.3
 	github.com/minio/minio-go/v7 v7.0.52
@@ -140,7 +141,7 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/compress v1.16.0 // indirect
-	github.com/labstack/echo/v4 v4.10.0 // indirect
+	github.com/labstack/echo/v4 v4.10.0
 	github.com/labstack/gommon v0.4.0
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect

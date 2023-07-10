@@ -1,0 +1,182 @@
+package http_impl
+
+import (
+	"context"
+
+	"github.com/TAAL-GmbH/ubsv/services/blobserver"
+	"github.com/labstack/echo/v4"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	prometheusBlobServerHttpGetTransaction *prometheus.CounterVec
+	prometheusBlobServerHttpGetSubtree     *prometheus.CounterVec
+	prometheusBlobServerHttpGetBlockHeader *prometheus.CounterVec
+	prometheusBlobServerHttpGetBlock       *prometheus.CounterVec
+	prometheusBlobServerHttpGetUTXO        *prometheus.CounterVec
+)
+
+type HTTP struct {
+	db *blobserver.DAO
+	e  *echo.Echo
+}
+
+func New(db *blobserver.DAO) *HTTP {
+	e := echo.New()
+	e.HideBanner = true
+
+	e.GET("/tx/{hash}", func(c echo.Context) error {
+		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+		if err != nil {
+			return err
+		}
+
+		b, err := db.GetTransaction(c.Request().Context(), hash)
+		if err != nil {
+			return err
+		}
+
+		prometheusBlobServerHttpGetTransaction.WithLabelValues("200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	e.GET("/subtree/{hash}", func(c echo.Context) error {
+		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+		if err != nil {
+			return err
+		}
+
+		b, err := db.GetSubtree(c.Request().Context(), hash)
+		if err != nil {
+			return err
+		}
+
+		prometheusBlobServerHttpGetSubtree.WithLabelValues("200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	e.GET("/header/{hash}", func(c echo.Context) error {
+		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+		if err != nil {
+			return err
+		}
+
+		b, err := db.GetBlockHeaderByHash(c.Request().Context(), hash)
+		if err != nil {
+			return err
+		}
+
+		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	e.GET("/block/{hash}", func(c echo.Context) error {
+		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+		if err != nil {
+			return err
+		}
+
+		b, err := db.GetBlockByHash(c.Request().Context(), hash)
+		if err != nil {
+			return err
+		}
+
+		prometheusBlobServerHttpGetBlock.WithLabelValues("200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	e.GET("/utxo/{hash}", func(c echo.Context) error {
+		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+		if err != nil {
+			return err
+		}
+
+		b, err := db.GetUtxo(c.Request().Context(), hash)
+		if err != nil {
+			return err
+		}
+
+		prometheusBlobServerHttpGetUTXO.WithLabelValues("200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	return &HTTP{
+		db: db,
+		e:  e,
+	}
+}
+
+func (h *HTTP) Start(addr string) {
+	go func() {
+		h.e.Logger.Error(h.e.Start(":1323"))
+	}()
+}
+
+func (h *HTTP) Stop(ctx context.Context) error {
+	return h.e.Shutdown(ctx)
+}
+
+func init() {
+	prometheusBlobServerHttpGetTransaction = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_transaction",
+			Help: "Number of Get transactions ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetSubtree = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_subtree",
+			Help: "Number of Get subtree ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetBlockHeader = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_block_header",
+			Help: "Number of Get block header ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetBlock = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_block",
+			Help: "Number of Get block ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetUTXO = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_utxo",
+			Help: "Number of Get UTXO ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+}
