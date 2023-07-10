@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
@@ -79,7 +79,7 @@ func (s *Badger) Close(ctx context.Context) error {
 	return s.store.Close()
 }
 
-func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
+func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
@@ -88,7 +88,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...blob
 	traceSpan := tracing.Start(ctx, "Badger:Set")
 	defer traceSpan.Finish()
 
-	options := blob.NewSetOptions(opts...)
+	options := options.NewSetOptions(opts...)
 
 	if err := s.store.Update(func(tx *badger.Txn) error {
 		entry := badger.NewEntry(key, value)
@@ -120,7 +120,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 		return fmt.Errorf("failed to get data: %w", err)
 	}
 
-	return s.Set(ctx, key, objectBytes, blob.WithTTL(ttl))
+	return s.Set(ctx, key, objectBytes, options.WithTTL(ttl))
 }
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {

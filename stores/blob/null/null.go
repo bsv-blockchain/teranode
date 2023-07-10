@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -28,7 +28,7 @@ func (n *Null) Close(_ context.Context) error {
 	return nil
 }
 
-func (n *Null) Set(_ context.Context, _ []byte, _ []byte, _ ...blob.Options) error {
+func (n *Null) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) error {
 	return nil
 }
 

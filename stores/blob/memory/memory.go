@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -26,7 +26,7 @@ func (m *Memory) Close(_ context.Context) error {
 	return nil
 }
 
-func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...blob.Options) error {
+func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 

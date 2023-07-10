@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -40,7 +40,7 @@ func (s *File) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...blob.Options) error {
+func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	fileName := s.filename(hash)
 
 	// TODO: handle options

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	blobserver_api "github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
+	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -31,11 +31,11 @@ var (
 type GRPC struct {
 	blobserver_api.UnimplementedBlobServerAPIServer
 	logger     utils.Logger
-	db         *dao.DAO
+	repository *repository.Repository
 	grpcServer *grpc.Server
 }
 
-func New(db *dao.DAO) (*GRPC, error) {
+func New(repository *repository.Repository) (*GRPC, error) {
 	logger := gocore.Log("b_grpc")
 
 	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
@@ -45,54 +45,54 @@ func New(db *dao.DAO) (*GRPC, error) {
 		return nil, fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
-	v := &GRPC{
+	g := &GRPC{
 		logger:     logger,
-		db:         db,
+		repository: repository,
 		grpcServer: grpcServer,
 	}
 
-	blobserver_api.RegisterBlobServerAPIServer(grpcServer, v)
+	blobserver_api.RegisterBlobServerAPIServer(grpcServer, g)
 
 	// Register reflection service on gRPC server
-	reflection.Register(v.grpcServer)
+	reflection.Register(g.grpcServer)
 
-	return v, nil
+	return g, nil
 }
 
-func (grpc *GRPC) Start(addr string) error {
+func (g *GRPC) Start(addr string) error {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
 
-	grpc.logger.Infof("BlobServer GRPC service listening on %s", addr)
+	g.logger.Infof("BlobServer GRPC service listening on %s", addr)
 
 	go func() {
-		_ = grpc.grpcServer.Serve(lis)
+		_ = g.grpcServer.Serve(lis)
 	}()
 
 	return nil
 }
 
-func (grpc *GRPC) Stop(ctx context.Context) error {
-	grpc.grpcServer.GracefulStop()
+func (g *GRPC) Stop(ctx context.Context) error {
+	g.grpcServer.GracefulStop()
 	return nil
 }
 
-func (v *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
+func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
 	return &blobserver_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (v *GRPC) GetTransaction(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetTransaction(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := v.db.GetTransaction(ctx, hash)
+	tx, err := g.repository.GetTransaction(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -104,13 +104,13 @@ func (v *GRPC) GetTransaction(ctx context.Context, req *blobserver_api.Hash) (*b
 	}, nil
 }
 
-func (v *GRPC) GetSubtree(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetSubtree(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := v.db.GetSubtree(ctx, hash)
+	tx, err := g.repository.GetSubtree(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -122,13 +122,13 @@ func (v *GRPC) GetSubtree(ctx context.Context, req *blobserver_api.Hash) (*blobs
 	}, nil
 }
 
-func (v *GRPC) GetHeader(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetHeader(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.GetHash())
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := v.db.GetBlockHeaderByHash(ctx, hash)
+	tx, err := g.repository.GetBlockHeaderByHash(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -140,13 +140,13 @@ func (v *GRPC) GetHeader(ctx context.Context, req *blobserver_api.HashOrHeight) 
 	}, nil
 }
 
-func (v *GRPC) GetBlock(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetBlock(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.GetHash())
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := v.db.GetBlockByHash(ctx, hash)
+	tx, err := g.repository.GetBlockByHash(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -158,13 +158,13 @@ func (v *GRPC) GetBlock(ctx context.Context, req *blobserver_api.HashOrHeight) (
 	}, nil
 }
 
-func (v *GRPC) GetUTXO(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetUTXO(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.GetHash())
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := v.db.GetUtxo(ctx, hash)
+	tx, err := g.repository.GetUtxo(ctx, hash)
 	if err != nil {
 		return nil, err
 	}

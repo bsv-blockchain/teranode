@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -50,7 +50,7 @@ func (g *GCS) Close(ctx context.Context) error {
 	return g.client.Close()
 }
 
-func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
+func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Set").AddTime(start)

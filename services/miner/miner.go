@@ -16,6 +16,7 @@ import (
 type Miner struct {
 	logger              utils.Logger
 	blockAssemblyClient *blockassembly.Client
+	candidateTimer      *time.Timer
 }
 
 const (
@@ -34,12 +35,12 @@ func NewMiner() *Miner {
 }
 
 func (m *Miner) Start() {
-	candidateTimer := time.NewTimer(candidateRequestInterval * time.Second)
+	m.candidateTimer = time.NewTimer(candidateRequestInterval * time.Second)
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
-	for range candidateTimer.C {
-		candidateTimer.Reset(candidateRequestInterval * time.Second)
+	for range m.candidateTimer.C {
+		m.candidateTimer.Reset(candidateRequestInterval * time.Second)
 		candidate, err := m.blockAssemblyClient.GetMiningCandidate(context.Background())
 		if err != nil {
 			m.logger.Errorf("Error getting mining candidate: %v", err)
@@ -49,6 +50,11 @@ func (m *Miner) Start() {
 
 		m.Mine(candidate)
 	}
+}
+
+func (m *Miner) Stop(ctx context.Context) {
+	m.logger.Infof("Stopping miner")
+	m.candidateTimer.Stop()
 }
 
 func (m *Miner) Mine(candidate *model.MiningCandidate) {

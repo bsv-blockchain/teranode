@@ -22,6 +22,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -164,7 +165,7 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 			if err = ba.subtreeStore.Set(context.Background(),
 				subtree.RootHash()[:],
 				subtreeBytes,
-				blob.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
+				options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
 			); err != nil {
 				logger.Errorf("Failed to store subtree [%s]", err)
 				continue

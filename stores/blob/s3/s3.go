@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -78,7 +78,7 @@ func (g *S3) Close(_ context.Context) error {
 	return nil
 }
 
-func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
+func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_s3").NewStat("Set").AddTime(start)
@@ -94,7 +94,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Opt
 	}
 
 	// Expires
-	options := blob.NewSetOptions(opts...)
+	options := options.NewSetOptions(opts...)
 	if options.TTL > 0 {
 		expires := time.Now().Add(options.TTL)
 		uploadInput.Expires = &expires

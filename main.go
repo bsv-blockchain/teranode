@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/services/blobserver"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
@@ -21,6 +22,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	validator_utxostore "github.com/TAAL-GmbH/ubsv/services/validator/utxo"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/getsentry/sentry-go"
@@ -67,6 +69,7 @@ func main() {
 	startPropagation := flag.Bool("propagation", false, "start propagation service")
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	startMiner := flag.Bool("miner", false, "start miner service")
+	startBlobServer := flag.Bool("blobserver", false, "start blob server")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
@@ -90,6 +93,10 @@ func main() {
 
 	if !*startUtxoStore {
 		*startUtxoStore = gocore.Config().GetBool("startUtxoStore", false)
+	}
+
+	if !*startTxMetaStore {
+		*startTxMetaStore = gocore.Config().GetBool("startTxMetaStore", false)
 	}
 
 	if !*startPropagation {
@@ -132,6 +139,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -miner=<1|0>")
 		fmt.Println("          whether to start the miner service")
+		fmt.Println("")
+		fmt.Println("    -blobserver=<1|0>")
+		fmt.Println("          whether to start the blob server")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
@@ -201,6 +211,7 @@ func main() {
 	var blockAssemblyService *blockassembly.BlockAssembly
 	var seederService *seeder.Server
 	var minerServer *miner.Miner
+	var blobServer *blobserver.Server
 
 	//----------------------------------------------------------------
 	// These are the main stores used in the system
@@ -216,6 +227,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
 	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
 	if err != nil {
 		panic(err)
@@ -223,7 +235,7 @@ func main() {
 	if !found {
 		panic("txstore config not found")
 	}
-	txStore, err := propagation.NewStore(txStoreUrl)
+	txStore, err := blob.NewStore(txStoreUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -235,7 +247,7 @@ func main() {
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err := propagation.NewStore(subtreeStoreUrl)
+	subtreeStore, err := blob.NewStore(subtreeStoreUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -386,6 +398,22 @@ func main() {
 		})
 	}
 
+	// blob server
+	if *startBlobServer {
+		g.Go(func() (err error) {
+			blobServer, err = blobserver.NewServer(utxoStore, txStore, subtreeStore)
+			if err != nil {
+				return err
+			}
+
+			if err := blobServer.Start(); err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
 	// propagation
 	if *startPropagation {
 		validatorClient, err := validator.NewClient(context.Background(), logger)
@@ -464,6 +492,14 @@ func main() {
 
 	if blockchainService != nil {
 		blockchainService.Stop(shutdownCtx)
+	}
+
+	if minerServer != nil {
+		minerServer.Stop(shutdownCtx)
+	}
+
+	if blobServer != nil {
+		blobServer.Stop(shutdownCtx)
 	}
 
 	// wait for clean shutdown for 5 seconds, otherwise force exit

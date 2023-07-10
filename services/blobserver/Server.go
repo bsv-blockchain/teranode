@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/http_impl"
+	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -27,7 +29,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer() (*Server, error) {
+func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.Store) (*Server, error) {
 	grpcAddr, grpcOk := gocore.Config().Get("blobserver_grpcAddress")
 	httpAddr, httpOk := gocore.Config().Get("blobserver_httpAddress")
 
@@ -35,7 +37,7 @@ func NewServer() (*Server, error) {
 		return nil, errors.New("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	db, err := dao.NewDAO()
+	repository, err := repository.NewRepository(utxoStore, TxStore, SubtreeStore)
 	if err != nil {
 		panic(err)
 	}
@@ -47,14 +49,14 @@ func NewServer() (*Server, error) {
 	}
 
 	if grpcOk {
-		s.grpcServer, err = grpc_impl.New(db)
+		s.grpcServer, err = grpc_impl.New(repository)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if httpOk {
-		s.httpServer, err = http_impl.New(db)
+		s.httpServer, err = http_impl.New(repository)
 		if err != nil {
 			return nil, err
 		}

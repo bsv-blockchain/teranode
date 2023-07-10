@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -84,7 +84,7 @@ func (g *KinesisS3) Close(_ context.Context) error {
 	return nil
 }
 
-func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...blob.Options) error {
+func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	var rec firehose.Record
 	var recInput firehose.PutRecordInput
 

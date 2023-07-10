@@ -2,8 +2,9 @@ package http_impl
 
 import (
 	"context"
+	"net/http"
 
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/dao"
+	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
@@ -21,16 +22,20 @@ var (
 )
 
 type HTTP struct {
-	logger utils.Logger
-	db     *dao.DAO
-	e      *echo.Echo
+	logger     utils.Logger
+	repository *repository.Repository
+	e          *echo.Echo
 }
 
-func New(db *dao.DAO) (*HTTP, error) {
+func New(repository *repository.Repository) (*HTTP, error) {
 	logger := gocore.Log("b_http")
 
 	e := echo.New()
 	e.HideBanner = true
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
 
 	e.GET("/tx/{hash}", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
@@ -38,7 +43,7 @@ func New(db *dao.DAO) (*HTTP, error) {
 			return err
 		}
 
-		b, err := db.GetTransaction(c.Request().Context(), hash)
+		b, err := repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
 			return err
 		}
@@ -54,7 +59,7 @@ func New(db *dao.DAO) (*HTTP, error) {
 			return err
 		}
 
-		b, err := db.GetSubtree(c.Request().Context(), hash)
+		b, err := repository.GetSubtree(c.Request().Context(), hash)
 		if err != nil {
 			return err
 		}
@@ -70,7 +75,7 @@ func New(db *dao.DAO) (*HTTP, error) {
 			return err
 		}
 
-		b, err := db.GetBlockHeaderByHash(c.Request().Context(), hash)
+		b, err := repository.GetBlockHeaderByHash(c.Request().Context(), hash)
 		if err != nil {
 			return err
 		}
@@ -86,7 +91,7 @@ func New(db *dao.DAO) (*HTTP, error) {
 			return err
 		}
 
-		b, err := db.GetBlockByHash(c.Request().Context(), hash)
+		b, err := repository.GetBlockByHash(c.Request().Context(), hash)
 		if err != nil {
 			return err
 		}
@@ -102,7 +107,7 @@ func New(db *dao.DAO) (*HTTP, error) {
 			return err
 		}
 
-		b, err := db.GetUtxo(c.Request().Context(), hash)
+		b, err := repository.GetUtxo(c.Request().Context(), hash)
 		if err != nil {
 			return err
 		}
@@ -113,9 +118,9 @@ func New(db *dao.DAO) (*HTTP, error) {
 	})
 
 	return &HTTP{
-		logger: logger,
-		db:     db,
-		e:      e,
+		logger:     logger,
+		repository: repository,
+		e:          e,
 	}, nil
 }
 

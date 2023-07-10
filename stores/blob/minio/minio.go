@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -72,7 +72,7 @@ func (m *Minio) Close(ctx context.Context) error {
 	return nil //m.client.Close()
 }
 
-func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...blob.Options) error {
+func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_minio").NewStat("Set").AddTime(start)
@@ -86,7 +86,7 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...blob
 		ContentType: "application/octet-stream",
 	}
 
-	options := blob.NewSetOptions(opts...)
+	options := options.NewSetOptions(opts...)
 	if options.TTL > 0 {
 		objectOptions.RetainUntilDate = time.Now().Add(options.TTL)
 	}
