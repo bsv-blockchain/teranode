@@ -1,4 +1,5 @@
-TODO:
+# TODO
+
 - Write tests for block validation / assembly (TDD) - team effort
 - HTTP endpoints for txs, subtrees, blocks, block headers - Simon
 - Graph database spikes - Simon & Liam
@@ -8,4 +9,5 @@ TODO:
 - Aerospike: shared memory map for cleanup - Siggi
 
 DONE:
+
 - Test skeleton for block assembly Server - Siggi

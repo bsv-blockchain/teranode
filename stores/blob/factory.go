@@ -8,6 +8,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/badger"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/kinesiss3"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/minio"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/s3"
@@ -20,6 +21,9 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("error creating null block store: %v", err)
 		}
+	case "memory":
+		store = memory.New()
+
 	case "badger":
 		store, err = badger.New("." + storeUrl.Path) // relative
 		if err != nil {
