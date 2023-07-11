@@ -10,7 +10,7 @@ import (
 func generateRandomTxid() []byte {
 	// pseudo-code, replace with your actual random txid generation logic
 	bytes := make([]byte, 32)
-	rand.Read(bytes)
+	_, _ = rand.Read(bytes)
 	return bytes
 }
 

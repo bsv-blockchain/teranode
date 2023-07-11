@@ -13,7 +13,7 @@ const (
 	// Size of each shard
 	shardSize = 1024 * 1024 // 10GB
 	// Number of hash functions
-	numHashFuncs = 5
+	// numHashFuncs = 5
 )
 
 type MemoryFilter struct {
