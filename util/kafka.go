@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -104,8 +103,9 @@ func StartKafkaGroupListener(logger utils.Logger, kafkaURL *url.URL, groupID str
 			// server-side re-balance happens, the consumer session will need to be
 			// recreated to get the new claims
 			if err = client.Consume(ctx, topics, &consumer); err != nil {
-				log.Panicf("Error from consumer: %v", err)
+				logger.Errorf("Error from consumer: %v", err)
 			}
+
 			// check if context was cancelled, signalling that the consumer should stop
 			if ctx.Err() != nil {
 				return

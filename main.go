@@ -329,9 +329,9 @@ func main() {
 
 	// validator
 	if *startValidator {
-		if _, found = gocore.Config().Get("validator_grpcAddress"); found {
+		if validatorAddress, found := gocore.Config().Get("validator_grpcAddress"); found {
 			g.Go(func() error {
-				logger.Infof("Starting Validator Server")
+				logger.Infof("Starting Validator Server on: %s", validatorAddress)
 
 				validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
 				validatorService = validator.NewServer(validatorLogger, utxoStore)
