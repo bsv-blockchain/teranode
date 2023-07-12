@@ -17,6 +17,14 @@ service BlockchainAPI {
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
   rpc SubscribeBestBlockHeader (google.protobuf.Empty) returns (stream BestBlockHeaderResponse) {}
+  rpc Subscribe (google.protobuf.Empty) returns (stream Notification) {}
+  rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
+}
+
+// swagger:enum Type
+enum Type {
+  Subtree = 0;
+  Block = 1;
 }
 
 // swagger:model HealthResponse
@@ -70,4 +78,11 @@ message GetMedianTimeResponse {
 message BestBlockHeaderResponse {
   bytes blockHeader = 1;
   uint32 height = 2;
+}
+
+// swagger:model Notification
+message Notification {
+  Type type = 1;
+  bytes hash = 2;
+  string base_url = 3;
 }

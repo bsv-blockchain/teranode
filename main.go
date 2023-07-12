@@ -115,28 +115,40 @@ func main() {
 		*startBlobServer = gocore.Config().GetBool("startBlobServer", false)
 	}
 
-	if !*startTxMetaStore {
-		*startTxMetaStore = gocore.Config().GetBool("startTxMetaStore", false)
-	}
-
-	if help != nil && *help || (!*startValidator && !*startUtxoStore && !*startPropagation && !*startBlockAssembly && !*startSeeder && !*startBlockValidation) {
+	if help != nil && *help ||
+		(!*startBlockchain &&
+			!*startBlockAssembly &&
+			!*startBlockValidation &&
+			!*startValidator &&
+			!*startUtxoStore &&
+			!*startTxMetaStore &&
+			!*startPropagation &&
+			!*startSeeder &&
+			!*startMiner &&
+			!*startBlobServer) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
-		fmt.Println("")
-		fmt.Println("    -validator=<1|0>")
-		fmt.Println("          whether to start the validator service")
-		fmt.Println("")
-		fmt.Println("    -propagation=<1|0>")
-		fmt.Println("          whether to start the propagation service")
-		fmt.Println("")
-		fmt.Println("    -utxostore=<1|0>")
-		fmt.Println("          whether to start the utxo store service")
 		fmt.Println("")
 		fmt.Println("    -blockchain=<1|0>")
 		fmt.Println("          whether to start the blockchain service")
 		fmt.Println("")
 		fmt.Println("    -blockassembly=<1|0>")
 		fmt.Println("          whether to start the blockassembly service")
+		fmt.Println("")
+		fmt.Println("    -blockvalidation=<1|0>")
+		fmt.Println("          whether to start the blockvalidation service")
+		fmt.Println("")
+		fmt.Println("    -validator=<1|0>")
+		fmt.Println("          whether to start the validator service")
+		fmt.Println("")
+		fmt.Println("    -utxostore=<1|0>")
+		fmt.Println("          whether to start the utxo store service")
+		fmt.Println("")
+		fmt.Println("    -txmeta=<1|0>")
+		fmt.Println("          whether to start the tx meta store")
+		fmt.Println("")
+		fmt.Println("    -propagation=<1|0>")
+		fmt.Println("          whether to start the propagation service")
 		fmt.Println("")
 		fmt.Println("    -seeder=<1|0>")
 		fmt.Println("          whether to start the seeder service")

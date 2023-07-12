@@ -35,13 +35,22 @@ func init() {
 	)
 }
 
+type subscriber struct {
+	subscription blockchain_api.BlockchainAPI_SubscribeServer
+	done         chan struct{}
+}
+
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan chan *blockchain_api.AddBlockRequest
-	store        blockchain_store.Store
-	logger       utils.Logger
-	grpcServer   *grpc.Server
+	addBlockChan      chan *blockchain_api.AddBlockRequest
+	store             blockchain_store.Store
+	logger            utils.Logger
+	grpcServer        *grpc.Server
+	newSubscriptions  chan subscriber
+	deadSubscriptions chan subscriber
+	subscribers       map[subscriber]bool
+	notifications     chan *blockchain_api.Notification
 }
 
 func Enabled() bool {
@@ -65,9 +74,13 @@ func New(logger utils.Logger) (*Blockchain, error) {
 	}
 
 	return &Blockchain{
-		store:        s,
-		logger:       logger,
-		addBlockChan: make(chan *blockchain_api.AddBlockRequest, 10),
+		store:             s,
+		logger:            logger,
+		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions:  make(chan subscriber, 10),
+		deadSubscriptions: make(chan subscriber, 10),
+		subscribers:       make(map[subscriber]bool),
+		notifications:     make(chan *blockchain_api.Notification, 100),
 	}, nil
 }
 
@@ -87,6 +100,30 @@ func (b *Blockchain) Start() error {
 	}
 
 	gocore.SetAddress(address)
+
+	go func() {
+		for {
+			select {
+			case notification := <-b.notifications:
+				for sub := range b.subscribers {
+					go func(s subscriber) {
+						if err := s.subscription.Send(notification); err != nil {
+							b.deadSubscriptions <- s
+						}
+					}(sub)
+				}
+
+			case s := <-b.newSubscriptions:
+				b.subscribers[s] = true
+				b.logger.Infof("New Subscription received (Total=%d).", len(b.subscribers))
+
+			case s := <-b.deadSubscriptions:
+				delete(b.subscribers, s)
+				close(s.done)
+				b.logger.Infof("Subscription removed (Total=%d).", len(b.subscribers))
+			}
+		}
+	}()
 
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
@@ -242,4 +279,24 @@ func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchai
 			lastHeaderHashStr = header.Hash().String()
 		}
 	}
+}
+
+func (b *Blockchain) Subscribe(_ *emptypb.Empty, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
+	// Keep this subscription alive without endless loop - use a channel that blocks forever.
+	ch := make(chan struct{})
+
+	b.newSubscriptions <- subscriber{
+		subscription: sub,
+		done:         ch,
+	}
+
+	<-ch
+
+	return nil
+}
+
+func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
+	b.notifications <- req
+
+	return &emptypb.Empty{}, nil
 }
