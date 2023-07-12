@@ -14,5 +14,5 @@ type ClientI interface {
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error)
-	SubscribeBestBlockHeader(ctx context.Context) (chan *model.BlockHeader, error)
+	SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error)
 }

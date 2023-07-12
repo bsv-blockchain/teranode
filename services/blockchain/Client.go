@@ -6,6 +6,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -14,6 +15,11 @@ import (
 
 type Client struct {
 	client blockchain_api.BlockchainAPIClient
+}
+
+type BestBlockHeader struct {
+	Header *model.BlockHeader
+	Height uint32
 }
 
 func NewClient() (ClientI, error) {
@@ -71,6 +77,11 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		return nil, err
 	}
 
+	coinbaseTx, err := bt.NewTxFromBytes(resp.CoinbaseTx)
+	if err != nil {
+		return nil, err
+	}
+
 	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
 	for _, subtreeHash := range resp.SubtreeHashes {
 		hash, err := chainhash.NewHash(subtreeHash)
@@ -80,10 +91,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return &model.Block{
-		Header:   header,
-		Subtrees: subtreeHashes,
-	}, nil
+	return model.NewBlock(header, coinbaseTx, subtreeHashes)
 }
 
 func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
@@ -121,13 +129,13 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	return headers, nil
 }
 
-func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *model.BlockHeader, error) {
+func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error) {
 	stream, err := c.client.SubscribeBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
 
-	ch := make(chan *model.BlockHeader)
+	ch := make(chan *BestBlockHeader)
 	go func() {
 		defer close(ch)
 
@@ -145,7 +153,10 @@ func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *model.Block
 				return
 			}
 
-			ch <- header
+			ch <- &BestBlockHeader{
+				Header: header,
+				Height: resp.Height,
+			}
 		}
 	}()
 

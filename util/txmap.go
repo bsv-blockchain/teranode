@@ -12,10 +12,13 @@ import (
 type txMap interface {
 	Exists(hash [32]byte) bool
 	Put(hash [32]byte) error
+	Length() int
 }
 
 type SwissMap struct {
-	m *swiss.Map[[32]byte, struct{}]
+	mu     sync.Mutex
+	m      *swiss.Map[[32]byte, struct{}]
+	length int
 }
 
 func NewSwissMap(length int) *SwissMap {
@@ -25,13 +28,58 @@ func NewSwissMap(length int) *SwissMap {
 }
 
 func (s *SwissMap) Exists(hash [32]byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	_, ok := s.m.Get(hash)
 	return ok
 }
 
 func (s *SwissMap) Put(hash [32]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.length++
+
 	s.m.Put(hash, struct{}{})
 	return nil
+}
+
+func (s *SwissMap) Length() int {
+	return s.length
+}
+
+type SplitSwissMap struct {
+	m      map[[1]byte]*SwissMap
+	length int
+}
+
+func NewSplitSwissMap(length int) *SplitSwissMap {
+	m := &SplitSwissMap{
+		m: make(map[[1]byte]*SwissMap, 256),
+	}
+
+	for i := 0; i <= 255; i++ {
+		m.m[[1]byte{uint8(i)}] = NewSwissMap(length / 256)
+	}
+
+	return m
+}
+
+func (g *SplitSwissMap) Exists(hash [32]byte) bool {
+	return g.m[[1]byte{hash[0]}].Exists(hash)
+}
+
+func (g *SplitSwissMap) Put(hash [32]byte) error {
+	return g.m[[1]byte{hash[0]}].Put(hash)
+}
+func (g *SplitSwissMap) Length() int {
+	length := 0
+	for i := 0; i <= 255; i++ {
+		length += g.m[[1]byte{uint8(i)}].length
+	}
+
+	return length
 }
 
 type GoMap struct {
@@ -138,7 +186,7 @@ func NewGoSplitMutexMap(length int) *GoSplitMutexMap {
 	}
 
 	for i := 0; i <= 255; i++ {
-		m.m[[1]byte{uint8(i)}] = NewGoMutexMap(length / 255)
+		m.m[[1]byte{uint8(i)}] = NewGoMutexMap(length / 256)
 	}
 
 	return m

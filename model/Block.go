@@ -28,9 +28,10 @@ type Block struct {
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) (*Block, error) {
 	return &Block{
-		Header:     header,
-		CoinbaseTx: coinbase,
-		Subtrees:   subtrees,
+		Header:        header,
+		CoinbaseTx:    coinbase,
+		Subtrees:      subtrees,
+		subtreeLength: uint64(len(subtrees)),
 	}, nil
 }
 
@@ -111,7 +112,15 @@ func (b *Block) Valid() (bool, error) {
 		return false, fmt.Errorf("block has no subtrees")
 	}
 
+	if !b.ValidOrder() {
+		return false, fmt.Errorf("block has invalid order")
+	}
+
 	return true, nil
+}
+
+func (b *Block) ValidOrder() bool {
+	return true
 }
 
 func (b *Block) SubTreeBytes() ([]byte, error) {

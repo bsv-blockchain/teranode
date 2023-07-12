@@ -42,7 +42,7 @@ func (ns *NullStore) Spend(ctx context.Context, hash *chainhash.Hash, txID *chai
 }
 
 func (ns *NullStore) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	// fmt.Printf("Reset(%s)\n", hash.String())
+	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
 	return nil, nil
 }
 

@@ -50,7 +50,9 @@ message GetBlockRequest {
 // swagger:model GetBlockResponse
 message GetBlockResponse {
   bytes header = 1;
-  repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
+  uint32 height = 2;
+  bytes coinbase_tx = 3;
+  repeated bytes subtree_hashes = 4;
 }
 
 // swagger:model GetMedianTimeRequest

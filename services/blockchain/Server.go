@@ -200,14 +200,21 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		return nil, err
 	}
 
-	block, _, err := b.store.GetBlock(ctx, blockHash)
+	block, height, err := b.store.GetBlock(ctx, blockHash)
 	if err != nil {
 		return nil, err
 	}
 
+	subtreeHashes := make([][]byte, len(block.Subtrees))
+	for i, subtreeHash := range block.Subtrees {
+		subtreeHashes[i] = subtreeHash[:]
+	}
+
 	return &blockchain_api.GetBlockResponse{
 		Header:        block.Header.Bytes(),
-		SubtreeHashes: [][]byte{},
+		Height:        height,
+		CoinbaseTx:    block.CoinbaseTx.Bytes(),
+		SubtreeHashes: subtreeHashes,
 	}, nil
 }
 

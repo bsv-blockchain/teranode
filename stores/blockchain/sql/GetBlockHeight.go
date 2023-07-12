@@ -10,7 +10,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -26,7 +26,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		WHERE b.hash = $1
 	`
 
-	var height uint64
+	var height uint32
 	var err error
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(

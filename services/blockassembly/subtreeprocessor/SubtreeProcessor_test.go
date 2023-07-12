@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -20,6 +21,14 @@ var (
 
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+	blockHeader     = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
 
 	txIds = []string{
 		"fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4",
@@ -52,7 +61,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 
 	waitCh := make(chan struct{})
 	defer close(waitCh)
@@ -121,7 +130,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		defer close(waitCh)
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
-		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+		stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -153,7 +162,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		defer close(waitCh)
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-		stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+		stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -186,7 +195,7 @@ func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 
 /*
 *
-The reset method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
+The moveUpBlock method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
 *
 */
 func TestReset(t *testing.T) {
@@ -218,7 +227,7 @@ func TestReset(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -242,17 +251,16 @@ func TestReset(t *testing.T) {
 
 	stp.currentItemsPerFile = 2
 
-	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be reset
+	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveUpBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
 	wg.Add(5) // we are expecting 2 more subtrees
 
-	jobId, _ := chainhash.NewHashFromStr("123")
-	err := stp.Reset(&Job{
-		ID: jobId,
-		Subtrees: []*util.Subtree{
-			stp.chainedSubtrees[0],
-			stp.chainedSubtrees[1],
+	err := stp.MoveUpBlock(&model.Block{
+		Header: blockHeader,
+		Subtrees: []*chainhash.Hash{
+			stp.chainedSubtrees[0].RootHash(),
+			stp.chainedSubtrees[1].RootHash(),
 		},
 	})
 	require.NoError(t, err)
@@ -293,7 +301,7 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -320,15 +328,14 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 
 	wg.Add(5) // we are expecting 4 subtrees
 
-	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be reset
+	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveUpBlock
 	// new items per file is 2 so there should be 5 subtrees in the chain
-	jobId, _ := chainhash.NewHashFromStr("123")
-	err := stp.Reset(&Job{
-		ID: jobId,
-		Subtrees: []*util.Subtree{
-			stp.chainedSubtrees[0],
-			stp.chainedSubtrees[1],
+	err := stp.MoveUpBlock(&model.Block{
+		Header: blockHeader,
+		Subtrees: []*chainhash.Hash{
+			stp.chainedSubtrees[0].RootHash(),
+			stp.chainedSubtrees[1].RootHash(),
 		},
 	})
 	wg.Wait()
@@ -367,7 +374,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -394,15 +401,14 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 
 	wg.Add(4) // we are expecting 4 subtrees
 
-	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be reset
+	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveUpBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
-	jobId, _ := chainhash.NewHashFromStr("123")
-	err := stp.Reset(&Job{
-		ID: jobId,
-		Subtrees: []*util.Subtree{
-			stp.chainedSubtrees[0],
-			stp.chainedSubtrees[1],
+	err := stp.MoveUpBlock(&model.Block{
+		Header: blockHeader,
+		Subtrees: []*chainhash.Hash{
+			stp.chainedSubtrees[0].RootHash(),
+			stp.chainedSubtrees[1].RootHash(),
 		},
 	})
 	wg.Wait()
@@ -440,7 +446,7 @@ func TestResetLarge(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -468,15 +474,14 @@ func TestResetLarge(t *testing.T) {
 
 	wg.Add(8) // we are expecting 4 subtrees
 
-	// reset saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be reset
+	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveUpBlock
 	// new items per file is 65536 so there should be 8 subtrees in the chain
-	jobId, _ := chainhash.NewHashFromStr("123")
-	err := stp.Reset(&Job{
-		ID: jobId,
-		Subtrees: []*util.Subtree{
-			stp.chainedSubtrees[0],
-			stp.chainedSubtrees[1],
+	err := stp.MoveUpBlock(&model.Block{
+		Header: blockHeader,
+		Subtrees: []*chainhash.Hash{
+			stp.chainedSubtrees[0].RootHash(),
+			stp.chainedSubtrees[1].RootHash(),
 		},
 	})
 	wg.Wait()
@@ -517,7 +522,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	subtreeProcessor := NewSubtreeProcessor(p2p.TestLogger{}, newSubtreeChan)
+	subtreeProcessor := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash)

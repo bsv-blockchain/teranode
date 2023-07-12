@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -24,7 +23,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -63,7 +61,7 @@ func init() {
 	prometheusUtxoStoreDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Name: "blockassembly_utxo_store_duration",
-			Help: "Duration of storing new utxos by BlockAssembler",
+			Help: "Duration of storing new utxos by BlockAssembly",
 		},
 	)
 
@@ -78,11 +76,9 @@ func init() {
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
-	logger utils.Logger
+	blockAssembler *BlockAssembler
+	logger         utils.Logger
 
-	utxoStore        utxostore.Interface
-	txMetaClient     txmeta_store.Store
-	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
@@ -105,7 +101,7 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 		panic("no utxostore setting found")
 	}
 
-	s, err := utxo.NewStore(logger, utxostoreURL)
+	utxoStore, err := utxo.NewStore(logger, utxostoreURL)
 	if err != nil {
 		panic(err)
 	}
@@ -140,11 +136,11 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 
 	newSubtreeChan := make(chan *util.Subtree)
 
+	blockAssembler := NewBlockAssembler(logger, txMetaStore, utxoStore, subtreeStore, blockchainClient)
+
 	ba := &BlockAssembly{
+		blockAssembler:   blockAssembler,
 		logger:           logger,
-		utxoStore:        s,
-		txMetaClient:     txMetaStore,
-		subtreeProcessor: subtreeprocessor.NewSubtreeProcessor(logger, newSubtreeChan),
 		blockchainClient: blockchainClient,
 		subtreeStore:     subtreeStore,
 		jobStore:         make(map[chainhash.Hash]*subtreeprocessor.Job),
@@ -265,7 +261,7 @@ func (ba *BlockAssembly) Start() error {
 	// Register reflection service on gRPC server.
 	reflection.Register(ba.grpcServer)
 
-	ba.logger.Infof("BlockAssembler GRPC service listening on %s", address)
+	ba.logger.Infof("[BlockAssembly] GRPC service listening on %s", address)
 
 	if err = ba.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
@@ -288,44 +284,16 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockasse
 	}, nil
 }
 
-// func (ba *BlockAssembly) NewChaintipAndHeight(ctx context.Context, req *blockassembly_api.NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
-// 	return &emptypb.Empty{}, nil
-// }
-
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
-	// Look up the new utxos for this txid, add them to the utxostore, and add the tx to the subtree builder...
-	txid, err := chainhash.NewHash(req.Txid)
+	// Look up the new utxos for this txHash, add them to the utxostore, and add the tx to the subtree builder...
+	txHash, err := chainhash.NewHash(req.Txid)
 	if err != nil {
 		return nil, err
 	}
 
-	startTime := time.Now()
-
-	txMetadata, err := ba.txMetaClient.Get(ctx, txid)
-	if err != nil {
+	if err = ba.blockAssembler.AddTx(ctx, txHash); err != nil {
 		return nil, err
 	}
-
-	prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
-
-	startTime = time.Now()
-
-	// Add all the utxo hashes to the utxostore
-	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err := ba.utxoStore.Store(context.Background(), hash); err != nil {
-			return nil, fmt.Errorf("error storing utxo (%v): %w", resp, err)
-		}
-	}
-
-	prometheusUtxoStoreDuration.Observe(float64(time.Since(startTime).Microseconds()))
-
-	startTime = time.Now()
-
-	ba.subtreeProcessor.Add(*txid, txMetadata.Fee)
-
-	prometheusSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
-
-	prometheusBlockAssemblyAddTx.Inc()
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
@@ -333,58 +301,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*model.MiningCandidate, error) {
-
-	bestBlockHeader, bestBlockHeight, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error getting best block header: %w", err)
+		return nil, err
 	}
 
-	// Get the list of completed containers for the current chaintip and height...
-	subtrees := ba.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
-
-	var coinbaseValue uint64
-	for _, subtree := range subtrees {
-		coinbaseValue += subtree.Fees
-	}
-	coinbaseValue += util.GetBlockSubsidyForHeight(bestBlockHeight + 1)
-
-	// Get the hash of the last subtree in the list...
-	id := &chainhash.Hash{}
-	if len(subtrees) > 0 {
-		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree := util.NewTree(height)
-		for _, subtree := range subtrees {
-			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees)
-		}
-		id = topTree.RootHash()
-	}
-
-	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
-	// nBits := bestBlockHeader.Bits
-	// TEMP for testing only - moved from blockchain sql store
-	nBits := model.NewNBitFromString("2000ffff") // TEMP We want hashes with 2 leading zeros
-
-	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
-	if err != nil {
-		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
-	}
-
-	var coinbaseMerkleProofBytes [][]byte
-	for _, hash := range coinbaseMerkleProof {
-		coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
-	}
-
-	miningCandidate := &model.MiningCandidate{
-		Id:            id[:],
-		PreviousHash:  bestBlockHeader.Hash().CloneBytes(),
-		CoinbaseValue: coinbaseValue,
-		Version:       1,
-		NBits:         nBits.CloneBytes(),
-		Height:        bestBlockHeight + 1,
-		Time:          uint32(time.Now().Unix()),
-		MerkleProof:   coinbaseMerkleProofBytes,
-	}
-
+	id, _ := chainhash.NewHash(miningCandidate.Id)
 	ba.jobStoreMutex.Lock()
 	ba.jobStore[*id] = &subtreeprocessor.Job{
 		ID:              id,
@@ -397,9 +319,6 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	// TODO Should this all happen in the subtreeProcessor? There could be timing issues between adding block and
-	// resetting for the next mining job etc. - also we are continually adding new subtrees and transactions etc.
-
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
 		return nil, err
@@ -427,11 +346,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("failed to convert coinbaseTxHash: %w", err)
 	}
 
-	//subtreesInJob := ba.subtreeProcessor.GetCompleteSubtreesForJob(job.ID[:])
 	subtreesInJob := job.Subtrees
-	//ba.logger.Debugf("SERVER replacing coinbase, current hash: %s", subtreesInJob[0].RootHash().String())
 	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
-	//ba.logger.Debugf("SERVER replacing coinbase, new hash: %s", subtreesInJob[0].RootHash().String())
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
 	transactionCount := uint64(0)
@@ -450,8 +366,6 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		}
 	}
 
-	//merkleProofs, _ := topTree.BuildMerkleTreeStoreFromBytes()
-	//ba.logger.Debugf("SERVER SUBTREE HASHES: %v", subtreeHashes)
 	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesInJob)
 	if err != nil {
 		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
@@ -463,20 +377,12 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		cmp[idx] = hash.String()
 		cmpB[idx] = hash.CloneBytes()
 	}
-	//fmt.Printf("SERVER merkle proof: %v", cmp)
-	//bMerkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), cmpB)
-	//ba.logger.Debugf("SERVER Merkle root from proofs: %s", utils.ReverseAndHexEncodeSlice(bMerkleRoot))
-
-	//ba.logger.Debugf("SERVER Coinbase: %s", coinbaseTx.TxID())
-	//ba.logger.Debugf("SERVER MERKLE PROOfS: %v", merkleProofs)
 
 	calculatedMerkleRoot := topTree.RootHash()
 	hashMerkleRoot, err := chainhash.NewHash(calculatedMerkleRoot[:])
 	if err != nil {
 		return nil, err
 	}
-
-	//ba.logger.Debugf("SERVER MERKLE ROOT: %s", hashMerkleRoot.String())
 
 	block := &model.Block{
 		Header: &model.BlockHeader{
@@ -498,15 +404,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("invalid block: %v", err)
 	}
 
-	// reset the subtrees
-	err = ba.subtreeProcessor.Reset(job)
-	if err != nil {
-		// TODO if this happens, why might actually start mining the next block with the same subtrees and transactions
-		// this would be VERY bad
-		return nil, fmt.Errorf("failed to reset subtree processor: %w", err)
-	}
-
-	// only add block to blockchain if the reset was successful - otherwise we risk mining the same transactions
+	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}

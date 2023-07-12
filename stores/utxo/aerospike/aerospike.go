@@ -282,15 +282,15 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Reset: %v\n", err)
+		prometheusUtxoErrors.WithLabelValues("MoveUpBlock", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike MoveUpBlock: %v\n", err)
 		return nil, err
 	}
 
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Reset delete key: %v\n", err)
+		prometheusUtxoErrors.WithLabelValues("MoveUpBlock", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike MoveUpBlock delete key: %v\n", err)
 		return nil, err
 	}
 

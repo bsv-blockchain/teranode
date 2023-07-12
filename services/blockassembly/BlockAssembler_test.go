@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
@@ -28,7 +27,7 @@ type baTestItems struct {
 	blobStore        *memory.Memory
 	newSubtreeChan   chan *util.Subtree
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
-	blockAssembly    *BlockAssembly
+	blockAssembler   *BlockAssembler
 }
 
 var (
@@ -64,33 +63,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		}()
 
 		require.NoError(t, ba.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
-		_, err := ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-			Txid: tx1.CloneBytes(),
-		})
+		err := ba.blockAssembler.AddTx(context.Background(), tx1)
 		require.NoError(t, err)
 
 		require.NoError(t, ba.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
-		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-			Txid: tx2.CloneBytes(),
-		})
+		err = ba.blockAssembler.AddTx(context.Background(), tx2)
 		require.NoError(t, err)
 
 		require.NoError(t, ba.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
-		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-			Txid: tx3.CloneBytes(),
-		})
+		err = ba.blockAssembler.AddTx(context.Background(), tx3)
 		require.NoError(t, err)
 
 		require.NoError(t, ba.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
-		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-			Txid: tx4.CloneBytes(),
-		})
+		err = ba.blockAssembler.AddTx(context.Background(), tx4)
 		require.NoError(t, err)
 
 		require.NoError(t, ba.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
-		_, err = ba.blockAssembly.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-			Txid: tx5.CloneBytes(),
-		})
+		err = ba.blockAssembler.AddTx(context.Background(), tx5)
 		require.NoError(t, err)
 
 		wg.Wait()
@@ -106,7 +95,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan *util.Subtree)
-	items.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(p2p.TestLogger{}, items.newSubtreeChan)
+	items.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(p2p.TestLogger{}, nil, items.newSubtreeChan)
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
@@ -118,20 +107,16 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
-	ba := BlockAssembly{
-		UnimplementedBlockAssemblyAPIServer: blockassembly_api.UnimplementedBlockAssemblyAPIServer{},
-		logger:                              p2p.TestLogger{},
-		utxoStore:                           items.utxoStore,
-		txMetaClient:                        items.txMetaStore,
-		subtreeProcessor:                    items.subtreeProcessor,
-		grpcServer:                          nil,
-		blockchainClient:                    blockchainClient,
-		subtreeStore:                        items.blobStore,
-		jobStoreMutex:                       sync.RWMutex{},
-		jobStore:                            make(map[chainhash.Hash]*subtreeprocessor.Job),
+	ba := BlockAssembler{
+		logger:           p2p.TestLogger{},
+		utxoStore:        items.utxoStore,
+		txMetaClient:     items.txMetaStore,
+		subtreeProcessor: items.subtreeProcessor,
+		blockchainClient: blockchainClient,
+		subtreeStore:     items.blobStore,
 	}
 
-	items.blockAssembly = &ba
+	items.blockAssembler = &ba
 
 	return &items
 }

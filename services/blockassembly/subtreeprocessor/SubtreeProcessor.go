@@ -1,14 +1,17 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"errors"
 	"sync"
 
 	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 type txIDAndFee struct {
@@ -23,8 +26,8 @@ type Job struct {
 	MiningCandidate *model.MiningCandidate
 }
 
-type resetRequest struct {
-	job     *Job
+type moveBlockRequest struct {
+	block   *model.Block
 	errChan chan error
 }
 
@@ -33,12 +36,14 @@ type SubtreeProcessor struct {
 	txChan              chan *txIDAndFee
 	incomingBlockChan   chan string
 	getSubtreesChan     chan chan []*util.Subtree
-	resetChan           chan resetRequest
+	moveDownBlockChan   chan moveBlockRequest
+	moveUpBlockChan     chan moveBlockRequest
 	newSubtreeChan      chan *util.Subtree // used to notify of a new subtree
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
 	sync.Mutex
 	incompleteSubtrees map[chainhash.Hash]*util.Subtree
+	subtreeStore       blob.Store
 	logger             utils.Logger
 }
 
@@ -46,7 +51,7 @@ var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
 	firstSubtree := util.NewTreeByLeafCount(initialItemsPerFile)
@@ -60,11 +65,13 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 		txChan:              make(chan *txIDAndFee, 100_000),
 		incomingBlockChan:   make(chan string),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
-		resetChan:           make(chan resetRequest),
+		moveDownBlockChan:   make(chan moveBlockRequest),
+		moveUpBlockChan:     make(chan moveBlockRequest),
 		newSubtreeChan:      newSubtreeChan,
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		incompleteSubtrees:  make(map[chainhash.Hash]*util.Subtree, 0),
+		subtreeStore:        subtreeStore,
 		logger:              logger,
 	}
 
@@ -83,11 +90,15 @@ func NewSubtreeProcessor(logger utils.Logger, newSubtreeChan chan *util.Subtree)
 
 				getSubtreesChan <- chainedSubtrees
 
-			case resetReq := <-stp.resetChan:
-				logger.Infof("[SubtreeProcessor] reset subtree processor")
-				// Reset the state of the subtree processor to the state of the subtree that contains the resetHash
-				err := stp.reset(resetReq.job)
-				resetReq.errChan <- err
+			case moveDownReq := <-stp.moveDownBlockChan:
+				logger.Infof("[SubtreeProcessor] moveDownBlock subtree processor")
+				err := stp.moveDownBlock(moveDownReq.block)
+				moveDownReq.errChan <- err
+
+			case moveUpReq := <-stp.moveUpBlockChan:
+				logger.Infof("[SubtreeProcessor] moveUpBlock subtree processor")
+				err := stp.moveUpBlock(moveUpReq.block)
+				moveUpReq.errChan <- err
 
 			case txReq := <-stp.txChan:
 				stp.addNode(txReq.txID, txReq.fee)
@@ -112,7 +123,7 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
 		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
 		// Add the subtree to the chain
-		// this needs to happen here, so we can wait for the append to complete
+		// this needs to happen here, so we can wait for the append action to complete
 		stp.logger.Infof("[SubtreeProcessor] append subtree")
 		stp.chainedSubtrees = append(stp.chainedSubtrees, subtree)
 		// Send the subtree to the newSubtreeChan
@@ -195,62 +206,108 @@ func (stp *SubtreeProcessor) GetCompleteSubtreesForJob(lastRoot []byte) []*util.
 	return nil
 }
 
-// Reset the subtrees when a new block is found
-func (stp *SubtreeProcessor) Reset(job *Job) error {
+// MoveUpBlock the subtrees when a new block is found
+func (stp *SubtreeProcessor) MoveUpBlock(block *model.Block) error {
 	errChan := make(chan error)
-	stp.resetChan <- resetRequest{
-		job:     job,
+	stp.moveUpBlockChan <- moveBlockRequest{
+		block:   block,
 		errChan: errChan,
 	}
 
 	return <-errChan
 }
 
-func (stp *SubtreeProcessor) reset(job *Job) error {
-	stp.logger.Infof("resetting the subtrees with last root %s", utils.ReverseAndHexEncodeHash(*job.ID))
-	stp.logger.Debugf("resetting subtrees: %v", job.Subtrees)
+// moveDownBlock adds all transactions that are in the block given to the current subtrees
+// TODO handle conflicting transactions
+func (stp *SubtreeProcessor) moveDownBlock(block *model.Block) error {
+	return nil
+}
 
-	// we need to shuffle all the transaction along because of the new coinbase placeholder
+// moveUpBlock cleans out all transactions that are in the current subtrees and also in the block
+// given. It is akin moving up the blockchain to the next block.
+// TODO handle conflicting transactions
+func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
+	stp.logger.Infof("resetting the subtrees with block %s", block.String())
+	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
-	if job.ID == nil {
-		return errors.New("you must pass in the job ID")
+	if block == nil {
+		return errors.New("you must pass in a block to moveUpBlock")
 	}
 
-	// check that all the subtrees are still in the processor
-	// this should still be locked in the go routines so we should be safe
-	subtreesMap := make(map[chainhash.Hash]int, len(stp.chainedSubtrees))
-	for idx, subtree := range stp.chainedSubtrees {
-		subtreesMap[*subtree.RootHash()] = idx
-	}
-
-	for _, subtree := range job.Subtrees {
-		if _, ok := subtreesMap[*subtree.RootHash()]; !ok {
-			return errors.New("the subtree is not in the processor: " + subtree.RootHash().String())
-		}
-	}
-
-	jobSubtreesMap := make(map[chainhash.Hash]int, len(job.Subtrees))
-	for idx, subtree := range job.Subtrees {
-		jobSubtreesMap[*subtree.RootHash()] = idx
-	}
-
-	// create SET to look up the transactions that need to be removed from the incomplete subtrees
-	var incompleteSubtreeFilterMap map[chainhash.Hash]struct{}
-	if stp.incompleteSubtrees[*job.ID] != nil {
-		incompleteSubtreeFilterMap = make(map[chainhash.Hash]struct{}, stp.incompleteSubtrees[*job.ID].Length())
-		for _, node := range stp.incompleteSubtrees[*job.ID].Nodes {
-			incompleteSubtreeFilterMap[*node] = struct{}{}
-		}
+	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
+	for idx, subtree := range block.Subtrees {
+		blockSubtreesMap[*subtree] = idx
 	}
 
 	currentSubtree := stp.currentSubtree
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
+	// get all the subtrees that were not in the block
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	for _, subtree := range stp.chainedSubtrees {
-		_, ok := jobSubtreesMap[*subtree.RootHash()]
-		if ok {
+		id := *subtree.RootHash()
+		if _, ok := blockSubtreesMap[id]; !ok {
+			// only add the subtrees that were not in the block
 			chainedSubtrees = append(chainedSubtrees, subtree)
+		} else {
+			// remove the subtree from the block subtrees map, we had it in our list
+			delete(blockSubtreesMap, id)
+		}
+	}
+
+	// clear the transaction ids from all the subtrees of the block that are left over
+	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
+	transactionMap := util.NewSplitSwissMap(mapSize)
+	g, _ := errgroup.WithContext(context.Background())
+	// get all the subtrees from the block that we have not yet cleaned out
+	for subtreeHash, _ := range blockSubtreesMap {
+		g.Go(func() error {
+			subtreeBytes, err := stp.subtreeStore.Get(context.Background(), subtreeHash[:])
+			if err != nil {
+				return err
+			}
+
+			subtree := &util.Subtree{}
+			err = subtree.Deserialize(subtreeBytes)
+			if err != nil {
+				return err
+			}
+
+			for _, node := range subtree.Nodes {
+				_ = transactionMap.Put(*node)
+			}
+
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		stp.logger.Errorf("error getting subtrees from block: %s", err.Error())
+		return err
+	}
+
+	// TODO check the order of transactions in the block
+
+	if transactionMap.Length() > 0 {
+		// clean out the transactions from the old current subtree that were in the block
+		// and add the remainder to the new current subtree
+		g, _ = errgroup.WithContext(context.Background())
+		for _, subtree := range chainedSubtrees {
+			g.Go(func() error {
+				remainingTransactions, err := subtree.Difference(transactionMap)
+				if err != nil {
+					return err
+				}
+
+				for _, txHash := range remainingTransactions {
+					_ = stp.currentSubtree.AddNode(txHash, 0)
+				}
+
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			stp.logger.Errorf("error calculating difference: %s", err.Error())
+			return err
 		}
 	}
 
@@ -259,31 +316,17 @@ func (stp *SubtreeProcessor) reset(job *Job) error {
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholderHash, 0)
 
-	fees := uint64(0)
-	for _, node := range currentSubtree.Nodes {
-		if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
+	fees := currentSubtree.Fees
+
+	for _, subtree := range chainedSubtrees {
+		for _, node := range subtree.Nodes {
 			stp.addNode(*node, 0)
 		}
+		fees += subtree.Fees
 	}
-	fees += currentSubtree.Fees
 
-	if incompleteSubtreeFilterMap != nil {
-		// this prevents repeating the map lookup in every iteration of the loop
-		for _, subtree := range chainedSubtrees {
-			for _, node := range subtree.Nodes {
-				if _, ok := incompleteSubtreeFilterMap[*node]; !ok {
-					stp.addNode(*node, 0)
-				}
-			}
-			fees += subtree.Fees
-		}
-	} else {
-		for _, subtree := range chainedSubtrees {
-			for _, node := range subtree.Nodes {
-				stp.addNode(*node, 0)
-			}
-			fees += subtree.Fees
-		}
+	for _, node := range currentSubtree.Nodes {
+		stp.addNode(*node, 0)
 	}
 
 	if len(stp.chainedSubtrees) > 0 {

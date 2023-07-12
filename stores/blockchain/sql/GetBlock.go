@@ -8,11 +8,12 @@ import (
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint64, error) {
+func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -30,6 +31,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		,b.previous_hash
 		,b.merkle_root
 	    ,b.tx_count
+		,b.coinbase_tx
 		,b.subtree_count
 		,b.subtrees
 		,b.height
@@ -46,7 +48,8 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	var subtreeBytes []byte
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
-	var height uint64
+	var coinbaseTx []byte
+	var height uint32
 	var nBits []byte
 	var err error
 
@@ -58,6 +61,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&hashPrevBlock,
 		&hashMerkleRoot,
 		&transactionCount,
+		&coinbaseTx,
 		&subtreeCount,
 		&subtreeBytes,
 		&height,
@@ -79,6 +83,11 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
 	block.TransactionCount = transactionCount
+
+	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {

@@ -50,9 +50,9 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
-func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *model.BlockHeader, error) {
+func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error) {
 	timer := time.NewTicker(10 * time.Second)
-	ch := make(chan *model.BlockHeader)
+	ch := make(chan *BestBlockHeader)
 
 	var lastHeaderHashStr string
 	go func() {
@@ -61,7 +61,7 @@ func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *model.
 			case <-ctx.Done():
 				return
 			case <-timer.C:
-				header, _, err := c.store.GetBestBlockHeader(ctx)
+				header, height, err := c.store.GetBestBlockHeader(ctx)
 				if err != nil {
 					c.logger.Errorf("error getting best block header: %s", err.Error())
 					continue
@@ -71,7 +71,10 @@ func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *model.
 					continue
 				}
 
-				ch <- header
+				ch <- &BestBlockHeader{
+					Header: header,
+					Height: height,
+				}
 
 				lastHeaderHashStr = header.Hash().String()
 			}

@@ -228,7 +228,7 @@ func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) 
 }
 
 func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
-	traceSpan := tracing.Start(ctx, "Interface:Reset")
+	traceSpan := tracing.Start(ctx, "Interface:MoveUpBlock")
 	defer traceSpan.Finish()
 
 	utxoHash, err := chainhash.NewHash(req.UxtoHash)
