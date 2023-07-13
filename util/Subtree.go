@@ -295,30 +295,37 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		return fmt.Errorf("unable to read fees: %v", err)
 	}
 
-	// read number of nodes
-	numNodes, err := wire.ReadVarInt(buf, 0)
+	// read number of leaves
+	numLeaves, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return fmt.Errorf("unable to read number of nodes: %v", err)
+		return fmt.Errorf("unable to read number of leaves: %v", err)
 	}
 
-	// read nodes
-	st.Nodes = make([]*chainhash.Hash, numNodes)
-	for i := uint64(0); i < numNodes; i++ {
+	if !IsPowerOfTwo(int(numLeaves)) {
+		return fmt.Errorf("numberOfLeaves must be a power of two")
+	}
+
+	st.treeSize = int(numLeaves)
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	// read leaves
+	st.Nodes = make([]*chainhash.Hash, numLeaves)
+	for i := uint64(0); i < numLeaves; i++ {
 		st.Nodes[i], err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
-			return fmt.Errorf("unable to read node: %v", err)
+			return fmt.Errorf("unable to read leaves: %v", err)
 		}
 	}
 
 	// read number of conflicting nodes
-	numConflictingNodes, err := wire.ReadVarInt(buf, 0)
+	numConflictingLeaves, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
 	}
 
 	// read conflicting nodes
-	st.ConflictingNodes = make([]*chainhash.Hash, numConflictingNodes)
-	for i := uint64(0); i < numConflictingNodes; i++ {
+	st.ConflictingNodes = make([]*chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
 		st.ConflictingNodes[i], err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return fmt.Errorf("unable to read conflicting node: %v", err)

@@ -135,8 +135,7 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 	}
 
 	newSubtreeChan := make(chan *util.Subtree)
-
-	blockAssembler := NewBlockAssembler(logger, txMetaStore, utxoStore, subtreeStore, blockchainClient)
+	blockAssembler := NewBlockAssembler(logger, txMetaStore, utxoStore, subtreeStore, blockchainClient, newSubtreeChan)
 
 	ba := &BlockAssembly{
 		blockAssembler:   blockAssembler,
@@ -329,29 +328,34 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	ba.jobStoreMutex.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("job not found")
+		return nil, fmt.Errorf("[BlockAssembly] job not found")
 	}
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly] failed to convert hashPrevBlock: %w", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTx: %w", err)
 	}
 	coinbaseTxIDHash, err := chainhash.NewHashFromStr(coinbaseTx.TxID())
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert coinbaseTxHash: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTxHash: %w", err)
 	}
 
-	subtreesInJob := job.Subtrees
-	subtreesInJob[0].ReplaceRootNode(coinbaseTxIDHash)
-
-	subtreeHashes := make([]*chainhash.Hash, len(subtreesInJob))
+	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
+	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
+	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
-	for i, subtree := range subtreesInJob {
+	for i, subtree := range job.Subtrees {
+		jobSubtreeHashes[i] = subtree.RootHash()
+
+		subtreesInJob[i] = subtree
+		if i == 0 {
+			subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash)
+		}
 		rootHash := subtree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 		transactionCount += uint64(subtree.Length())
@@ -368,7 +372,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesInJob)
 	if err != nil {
-		return nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)
 	}
 
 	cmp := make([]string, len(coinbaseMerkleProof))
@@ -395,13 +399,13 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		},
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: transactionCount,
-		Subtrees:         subtreeHashes,
+		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 	}
 
 	// check fully valid, including whether difficulty in header is low enough
 	if ok, err = block.Valid(); !ok {
-		ba.logger.Errorf("Invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
-		return nil, fmt.Errorf("invalid block: %v", err)
+		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
+		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
 	}
 
 	// add block to the blockchain

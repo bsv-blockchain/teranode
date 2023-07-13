@@ -124,7 +124,7 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
 
 		// Add the subtree to the chain
 		// this needs to happen here, so we can wait for the append action to complete
-		stp.logger.Infof("[SubtreeProcessor] append subtree")
+		stp.logger.Infof("[SubtreeProcessor] append subtree: %s", subtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, subtree)
 		// Send the subtree to the newSubtreeChan
 		stp.newSubtreeChan <- subtree
@@ -244,45 +244,49 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 
 	// get all the subtrees that were not in the block
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	for _, subtree := range stp.chainedSubtrees {
-		id := *subtree.RootHash()
-		if _, ok := blockSubtreesMap[id]; !ok {
-			// only add the subtrees that were not in the block
-			chainedSubtrees = append(chainedSubtrees, subtree)
-		} else {
-			// remove the subtree from the block subtrees map, we had it in our list
-			delete(blockSubtreesMap, id)
-		}
-	}
+	//for _, subtree := range stp.chainedSubtrees {
+	//	id := *subtree.RootHash()
+	//	if _, ok := blockSubtreesMap[id]; !ok {
+	//		// only add the subtrees that were not in the block
+	//		chainedSubtrees = append(chainedSubtrees, subtree)
+	//	} else {
+	//		// remove the subtree from the block subtrees map, we had it in our list
+	//		delete(blockSubtreesMap, id)
+	//	}
+	//}
 
 	// clear the transaction ids from all the subtrees of the block that are left over
-	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
-	transactionMap := util.NewSplitSwissMap(mapSize)
-	g, _ := errgroup.WithContext(context.Background())
-	// get all the subtrees from the block that we have not yet cleaned out
-	for subtreeHash, _ := range blockSubtreesMap {
-		g.Go(func() error {
-			subtreeBytes, err := stp.subtreeStore.Get(context.Background(), subtreeHash[:])
-			if err != nil {
-				return err
-			}
+	var transactionMap *util.SplitSwissMap
+	if len(blockSubtreesMap) > 0 {
+		mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
+		transactionMap = util.NewSplitSwissMap(mapSize)
+		g, _ := errgroup.WithContext(context.Background())
+		// get all the subtrees from the block that we have not yet cleaned out
+		for subtreeHash, _ := range blockSubtreesMap {
+			g.Go(func() error {
+				stp.logger.Infof("getting subtree: %s", subtreeHash.String())
+				subtreeBytes, err := stp.subtreeStore.Get(context.Background(), subtreeHash[:])
+				if err != nil {
+					return err
+				}
 
-			subtree := &util.Subtree{}
-			err = subtree.Deserialize(subtreeBytes)
-			if err != nil {
-				return err
-			}
+				subtree := &util.Subtree{}
+				err = subtree.Deserialize(subtreeBytes)
+				if err != nil {
+					return err
+				}
 
-			for _, node := range subtree.Nodes {
-				_ = transactionMap.Put(*node)
-			}
+				for _, node := range subtree.Nodes {
+					_ = transactionMap.Put(*node)
+				}
 
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		stp.logger.Errorf("error getting subtrees from block: %s", err.Error())
-		return err
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			stp.logger.Errorf("error getting subtrees from block: %s", err.Error())
+			return err
+		}
 	}
 
 	// TODO check the order of transactions in the block
@@ -290,7 +294,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	if transactionMap.Length() > 0 {
 		// clean out the transactions from the old current subtree that were in the block
 		// and add the remainder to the new current subtree
-		g, _ = errgroup.WithContext(context.Background())
+		g, _ := errgroup.WithContext(context.Background())
 		for _, subtree := range chainedSubtrees {
 			g.Go(func() error {
 				remainingTransactions, err := subtree.Difference(transactionMap)

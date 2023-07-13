@@ -39,9 +39,8 @@ type BlockAssembler struct {
 }
 
 func NewBlockAssembler(logger utils.Logger, txMetaClient txmeta_store.Store, utxoStore utxostore.Interface,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembler {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
-	newSubtreeChan := make(chan *util.Subtree, 100_000)
 	b := &BlockAssembler{
 		logger:            logger,
 		txMetaClient:      txMetaClient,
@@ -112,6 +111,10 @@ func NewBlockAssembler(logger utils.Logger, txMetaClient txmeta_store.Store, utx
 	}()
 
 	return b
+}
+
+func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
+	return b.bestBlockHeader, b.bestBlockHeight
 }
 
 func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) error {

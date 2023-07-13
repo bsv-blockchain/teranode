@@ -39,17 +39,25 @@ func (m *Miner) Start() {
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
+	ctx, cancelCtx := context.WithCancel(context.Background())
 	for range m.candidateTimer.C {
 		m.candidateTimer.Reset(candidateRequestInterval * time.Second)
-		candidate, err := m.blockAssemblyClient.GetMiningCandidate(context.Background())
+		// cancel the previous context
+		cancelCtx()
+
+		// create a new context to mine in
+		ctx, cancelCtx = context.WithCancel(context.Background())
+
+		candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
 		if err != nil {
 			m.logger.Errorf("Error getting mining candidate: %v", err)
 			continue
 		}
 		m.logger.Infof(candidate.Stringify())
 
-		m.Mine(candidate)
+		m.Mine(ctx, candidate)
 	}
+	cancelCtx()
 }
 
 func (m *Miner) Stop(ctx context.Context) {
@@ -57,7 +65,7 @@ func (m *Miner) Stop(ctx context.Context) {
 	m.candidateTimer.Stop()
 }
 
-func (m *Miner) Mine(candidate *model.MiningCandidate) {
+func (m *Miner) Mine(ctx context.Context, candidate *model.MiningCandidate) {
 	// Create a new coinbase transaction
 
 	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
@@ -83,26 +91,33 @@ func (m *Miner) Mine(candidate *model.MiningCandidate) {
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
 	var nonce uint32
+
+miningLoop:
 	for {
-		blockHeader := model.BlockHeader{
-			Version:        candidate.Version,
-			HashPrevBlock:  previousHash,
-			HashMerkleRoot: merkleRootHash,
-			Timestamp:      candidate.Time,
-			Bits:           model.NewNBitFromSlice(candidate.NBits),
-			Nonce:          nonce,
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			blockHeader := model.BlockHeader{
+				Version:        candidate.Version,
+				HashPrevBlock:  previousHash,
+				HashMerkleRoot: merkleRootHash,
+				Timestamp:      candidate.Time,
+				Bits:           model.NewNBitFromSlice(candidate.NBits),
+				Nonce:          nonce,
+			}
+
+			headerValid, _ := blockHeader.Valid()
+			if headerValid { // header is valid if the hash is less than the target
+				break miningLoop
+			}
+
+			// TODO: remove this when Siggi gets a laptop without a fan...
+			// 😂
+			time.Sleep(10 * time.Millisecond)
+
+			nonce++
 		}
-
-		headerValid, _ := blockHeader.Valid()
-		if headerValid { // header is valid if the hash is less than the target
-			break
-		}
-
-		// TODO: remove this when Siggi gets a laptop without a fan...
-		// 😂
-		time.Sleep(10 * time.Millisecond)
-
-		nonce++
 	}
 
 	m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(candidate.Id))

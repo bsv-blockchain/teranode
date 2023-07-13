@@ -108,9 +108,13 @@ func (b *Block) Valid() (bool, error) {
 		return false, fmt.Errorf("block has no coinbase tx")
 	}
 
+	// TODO ShouldHaveSerializedBlockHeight ?
+
 	if len(b.Subtrees) == 0 {
 		return false, fmt.Errorf("block has no subtrees")
 	}
+
+	// TODO check the subtrees merkle path, replacing the coinbase transaction
 
 	if !b.ValidOrder() {
 		return false, fmt.Errorf("block has invalid order")
