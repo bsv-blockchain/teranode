@@ -75,7 +75,7 @@ func (bh *BlockHeader) Valid() (bool, error) {
 	bn.SetString(bh.Hash().String(), 16)
 
 	compare := bn.Cmp(target)
-	if compare < 0 {
+	if compare <= 0 {
 		return true, nil
 	}
 

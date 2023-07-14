@@ -1,4 +1,4 @@
-package miner
+package cpuminer
 
 import (
 	"encoding/hex"

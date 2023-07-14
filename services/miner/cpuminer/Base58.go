@@ -1,4 +1,4 @@
-package miner
+package cpuminer
 
 // Copied from github.com/drewwells/go-bitpay-client/encoding/base58
 /*

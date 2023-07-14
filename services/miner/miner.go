@@ -4,11 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
-	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/TAAL-GmbH/ubsv/services/miner/cpuminer"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -55,7 +52,16 @@ func (m *Miner) Start() {
 		}
 		m.logger.Infof(candidate.Stringify())
 
-		m.Mine(ctx, candidate)
+		solution, err := cpuminer.Mine(ctx, candidate)
+		if err != nil {
+			m.logger.Errorf("Error mining block: %v", err)
+		}
+
+		m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
+		err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
+		if err != nil {
+			m.logger.Errorf("Error submitting mining solution: %v", err)
+		}
 	}
 	cancelCtx()
 }
@@ -63,66 +69,4 @@ func (m *Miner) Start() {
 func (m *Miner) Stop(ctx context.Context) {
 	m.logger.Infof("Stopping miner")
 	m.candidateTimer.Stop()
-}
-
-func (m *Miner) Mine(ctx context.Context, candidate *model.MiningCandidate) {
-	// Create a new coinbase transaction
-
-	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
-	if err != nil {
-		m.logger.Errorf("Error creating coinbase transaction: %v", err)
-		return
-	}
-
-	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
-	extranonce := make([]byte, 12)
-	a = append(a, extranonce...)
-	a = append(a, b...)
-
-	coinbaseTx, err := bt.NewTxFromBytes(a)
-	if err != nil {
-		m.logger.Errorf("Error decoding coinbase transaction: %v", err)
-		return
-	}
-
-	merkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), candidate.MerkleProof)
-
-	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
-	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
-
-	var nonce uint32
-
-miningLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			blockHeader := model.BlockHeader{
-				Version:        candidate.Version,
-				HashPrevBlock:  previousHash,
-				HashMerkleRoot: merkleRootHash,
-				Timestamp:      candidate.Time,
-				Bits:           model.NewNBitFromSlice(candidate.NBits),
-				Nonce:          nonce,
-			}
-
-			headerValid, _ := blockHeader.Valid()
-			if headerValid { // header is valid if the hash is less than the target
-				break miningLoop
-			}
-
-			// TODO: remove this when Siggi gets a laptop without a fan...
-			// 😂
-			time.Sleep(10 * time.Millisecond)
-
-			nonce++
-		}
-	}
-
-	m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
-	err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), candidate.Id, coinbaseTx.Bytes(), candidate.Time, nonce, 1)
-	if err != nil {
-		m.logger.Errorf("Error submitting mining solution: %v", err)
-	}
 }

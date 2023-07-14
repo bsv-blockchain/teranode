@@ -1,4 +1,4 @@
-package miner
+package cpuminer
 
 /*
 Here is a real example coinbase broken down...

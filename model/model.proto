@@ -15,3 +15,11 @@ message MiningCandidate {
   uint32 height = 7;
   repeated bytes merkle_proof = 8;
 }
+// swagger:model MiningSolution
+message MiningSolution {
+  bytes id = 1;
+  bytes coinbase= 2;
+  uint32 time = 3;
+  uint32 nonce = 4;
+  uint32 version = 5;
+}

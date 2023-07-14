@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"math/big"
 	"net/url"
 	"os"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	"github.com/TAAL-GmbH/ubsv/services/miner/cpuminer"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
 	blockchainstore "github.com/TAAL-GmbH/ubsv/stores/blockchain"
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
@@ -17,6 +19,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,13 +51,13 @@ var (
 func TestBlockAssembly_AddTx(t *testing.T) {
 	t.Run("AddTx", func(t *testing.T) {
 		ctx := context.Background()
-		ba := setupBlockAssemblyTest(t)
-		require.NotNil(t, ba)
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
-			subtree := <-ba.newSubtreeChan
+			subtree := <-testItems.newSubtreeChan
 			assert.NotNil(t, subtree)
 			assert.Equal(t, *model.CoinbasePlaceholderHash, *subtree.Nodes[0])
 			assert.Len(t, subtree.Nodes, 4)
@@ -62,27 +65,56 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		require.NoError(t, ba.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
-		err := ba.blockAssembler.AddTx(context.Background(), tx1)
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
+		err := testItems.blockAssembler.AddTx(context.Background(), tx1)
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
-		err = ba.blockAssembler.AddTx(context.Background(), tx2)
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
+		err = testItems.blockAssembler.AddTx(context.Background(), tx2)
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
-		err = ba.blockAssembler.AddTx(context.Background(), tx3)
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
+		err = testItems.blockAssembler.AddTx(context.Background(), tx3)
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
-		err = ba.blockAssembler.AddTx(context.Background(), tx4)
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
+		err = testItems.blockAssembler.AddTx(context.Background(), tx4)
 		require.NoError(t, err)
 
-		require.NoError(t, ba.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
-		err = ba.blockAssembler.AddTx(context.Background(), tx5)
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
+		err = testItems.blockAssembler.AddTx(context.Background(), tx5)
 		require.NoError(t, err)
 
 		wg.Wait()
+		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		assert.NotNil(t, miningCandidate)
+		assert.NotNil(t, subtree)
+		assert.Equal(t, uint64(5000000666), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint32(1), miningCandidate.Height)
+		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Len(t, subtree, 1)
+		assert.Len(t, subtree[0].Nodes, 4)
+
+		// mine block
+
+		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		require.NoError(t, err)
+
+		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		require.NoError(t, err)
+
+		blockHash := util.Sha256d(blockHeader)
+		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+
+		target := model.NewNBitFromSlice(miningCandidate.NBits).CalculateTarget()
+
+		var bn = big.NewInt(0)
+		bn.SetString(hashStr, 16)
+
+		compare := bn.Cmp(target)
+		assert.LessOrEqual(t, compare, 0)
+
 	})
 }
 
@@ -107,16 +139,9 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
-	ba := BlockAssembler{
-		logger:           p2p.TestLogger{},
-		utxoStore:        items.utxoStore,
-		txMetaClient:     items.txMetaStore,
-		subtreeProcessor: items.subtreeProcessor,
-		blockchainClient: blockchainClient,
-		subtreeStore:     items.blobStore,
-	}
+	ba := NewBlockAssembler(p2p.TestLogger{}, items.txMetaStore, items.utxoStore, items.blobStore, blockchainClient, items.newSubtreeChan)
 
-	items.blockAssembler = &ba
+	items.blockAssembler = ba
 
 	return &items
 }

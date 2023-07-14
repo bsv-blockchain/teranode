@@ -1,4 +1,4 @@
-package miner
+package cpuminer
 
 // Bitcoin Script constants
 const (
