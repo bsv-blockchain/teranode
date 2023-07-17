@@ -23,7 +23,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
-	github.com/ordishs/go-utils v1.0.43
+	github.com/ordishs/go-utils v1.0.44
 	github.com/ordishs/gocore v1.0.35
 	github.com/ordishs/verifysignature v1.0.7
 	github.com/pkg/profile v1.7.0
@@ -59,6 +59,8 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/gofuzz v1.1.0 // indirect
 	github.com/googleapis/gnostic v0.5.5 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.0.0-rc.3 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect

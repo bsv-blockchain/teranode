@@ -243,6 +243,7 @@ func (ba *BlockAssembly) Start() error {
 	var err error
 	ba.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 	})
 	if err != nil {
 		return fmt.Errorf("could not create GRPC server [%w]", err)

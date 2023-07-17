@@ -40,6 +40,7 @@ func New(repository *repository.Repository) (*GRPC, error) {
 
 	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not create GRPC server [%w]", err)
