@@ -8,7 +8,7 @@ import (
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain/work"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -168,7 +168,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {
-	newWork, err := util.CalculateWork(chainWork, block.Header.Bits)
+	newWork, err := work.CalculateWork(chainWork, block.Header.Bits)
 	if err != nil {
 		return nil, err
 	}
