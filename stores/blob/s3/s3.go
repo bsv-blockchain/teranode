@@ -10,6 +10,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -141,6 +142,30 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), err
+}
+
+func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_s3").NewStat("Exists").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:Exists")
+	defer traceSpan.Finish()
+
+	_, err := g.client.HeadObject(&s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    g.generateKey(hash),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == s3.ErrCodeNoSuchKey {
+			return false, nil
+		}
+
+		traceSpan.RecordError(err)
+		return false, fmt.Errorf("failed to check whether object exists: %w", err)
+	}
+
+	return true, nil
 }
 
 func (g *S3) Del(ctx context.Context, hash []byte) error {

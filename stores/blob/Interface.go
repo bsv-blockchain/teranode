@@ -8,6 +8,7 @@ import (
 )
 
 type Store interface {
+	Exists(ctx context.Context, key []byte) (bool, error)
 	Get(ctx context.Context, key []byte) ([]byte, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error

@@ -58,6 +58,17 @@ func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, nil
 }
 
+func (m *Memory) Exists(_ context.Context, hash []byte) (bool, error) {
+	// hash should have been a chainhash.Hash
+	key := chainhash.Hash(hash)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.blobs[key]
+	return ok, nil
+}
+
 func (m *Memory) Del(_ context.Context, hash []byte) error {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)

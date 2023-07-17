@@ -157,6 +157,33 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return result, err
 }
 
+func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_badger").NewStat("Exists").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "Badger:Exists")
+	defer traceSpan.Finish()
+
+	err := s.store.View(func(tx *badger.Txn) error {
+		_, err := tx.Get(hash)
+		if err != nil {
+			traceSpan.RecordError(err)
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		if err == badger.ErrKeyNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
 func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {

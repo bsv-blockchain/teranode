@@ -9,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/firehose"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -28,7 +29,7 @@ type KinesisS3 struct {
 
 func New(s3URL *url.URL) (*KinesisS3, error) {
 	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("s3", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("kinesisS3", gocore.NewLogLevelFromString(logLevel))
 
 	region := s3URL.Query().Get("region")
 
@@ -75,9 +76,9 @@ func (g *KinesisS3) generateKey(key []byte) *string {
 func (g *KinesisS3) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Close").AddTime(start)
+		gocore.NewStat("prop_store_kinesisS3").NewStat("Close").AddTime(start)
 	}()
-	traceSpan := tracing.Start(context.Background(), "s3:Close")
+	traceSpan := tracing.Start(context.Background(), "kinesisS3:Close")
 	defer traceSpan.Finish()
 
 	// return g.client.Close()
@@ -104,9 +105,9 @@ func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...o
 func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("SetTTL").AddTime(start)
+		gocore.NewStat("prop_store_kinesisS3").NewStat("SetTTL").AddTime(start)
 	}()
-	traceSpan := tracing.Start(ctx, "s3:SetTTL")
+	traceSpan := tracing.Start(ctx, "kinesisS3:SetTTL")
 	defer traceSpan.Finish()
 
 	// TODO implement
@@ -116,9 +117,9 @@ func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Get").AddTime(start)
+		gocore.NewStat("prop_store_kinesisS3").NewStat("Get").AddTime(start)
 	}()
-	traceSpan := tracing.Start(ctx, "s3:Get")
+	traceSpan := tracing.Start(ctx, "kinesisS3:Get")
 	defer traceSpan.Finish()
 
 	buf := aws.NewWriteAtBuffer([]byte{})
@@ -135,12 +136,36 @@ func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func (g *KinesisS3) Exists(ctx context.Context, hash []byte) (bool, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_kinesisS3").NewStat("Exists").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "kinesisS3:Exists")
+	defer traceSpan.Finish()
+
+	_, err := g.client.HeadObject(&s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    g.generateKey(hash),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == s3.ErrCodeNoSuchKey {
+			return false, nil
+		}
+
+		traceSpan.RecordError(err)
+		return false, fmt.Errorf("failed to check whether object exists: %w", err)
+	}
+
+	return true, nil
+}
+
 func (g *KinesisS3) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Del").AddTime(start)
+		gocore.NewStat("prop_store_kinesisS3").NewStat("Del").AddTime(start)
 	}()
-	traceSpan := tracing.Start(ctx, "s3:Del")
+	traceSpan := tracing.Start(ctx, "kinesisS3:Del")
 	defer traceSpan.Finish()
 	var key = g.generateKey(hash)
 

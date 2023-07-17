@@ -113,6 +113,28 @@ func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return result, err
 }
 
+func (g *GCS) Exists(ctx context.Context, hash []byte) (bool, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_gcs").NewStat("Exists").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "gcs:Exists")
+	defer traceSpan.Finish()
+
+	rc, err := g.bucket.Object(utils.ReverseAndHexEncodeSlice(hash)).NewReader(ctx)
+	if err != nil {
+		if err == storage.ErrObjectNotExist {
+			return false, nil
+		}
+
+		traceSpan.RecordError(err)
+		return false, fmt.Errorf("failed to get data: %w", err)
+	}
+	defer rc.Close()
+
+	return true, nil
+}
+
 func (g *GCS) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {

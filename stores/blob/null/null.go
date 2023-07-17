@@ -40,6 +40,10 @@ func (n *Null) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
 }
 
-func (n *Null) Del(_ context.Context, hash []byte) error {
+func (n *Null) Exists(_ context.Context, _ []byte) (bool, error) {
+	return false, nil
+}
+
+func (n *Null) Del(_ context.Context, _ []byte) error {
 	return nil
 }

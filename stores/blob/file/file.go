@@ -70,6 +70,20 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
+func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
+	fileName := s.filename(hash)
+
+	_, err := os.Stat(fileName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to read data from file: %w", err)
+	}
+
+	return true, nil
+}
+
 func (s *File) Del(_ context.Context, hash []byte) error {
 	fileName := s.filename(hash)
 

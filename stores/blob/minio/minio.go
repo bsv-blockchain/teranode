@@ -86,9 +86,9 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...opti
 		ContentType: "application/octet-stream",
 	}
 
-	options := options.NewSetOptions(opts...)
-	if options.TTL > 0 {
-		objectOptions.RetainUntilDate = time.Now().Add(options.TTL)
+	setOptions := options.NewSetOptions(opts...)
+	if setOptions.TTL > 0 {
+		objectOptions.RetainUntilDate = time.Now().Add(setOptions.TTL)
 	}
 
 	_, err := m.client.PutObject(ctx, m.bucketName, objectName, bufReader, int64(len(value)), objectOptions)
@@ -151,6 +151,28 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	}
 
 	return b, err
+}
+
+func (m *Minio) Exists(ctx context.Context, hash []byte) (bool, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		gocore.NewStat("prop_store_minio").NewStat("Exists").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "minio:Exists")
+	defer traceSpan.Finish()
+
+	objectName := utils.ReverseAndHexEncodeSlice(hash)
+	_, err := m.client.StatObject(ctx, m.bucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		errResponse := minio.ToErrorResponse(err)
+		if errResponse.Code == "NoSuchKey" {
+			return false, nil
+		}
+		traceSpan.RecordError(err)
+		return false, fmt.Errorf("failed to get minio data: %w", err)
+	}
+
+	return true, nil
 }
 
 func (m *Minio) Del(ctx context.Context, hash []byte) error {
