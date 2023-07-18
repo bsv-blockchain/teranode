@@ -31,39 +31,40 @@ func NewMiner() *Miner {
 	}
 }
 
-func (m *Miner) Start() {
+func (m *Miner) Start(ctx context.Context) error {
 	m.candidateTimer = time.NewTimer(candidateRequestInterval * time.Second)
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	for range m.candidateTimer.C {
-		m.candidateTimer.Reset(candidateRequestInterval * time.Second)
-		// cancel the previous context
-		cancelCtx()
+	for {
+		select {
+		case <-ctx.Done():
+			m.logger.Infof("Stopping miner as ctx is done")
+			return nil // context cancelled
+		case <-m.candidateTimer.C:
+			m.candidateTimer.Reset(candidateRequestInterval * time.Second)
 
-		// create a new context to mine in
-		ctx, cancelCtx = context.WithCancel(context.Background())
+			candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
+			if err != nil {
+				m.logger.Warnf("Error getting mining candidate: %v", err)
+				continue
+			}
+			m.logger.Infof(candidate.Stringify())
 
-		candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
-		if err != nil {
-			m.logger.Errorf("Error getting mining candidate: %v", err)
-			continue
-		}
-		m.logger.Infof(candidate.Stringify())
+			solution, err := cpuminer.Mine(ctx, candidate)
+			if err != nil {
+				m.logger.Errorf("Error mining block: %v", err)
+				return err
+			}
 
-		solution, err := cpuminer.Mine(ctx, candidate)
-		if err != nil {
-			m.logger.Errorf("Error mining block: %v", err)
-		}
-
-		m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
-		err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
-		if err != nil {
-			m.logger.Errorf("Error submitting mining solution: %v", err)
+			m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
+			err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
+			if err != nil {
+				m.logger.Errorf("Error submitting mining solution: %v", err)
+				return err
+			}
 		}
 	}
-	cancelCtx()
 }
 
 func (m *Miner) Stop(ctx context.Context) {

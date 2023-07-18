@@ -11,7 +11,6 @@ import (
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 )
 
 type txIDAndFee struct {
@@ -227,12 +226,12 @@ func (stp *SubtreeProcessor) moveDownBlock(block *model.Block) error {
 // given. It is akin moving up the blockchain to the next block.
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
-	stp.logger.Infof("resetting the subtrees with block %s", block.String())
-	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
-
 	if block == nil {
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
+
+	stp.logger.Infof("resetting the subtrees with block %s", block.String())
+	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {
@@ -260,33 +259,36 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	if len(blockSubtreesMap) > 0 {
 		mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
 		transactionMap = util.NewSplitSwissMap(mapSize)
-		g, _ := errgroup.WithContext(context.Background())
+
+		var wg sync.WaitGroup
+
 		// get all the subtrees from the block that we have not yet cleaned out
-		for subtreeHash, _ := range blockSubtreesMap {
-			g.Go(func() error {
-				stp.logger.Infof("getting subtree: %s", subtreeHash.String())
-				subtreeBytes, err := stp.subtreeStore.Get(context.Background(), subtreeHash[:])
+		for subtreeHash := range blockSubtreesMap {
+			wg.Add(1)
+			go func(st chainhash.Hash) {
+				defer wg.Done()
+
+				stp.logger.Infof("getting subtree: %s", st.String())
+				subtreeBytes, err := stp.subtreeStore.Get(context.Background(), st[:])
 				if err != nil {
-					return err
+					stp.logger.Errorf("error getting subtree: %s", err.Error())
+					return
 				}
 
 				subtree := &util.Subtree{}
 				err = subtree.Deserialize(subtreeBytes)
 				if err != nil {
-					return err
+					stp.logger.Errorf("error deserializing subtree: %s", err.Error())
+					return
 				}
 
 				for _, node := range subtree.Nodes {
 					_ = transactionMap.Put(*node)
 				}
+			}(subtreeHash)
+		}
 
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			stp.logger.Errorf("error getting subtrees from block: %s", err.Error())
-			return err
-		}
+		wg.Wait()
 	}
 
 	// TODO check the order of transactions in the block
@@ -294,25 +296,27 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	if transactionMap.Length() > 0 {
 		// clean out the transactions from the old current subtree that were in the block
 		// and add the remainder to the new current subtree
-		g, _ := errgroup.WithContext(context.Background())
+
+		var wg sync.WaitGroup
+
 		for _, subtree := range chainedSubtrees {
-			g.Go(func() error {
-				remainingTransactions, err := subtree.Difference(transactionMap)
+			wg.Add(1)
+
+			go func(st *util.Subtree) {
+				defer wg.Done()
+
+				remainingTransactions, err := st.Difference(transactionMap)
 				if err != nil {
-					return err
+					stp.logger.Errorf("error calculating difference: %s", err.Error())
+					return
 				}
 
 				for _, txHash := range remainingTransactions {
 					_ = stp.currentSubtree.AddNode(txHash, 0)
 				}
-
-				return nil
-			})
+			}(subtree)
 		}
-		if err := g.Wait(); err != nil {
-			stp.logger.Errorf("error calculating difference: %s", err.Error())
-			return err
-		}
+		wg.Wait()
 	}
 
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)

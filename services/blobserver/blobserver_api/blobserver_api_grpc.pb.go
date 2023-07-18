@@ -26,6 +26,7 @@ const (
 	BlobServerAPI_GetBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBlockHeader"
 	BlobServerAPI_GetBlock_FullMethodName       = "/blobserver_api.BlobServerAPI/GetBlock"
 	BlobServerAPI_GetUTXO_FullMethodName        = "/blobserver_api.BlobServerAPI/GetUTXO"
+	BlobServerAPI_Subscribe_FullMethodName      = "/blobserver_api.BlobServerAPI/Subscribe"
 )
 
 // BlobServerAPIClient is the client API for BlobServerAPI service.
@@ -39,6 +40,7 @@ type BlobServerAPIClient interface {
 	GetBlockHeader(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
 	GetBlock(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
 	GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
+	Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
 type blobServerAPIClient struct {
@@ -103,6 +105,38 @@ func (c *blobServerAPIClient) GetUTXO(ctx context.Context, in *Hash, opts ...grp
 	return out, nil
 }
 
+func (c *blobServerAPIClient) Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &BlobServerAPI_ServiceDesc.Streams[0], BlobServerAPI_Subscribe_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &blobServerAPISubscribeClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type BlobServerAPI_SubscribeClient interface {
+	Recv() (*Notification, error)
+	grpc.ClientStream
+}
+
+type blobServerAPISubscribeClient struct {
+	grpc.ClientStream
+}
+
+func (x *blobServerAPISubscribeClient) Recv() (*Notification, error) {
+	m := new(Notification)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // BlobServerAPIServer is the server API for BlobServerAPI service.
 // All implementations must embed UnimplementedBlobServerAPIServer
 // for forward compatibility
@@ -114,6 +148,7 @@ type BlobServerAPIServer interface {
 	GetBlockHeader(context.Context, *HashOrHeight) (*Blob, error)
 	GetBlock(context.Context, *HashOrHeight) (*Blob, error)
 	GetUTXO(context.Context, *Hash) (*Blob, error)
+	Subscribe(*emptypb.Empty, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
 
@@ -138,6 +173,9 @@ func (UnimplementedBlobServerAPIServer) GetBlock(context.Context, *HashOrHeight)
 }
 func (UnimplementedBlobServerAPIServer) GetUTXO(context.Context, *Hash) (*Blob, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUTXO not implemented")
+}
+func (UnimplementedBlobServerAPIServer) Subscribe(*emptypb.Empty, BlobServerAPI_SubscribeServer) error {
+	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
 }
 func (UnimplementedBlobServerAPIServer) mustEmbedUnimplementedBlobServerAPIServer() {}
 
@@ -260,6 +298,27 @@ func _BlobServerAPI_GetUTXO_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(BlobServerAPIServer).Subscribe(m, &blobServerAPISubscribeServer{stream})
+}
+
+type BlobServerAPI_SubscribeServer interface {
+	Send(*Notification) error
+	grpc.ServerStream
+}
+
+type blobServerAPISubscribeServer struct {
+	grpc.ServerStream
+}
+
+func (x *blobServerAPISubscribeServer) Send(m *Notification) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // BlobServerAPI_ServiceDesc is the grpc.ServiceDesc for BlobServerAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -292,6 +351,12 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlobServerAPI_GetUTXO_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Subscribe",
+			Handler:       _BlobServerAPI_Subscribe_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "services/blobserver/blobserver_api/blobserver_api.proto",
 }

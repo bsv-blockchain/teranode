@@ -92,7 +92,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
+func New(ctx context.Context, logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		panic(err)
@@ -135,7 +135,7 @@ func New(logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
 	}
 
 	newSubtreeChan := make(chan *util.Subtree)
-	blockAssembler := NewBlockAssembler(logger, txMetaStore, utxoStore, subtreeStore, blockchainClient, newSubtreeChan)
+	blockAssembler := NewBlockAssembler(ctx, logger, txMetaStore, utxoStore, subtreeStore, blockchainClient, newSubtreeChan)
 
 	ba := &BlockAssembly{
 		blockAssembler:   blockAssembler,

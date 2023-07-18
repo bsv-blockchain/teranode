@@ -278,7 +278,12 @@ func main() {
 		}
 
 		g.Go(func() error {
-			return blockchainService.Start()
+			err := blockchainService.Start()
+			if err != nil {
+				logger.Errorf("blockchain service failed: %v", err)
+				return err
+			}
+			return nil
 		})
 	}
 
@@ -303,7 +308,11 @@ func main() {
 					panic(err)
 				}
 
-				return txMetaStore.Start()
+				if err := txMetaStore.Start(); err != nil {
+					logger.Errorf("txMetaStore errored: %v", err)
+				}
+
+				return nil
 			})
 		}
 	}
@@ -315,9 +324,14 @@ func main() {
 				logger.Infof("Starting Block Assembly Server")
 
 				baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
-				blockAssemblyService = blockassembly.New(baLogger, subtreeStore)
+				blockAssemblyService = blockassembly.New(ctx, baLogger, subtreeStore)
 
-				return blockAssemblyService.Start()
+				if err := blockAssemblyService.Start(); err != nil {
+					logger.Errorf("blockassembly errored: %v", err)
+					return err
+				}
+
+				return nil
 			})
 		}
 	}
@@ -409,8 +423,7 @@ func main() {
 	if *startMiner {
 		g.Go(func() (err error) {
 			minerServer = miner.NewMiner()
-			minerServer.Start()
-			return nil
+			return minerServer.Start(ctx)
 		})
 	}
 
@@ -437,14 +450,14 @@ func main() {
 			logger.Fatalf("error creating validator client: %v", err)
 		}
 
-		g.Go(func() error {
-			logger.Infof("Starting Propagation")
+		// g.Go(func() error {
+		// 	logger.Infof("Starting Propagation")
 
-			p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
-			propagationServer = propagation.NewServer(p2pLogger, txStore, subtreeStore, validatorClient)
+		// 	p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
+		// 	propagationServer = propagation.NewServer(p2pLogger, txStore, subtreeStore, validatorClient)
 
-			return propagationServer.Start(ctx)
-		})
+		// 	return propagationServer.Start(ctx)
+		// })
 
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
 		if ok && propagationGrpcAddress != "" {

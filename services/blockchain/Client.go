@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
@@ -156,6 +157,39 @@ func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHe
 			ch <- &BestBlockHeader{
 				Header: header,
 				Height: resp.Height,
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+func (c Client) Subscribe(ctx context.Context) (chan *model.Notification, error) {
+	ch := make(chan *model.Notification)
+
+	go func() {
+		defer close(ch)
+
+	RETRY:
+		for {
+			stream, err := c.client.Subscribe(ctx, &emptypb.Empty{})
+			if err != nil {
+				time.Sleep(1 * time.Second)
+				break RETRY
+			}
+
+			for {
+				resp, err := stream.Recv()
+				if err != nil {
+					time.Sleep(1 * time.Second)
+					break RETRY
+				}
+
+				ch <- &model.Notification{
+					Type:    int32(resp.Type),
+					Hash:    resp.Hash,
+					BaseUrl: resp.BaseUrl,
+				}
 			}
 		}
 	}()

@@ -8,6 +8,7 @@ import (
 
 	blobserver_api "github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -28,11 +29,21 @@ var (
 	prometheusBlobServerGRPCGetUTXO        *prometheus.CounterVec
 )
 
+type subscriber struct {
+	subscription blobserver_api.BlobServerAPI_SubscribeServer
+	done         chan struct{}
+}
+
 type GRPC struct {
 	blobserver_api.UnimplementedBlobServerAPIServer
-	logger     utils.Logger
-	repository *repository.Repository
-	grpcServer *grpc.Server
+	logger            utils.Logger
+	repository        *repository.Repository
+	grpcServer        *grpc.Server
+	blockchainClient  blockchain.ClientI
+	newSubscriptions  chan subscriber
+	deadSubscriptions chan subscriber
+	subscribers       map[subscriber]bool
+	notifications     chan *blobserver_api.Notification
 }
 
 func New(repository *repository.Repository) (*GRPC, error) {
@@ -46,10 +57,20 @@ func New(repository *repository.Repository) (*GRPC, error) {
 		return nil, fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
+	blockchainClient, err := blockchain.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("could not create blockchain client [%w]", err)
+	}
+
 	g := &GRPC{
-		logger:     logger,
-		repository: repository,
-		grpcServer: grpcServer,
+		logger:            logger,
+		repository:        repository,
+		grpcServer:        grpcServer,
+		blockchainClient:  blockchainClient,
+		newSubscriptions:  make(chan subscriber, 10),
+		deadSubscriptions: make(chan subscriber, 10),
+		subscribers:       make(map[subscriber]bool),
+		notifications:     make(chan *blobserver_api.Notification, 100),
 	}
 
 	blobserver_api.RegisterBlobServerAPIServer(grpcServer, g)
@@ -61,6 +82,49 @@ func New(repository *repository.Repository) (*GRPC, error) {
 }
 
 func (g *GRPC) Start(addr string) error {
+	// Subscribe to the blockchain service
+	blockchainSubscription, err := g.blockchainClient.Subscribe(context.Background())
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for notification := range blockchainSubscription {
+			if notification == nil {
+				continue
+			}
+			g.notifications <- &blobserver_api.Notification{
+				Type:    blobserver_api.Type(notification.Type),
+				Hash:    notification.Hash,
+				BaseUrl: notification.BaseUrl,
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case notification := <-g.notifications:
+				for sub := range g.subscribers {
+					go func(s subscriber) {
+						if err := s.subscription.Send(notification); err != nil {
+							g.deadSubscriptions <- s
+						}
+					}(sub)
+				}
+
+			case s := <-g.newSubscriptions:
+				g.subscribers[s] = true
+				g.logger.Infof("New Subscription received (Total=%d).", len(g.subscribers))
+
+			case s := <-g.deadSubscriptions:
+				delete(g.subscribers, s)
+				close(s.done)
+				g.logger.Infof("Subscription removed (Total=%d).", len(g.subscribers))
+			}
+		}
+	}()
+
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
@@ -119,7 +183,7 @@ func (g *GRPC) GetSubtree(ctx context.Context, req *blobserver_api.Hash) (*blobs
 	}, nil
 }
 
-func (g *GRPC) GetHeader(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
+func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
 	hash, err := chainhash.NewHash(req.GetHash())
 	if err != nil {
 		return nil, err
@@ -228,5 +292,18 @@ func init() {
 			"operation", // type of operation achieved
 		},
 	)
+}
 
+func (g *GRPC) Subscribe(_ *emptypb.Empty, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
+	// Keep this subscription alive without endless loop - use a channel that blocks forever.
+	ch := make(chan struct{})
+
+	g.newSubscriptions <- subscriber{
+		subscription: sub,
+		done:         ch,
+	}
+
+	<-ch
+
+	return nil
 }

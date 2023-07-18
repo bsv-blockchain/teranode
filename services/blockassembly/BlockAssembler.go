@@ -38,7 +38,7 @@ type BlockAssembler struct {
 	bestBlockHeight   uint32
 }
 
-func NewBlockAssembler(logger utils.Logger, txMetaClient txmeta_store.Store, utxoStore utxostore.Interface,
+func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmeta_store.Store, utxoStore utxostore.Interface,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	b := &BlockAssembler{
@@ -56,7 +56,7 @@ func NewBlockAssembler(logger utils.Logger, txMetaClient txmeta_store.Store, utx
 	var err error
 	var bestBlockHeaderCh chan *blockchain.BestBlockHeader
 	go func() {
-		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(context.Background())
+		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 			return
@@ -71,6 +71,10 @@ func NewBlockAssembler(logger utils.Logger, txMetaClient txmeta_store.Store, utx
 		var block *model.Block
 		for {
 			select {
+			case <-ctx.Done():
+				logger.Infof("Stopping blockassembler as ctx is done")
+				return
+
 			case responseCh := <-b.miningCandidateCh:
 				miningCandidate, subtrees, err := b.getMiningCandidate()
 				responseCh <- &miningCandidateResponse{

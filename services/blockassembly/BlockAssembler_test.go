@@ -139,7 +139,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
-	ba := NewBlockAssembler(p2p.TestLogger{}, items.txMetaStore, items.utxoStore, items.blobStore, blockchainClient, items.newSubtreeChan)
+	ba := NewBlockAssembler(context.Background(), p2p.TestLogger{}, items.txMetaStore, items.utxoStore, items.blobStore, blockchainClient, items.newSubtreeChan)
 
 	items.blockAssembler = ba
 

@@ -83,3 +83,7 @@ func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBl
 
 	return ch, nil
 }
+
+func (c LocalClient) Subscribe(ctx context.Context) (chan *model.Notification, error) {
+	return nil, nil
+}
