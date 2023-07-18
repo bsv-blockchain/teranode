@@ -22,7 +22,6 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	BlockValidationAPI_Health_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/Health"
 	BlockValidationAPI_BlockFound_FullMethodName = "/blockvalidation_api.BlockValidationAPI/BlockFound"
-	BlockValidationAPI_GetSubtree_FullMethodName = "/blockvalidation_api.BlockValidationAPI/GetSubtree"
 )
 
 // BlockValidationAPIClient is the client API for BlockValidationAPI service.
@@ -32,7 +31,6 @@ type BlockValidationAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	GetSubtree(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
 }
 
 type blockValidationAPIClient struct {
@@ -61,15 +59,6 @@ func (c *blockValidationAPIClient) BlockFound(ctx context.Context, in *BlockFoun
 	return out, nil
 }
 
-func (c *blockValidationAPIClient) GetSubtree(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error) {
-	out := new(GetSubtreeResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_GetSubtree_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // BlockValidationAPIServer is the server API for BlockValidationAPI service.
 // All implementations must embed UnimplementedBlockValidationAPIServer
 // for forward compatibility
@@ -77,7 +66,6 @@ type BlockValidationAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	BlockFound(context.Context, *BlockFoundRequest) (*emptypb.Empty, error)
-	GetSubtree(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
 
@@ -90,9 +78,6 @@ func (UnimplementedBlockValidationAPIServer) Health(context.Context, *emptypb.Em
 }
 func (UnimplementedBlockValidationAPIServer) BlockFound(context.Context, *BlockFoundRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BlockFound not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) GetSubtree(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetSubtree not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) mustEmbedUnimplementedBlockValidationAPIServer() {}
 
@@ -143,24 +128,6 @@ func _BlockValidationAPI_BlockFound_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockValidationAPI_GetSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetSubtreeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).GetSubtree(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_GetSubtree_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).GetSubtree(ctx, req.(*GetSubtreeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // BlockValidationAPI_ServiceDesc is the grpc.ServiceDesc for BlockValidationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -175,10 +142,6 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BlockFound",
 			Handler:    _BlockValidationAPI_BlockFound_Handler,
-		},
-		{
-			MethodName: "GetSubtree",
-			Handler:    _BlockValidationAPI_GetSubtree_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

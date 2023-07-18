@@ -36,6 +36,8 @@ type BlockAssembler struct {
 	miningCandidateCh chan chan *miningCandidateResponse
 	bestBlockHeader   *model.BlockHeader
 	bestBlockHeight   uint32
+	currentChainMap   map[chainhash.Hash]uint32
+	currentChainMapMu sync.RWMutex
 }
 
 func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmeta_store.Store, utxoStore utxostore.Interface,
@@ -49,6 +51,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		blockchainClient:  blockchainClient,
 		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(logger, subtreeStore, newSubtreeChan),
 		miningCandidateCh: make(chan chan *miningCandidateResponse),
+		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
 	}
 
 	// start a subscription for the best block header
@@ -69,6 +72,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		}
 
 		var block *model.Block
+		var blockHeaders []*model.BlockHeader
 		for {
 			select {
 			case <-ctx.Done():
@@ -98,9 +102,6 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 					continue
 				}
 
-				b.bestBlockHeader = header.Header
-				b.bestBlockHeight = header.Height
-
 				if block, err = b.blockchainClient.GetBlock(context.Background(), header.Header.Hash()); err != nil {
 					b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
 					continue
@@ -110,6 +111,24 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 					b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
 					continue
 				}
+
+				b.bestBlockHeader = header.Header
+				b.bestBlockHeight = header.Height
+
+				blockHeaders, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] error getting block headers from blockchain: %v", err)
+					// todo should we stop here, we are in a weird state
+					continue
+				}
+
+				b.currentChainMapMu.Lock()
+				b.currentChainMap = make(map[chainhash.Hash]uint32, 100)
+				for _, blockHeader := range blockHeaders {
+					// todo set the height instead of timestamp
+					b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
+				}
+				b.currentChainMapMu.Unlock()
 			}
 		}
 	}()
@@ -127,6 +146,17 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 	txMetadata, err := b.txMetaClient.Get(ctx, txHash)
 	if err != nil {
 		return err
+	}
+
+	if len(txMetadata.BlockHashes) > 0 {
+		b.currentChainMapMu.RLock()
+		for _, hash := range txMetadata.BlockHashes {
+			if _, ok := b.currentChainMap[*hash]; ok {
+				// the tx is already in a block on our chain, nothing to do
+				return fmt.Errorf("tx already in a block on the active chain: %s", hash)
+			}
+		}
+		b.currentChainMapMu.RUnlock()
 	}
 
 	prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))

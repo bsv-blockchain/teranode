@@ -68,7 +68,7 @@ func (bh *BlockHeader) Hash() *chainhash.Hash {
 	return &hash
 }
 
-func (bh *BlockHeader) Valid() (bool, error) {
+func (bh *BlockHeader) HasMetTargetDifficulty() (bool, error) {
 	target := bh.Bits.CalculateTarget()
 
 	var bn = big.NewInt(0)

@@ -44,6 +44,16 @@ func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
 	return NewTree(int(height))
 }
 
+func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
+	subtree := &Subtree{}
+	err := subtree.Deserialize(b)
+	if err != nil {
+		return nil, err
+	}
+
+	return subtree, nil
+}
+
 func (st *Subtree) Size() int {
 	return cap(st.Nodes)
 }
@@ -107,7 +117,7 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
-func (st *Subtree) Difference(ids txMap) ([]*chainhash.Hash, error) {
+func (st *Subtree) Difference(ids TxMap) ([]*chainhash.Hash, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]*chainhash.Hash, 0, 1_000)
 	for _, id := range st.Nodes {

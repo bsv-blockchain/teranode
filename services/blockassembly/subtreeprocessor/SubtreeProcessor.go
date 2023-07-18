@@ -291,7 +291,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 		wg.Wait()
 	}
 
-	// TODO check the order of transactions in the block
+	// TODO make sure there are no transactions in our tx chan buffer that were in the block
 
 	if transactionMap.Length() > 0 {
 		// clean out the transactions from the old current subtree that were in the block

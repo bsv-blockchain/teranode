@@ -19,10 +19,12 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
 	"github.com/TAAL-GmbH/ubsv/services/txmeta"
+	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/utxo"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	validator_utxostore "github.com/TAAL-GmbH/ubsv/services/validator/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/getsentry/sentry-go"
@@ -221,7 +223,7 @@ func main() {
 	var blockchainService *blockchain.Blockchain
 	var validatorService *validator.Server
 	var utxoStoreServer *utxo.UTXOStore
-	var txMetaStore *txmeta.Server
+	var txMetaStoreServer *txmeta.Server
 	var propagationServer *propagation.Server
 	var propagationGRPCServer *propagation.PropagationServer
 	var blockAssemblyService *blockassembly.BlockAssembly
@@ -256,6 +258,27 @@ func main() {
 		panic(err)
 	}
 
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no txmeta_store setting found")
+	}
+	var txMetaStore txmetastore.Store
+	if txMetaStoreURL.Scheme == "memory" {
+		// the memory store is reached through a grpc client
+		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		txMetaStore, err = store.New(logger, txMetaStoreURL)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
 	if err != nil {
 		panic(err)
@@ -269,6 +292,11 @@ func main() {
 	}
 	//
 	//----------------------------------------------------------------
+
+	validatorClient, err := validator.NewClient(context.Background(), logger)
+	if err != nil {
+		logger.Fatalf("error creating validator client: %v", err)
+	}
 
 	// blockchain
 	if *startBlockchain {
@@ -303,13 +331,13 @@ func main() {
 				logger.Infof("Starting Tx Status Client on: %s", txMetaStoreURL.Host)
 
 				txMetaLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
-				txMetaStore, err = txmeta.New(txMetaLogger, txMetaStoreURL)
+				txMetaStoreServer, err = txmeta.New(txMetaLogger, txMetaStoreURL)
 				if err != nil {
 					panic(err)
 				}
 
-				if err := txMetaStore.Start(); err != nil {
-					logger.Errorf("txMetaStore errored: %v", err)
+				if err := txMetaStoreServer.Start(); err != nil {
+					logger.Errorf("txMetaStoreServer errored: %v", err)
 				}
 
 				return nil
@@ -343,7 +371,7 @@ func main() {
 				logger.Infof("Starting Block Validation Server")
 
 				bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
-				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, subtreeStore)
+				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, subtreeStore, txMetaStore, validatorClient)
 				if err != nil {
 					panic(err)
 				}
@@ -360,7 +388,7 @@ func main() {
 				logger.Infof("Starting Validator Server on: %s", validatorAddress)
 
 				validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
-				validatorService = validator.NewServer(validatorLogger, utxoStore)
+				validatorService = validator.NewServer(validatorLogger, utxoStore, txMetaStore)
 
 				return validatorService.Start()
 			})
@@ -445,11 +473,6 @@ func main() {
 
 	// propagation
 	if *startPropagation {
-		validatorClient, err := validator.NewClient(context.Background(), logger)
-		if err != nil {
-			logger.Fatalf("error creating validator client: %v", err)
-		}
-
 		// g.Go(func() error {
 		// 	logger.Infof("Starting Propagation")
 

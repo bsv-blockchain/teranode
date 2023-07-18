@@ -51,7 +51,7 @@ miningLoop:
 				Nonce:          nonce,
 			}
 
-			headerValid, _ := blockHeader.Valid()
+			headerValid, _ := blockHeader.HasMetTargetDifficulty()
 			if headerValid { // header is valid if the hash is less than the target
 				break miningLoop
 			}

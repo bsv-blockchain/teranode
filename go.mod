@@ -41,7 +41,7 @@ require (
 	golang.org/x/time v0.3.0
 	google.golang.org/api v0.114.0
 	google.golang.org/grpc v1.54.0
-	google.golang.org/protobuf v1.30.0
+	google.golang.org/protobuf v1.31.0
 	k8s.io/api v0.23.2
 	k8s.io/apimachinery v0.23.2
 	k8s.io/client-go v0.23.2
@@ -50,6 +50,7 @@ require (
 
 require (
 	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
+	github.com/bitcoinsv/bsvlog v0.0.0-20181216181007-cb81b076bf2e // indirect
 	github.com/dolthub/maphash v0.0.0-20221220182448-74e1e1ea1577 // indirect
 	github.com/eapache/go-resiliency v1.3.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230111030713-bf00bc1b83b6 // indirect
@@ -112,7 +113,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	cloud.google.com/go/iam v0.13.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 // indirect
+	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173
 	github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect

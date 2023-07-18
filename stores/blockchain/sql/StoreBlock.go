@@ -60,6 +60,15 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		}
 		height = previousHeight + 1
 
+		// Check that the coinbase transaction includes the correct block height.
+		blockHeight, err := block.ExtractCoinbaseHeight()
+		if err != nil {
+			return err
+		}
+		if blockHeight != uint32(height) {
+			return fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+		}
+
 		// check whether there is another block with the same height that is not orphaned
 		var activeBlockId uint64
 		q = `

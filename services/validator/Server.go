@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/TAAL-GmbH/ubsv/services/txmeta"
-	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -85,30 +83,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger, utxoStore utxostore.Interface) *Server {
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
-
-	// TODO abstract into a factory
-	var txMetaStore txmetastore.Store
-	if txMetaStoreURL.Scheme == "memory" {
-		// the memory store is reached through a grpc client
-		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		txMetaStore, err = store.New(logger, txMetaStoreURL)
-		if err != nil {
-			panic(err)
-		}
-	}
-
+func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
 	validator, err := New(logger, utxoStore, txMetaStore)
 	if err != nil {
 		panic(err)

@@ -9,7 +9,7 @@ import (
 	"github.com/puzpuzpuz/xsync/v2"
 )
 
-type txMap interface {
+type TxMap interface {
 	Exists(hash [32]byte) bool
 	Put(hash [32]byte) error
 	Length() int
@@ -49,6 +49,54 @@ func (s *SwissMap) Length() int {
 	return s.length
 }
 
+type SwissMapUint64 struct {
+	mu     sync.Mutex
+	m      *swiss.Map[[32]byte, uint64]
+	length int
+}
+
+func NewSwissMapUint64(length int) *SwissMapUint64 {
+	return &SwissMapUint64{
+		m: swiss.NewMap[[32]byte, uint64](uint32(length)),
+	}
+}
+
+func (s *SwissMapUint64) Exists(hash [32]byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.m.Get(hash)
+	return ok
+}
+
+func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.length++
+
+	s.m.Put(hash, n)
+	return nil
+}
+
+func (s *SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.length++
+
+	n, ok := s.m.Get(hash)
+	if !ok {
+		return 0, false
+	}
+
+	return n, true
+}
+
+func (s *SwissMapUint64) Length() int {
+	return s.length
+}
+
 type SplitSwissMap struct {
 	m      map[[1]byte]*SwissMap
 	length int
@@ -74,6 +122,44 @@ func (g *SplitSwissMap) Put(hash [32]byte) error {
 	return g.m[[1]byte{hash[0]}].Put(hash)
 }
 func (g *SplitSwissMap) Length() int {
+	length := 0
+	for i := 0; i <= 255; i++ {
+		length += g.m[[1]byte{uint8(i)}].length
+	}
+
+	return length
+}
+
+type SplitSwissMapUint64 struct {
+	m      map[[1]byte]*SwissMapUint64
+	length int
+}
+
+func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
+	m := &SplitSwissMapUint64{
+		m: make(map[[1]byte]*SwissMapUint64, 256),
+	}
+
+	for i := 0; i <= 255; i++ {
+		m.m[[1]byte{uint8(i)}] = NewSwissMapUint64(length / 256)
+	}
+
+	return m
+}
+
+func (g *SplitSwissMapUint64) Exists(hash [32]byte) bool {
+	return g.m[[1]byte{hash[0]}].Exists(hash)
+}
+
+func (g *SplitSwissMapUint64) Put(hash [32]byte, n uint64) error {
+	return g.m[[1]byte{hash[0]}].Put(hash, n)
+}
+
+func (g *SplitSwissMapUint64) Get(hash [32]byte) (uint64, bool) {
+	return g.m[[1]byte{hash[0]}].Get(hash)
+}
+
+func (g *SplitSwissMapUint64) Length() int {
 	length := 0
 	for i := 0; i <= 255; i++ {
 		length += g.m[[1]byte{uint8(i)}].length

@@ -404,7 +404,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err = block.Valid(); !ok {
+	if ok, err = block.Valid(ctx, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
 	}
