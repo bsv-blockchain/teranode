@@ -12,7 +12,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -24,12 +23,12 @@ type BlockValidation struct {
 	logger           utils.Logger
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
-	txMetaStore      txmeta_store.Store
+	txMetaStore      txmeta.Store
 	validatorClient  *validator.Client
 }
 
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient *validator.Client) *BlockValidation {
+	txMetaStore txmeta.Store, validatorClient *validator.Client) *BlockValidation {
 
 	bv := &BlockValidation{
 		logger:           logger,
@@ -44,11 +43,14 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 
 func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, baseUrl string) error {
 	g, _ := errgroup.WithContext(context.Background())
+
 	for _, subtreeHash := range block.Subtrees {
+		st := subtreeHash
+
 		g.Go(func() error {
-			isValid := u.validateSubtree(ctx, subtreeHash, baseUrl)
+			isValid := u.validateSubtree(ctx, st, baseUrl)
 			if !isValid {
-				return fmt.Errorf("invalid subtree found [%s]", subtreeHash.String())
+				return fmt.Errorf("invalid subtree found [%s]", st.String())
 			}
 
 			return nil
@@ -131,7 +133,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		// if all txs in tree are blessed, then bless the tree
 		txMeta, err := u.txMetaStore.Get(ctx, txHash)
 		if err != nil {
-			if errors.Is(err, txmeta_store.ErrNotFound) {
+			if errors.Is(err, txmeta.ErrNotFound) {
 				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
 				if err != nil {
 					u.logger.Errorf("failed to bless missing transaction [%s]", err.Error())

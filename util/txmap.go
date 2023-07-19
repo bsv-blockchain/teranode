@@ -98,8 +98,8 @@ func (s *SwissMapUint64) Length() int {
 }
 
 type SplitSwissMap struct {
-	m      map[[1]byte]*SwissMap
-	length int
+	m map[[1]byte]*SwissMap
+	// length int
 }
 
 func NewSplitSwissMap(length int) *SplitSwissMap {
@@ -131,8 +131,8 @@ func (g *SplitSwissMap) Length() int {
 }
 
 type SplitSwissMapUint64 struct {
-	m      map[[1]byte]*SwissMapUint64
-	length int
+	m map[[1]byte]*SwissMapUint64
+	// length int
 }
 
 func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
