@@ -13,7 +13,7 @@ build:
 
 .PHONY: test
 test:
-	go test -race -count=1 ./...
+	go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: lint
 lint:
