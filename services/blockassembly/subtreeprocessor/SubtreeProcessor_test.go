@@ -421,6 +421,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 }
 
 func TestResetLarge(t *testing.T) {
+	util.SkipLongTests(t)
 
 	n := 1049576
 	txIds := make([]string, n)

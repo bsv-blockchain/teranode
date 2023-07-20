@@ -3,11 +3,11 @@ package memory
 import (
 	"context"
 	"encoding/binary"
-	"os"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +81,7 @@ func testRestore(t *testing.T, db utxostore.Interface) {
 }
 
 func testSanity(t *testing.T, db utxostore.Interface) {
-	skipLongTests(t)
+	util.SkipLongTests(t)
 	ctx := context.Background()
 
 	var resp *utxostore.UTXOResponse
@@ -145,11 +145,5 @@ func benchmark(b *testing.B, db utxostore.Interface) {
 		if err != nil {
 			b.Fatal(err)
 		}
-	}
-}
-
-func skipLongTests(t *testing.T) {
-	if os.Getenv("LONG_TESTS") == "" {
-		t.Skip("Skipping long running tests. Set LONG_TESTS=1 to run them.")
 	}
 }

@@ -3,10 +3,10 @@ package memory
 import (
 	"context"
 	"crypto/rand"
-	"os"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +31,7 @@ func testStore(t *testing.T, db txmeta.Store) {
 }
 
 func testSanity(t *testing.T, db txmeta.Store) {
-	skipLongTests(t)
+	util.SkipLongTests(t)
 }
 
 func benchmark(b *testing.B, db txmeta.Store) {
@@ -58,10 +58,4 @@ func benchmark(b *testing.B, db txmeta.Store) {
 			}
 		}
 	})
-}
-
-func skipLongTests(t *testing.T) {
-	if os.Getenv("LONG_TESTS") == "" {
-		t.Skip("Skipping long running tests. Create LONG_TESTS=1 to run them.")
-	}
 }
