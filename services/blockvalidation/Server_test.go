@@ -1,10 +1,12 @@
 package blockvalidation
 
 import (
+	"context"
 	"encoding/hex"
 	"testing"
 
 	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -60,6 +62,16 @@ func TestOneTransaction(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	}
 
+	ctx := context.Background()
+	subtreeStore := memory.New()
+
+	subtreeBytes, _ := subtrees[0].Serialize()
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes)
+
+	// loads the subtrees into the block
+	err = block.GetAndValidateSubtrees(ctx, subtreeStore)
+	require.NoError(t, err)
+
 	// err = blockValidationService.CheckMerkleRoot(block)
 	err = block.CheckMerkleRoot()
 	assert.NoError(t, err)
@@ -106,6 +118,16 @@ func TestTwoTransactions(t *testing.T) {
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,
 	}
+
+	ctx := context.Background()
+	subtreeStore := memory.New()
+
+	subtreeBytes, _ := subtrees[0].Serialize()
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes)
+
+	// loads the subtrees into the block
+	err = block.GetAndValidateSubtrees(ctx, subtreeStore)
+	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
 	err = block.CheckMerkleRoot()
@@ -154,10 +176,16 @@ func TestMerkleRoot(t *testing.T) {
 	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash)
 
+	ctx := context.Background()
+	subtreeStore := memory.New()
+
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+
+		subtreeBytes, _ := subTree.Serialize()
+		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes)
 	}
 
 	block := &model.Block{
@@ -175,6 +203,10 @@ func TestMerkleRoot(t *testing.T) {
 
 	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)
+
+	// loads the subtrees into the block
+	err = block.GetAndValidateSubtrees(ctx, subtreeStore)
+	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
 	err = block.CheckMerkleRoot()

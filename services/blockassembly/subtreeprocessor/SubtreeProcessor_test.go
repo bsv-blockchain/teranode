@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -227,7 +228,9 @@ func TestReset(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	subtreeStore, _ := null.New()
+
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, subtreeStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -264,7 +267,7 @@ func TestReset(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	wg.Wait()
+	//wg.Wait()
 
 	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))

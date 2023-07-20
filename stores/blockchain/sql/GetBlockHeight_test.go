@@ -24,7 +24,7 @@ func TestSQL_GetBlockHeight(t *testing.T) {
 		height, err := s.GetBlockHeight(context.Background(), headerHash)
 		require.NoError(t, err)
 
-		assert.Equal(t, uint64(0), height)
+		assert.Equal(t, uint32(0), height)
 	})
 
 	t.Run("block 2", func(t *testing.T) {
@@ -43,6 +43,6 @@ func TestSQL_GetBlockHeight(t *testing.T) {
 		height, err := s.GetBlockHeight(context.Background(), block2.Hash())
 		require.NoError(t, err)
 
-		assert.Equal(t, uint64(2), height)
+		assert.Equal(t, uint32(2), height)
 	})
 }
