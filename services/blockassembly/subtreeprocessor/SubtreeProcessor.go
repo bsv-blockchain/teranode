@@ -243,16 +243,16 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 
 	// get all the subtrees that were not in the block
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	//for _, subtree := range stp.chainedSubtrees {
-	//	id := *subtree.RootHash()
-	//	if _, ok := blockSubtreesMap[id]; !ok {
-	//		// only add the subtrees that were not in the block
-	//		chainedSubtrees = append(chainedSubtrees, subtree)
-	//	} else {
-	//		// remove the subtree from the block subtrees map, we had it in our list
-	//		delete(blockSubtreesMap, id)
-	//	}
-	//}
+	for _, subtree := range stp.chainedSubtrees {
+		id := *subtree.RootHash()
+		if _, ok := blockSubtreesMap[id]; !ok {
+			// only add the subtrees that were not in the block
+			chainedSubtrees = append(chainedSubtrees, subtree)
+		} else {
+			// remove the subtree from the block subtrees map, we had it in our list
+			delete(blockSubtreesMap, id)
+		}
+	}
 
 	// clear the transaction ids from all the subtrees of the block that are left over
 	var transactionMap *util.SplitSwissMap
@@ -293,7 +293,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
 
-	if transactionMap.Length() > 0 {
+	if transactionMap != nil && transactionMap.Length() > 0 {
 		// clean out the transactions from the old current subtree that were in the block
 		// and add the remainder to the new current subtree
 

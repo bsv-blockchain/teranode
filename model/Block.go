@@ -143,7 +143,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// missing the subtreeStore should only happen when we are validating an internal block
 	if subtreeStore != nil {
 		// 6. Get and validate any missing subtrees.
-		if err = b.getAndValidateSubtrees(ctx, subtreeStore); err != nil {
+		if err = b.GetAndValidateSubtrees(ctx, subtreeStore); err != nil {
 			return false, err
 		}
 
@@ -272,7 +272,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 	return nil
 }
 
-func (b *Block) getAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
+func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
 	b.subtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 	var subtreeBytes []byte
 	var err error

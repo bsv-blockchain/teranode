@@ -25,7 +25,7 @@ func TestSQL_GetBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		// header
-		assert.Equal(t, uint64(0), height)
+		assert.Equal(t, uint32(0), height)
 		assertGenesis(t, block.Header)
 
 		// block
