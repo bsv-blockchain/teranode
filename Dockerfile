@@ -3,15 +3,16 @@
 FROM --platform=linux/amd64 ubuntu:latest
 ARG GITHUB_SHA
 
-RUN apt update && apt install -y wget build-essential libsecp256k1-dev
+RUN apt update && apt install -y wget curl build-essential libsecp256k1-dev
 
 #RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
 #  dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
-RUN wget -q https://go.dev/dl/go1.20.3.linux-amd64.tar.gz && \
-  tar -C /usr/local -xzf go1.20.3.linux-amd64.tar.gz
+RUN wget -q https://go.dev/dl/go1.20.6.linux-amd64.tar.gz && \
+  tar -C /usr/local -xzf go1.20.6.linux-amd64.tar.gz
 
 ENV PATH=${PATH}:/usr/local/go/bin
+ENV GOPATH=/root/go
 
 RUN mkdir /app
 # Copy the source code from the current directory to the working directory inside the container
@@ -22,6 +23,14 @@ WORKDIR /app
 
 ENV CGO_ENABLED=1
 RUN echo "${GITHUB_SHA}"
+
+RUN go test -race -count=1 $(go list ./... | grep -v playground | grep -v poc)
+
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.53.3
+RUN $(go env GOPATH)/bin/golangci-lint run --skip-dirs p2p/wire
+
+RUN go install honnef.co/go/tools/cmd/staticcheck@latest
+RUN $(go env GOPATH)/bin/staticcheck ./...
 
 # Build the Go library
 #RUN go build -tags aerospike,foundationdb,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
