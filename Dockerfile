@@ -8,8 +8,8 @@ RUN apt update && apt install -y wget curl build-essential libsecp256k1-dev
 #RUN wget -q https://github.com/apple/foundationdb/releases/download/7.2.5/foundationdb-clients_7.2.5-1_amd64.deb && \
 #  dpkg -i foundationdb-clients_7.2.5-1_amd64.deb
 
-RUN wget -q https://go.dev/dl/go1.20.6.linux-amd64.tar.gz && \
-  tar -C /usr/local -xzf go1.20.6.linux-amd64.tar.gz
+RUN wget -q https://go.dev/dl/go1.20.5.linux-amd64.tar.gz && \
+  tar -C /usr/local -xzf go1.20.5.linux-amd64.tar.gz
 
 ENV PATH=${PATH}:/usr/local/go/bin
 ENV GOPATH=/root/go
