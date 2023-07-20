@@ -60,13 +60,17 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		}
 		height = previousHeight + 1
 
-		// Check that the coinbase transaction includes the correct block height.
-		blockHeight, err := block.ExtractCoinbaseHeight()
-		if err != nil {
-			return err
-		}
-		if blockHeight != uint32(height) {
-			return fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+		// Check that the coinbase transaction includes the correct block height for all
+		// blocks that are version 2 or higher.
+		// BIP34 - Block number 227,835 (timestamp 2013-03-24 15:49:13 GMT) was the last version 1 block.
+		if block.Header.Version > 1 {
+			blockHeight, err := block.ExtractCoinbaseHeight()
+			if err != nil {
+				return err
+			}
+			if blockHeight != uint32(height) {
+				return fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+			}
 		}
 
 		// check whether there is another block with the same height that is not orphaned
@@ -88,20 +92,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	q := `
 		INSERT INTO blocks (
 		 parentId
-        ,version
-	    ,hash
-	    ,previous_hash
-	    ,merkle_root
-        ,block_time
-        ,n_bits
-        ,nonce
-	    ,height
-        ,chain_work
+    ,version
+	  ,hash
+	  ,previous_hash
+	  ,merkle_root
+    ,block_time
+    ,n_bits
+    ,nonce
+	  ,height
+    ,chain_work
 		,tx_count
 		,subtree_count
 		,subtrees
-        ,coinbase_tx
-	    ,orphaned
+    ,coinbase_tx
+	  ,orphaned
 		) VALUES (
 		 $1
 		,$2
