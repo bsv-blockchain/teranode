@@ -7,7 +7,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,8 +36,8 @@ func TestOneTransaction(t *testing.T) {
 	err := subtrees[0].AddNode(model.CoinbasePlaceholderHash, 0)
 	require.NoError(t, err)
 
-	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
-	require.NoError(t, err)
+	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
+	// require.NoError(t, err)
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
@@ -61,7 +60,8 @@ func TestOneTransaction(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	}
 
-	err = blockValidationService.CheckMerkleRoot(block)
+	// err = blockValidationService.CheckMerkleRoot(block)
+	err = block.CheckMerkleRoot()
 	assert.NoError(t, err)
 }
 
@@ -83,8 +83,8 @@ func TestTwoTransactions(t *testing.T) {
 	err = subtrees[0].AddNode(txid1, 0)
 	require.NoError(t, err)
 
-	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
-	require.NoError(t, err)
+	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
+	// require.NoError(t, err)
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
@@ -107,7 +107,8 @@ func TestTwoTransactions(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	}
 
-	err = blockValidationService.CheckMerkleRoot(block)
+	// err = blockValidationService.CheckMerkleRoot(block)
+	err = block.CheckMerkleRoot()
 	assert.NoError(t, err)
 }
 
@@ -172,9 +173,10 @@ func TestMerkleRoot(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	}
 
-	blockValidationService, err := New(p2p.TestLogger{}, nil, nil)
-	require.NoError(t, err)
+	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
+	// require.NoError(t, err)
 
-	err = blockValidationService.CheckMerkleRoot(block)
+	// err = blockValidationService.CheckMerkleRoot(block)
+	err = block.CheckMerkleRoot()
 	assert.NoError(t, err)
 }
