@@ -1,1 +1,0 @@
-../development/build.sh
