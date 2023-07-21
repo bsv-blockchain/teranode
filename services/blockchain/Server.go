@@ -154,10 +154,13 @@ func (b *Blockchain) Stop(ctx context.Context) {
 	// server can gracefully shutdown as well. Need better client handling
 	// logic. Will be addressed during refactoring. For now, allow the node
 	// to shut down without waiting for the clients' connections to terminate
-	// gracefully.
-	b.grpcServer.Stop() // force a brute shutdown
-	// (ok)
-	// b.grpcServer.GracefulStop()
+	// gracefully. Keep the default value as false to encourage the original
+	// behavior.
+	if gocore.Config().GetBool("blockchain_grpcForceShutdown", false) {
+		b.grpcServer.Stop()
+	} else {
+		b.grpcServer.GracefulStop()
+	}
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
