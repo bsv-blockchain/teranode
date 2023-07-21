@@ -167,6 +167,15 @@ func main() {
 		return
 	}
 
+	// (ok) To help with debugging a temporary configuration parameter
+	// dev_env is being used.
+	dev_env := gocore.Config().GetBool("dev_env", false)
+	if dev_env {
+		// (ok) Why we need pid - in debug mode initiate a shutdown
+		// by running kill -TERM <pid> in a separate terminal window.
+		logger.Debugf("\U0001f527 PID: %d", os.Getpid())
+	}
+
 	go func() {
 		var profilerAddr string
 		var ok bool
@@ -515,7 +524,16 @@ func main() {
 
 	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	var (
+		shutdownCtx    context.Context
+		shutdownCancel context.CancelFunc
+	)
+	if dev_env {
+		// (ok) To allow stepping through the shutdown sequence without timing out
+		shutdownCtx, shutdownCancel = context.WithCancel(context.Background())
+	} else {
+		shutdownCtx, shutdownCancel = context.WithTimeout(context.Background(), 5*time.Second)
+	}
 	defer shutdownCancel()
 
 	if propagationServer != nil {
@@ -528,6 +546,10 @@ func main() {
 
 	if utxoStoreServer != nil {
 		utxoStoreServer.Stop(shutdownCtx)
+	}
+
+	if txMetaStoreServer != nil {
+		txMetaStoreServer.Stop(shutdownCtx)
 	}
 
 	if validatorService != nil {
@@ -554,6 +576,7 @@ func main() {
 		blobServer.Stop(shutdownCtx)
 	}
 
+	logger.Info("\U0001f6d1 All services stopped.")
 	// wait for clean shutdown for 5 seconds, otherwise force exit
 	go func() {
 		// Wait for 5 seconds and then force exit...

@@ -148,8 +148,16 @@ func (b *Blockchain) Start() error {
 func (b *Blockchain) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	b.grpcServer.GracefulStop()
+	// (ok) gRPC clients may still hold open connections to the Blockchain
+	// gRPC server. The list of services: GRPC, Blob/Repository, Blockassembly,
+	// Blockvalidation; Clients should be terminated gracefully before the
+	// server can gracefully shutdown as well. Need better client handling
+	// logic. Will be addressed during refactoring. For now, allow the node
+	// to shut down without waiting for the clients' connections to terminate
+	// gracefully.
+	b.grpcServer.Stop() // force a brute shutdown
+	// (ok)
+	// b.grpcServer.GracefulStop()
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
