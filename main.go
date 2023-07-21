@@ -530,6 +530,10 @@ func main() {
 		utxoStoreServer.Stop(shutdownCtx)
 	}
 
+	if txMetaStoreServer != nil {
+		txMetaStoreServer.Stop(shutdownCtx)
+	}
+
 	if validatorService != nil {
 		validatorService.Stop(shutdownCtx)
 	}
@@ -554,6 +558,7 @@ func main() {
 		blobServer.Stop(shutdownCtx)
 	}
 
+	logger.Info("\U0001f6d1 All services stopped.")
 	// wait for clean shutdown for 5 seconds, otherwise force exit
 	go func() {
 		// Wait for 5 seconds and then force exit...
