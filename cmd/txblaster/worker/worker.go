@@ -84,7 +84,7 @@ type Worker struct {
 	satoshisPerOutput    uint64
 	seeder               seeder_api.SeederAPIClient
 	rateLimiter          *rate.Limiter
-	propagationServer    propagation_api.PropagationAPIClient
+	propagationServers   []propagation_api.PropagationAPIClient
 	kafkaProducer        sarama.SyncProducer
 	kafkaTopic           string
 	ipv6MulticastConn    *net.UDPConn
@@ -98,7 +98,7 @@ func NewWorker(
 	satoshisPerOutput uint64,
 	seeder seeder_api.SeederAPIClient,
 	rateLimiter *rate.Limiter,
-	propagationServer propagation_api.PropagationAPIClient,
+	propagationServers []propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -115,7 +115,7 @@ func NewWorker(
 		satoshisPerOutput:    satoshisPerOutput,
 		seeder:               seeder,
 		rateLimiter:          rateLimiter,
-		propagationServer:    propagationServer,
+		propagationServers:   propagationServers,
 		kafkaProducer:        kafkaProducer,
 		kafkaTopic:           kafkaTopic,
 		ipv6MulticastConn:    ipv6MulticastConn,
@@ -310,10 +310,16 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	traceSpan.SetTag("transport", "grpc")
 
-	if _, err := w.propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
-		Tx: txExtendedBytes,
-	}); err != nil {
-		return fmt.Errorf("error sending transaction to propagation server: %v", err)
+	var propagationError error = nil
+	for _, propagationServer := range w.propagationServers {
+		if _, err := propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
+			Tx: txExtendedBytes,
+		}); err != nil {
+			propagationError = err
+		}
+	}
+	if propagationError != nil {
+		return fmt.Errorf("error sending transaction to propagation server: %s", propagationError.Error())
 	}
 
 	counterLoad := counter.Add(1)

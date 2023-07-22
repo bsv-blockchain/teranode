@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -30,7 +31,8 @@ import (
 )
 
 var logger utils.Logger
-var propagationServer propagation_api.PropagationAPIClient
+
+// var propagationServers []propagation_api.PropagationAPIClient
 var seederServer seeder_api.SeederAPIClient
 var printProgress uint64
 
@@ -185,19 +187,33 @@ func main() {
 	}
 	seederServer = seeder_api.NewSeederAPIClient(sConn)
 
-	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
-	if !ok {
-		panic("no propagation_grpcAddress setting found")
+	propagationGrpcAddresses := []string{}
+	if addresses, ok := gocore.Config().Get("txblaster_grpcTargets"); ok {
+		propagationGrpcAddresses = append(propagationGrpcAddresses, strings.Split(addresses, "|")...)
+	} else {
+		if address, ok := gocore.Config().Get("propagation_grpcAddress"); ok {
+			propagationGrpcAddresses = append(propagationGrpcAddresses, address)
+		} else {
+			panic("no propagation_grpcAddress setting found")
+		}
 	}
 
-	pConn, err := utils.GetGRPCClient(ctx, propagationGrpcAddress, &utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		panic(err)
+	propagationServers := []propagation_api.PropagationAPIClient{}
+	for _, propagationGrpcAddress := range propagationGrpcAddresses {
+		pConn, err := utils.GetGRPCClient(ctx, propagationGrpcAddress, &utils.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			logger.Errorf("Failed to connect to %s: %s", propagationGrpcAddress, err.Error())
+			continue
+		}
+		propagationServers = append(propagationServers, propagation_api.NewPropagationAPIClient(pConn))
 	}
-	propagationServer = propagation_api.NewPropagationAPIClient(pConn)
+
+	if len(propagationServers) == 0 {
+		panic("No suitable propagation server connnection found")
+	}
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 	numberOfTransactions := uint32(1)
@@ -227,7 +243,7 @@ func main() {
 			satoshisPerOutput,
 			seederServer,
 			rateLimiter,
-			propagationServer,
+			propagationServers,
 			kafkaProducer,
 			kafkaTopic,
 			ipv6MulticastConn,
@@ -236,7 +252,8 @@ func main() {
 		)
 
 		g.Go(func() error {
-			return w.Start(ctx)
+			// (ok) return w.Start(ctx)
+			return w.Start(context.Background())
 		})
 	}
 

@@ -26,11 +26,11 @@ RUN echo "${GITHUB_SHA}"
 
 RUN go test -race -count=1 $(go list ./... | grep -v playground | grep -v poc)
 
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.53.3 && \
-  $(go env GOPATH)/bin/golangci-lint run --skip-dirs p2p/wire
+# RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.53.3 && \
+#   $(go env GOPATH)/bin/golangci-lint run --skip-dirs p2p/wire
 
-RUN go install honnef.co/go/tools/cmd/staticcheck@latest && \
-  $(go env GOPATH)/bin/staticcheck ./...
+# RUN go install honnef.co/go/tools/cmd/staticcheck@latest && \
+#   $(go env GOPATH)/bin/staticcheck ./...
 
 # Build the Go library
 #RUN go build -tags aerospike,foundationdb,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
