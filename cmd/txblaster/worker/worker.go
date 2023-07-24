@@ -82,7 +82,7 @@ type Worker struct {
 	numberOfOutputs      int
 	numberOfTransactions uint32
 	satoshisPerOutput    uint64
-	seeder               seeder_api.SeederAPIClient
+	seederServers        []seeder_api.SeederAPIClient
 	rateLimiter          *rate.Limiter
 	propagationServers   []propagation_api.PropagationAPIClient
 	kafkaProducer        sarama.SyncProducer
@@ -96,7 +96,7 @@ func NewWorker(
 	numberOfOutputs int,
 	numberOfTransactions uint32,
 	satoshisPerOutput uint64,
-	seeder seeder_api.SeederAPIClient,
+	seederServers []seeder_api.SeederAPIClient,
 	rateLimiter *rate.Limiter,
 	propagationServers []propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
@@ -113,7 +113,7 @@ func NewWorker(
 		numberOfOutputs:      numberOfOutputs,
 		numberOfTransactions: numberOfTransactions,
 		satoshisPerOutput:    satoshisPerOutput,
-		seeder:               seeder,
+		seederServers:        seederServers,
 		rateLimiter:          rateLimiter,
 		propagationServers:   propagationServers,
 		kafkaProducer:        kafkaProducer,
@@ -133,48 +133,51 @@ func (w *Worker) Start(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := w.seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
-		PrivateKey:           keySet.PrivateKey.Serialise(),
-		NumberOfTransactions: w.numberOfTransactions,
-		NumberOfOutputs:      uint32(w.numberOfOutputs),
-		SatoshisPerOutput:    w.satoshisPerOutput,
-	}); err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create spendable transaction: %v", err)
-		return err
-	}
-
-	res, err := w.seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
-		PrivateKey: keySet.PrivateKey.Serialise(),
-	})
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create next spendable transaction: %v", err)
-		return err
-	}
-
-	privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
-
-	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create private key from pub key: %v", err)
-		panic(err)
-	}
-
-	go func(numberOfOutputs uint32) {
-		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-		for i := uint32(0); i < numberOfOutputs; i++ {
-			u := &bt.UTXO{
-				TxID:          bt.ReverseBytes(res.Txid),
-				Vout:          i,
-				LockingScript: script,
-				Satoshis:      res.SatoshisPerOutput,
-			}
-
-			w.utxoChan <- u
+	// (ok)
+	for _, seeder := range w.seederServers {
+		if _, err := seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
+			PrivateKey:           keySet.PrivateKey.Serialise(),
+			NumberOfTransactions: w.numberOfTransactions,
+			NumberOfOutputs:      uint32(w.numberOfOutputs),
+			SatoshisPerOutput:    w.satoshisPerOutput,
+		}); err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create spendable transaction: %v", err)
+			return err
 		}
-	}(res.NumberOfOutputs)
+
+		res, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
+			PrivateKey: keySet.PrivateKey.Serialise(),
+		})
+		if err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create next spendable transaction: %v", err)
+			return err
+		}
+
+		privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
+
+		script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+		if err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create private key from pub key: %v", err)
+			panic(err)
+		}
+
+		go func(numberOfOutputs uint32) {
+			logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+			for i := uint32(0); i < numberOfOutputs; i++ {
+				u := &bt.UTXO{
+					TxID:          bt.ReverseBytes(res.Txid),
+					Vout:          i,
+					LockingScript: script,
+					Satoshis:      res.SatoshisPerOutput,
+				}
+
+				w.utxoChan <- u
+			}
+		}(res.NumberOfOutputs)
+	}
 
 	w.startTime = time.Now()
 

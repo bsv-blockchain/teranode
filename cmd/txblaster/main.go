@@ -173,22 +173,38 @@ func main() {
 		_ = http.ListenAndServe(profilerAddr, nil)
 	}()
 
-	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
-	if !ok {
-		panic("no seeder_grpcAddress setting found")
+	// (ok)
+	seederGrpcAddresses := []string{}
+	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets"); ok {
+		seederGrpcAddresses = append(seederGrpcAddresses, strings.Split(addresses, "|")...)
+	} else {
+		if address, ok := gocore.Config().Get("seeder_grpcAddress"); ok {
+			seederGrpcAddresses = append(seederGrpcAddresses, address)
+		} else {
+			panic("no seeder_grpcAddress setting found")
+		}
 	}
 
-	sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		panic(err)
+	seederServers := []seeder_api.SeederAPIClient{}
+	for _, seederGrpcAddress := range seederGrpcAddresses {
+		sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			panic(err)
+		}
+		seederServers = append(seederServers, seeder_api.NewSeederAPIClient(sConn))
 	}
-	seederServer = seeder_api.NewSeederAPIClient(sConn)
+
+	if len(seederServers) == 0 {
+		panic("No suitable seeder server connection found")
+	}
+
+	// (ok)
 
 	propagationGrpcAddresses := []string{}
-	if addresses, ok := gocore.Config().Get("txblaster_grpcTargets"); ok {
+	if addresses, ok := gocore.Config().Get("txblaster_propagation_grpcTargets"); ok {
 		propagationGrpcAddresses = append(propagationGrpcAddresses, strings.Split(addresses, "|")...)
 	} else {
 		if address, ok := gocore.Config().Get("propagation_grpcAddress"); ok {
@@ -205,8 +221,7 @@ func main() {
 			MaxRetries:  3,
 		})
 		if err != nil {
-			logger.Errorf("Failed to connect to %s: %s", propagationGrpcAddress, err.Error())
-			continue
+			panic(err)
 		}
 		propagationServers = append(propagationServers, propagation_api.NewPropagationAPIClient(pConn))
 	}
@@ -241,7 +256,7 @@ func main() {
 			numberOfOutputs,
 			uint32(numberOfTransactions),
 			satoshisPerOutput,
-			seederServer,
+			seederServers,
 			rateLimiter,
 			propagationServers,
 			kafkaProducer,
@@ -263,7 +278,7 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
 		panic(err)
 	}

@@ -1,32 +1,38 @@
-version: '3.4'
+version: '3.8'
 
 services:
   ubsv-1:
     container_name: ubsv-1
-    image: taag/ubsv:latest
+    image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081-8088:18081-18088"
-      - "8090-8091:18090-18091"
+      - "18081-18088:8081-8088"
+      - "18090-18091:8090-8091"
 
   ubsv-2:
     container_name: ubsv-2
-    image: taag/ubsv:latest
+    image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081-8088:28081-28088"
-      - "8090-8091:28090-28091"
+      - "28081-28088:8081-8088"
+      - "28090-28091:8090-8091"
 
   ubsv-3:
     container_name: ubsv-3
-    image: taag/ubsv:latest
+    image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081-8088:38081-38088"
-      - "8090-8091:38090-38091"
+      - "38081-38088:8081-8088"
+      - "38090-38091:8090-8091"
+  
+networks:
+  network1:
+    name: my-pre-existing-network
+    external: true
+

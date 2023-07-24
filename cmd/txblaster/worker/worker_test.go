@@ -20,7 +20,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 		numberOfOutputs      int
 		numberOfTransactions uint32
 		satoshisPerOutput    uint64
-		seeder               seeder_api.SeederAPIClient
+		seederServers        []seeder_api.SeederAPIClient
 		rateLimiter          *rate.Limiter
 		propagationServers   []propagation_api.PropagationAPIClient
 		kafkaProducer        sarama.SyncProducer
@@ -48,7 +48,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 				numberOfOutputs:      tt.fields.numberOfOutputs,
 				numberOfTransactions: tt.fields.numberOfTransactions,
 				satoshisPerOutput:    tt.fields.satoshisPerOutput,
-				seeder:               tt.fields.seeder,
+				seederServers:        tt.fields.seederServers,
 				rateLimiter:          tt.fields.rateLimiter,
 				propagationServers:   tt.fields.propagationServers,
 				kafkaProducer:        tt.fields.kafkaProducer,
