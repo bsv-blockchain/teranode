@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -50,7 +51,7 @@ func TestAerospike(t *testing.T) {
 	var value *aero.Record
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
-		resp, err = db.Store(context.Background(), hash)
+		resp, err = db.Store(context.Background(), hash, 0)
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -58,7 +59,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 
-		resp, err = db.Store(context.Background(), hash)
+		resp, err = db.Store(context.Background(), hash, 0)
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -66,14 +67,14 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-		resp, err = db.Store(context.Background(), hash)
+		resp, err = db.Store(context.Background(), hash, 0)
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {
 		cleanDB(t, client, key)
-		resp, err = db.Store(context.Background(), hash)
+		resp, err = db.Store(context.Background(), hash, 0)
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -93,9 +94,11 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike reset", func(t *testing.T) {
 		cleanDB(t, client, key)
-		resp, err = db.Store(context.Background(), hash)
+		resp, err = db.Store(context.Background(), hash, 100)
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		_ = db.SetBlockHeight(101)
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
@@ -106,8 +109,69 @@ func TestAerospike(t *testing.T) {
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
-		require.Equal(t, []byte{}, value.Bins["txid"].([]byte))
+		require.Nil(t, value.Bins["txid"])
+		require.Equal(t, 100, value.Bins["locktime"])
 		require.Equal(t, uint32(1), value.Generation)
+	})
+
+	t.Run("aerospike block locktime", func(t *testing.T) {
+		cleanDB(t, client, key)
+		resp, err = db.Store(context.Background(), hash, 1000)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Nil(t, value.Bins["txid"])
+		require.Equal(t, uint32(1), value.Generation)
+
+		_ = db.SetBlockHeight(1001)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
+		require.Equal(t, uint32(2), value.Generation)
+
+	})
+
+	t.Run("aerospike unix time locktime", func(t *testing.T) {
+		cleanDB(t, client, key)
+		resp, err = db.Store(context.Background(), hash, uint32(time.Now().Unix()+1)) // valid in 1 second
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Nil(t, value.Bins["txid"])
+		require.Equal(t, uint32(1), value.Generation)
+
+		time.Sleep(1 * time.Second)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
+		require.Equal(t, uint32(2), value.Generation)
+
 	})
 }
 

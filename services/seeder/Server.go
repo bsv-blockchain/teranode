@@ -199,7 +199,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 			g, ctx := errgroup.WithContext(ctx)
 
 			g.Go(func() error {
-				if _, err := v.utxoStore.Store(ctx, hash); err != nil {
+				if _, err := v.utxoStore.Store(ctx, hash, 0); err != nil {
 					v.logger.Fatalf("Error occurred in seeder: %v\n%s\n", err, debug.Stack())
 					prometheusSeederErrors.WithLabelValues("CreateSpendableTransactions", "Store").Inc()
 					return status.Error(codes.Internal, err.Error())

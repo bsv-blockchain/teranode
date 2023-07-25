@@ -6,6 +6,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
@@ -13,32 +14,45 @@ var (
 	empty = &chainhash.Hash{}
 )
 
+type UTXO struct {
+	Hash     *chainhash.Hash
+	LockTime uint32
+}
+
 type Memory struct {
 	mu               sync.Mutex
-	m                map[chainhash.Hash]chainhash.Hash
+	m                map[chainhash.Hash]UTXO // needs to be able to be variable length
+	BlockHeight      uint32
 	DeleteSpentUtxos bool
 }
 
 func New(deleteSpends bool) *Memory {
 	return &Memory{
-		m:                make(map[chainhash.Hash]chainhash.Hash),
+		m:                make(map[chainhash.Hash]UTXO),
 		DeleteSpentUtxos: deleteSpends,
 	}
+}
+
+func (m *Memory) SetBlockHeight(height uint32) error {
+	m.BlockHeight = height
+	return nil
 }
 
 func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if txID, ok := m.m[*hash]; ok {
-		if txID.IsEqual(empty) {
+	if utxo, ok := m.m[*hash]; ok {
+		if utxo.Hash == nil {
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_OK),
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: &txID,
+			SpendingTxID: utxo.Hash,
+			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
@@ -47,36 +61,41 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORe
 	}, nil
 }
 
-func (m *Memory) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (m *Memory) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	spendingTxid, found := m.m[*hash]
+	utxo, found := m.m[*hash]
 	if found {
-		if spendingTxid.IsEqual(empty) {
+		if utxo.Hash == nil {
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_OK),
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 
 		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: &spendingTxid,
+			SpendingTxID: utxo.Hash,
+			LockTime:     utxo.LockTime,
 		}, nil
-
 	}
 
-	m.m[*hash] = *empty
+	m.m[*hash] = UTXO{
+		Hash:     nil,
+		LockTime: nLockTime,
+	}
 
 	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
+		Status:   int(utxostore_api.Status_OK),
+		LockTime: nLockTime,
 	}, nil
 }
 
 func (m *Memory) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	var h *chainhash.Hash
 	for _, h = range hashes {
-		_, err := m.Store(ctx, h)
+		_, err := m.Store(ctx, h, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -91,19 +110,29 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if existingHash, found := m.m[*hash]; found {
-		if existingHash.IsEqual(&chainhash.Hash{}) {
-			if m.DeleteSpentUtxos {
-				delete(m.m, *hash)
+	if utxo, found := m.m[*hash]; found {
+		if utxo.Hash == nil {
+			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
+				if m.DeleteSpentUtxos {
+					delete(m.m, *hash)
+				} else {
+					m.m[*hash] = UTXO{
+						Hash:     txID,
+						LockTime: utxo.LockTime,
+					}
+				}
+				return &utxostore.UTXOResponse{
+					Status:       int(utxostore_api.Status_OK),
+					SpendingTxID: txID,
+				}, nil
 			} else {
-				m.m[*hash] = *txID
+				return &utxostore.UTXOResponse{
+					Status:   int(utxostore_api.Status_LOCK_TIME),
+					LockTime: utxo.LockTime,
+				}, nil
 			}
-			return &utxostore.UTXOResponse{
-				Status:       int(utxostore_api.Status_OK),
-				SpendingTxID: txID,
-			}, nil
 		} else {
-			if existingHash.IsEqual(txID) {
+			if utxo.Hash.IsEqual(txID) {
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_OK),
 					SpendingTxID: txID,
@@ -111,7 +140,7 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 			} else {
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
-					SpendingTxID: &existingHash,
+					SpendingTxID: utxo.Hash,
 				}, nil
 			}
 		}
@@ -124,10 +153,16 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 
 func (m *Memory) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
+	utxo, ok := m.m[*hash]
 	delete(m.m, *hash)
 	m.mu.Unlock()
 
-	return m.Store(ctx, hash)
+	nLockTime := uint32(0)
+	if ok {
+		nLockTime = utxo.LockTime
+	}
+
+	return m.Store(ctx, hash, nLockTime)
 }
 
 func (m *Memory) delete(hash *chainhash.Hash) error {

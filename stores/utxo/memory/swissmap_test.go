@@ -30,6 +30,14 @@ func TestSwissMap(t *testing.T) {
 		require.NoError(t, err)
 		testRestore(t, db)
 	})
+
+	t.Run("memory lock time", func(t *testing.T) {
+		db := NewSwissMap(false)
+		err := db.delete(hash)
+		require.NoError(t, err)
+
+		testLockTime(t, db)
+	})
 }
 
 func TestSwissMapSanity(t *testing.T) {

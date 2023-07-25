@@ -27,12 +27,14 @@ message HealthResponse {
 enum Status {
   OK = 0;
   SPENT = 1;
-  NOT_FOUND = 2;
+  LOCK_TIME = 2;
+  NOT_FOUND = 3;
 }
 
 // swagger:model StoreRequest
 message StoreRequest {
   bytes uxto_hash = 1;
+  uint32 lock_time = 2;
 }
 
 // swagger:model StoreResponse

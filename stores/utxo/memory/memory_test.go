@@ -31,6 +31,14 @@ func TestMemory(t *testing.T) {
 
 		testRestore(t, db)
 	})
+
+	t.Run("memory lock time", func(t *testing.T) {
+		db := New(false)
+		err := db.delete(hash)
+		require.NoError(t, err)
+
+		testLockTime(t, db)
+	})
 }
 
 func TestMemorySanity(t *testing.T) {

@@ -81,7 +81,8 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 	}, nil
 }
 
-func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
+func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash,
+	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 
 	var parentTxHashesBytes [][]byte
 	for _, parentTxHash := range parentTxHashes {
@@ -98,6 +99,7 @@ func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, p
 		Fee:            fee,
 		ParentTxHashes: parentTxHashesBytes,
 		UtxoHashes:     utxoHashesBytes,
+		LockTime:       nLockTime,
 	})
 	if err != nil {
 		return err

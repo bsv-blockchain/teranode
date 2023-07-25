@@ -231,6 +231,23 @@ func main() {
 	var minerServer *miner.Miner
 	var blobServer *blobserver.Server
 
+	// blockchain service needs to start first !
+	if *startBlockchain {
+		blockchainService, err = blockchain.New(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		g.Go(func() error {
+			err := blockchainService.Start()
+			if err != nil {
+				logger.Errorf("blockchain service failed: %v", err)
+				return err
+			}
+			return nil
+		})
+	}
+
 	//----------------------------------------------------------------
 	// These are the main stores used in the system
 	//
@@ -296,23 +313,6 @@ func main() {
 	validatorClient, err := validator.NewClient(context.Background(), logger)
 	if err != nil {
 		logger.Fatalf("error creating validator client: %v", err)
-	}
-
-	// blockchain
-	if *startBlockchain {
-		blockchainService, err = blockchain.New(logger)
-		if err != nil {
-			panic(err)
-		}
-
-		g.Go(func() error {
-			err := blockchainService.Start()
-			if err != nil {
-				logger.Errorf("blockchain service failed: %v", err)
-				return err
-			}
-			return nil
-		})
 	}
 
 	// txmeta store

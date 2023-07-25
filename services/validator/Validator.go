@@ -96,9 +96,13 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 			return err
 		}
 
-		// store the coinbase utxo
-		// TODO this should be marked as spendable only after 100 blocks
-		_, err = v.store.Store(coinbaseSpan.Ctx, hash)
+		height, err := util.ExtractCoinbaseHeight(tx)
+		if err != nil {
+			return err
+		}
+
+		// store the coinbase utxo, with an nLockTime of +100 blocks
+		_, err = v.store.Store(coinbaseSpan.Ctx, hash, height+100)
 		if err != nil {
 			return err
 		}
@@ -174,6 +178,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// Revert all the spends
 		for _, hash = range reservedUtxos {
+			// TODO nLockTime needs to be set back to the original value
 			if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
 				reverseUtxoSpan.RecordError(errReset)
 				v.logger.Errorf(errReset.Error())
@@ -213,7 +218,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// we should probably recover and add it to a retry queue
 
 	// register transaction in tx status store
-	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes); err != nil {
+	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes, tx.LockTime); err != nil {
 		v.logger.Errorf("error sending tx to tx meta store: %v", err)
 	}
 

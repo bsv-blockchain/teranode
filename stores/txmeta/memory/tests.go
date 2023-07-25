@@ -19,14 +19,14 @@ var (
 func testStore(t *testing.T, db txmeta.Store) {
 	ctx := context.Background()
 
-	err := db.Create(ctx, hash, 100, nil, nil)
+	err := db.Create(ctx, hash, 100, nil, nil, 0)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, txmeta.Validated, resp.Status)
 
-	err = db.Create(ctx, hash, 100, nil, nil)
+	err = db.Create(ctx, hash, 100, nil, nil, 0)
 	require.Error(t, err, txmeta.ErrAlreadyExists)
 }
 
@@ -44,7 +44,7 @@ func benchmark(b *testing.B, db txmeta.Store) {
 
 			bHash, _ := chainhash.NewHash(buf)
 
-			err = db.Create(ctx, bHash, 100, nil, nil)
+			err = db.Create(ctx, bHash, 100, nil, nil, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

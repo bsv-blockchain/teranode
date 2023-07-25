@@ -6,19 +6,21 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/dolthub/swiss"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
 type SwissMap struct {
 	mu               sync.Mutex
-	m                *swiss.Map[chainhash.Hash, *chainhash.Hash]
+	m                *swiss.Map[chainhash.Hash, UTXO]
+	BlockHeight      uint32
 	DeleteSpentUtxos bool
 }
 
 func NewSwissMap(deleteSpends bool) *SwissMap {
 	// the swiss map uses a lot less memory than the standard map
-	swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](1_000_000)
+	swissMap := swiss.NewMap[chainhash.Hash, UTXO](1024 * 1024)
 
 	return &SwissMap{
 		m:                swissMap,
@@ -26,41 +28,51 @@ func NewSwissMap(deleteSpends bool) *SwissMap {
 	}
 }
 
+func (m *SwissMap) SetBlockHeight(height uint32) error {
+	m.BlockHeight = height
+	return nil
+}
+
 func (m *SwissMap) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if txID, ok := m.m.Get(*hash); ok {
-		if *txID == emptyHash {
+	if utxo, ok := m.m.Get(*hash); ok {
+		if utxo.Hash == nil {
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_OK),
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 
 		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: txID,
+			SpendingTxID: utxo.Hash,
+			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
 	return &utxostore.UTXOResponse{
-		Status: 0,
+		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *SwissMap) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (m *SwissMap) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if txID, ok := m.m.Get(*hash); ok {
-		if *txID != emptyHash {
+	if utxo, ok := m.m.Get(*hash); ok {
+		if utxo.Hash != nil {
 			return &utxostore.UTXOResponse{
 				Status:       int(utxostore_api.Status_SPENT),
-				SpendingTxID: txID,
+				SpendingTxID: utxo.Hash,
 			}, nil
 		}
 	} else {
-		m.m.Put(*hash, &emptyHash)
+		m.m.Put(*hash, UTXO{
+			Hash:     nil,
+			LockTime: nLockTime,
+		})
 	}
 
 	return &utxostore.UTXOResponse{
@@ -71,7 +83,7 @@ func (m *SwissMap) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UT
 func (m *SwissMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	var h *chainhash.Hash
 	for _, h = range hashes {
-		_, err := m.Store(ctx, h)
+		_, err := m.Store(ctx, h, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -86,23 +98,40 @@ func (m *SwissMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhas
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if existingTxID, ok := m.m.Get(*hash); ok {
-		if existingTxID.IsEqual(&chainhash.Hash{}) {
-			m.m.Put(*hash, txID)
+	if utxo, ok := m.m.Get(*hash); ok {
+		if utxo.Hash == nil {
+			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
+				if m.DeleteSpentUtxos {
+					m.m.Delete(*hash)
+				} else {
+					m.m.Put(*hash, UTXO{
+						Hash:     txID,
+						LockTime: utxo.LockTime,
+					})
+				}
+			} else {
+				return &utxostore.UTXOResponse{
+					Status:   int(utxostore_api.Status_LOCK_TIME),
+					LockTime: utxo.LockTime,
+				}, nil
+			}
+
 			return &utxostore.UTXOResponse{
 				Status:       int(utxostore_api.Status_OK),
 				SpendingTxID: txID,
+				LockTime:     utxo.LockTime,
 			}, nil
 		} else {
-			if existingTxID.IsEqual(txID) {
+			if utxo.Hash == nil {
 				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_SPENT),
-					SpendingTxID: existingTxID,
+					Status:       int(utxostore_api.Status_OK),
+					SpendingTxID: txID,
+					LockTime:     utxo.LockTime,
 				}, nil
 			} else {
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
-					SpendingTxID: existingTxID,
+					SpendingTxID: utxo.Hash,
 				}, nil
 			}
 		}
@@ -115,13 +144,22 @@ func (m *SwissMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhas
 
 func (m *SwissMap) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
+	utxo, ok := m.m.Get(*hash)
 	m.m.Delete(*hash)
 	m.mu.Unlock()
 
-	return m.Store(ctx, hash)
+	nLockTime := uint32(0)
+	if ok {
+		nLockTime = utxo.LockTime
+	}
+
+	return m.Store(ctx, hash, nLockTime)
 }
 
 func (m *SwissMap) delete(hash *chainhash.Hash) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.m.Delete(*hash)
 	return nil
 }

@@ -26,18 +26,27 @@ func NewSplitByHash(deleteSpends bool) *SplitByHash {
 	return db
 }
 
+func (m *SplitByHash) SetBlockHeight(height uint32) error {
+	for i := 0; i <= 255; i++ {
+		_ = m.m[[1]byte{uint8(i)}].SetBlockHeight(height)
+	}
+	return nil
+}
+
 func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
-	if txID, ok := memMap.Get(hash); ok {
-		if txID == nil {
+	if utxo, ok := memMap.Get(hash); ok {
+		if utxo.Hash == nil {
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_OK),
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 		return &utxostore.UTXOResponse{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: txID,
+			SpendingTxID: utxo.Hash,
+			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
@@ -46,10 +55,10 @@ func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.U
 	}, nil
 }
 
-func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
-	status, err := memMap.Store(hash)
+	status, err := memMap.Store(hash, nLockTime)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +71,7 @@ func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash) (*utxostore
 func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	var h *chainhash.Hash
 	for _, h = range hashes {
-		_, err := m.Store(ctx, h)
+		_, err := m.Store(ctx, h, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +85,7 @@ func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash) 
 func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 
-	status, err := memMap.Spend(hash, txID)
+	status, nLockTime, err := memMap.Spend(hash, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +93,21 @@ func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chain
 	return &utxostore.UTXOResponse{
 		Status:       status,
 		SpendingTxID: txID,
+		LockTime:     nLockTime,
 	}, nil
 }
 
 func (m *SplitByHash) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
+	utxo, ok := memMap.Get(hash)
 	memMap.Delete(hash)
 
-	return m.Store(ctx, hash)
+	nLockTime := uint32(0)
+	if ok {
+		nLockTime = utxo.LockTime
+	}
+
+	return m.Store(ctx, hash, nLockTime)
 }
 
 // only used for testing

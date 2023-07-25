@@ -133,6 +133,11 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		}
 	}
 
+	var nLockTime uint32
+	if value.Bins["lockTime"] != nil {
+		nLockTime = uint32(value.Bins["lockTime"].(int))
+	}
+
 	// transform the aerospike interface{} into the correct types
 	status := &txmeta.Data{
 		Fee:            uint64(value.Bins["fee"].(int)),
@@ -140,12 +145,15 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		UtxoHashes:     utxoHashes,
 		FirstSeen:      time.Unix(int64(value.Bins["firstSeen"].(int)), 0),
 		BlockHashes:    blockHashes,
+		LockTime:       nLockTime,
 	}
 
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error {
+func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash,
+	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
@@ -170,6 +178,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, pare
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
 		aerospike.NewBin("utxoHashes", utxoHashesInterface),
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
+		aerospike.NewBin("lockTime", int(nLockTime)),
 	}
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {

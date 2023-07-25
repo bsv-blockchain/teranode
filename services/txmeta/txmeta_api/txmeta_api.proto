@@ -39,6 +39,7 @@ message CreateRequest {
   uint64 fee = 2;
   repeated bytes ParentTxHashes = 3;
   repeated bytes utxoHashes = 4;
+  uint32 lockTime = 5;
 }
 
 // swagger:model SetResponse

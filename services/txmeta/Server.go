@@ -158,7 +158,7 @@ func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) 
 		parentTxHashes[index] = parentTxHash
 	}
 
-	err = u.store.Create(ctx, hash, request.Fee, parentTxHashes, utxoHashes)
+	err = u.store.Create(ctx, hash, request.Fee, parentTxHashes, utxoHashes, request.LockTime)
 	if err != nil {
 		return nil, err
 	}

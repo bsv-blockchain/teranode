@@ -20,7 +20,7 @@ var (
 func testStore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash)
+	resp, err := db.Store(ctx, hash, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -28,7 +28,7 @@ func testStore(t *testing.T, db utxostore.Interface) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Store(context.Background(), hash)
+	resp, err = db.Store(context.Background(), hash, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -36,7 +36,7 @@ func testStore(t *testing.T, db utxostore.Interface) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Store(context.Background(), hash)
+	resp, err = db.Store(context.Background(), hash, 0)
 	require.NoError(t, err)
 	// this value should be spent, but we delete spends, so it will now be ok (stored again)
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
@@ -45,7 +45,7 @@ func testStore(t *testing.T, db utxostore.Interface) {
 func testSpend(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash)
+	resp, err := db.Store(ctx, hash, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -63,7 +63,7 @@ func testSpend(t *testing.T, db utxostore.Interface) {
 func testRestore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash)
+	resp, err := db.Store(ctx, hash, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
@@ -80,6 +80,26 @@ func testRestore(t *testing.T, db utxostore.Interface) {
 	require.Nil(t, resp.SpendingTxID)
 }
 
+func testLockTime(t *testing.T, db utxostore.Interface) {
+	ctx := context.Background()
+
+	resp, err := db.Store(ctx, hash, 1000)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+	resp, err = db.Spend(ctx, hash, hash)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+	require.Equal(t, uint32(1000), resp.LockTime)
+
+	_ = db.SetBlockHeight(1000)
+
+	resp, err = db.Spend(ctx, hash, hash)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+	require.Equal(t, hash, resp.SpendingTxID)
+}
+
 func testSanity(t *testing.T, db utxostore.Interface) {
 	util.SkipLongTests(t)
 	ctx := context.Background()
@@ -93,7 +113,7 @@ func testSanity(t *testing.T, db utxostore.Interface) {
 		binary.LittleEndian.PutUint64(bs, i+2_000_000)
 		iii := chainhash.HashH(bs)
 
-		resp, err = db.Store(ctx, &ii)
+		resp, err = db.Store(ctx, &ii, 0)
 		if resp.Status != int(utxostore_api.Status_OK) {
 			s := ii.String()
 			_ = s
@@ -125,7 +145,7 @@ func benchmark(b *testing.B, db utxostore.Interface) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {
-		resp, err := db.Store(ctx, hash)
+		resp, err := db.Store(ctx, hash, 0)
 		if err != nil {
 			b.Fatal(err)
 		}

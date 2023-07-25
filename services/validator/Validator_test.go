@@ -15,6 +15,10 @@ import (
 
 type NullStore struct{}
 
+func (ns *NullStore) SetBlockHeight(height uint32) error {
+	return nil
+}
+
 func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	return nil, nil
 }
@@ -28,7 +32,7 @@ func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.
 	return nil, nil
 }
 
-func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Store(%s)\n", hash.String())
 	return nil, nil
 }

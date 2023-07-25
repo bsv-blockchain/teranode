@@ -30,6 +30,14 @@ func TestXsyncMap(t *testing.T) {
 
 		testRestore(t, db)
 	})
+
+	t.Run("memory lock time", func(t *testing.T) {
+		db := NewXSyncMap(false)
+		err := db.delete(hash)
+		require.NoError(t, err)
+
+		testLockTime(t, db)
+	})
 }
 
 func TestXsyncMapSanity(t *testing.T) {

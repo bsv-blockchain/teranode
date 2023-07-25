@@ -65,23 +65,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}))
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx1, 111, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}, 0))
 		err := testItems.blockAssembler.AddTx(context.Background(), tx1)
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}))
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx2, 222, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}, 0))
 		err = testItems.blockAssembler.AddTx(context.Background(), tx2)
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}))
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx3, 333, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}, 0))
 		err = testItems.blockAssembler.AddTx(context.Background(), tx3)
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}))
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx4, 444, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}, 0))
 		err = testItems.blockAssembler.AddTx(context.Background(), tx4)
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}))
+		require.NoError(t, testItems.txMetaStore.Create(ctx, tx5, 555, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}, 0))
 		err = testItems.blockAssembler.AddTx(context.Background(), tx5)
 		require.NoError(t, err)
 

@@ -149,7 +149,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 	}, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLocktime uint32) (*utxostore.UTXOResponse, error) {
 	// Database reads and writes happen inside transactions
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.ClearRange(s.dir)

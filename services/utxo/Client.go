@@ -10,13 +10,20 @@ import (
 
 type Store struct {
 	db               utxostore_api.UtxoStoreAPIClient
+	BlockHeight      uint32
 	DeleteSpentUtxos bool
 }
 
 func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	return &Store{
-		db: db,
+		db:          db,
+		BlockHeight: 0,
 	}, nil
+}
+
+func (s *Store) SetBlockHeight(height uint32) error {
+	s.BlockHeight = height
+	return nil
 }
 
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
@@ -38,9 +45,10 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 	}, nil
 }
 
-func (s *Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
 		UxtoHash: hash[:],
+		LockTime: nLockTime,
 	})
 	if err != nil {
 		return nil, err
@@ -53,7 +61,7 @@ func (s *Store) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 
 func (s *Store) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	for _, h := range hash {
-		_, err := s.Store(ctx, h)
+		_, err := s.Store(ctx, h, 0)
 		if err != nil {
 			return nil, err
 		}

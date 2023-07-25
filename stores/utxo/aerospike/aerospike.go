@@ -4,15 +4,16 @@ package aerospike
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/aerospike/aerospike-client-go/v6"
-	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
@@ -93,12 +94,13 @@ func init() {
 }
 
 type Store struct {
-	client    *aerospike.Client
-	namespace string
+	client      *aerospike.Client
+	namespace   string
+	blockHeight uint32
 }
 
 func New(url *url.URL) (*Store, error) {
-	asl.Logger.SetLevel(asl.DEBUG)
+	//asl.Logger.SetLevel(asl.DEBUG)
 
 	namespace := url.Path[1:]
 
@@ -108,9 +110,15 @@ func New(url *url.URL) (*Store, error) {
 	}
 
 	return &Store{
-		client:    client,
-		namespace: namespace,
+		client:      client,
+		namespace:   namespace,
+		blockHeight: 0,
 	}, nil
+}
+
+func (s *Store) SetBlockHeight(blockHeight uint32) error {
+	s.blockHeight = blockHeight
+	return nil
 }
 
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
@@ -118,7 +126,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 	return nil, nil
 }
 
-func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
@@ -130,8 +138,11 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		return nil, err
 	}
 
-	bin := aerospike.NewBin("txid", []byte{})
-	err = s.client.PutBins(policy, key, bin)
+	bins := []*aerospike.Bin{
+		aerospike.NewBin("locktime", nLockTime),
+	}
+
+	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		// check whether we already set this utxo
 		prometheusUtxoGet.Inc()
@@ -187,7 +198,7 @@ func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash) (*utxost
 	for _, hash := range hashes {
 		key, _ := aerospike.NewKey(s.namespace, "utxo", hash[:])
 
-		bin := aerospike.NewBin("txid", []byte{})
+		bin := aerospike.NewBin("locktime", 0)
 		record := aerospike.NewBatchWrite(batchWritePolicy, key,
 			aerospike.PutOp(bin),
 		)
@@ -235,9 +246,27 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		return nil, err
 	}
 
+	policy.FilterExpression = aerospike.ExpOr(
+		// anything below the block height is spendable, including 0
+		aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+		aerospike.ExpAnd(
+			aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+			// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+			// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+			// and not the block time itself.
+			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+		),
+	)
+
 	bin := aerospike.NewBin("txid", txID.CloneBytes())
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
+		if errors.Is(err, aerospike.ErrFilteredOut) {
+			return &utxostore.UTXOResponse{
+				Status: int(utxostore_api.Status_LOCK_TIME),
+			}, nil
+		}
+
 		// check whether we had the same value set as before
 		prometheusUtxoGet.Inc()
 		value, getErr := s.client.Get(nil, key, "txid")
@@ -264,7 +293,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Spend PutBins: %v\n", err)
+		fmt.Printf("ERROR in aerospike Spend PutBins: %v\n", err)
 		return nil, err
 	}
 
@@ -287,16 +316,27 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 		return nil, err
 	}
 
+	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "locktime")
+	if getErr != nil {
+		prometheusUtxoErrors.WithLabelValues("Get", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike get key: %v\n", err)
+		return nil, err
+	}
+	nLockTime, ok := value.Bins["locktime"].(int)
+	if !ok {
+		nLockTime = 0
+	}
+
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("MoveUpBlock", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike MoveUpBlock delete key: %v\n", err)
+		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike Reset delete key: %v\n", err)
 		return nil, err
 	}
 
 	prometheusUtxoReset.Inc()
 
-	return s.Store(ctx, hash)
+	return s.Store(ctx, hash, uint32(nLockTime))
 }
 
 func (s *Store) DeleteSpends(_ bool) {

@@ -165,7 +165,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 
 	// Add all the utxo hashes to the utxostore
 	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err := b.utxoStore.Store(context.Background(), hash); err != nil {
+		if resp, err := b.utxoStore.Store(context.Background(), hash, txMetadata.LockTime); err != nil {
 			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
 		}
 	}

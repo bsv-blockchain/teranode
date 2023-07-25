@@ -48,11 +48,12 @@ type Data struct {
 	FirstSeen      time.Time
 	BlockHashes    []*chainhash.Hash
 	BlockHeight    uint32 // delete after 100 blocks?
+	LockTime       uint32 // The block number or timestamp at which this transaction is unlocked
 }
 
 type Store interface {
 	Get(ctx context.Context, hash *chainhash.Hash) (*Data, error)
-	Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash) error
+	Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error
 	SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 }
