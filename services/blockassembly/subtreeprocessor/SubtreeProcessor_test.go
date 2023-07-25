@@ -22,9 +22,19 @@ var (
 
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
-	blockHeader     = &model.BlockHeader{
+
+	prevBlockHeader = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
+	blockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevBlockHeader.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      1234567890,
 		Bits:           model.NBit{},
@@ -259,6 +269,7 @@ func TestReset(t *testing.T) {
 	// new items per file is 2 so there should be 4 subtrees in the chain
 	wg.Add(5) // we are expecting 2 more subtrees
 
+	stp.SetCurrentBlockHeader(prevBlockHeader)
 	err := stp.MoveUpBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
@@ -331,6 +342,7 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 
 	wg.Add(5) // we are expecting 4 subtrees
 
+	stp.SetCurrentBlockHeader(prevBlockHeader)
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
 	// new items per file is 2 so there should be 5 subtrees in the chain
@@ -404,6 +416,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 
 	wg.Add(4) // we are expecting 4 subtrees
 
+	stp.SetCurrentBlockHeader(prevBlockHeader)
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
@@ -478,6 +491,7 @@ func TestResetLarge(t *testing.T) {
 
 	wg.Add(8) // we are expecting 4 subtrees
 
+	stp.SetCurrentBlockHeader(prevBlockHeader)
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
 	// new items per file is 65536 so there should be 8 subtrees in the chain
