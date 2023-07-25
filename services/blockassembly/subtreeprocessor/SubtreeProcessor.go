@@ -3,7 +3,9 @@ package subtreeprocessor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
@@ -40,6 +42,7 @@ type SubtreeProcessor struct {
 	newSubtreeChan      chan *util.Subtree // used to notify of a new subtree
 	chainedSubtrees     []*util.Subtree
 	currentSubtree      *util.Subtree
+	currentBlockHeader  *model.BlockHeader
 	sync.Mutex
 	incompleteSubtrees map[chainhash.Hash]*util.Subtree
 	subtreeStore       blob.Store
@@ -92,11 +95,17 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 			case moveDownReq := <-stp.moveDownBlockChan:
 				logger.Infof("[SubtreeProcessor] moveDownBlock subtree processor")
 				err := stp.moveDownBlock(moveDownReq.block)
+				if err == nil {
+					stp.currentBlockHeader = moveDownReq.block.Header
+				}
 				moveDownReq.errChan <- err
 
 			case moveUpReq := <-stp.moveUpBlockChan:
 				logger.Infof("[SubtreeProcessor] moveUpBlock subtree processor")
 				err := stp.moveUpBlock(moveUpReq.block)
+				if err == nil {
+					stp.currentBlockHeader = moveUpReq.block.Header
+				}
 				moveUpReq.errChan <- err
 
 			case txReq := <-stp.txChan:
@@ -109,6 +118,10 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 	}()
 
 	return stp
+}
+
+func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
+	stp.currentBlockHeader = blockHeader
 }
 
 func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
@@ -219,6 +232,14 @@ func (stp *SubtreeProcessor) MoveUpBlock(block *model.Block) error {
 // moveDownBlock adds all transactions that are in the block given to the current subtrees
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveDownBlock(block *model.Block) error {
+	if block == nil {
+		return errors.New("you must pass in a block to moveUpBlock")
+	}
+
+	if !block.Header.Hash().IsEqual(stp.currentBlockHeader.Hash()) {
+		return errors.New("the block passed in does not match the current block header")
+	}
+
 	return nil
 }
 
@@ -230,18 +251,27 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
 
+	if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
+		return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
+	}
+
 	stp.logger.Infof("resetting the subtrees with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
+	// create a reverse lookup map of all the subtrees in the block
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {
 		blockSubtreesMap[*subtree] = idx
 	}
 
+	// copy the current subtrees into a temp variable
 	currentSubtree := stp.currentSubtree
+	// reset the current subtree
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
 	// get all the subtrees that were not in the block
+	// this should clear out all subtrees from our own blocks, giving an empty blockSubtreesMap as a result
+	// and preventing processing of the map
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	for _, subtree := range stp.chainedSubtrees {
 		id := *subtree.RootHash()
@@ -292,17 +322,19 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	}
 
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
+	//      are they going to be caught by the tx meta lookup?
 
+	var remainderTxHashes []*chainhash.Hash
+	var hashCount atomic.Int64
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		// clean out the transactions from the old current subtree that were in the block
-		// and add the remainder to the new current subtree
-
+		// and add the remainderTxHashes to the new current subtree
 		var wg sync.WaitGroup
-
-		for _, subtree := range chainedSubtrees {
+		// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
+		remainderSubtreeHashes := make([][]*chainhash.Hash, len(chainedSubtrees))
+		for idx, subtree := range chainedSubtrees {
 			wg.Add(1)
-
-			go func(st *util.Subtree) {
+			go func(idx int, st *util.Subtree) {
 				defer wg.Done()
 
 				remainingTransactions, err := st.Difference(transactionMap)
@@ -312,11 +344,22 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 				}
 
 				for _, txHash := range remainingTransactions {
-					_ = stp.currentSubtree.AddNode(txHash, 0)
+					// TODO add fee ???
+					remainderSubtreeHashes[idx] = append(remainderSubtreeHashes[idx], txHash)
+					hashCount.Add(1)
 				}
-			}(subtree)
+			}(idx, subtree)
 		}
 		wg.Wait()
+		chainedSubtrees = nil
+
+		// add all found tx hashes to the final list
+		remainderTxHashes = make([]*chainhash.Hash, 0, hashCount.Load())
+		for _, subtreeHashes := range remainderSubtreeHashes {
+			for _, txHash := range subtreeHashes {
+				remainderTxHashes = append(remainderTxHashes, txHash)
+			}
+		}
 	}
 
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
@@ -331,6 +374,11 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 			stp.addNode(*node, 0)
 		}
 		fees += subtree.Fees
+	}
+
+	// remainderTxHashes is from early trees, so they need to be added before the current subtree nodes
+	for _, node := range remainderTxHashes {
+		stp.addNode(*node, 0)
 	}
 
 	for _, node := range currentSubtree.Nodes {

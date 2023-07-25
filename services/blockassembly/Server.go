@@ -371,22 +371,29 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		}
 	}
 
-	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesInJob)
-	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)
-	}
+	var hashMerkleRoot *chainhash.Hash
+	var coinbaseMerkleProof []*chainhash.Hash
+	if len(subtreesInJob) > 0 {
+		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
+		if err != nil {
+			return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)
+		}
 
-	cmp := make([]string, len(coinbaseMerkleProof))
-	cmpB := make([][]byte, len(coinbaseMerkleProof))
-	for idx, hash := range coinbaseMerkleProof {
-		cmp[idx] = hash.String()
-		cmpB[idx] = hash.CloneBytes()
-	}
+		cmp := make([]string, len(coinbaseMerkleProof))
+		cmpB := make([][]byte, len(coinbaseMerkleProof))
+		for idx, hash := range coinbaseMerkleProof {
+			cmp[idx] = hash.String()
+			cmpB[idx] = hash.CloneBytes()
+		}
 
-	calculatedMerkleRoot := topTree.RootHash()
-	hashMerkleRoot, err := chainhash.NewHash(calculatedMerkleRoot[:])
-	if err != nil {
-		return nil, err
+		calculatedMerkleRoot := topTree.RootHash()
+		hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:])
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		coinbaseMerkleProof = make([]*chainhash.Hash, 0)
+		hashMerkleRoot = coinbaseTxIDHash
 	}
 
 	block := &model.Block{

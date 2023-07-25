@@ -54,17 +54,18 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
 	}
 
+	var err error
+	b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+	} else {
+		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
+	}
+
 	// start a subscription for the best block header
 	// this will be used to reset the subtree processor when a new block is mined
-	var err error
 	var bestBlockHeaderCh chan *blockchain.BestBlockHeader
 	go func() {
-		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
-			return
-		}
-
 		bestBlockHeaderCh, err = b.blockchainClient.SubscribeBestBlockHeader(context.Background())
 		if err != nil {
 			logger.Errorf("[BlockAssembler] error subscribing to best block header: %v", err)
@@ -196,6 +197,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	if b.bestBlockHeader == nil {
+		return nil, nil, fmt.Errorf("best block header is not available")
+	}
+
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
 
@@ -221,19 +226,25 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// TEMP for testing only - moved from blockchain sql store
 	nBits := model.NewNBitFromString("2000ffff") // TEMP We want hashes with 2 leading zeros
 
-	coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
-	}
-
 	var coinbaseMerkleProofBytes [][]byte
-	for _, hash := range coinbaseMerkleProof {
-		coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
+	if len(subtrees) > 0 {
+		coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error getting merkle proof for coinbase: %w", err)
+		}
+
+		for _, hash := range coinbaseMerkleProof {
+			coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
+		}
+	} else {
+		coinbaseMerkleProofBytes = [][]byte{}
 	}
 
+	previousHash := b.bestBlockHeader.Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{
-		Id:            id[:],
-		PreviousHash:  b.bestBlockHeader.Hash().CloneBytes(),
+		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
+		Id:            chainhash.HashB(append(id[:], previousHash...)),
+		PreviousHash:  previousHash,
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits.CloneBytes(),

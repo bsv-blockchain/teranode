@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
@@ -66,6 +67,22 @@ func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 func (bh *BlockHeader) Hash() *chainhash.Hash {
 	hash := chainhash.DoubleHashH(bh.Bytes())
 	return &hash
+}
+
+func (bh *BlockHeader) String() string {
+	return bh.Hash().String()
+}
+
+func (bh *BlockHeader) StringDump() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Version: %d\n", bh.Version))
+	sb.WriteString(fmt.Sprintf("HashPrevBlock: %s\n", bh.HashPrevBlock.String()))
+	sb.WriteString(fmt.Sprintf("HashMerkleRoot: %s\n", bh.HashMerkleRoot.String()))
+	sb.WriteString(fmt.Sprintf("Timestamp: %d\n", bh.Timestamp))
+	sb.WriteString(fmt.Sprintf("Bits: %s\n", bh.Bits.String()))
+	sb.WriteString(fmt.Sprintf("Nonce: %d\n", bh.Nonce))
+
+	return sb.String()
 }
 
 func (bh *BlockHeader) HasMetTargetDifficulty() (bool, error) {

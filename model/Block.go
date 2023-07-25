@@ -106,9 +106,10 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
 	}
 
-	if len(b.Subtrees) == 0 {
-		return false, fmt.Errorf("block has no subtrees")
-	}
+	// empty blocks are valid
+	//if len(b.Subtrees) == 0 {
+	//	return false, fmt.Errorf("block has no subtrees")
+	//}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	if b.Header.Timestamp > uint32(time.Now().Add(2*time.Hour).Unix()) {
