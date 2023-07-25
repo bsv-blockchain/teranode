@@ -82,9 +82,9 @@ type Worker struct {
 	numberOfOutputs      int
 	numberOfTransactions uint32
 	satoshisPerOutput    uint64
-	seeder               seeder_api.SeederAPIClient
+	seederServers        []seeder_api.SeederAPIClient
 	rateLimiter          *rate.Limiter
-	propagationServer    propagation_api.PropagationAPIClient
+	propagationServers   []propagation_api.PropagationAPIClient
 	kafkaProducer        sarama.SyncProducer
 	kafkaTopic           string
 	ipv6MulticastConn    *net.UDPConn
@@ -96,9 +96,9 @@ func NewWorker(
 	numberOfOutputs int,
 	numberOfTransactions uint32,
 	satoshisPerOutput uint64,
-	seeder seeder_api.SeederAPIClient,
+	seederServers []seeder_api.SeederAPIClient,
 	rateLimiter *rate.Limiter,
-	propagationServer propagation_api.PropagationAPIClient,
+	propagationServers []propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -113,9 +113,9 @@ func NewWorker(
 		numberOfOutputs:      numberOfOutputs,
 		numberOfTransactions: numberOfTransactions,
 		satoshisPerOutput:    satoshisPerOutput,
-		seeder:               seeder,
+		seederServers:        seederServers,
 		rateLimiter:          rateLimiter,
-		propagationServer:    propagationServer,
+		propagationServers:   propagationServers,
 		kafkaProducer:        kafkaProducer,
 		kafkaTopic:           kafkaTopic,
 		ipv6MulticastConn:    ipv6MulticastConn,
@@ -133,48 +133,51 @@ func (w *Worker) Start(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := w.seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
-		PrivateKey:           keySet.PrivateKey.Serialise(),
-		NumberOfTransactions: w.numberOfTransactions,
-		NumberOfOutputs:      uint32(w.numberOfOutputs),
-		SatoshisPerOutput:    w.satoshisPerOutput,
-	}); err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create spendable transaction: %v", err)
-		return err
-	}
-
-	res, err := w.seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
-		PrivateKey: keySet.PrivateKey.Serialise(),
-	})
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create next spendable transaction: %v", err)
-		return err
-	}
-
-	privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
-
-	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create private key from pub key: %v", err)
-		panic(err)
-	}
-
-	go func(numberOfOutputs uint32) {
-		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-		for i := uint32(0); i < numberOfOutputs; i++ {
-			u := &bt.UTXO{
-				TxID:          bt.ReverseBytes(res.Txid),
-				Vout:          i,
-				LockingScript: script,
-				Satoshis:      res.SatoshisPerOutput,
-			}
-
-			w.utxoChan <- u
+	// (ok)
+	for _, seeder := range w.seederServers {
+		if _, err := seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
+			PrivateKey:           keySet.PrivateKey.Serialise(),
+			NumberOfTransactions: w.numberOfTransactions,
+			NumberOfOutputs:      uint32(w.numberOfOutputs),
+			SatoshisPerOutput:    w.satoshisPerOutput,
+		}); err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create spendable transaction: %v", err)
+			return err
 		}
-	}(res.NumberOfOutputs)
+
+		res, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
+			PrivateKey: keySet.PrivateKey.Serialise(),
+		})
+		if err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create next spendable transaction: %v", err)
+			return err
+		}
+
+		privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
+
+		script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+		if err != nil {
+			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+			logger.Errorf("Failed to create private key from pub key: %v", err)
+			panic(err)
+		}
+
+		go func(numberOfOutputs uint32) {
+			logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+			for i := uint32(0); i < numberOfOutputs; i++ {
+				u := &bt.UTXO{
+					TxID:          bt.ReverseBytes(res.Txid),
+					Vout:          i,
+					LockingScript: script,
+					Satoshis:      res.SatoshisPerOutput,
+				}
+
+				w.utxoChan <- u
+			}
+		}(res.NumberOfOutputs)
+	}
 
 	w.startTime = time.Now()
 
@@ -310,10 +313,16 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	traceSpan.SetTag("transport", "grpc")
 
-	if _, err := w.propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
-		Tx: txExtendedBytes,
-	}); err != nil {
-		return fmt.Errorf("error sending transaction to propagation server: %v", err)
+	var propagationError error = nil
+	for _, propagationServer := range w.propagationServers {
+		if _, err := propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
+			Tx: txExtendedBytes,
+		}); err != nil {
+			propagationError = err
+		}
+	}
+	if propagationError != nil {
+		return fmt.Errorf("error sending transaction to propagation server: %s", propagationError.Error())
 	}
 
 	counterLoad := counter.Add(1)

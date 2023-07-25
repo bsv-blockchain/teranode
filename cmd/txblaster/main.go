@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -30,7 +31,8 @@ import (
 )
 
 var logger utils.Logger
-var propagationServer propagation_api.PropagationAPIClient
+
+// var propagationServers []propagation_api.PropagationAPIClient
 var seederServer seeder_api.SeederAPIClient
 var printProgress uint64
 
@@ -171,33 +173,62 @@ func main() {
 		_ = http.ListenAndServe(profilerAddr, nil)
 	}()
 
-	seederGrpcAddress, ok := gocore.Config().Get("seeder_grpcAddress")
-	if !ok {
-		panic("no seeder_grpcAddress setting found")
+	// (ok)
+	seederGrpcAddresses := []string{}
+	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets"); ok {
+		seederGrpcAddresses = append(seederGrpcAddresses, strings.Split(addresses, "|")...)
+	} else {
+		if address, ok := gocore.Config().Get("seeder_grpcAddress"); ok {
+			seederGrpcAddresses = append(seederGrpcAddresses, address)
+		} else {
+			panic("no seeder_grpcAddress setting found")
+		}
 	}
 
-	sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		panic(err)
-	}
-	seederServer = seeder_api.NewSeederAPIClient(sConn)
-
-	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
-	if !ok {
-		panic("no propagation_grpcAddress setting found")
+	seederServers := []seeder_api.SeederAPIClient{}
+	for _, seederGrpcAddress := range seederGrpcAddresses {
+		sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			panic(err)
+		}
+		seederServers = append(seederServers, seeder_api.NewSeederAPIClient(sConn))
 	}
 
-	pConn, err := utils.GetGRPCClient(ctx, propagationGrpcAddress, &utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		panic(err)
+	if len(seederServers) == 0 {
+		panic("No suitable seeder server connection found")
 	}
-	propagationServer = propagation_api.NewPropagationAPIClient(pConn)
+
+	// (ok)
+
+	propagationGrpcAddresses := []string{}
+	if addresses, ok := gocore.Config().Get("txblaster_propagation_grpcTargets"); ok {
+		propagationGrpcAddresses = append(propagationGrpcAddresses, strings.Split(addresses, "|")...)
+	} else {
+		if address, ok := gocore.Config().Get("propagation_grpcAddress"); ok {
+			propagationGrpcAddresses = append(propagationGrpcAddresses, address)
+		} else {
+			panic("no propagation_grpcAddress setting found")
+		}
+	}
+
+	propagationServers := []propagation_api.PropagationAPIClient{}
+	for _, propagationGrpcAddress := range propagationGrpcAddresses {
+		pConn, err := utils.GetGRPCClient(ctx, propagationGrpcAddress, &utils.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			panic(err)
+		}
+		propagationServers = append(propagationServers, propagation_api.NewPropagationAPIClient(pConn))
+	}
+
+	if len(propagationServers) == 0 {
+		panic("No suitable propagation server connnection found")
+	}
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 	numberOfTransactions := uint32(1)
@@ -225,9 +256,9 @@ func main() {
 			numberOfOutputs,
 			uint32(numberOfTransactions),
 			satoshisPerOutput,
-			seederServer,
+			seederServers,
 			rateLimiter,
-			propagationServer,
+			propagationServers,
 			kafkaProducer,
 			kafkaTopic,
 			ipv6MulticastConn,
@@ -236,7 +267,8 @@ func main() {
 		)
 
 		g.Go(func() error {
-			return w.Start(ctx)
+			// (ok) return w.Start(ctx)
+			return w.Start(context.Background())
 		})
 	}
 
@@ -246,7 +278,7 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
 		panic(err)
 	}
