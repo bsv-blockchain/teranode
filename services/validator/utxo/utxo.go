@@ -48,17 +48,14 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 
 		go func() {
 			var height uint32
-			for {
-				select {
-				case notification := <-blockchainSubscriptionCh:
-					if notification.Type == int32(blockchain_api.Type_Block) {
-						_, height, err = blockchainClient.GetBestBlockHeader(context.Background())
-						if err != nil {
-							logger.Errorf("[UTXOStore] error getting best block header: %v", err)
-							continue
-						}
-						_ = utxoStore.SetBlockHeight(height)
+			for notification := range blockchainSubscriptionCh {
+				if notification.Type == int32(blockchain_api.Type_Block) {
+					_, height, err = blockchainClient.GetBestBlockHeader(context.Background())
+					if err != nil {
+						logger.Errorf("[UTXOStore] error getting best block header: %v", err)
+						continue
 					}
+					_ = utxoStore.SetBlockHeight(height)
 				}
 			}
 		}()

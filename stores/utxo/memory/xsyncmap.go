@@ -12,7 +12,7 @@ import (
 	"github.com/puzpuzpuz/xsync/v2"
 )
 
-var emptyHash = chainhash.Hash{}
+// var emptyHash = chainhash.Hash{}
 
 type XsyncMap struct {
 	m                *xsync.MapOf[chainhash.Hash, UTXO]

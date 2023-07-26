@@ -34,7 +34,7 @@ import (
 var logger utils.Logger
 
 // var propagationServers []propagation_api.PropagationAPIClient
-var seederServer seeder_api.SeederAPIClient
+// var seederServer seeder_api.SeederAPIClient
 var printProgress uint64
 
 // Name used by build script for the binaries. (Please keep on single line)
