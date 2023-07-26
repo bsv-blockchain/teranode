@@ -116,10 +116,55 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						continue
 					}
 
-					if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-						b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
+					// TODO: Add the coinbase to the tx lake
+
+					// Build up the items we need to store the outputs in the utxostore.  We do this here so that
+					// any errors that occur will happen before we do any further processing.
+					txidHash, err := chainhash.NewHashFromStr(block.CoinbaseTx.TxID())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error getting txid hash from string: %v", err)
 						continue
 					}
+
+					blockHeight, err := block.ExtractCoinbaseHeight()
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error extracting coinbase height: %v", err)
+						continue
+					}
+
+					utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
+					success := true
+
+					for i, output := range block.CoinbaseTx.Outputs {
+						if output.Satoshis > 0 {
+							hash, err := util.UTXOHashFromOutput(txidHash, output, uint32(i))
+							if err != nil {
+								b.logger.Errorf("[BlockAssembler] error getting utxo hash from output: %v", err)
+								continue
+							}
+
+							if resp, err := b.utxoStore.Store(ctx, hash, blockHeight+100); err != nil {
+								b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
+								success = false
+								break
+							}
+
+							utxoHashes = append(utxoHashes, hash)
+						}
+					}
+
+					if !success {
+						b.removeAllAdded(ctx, utxoHashes)
+						continue
+					}
+
+					if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
+						b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
+						b.removeAllAdded(ctx, utxoHashes)
+						continue
+					}
+
+					// Add the outputs of the coinbase to the utxostore with locktime of 100 blocks
 
 					b.bestBlockHeader = header
 					b.bestBlockHeight = height
@@ -144,6 +189,15 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	}()
 
 	return b
+}
+
+func (b *BlockAssembler) removeAllAdded(ctx context.Context, hashes []*chainhash.Hash) {
+	// Remove all the utxos we added
+	for _, hash := range hashes {
+		if resp, err := b.utxoStore.Reset(ctx, hash); err != nil {
+			b.logger.Errorf("[BlockAssembler] error resetting utxo (%v): %w", resp, err)
+		}
+	}
 }
 
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {

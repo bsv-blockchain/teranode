@@ -32,7 +32,7 @@ func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.
 	return nil, nil
 }
 
-func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash, locktime uint32) (*utxostore.UTXOResponse, error) {
 	// fmt.Printf("Store(%s)\n", hash.String())
 	return nil, nil
 }

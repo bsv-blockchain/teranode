@@ -375,7 +375,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	var hashMerkleRoot *chainhash.Hash
 	var coinbaseMerkleProof []*chainhash.Hash
-	if len(subtreesInJob) > 0 {
+
+	if len(subtreesInJob) == 0 {
+		hashMerkleRoot = coinbaseTxIDHash
+	} else {
 		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
 		if err != nil {
 			return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)
@@ -393,9 +396,6 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		coinbaseMerkleProof = make([]*chainhash.Hash, 0)
-		hashMerkleRoot = coinbaseTxIDHash
 	}
 
 	block := &model.Block{

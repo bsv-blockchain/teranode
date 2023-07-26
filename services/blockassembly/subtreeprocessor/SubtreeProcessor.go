@@ -79,9 +79,7 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				logger.Infof("[SubtreeProcessor] get current subtrees")
 				chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees))
-				for _, subtree := range stp.chainedSubtrees {
-					chainedSubtrees = append(chainedSubtrees, subtree)
-				}
+				chainedSubtrees = append(chainedSubtrees, stp.chainedSubtrees...)
 
 				// incomplete subtrees ?
 				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
@@ -225,7 +223,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	}
 
 	// copy the current subtree into a temp variable
-	currentSubtree := stp.currentSubtree
+	lastIncompleteSubtree := stp.currentSubtree
 	// reset the current subtree
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
@@ -253,7 +251,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
 	//      or are they going to be caught by the tx meta lookup?
 
-	fees := currentSubtree.Fees
+	fees := lastIncompleteSubtree.Fees
 
 	var remainderTxHashes *[]*chainhash.Hash
 	if transactionMap != nil && transactionMap.Length() > 0 {
@@ -262,26 +260,25 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 			fees += subtree.Fees
 			remainderSubtrees = append(remainderSubtrees, subtree)
 		}
-		remainderSubtrees = append(remainderSubtrees, currentSubtree)
+		remainderSubtrees = append(remainderSubtrees, lastIncompleteSubtree)
 
 		remainderTxHashes = stp.getRemainderTxHashes(remainderSubtrees, transactionMap)
-		chainedSubtrees = nil
+		// chainedSubtrees = nil
 	} else {
 		chainedSubtreeSize := 0
 		if len(chainedSubtrees) > 0 {
 			// just use the first subtree, each subtree should be the same size
 			chainedSubtreeSize = chainedSubtrees[0].Size()
 		}
-		r := make([]*chainhash.Hash, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(currentSubtree.Nodes))
+		r := make([]*chainhash.Hash, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
 		remainderTxHashes = &r
-		for _, node := range currentSubtree.Nodes {
-			*remainderTxHashes = append(*remainderTxHashes, node)
-		}
+
+		*remainderTxHashes = append(*remainderTxHashes, lastIncompleteSubtree.Nodes...)
+
 		for _, subtree := range chainedSubtrees {
 			fees += subtree.Fees
-			for _, node := range subtree.Nodes {
-				*remainderTxHashes = append(*remainderTxHashes, node)
-			}
+
+			*remainderTxHashes = append(*remainderTxHashes, subtree.Nodes...)
 		}
 	}
 
@@ -296,7 +293,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 			stp.addNode(*node, 0)
 		}
 	}
-	remainderTxHashes = nil
+	// remainderTxHashes = nil
 
 	if len(stp.chainedSubtrees) > 0 {
 		stp.chainedSubtrees[len(stp.chainedSubtrees)-1].Fees = fees
@@ -338,9 +335,7 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 	// add all found tx hashes to the final list
 	remainderTxHashes := make([]*chainhash.Hash, 0, hashCount.Load())
 	for _, subtreeHashes := range remainderSubtreeHashes {
-		for _, txHash := range subtreeHashes {
-			remainderTxHashes = append(remainderTxHashes, txHash)
-		}
+		remainderTxHashes = append(remainderTxHashes, subtreeHashes...)
 	}
 	return &remainderTxHashes
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 )
@@ -24,7 +23,7 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 
 	dbInit, ok := availableDatabases[url.Scheme]
 	if ok {
-		var utxoStore utxo.Interface
+		var utxoStore utxostore.Interface
 		var blockchainClient blockchain.ClientI
 		var blockchainSubscriptionCh chan *model.Notification
 

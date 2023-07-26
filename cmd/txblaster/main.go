@@ -264,11 +264,8 @@ func main() {
 
 		logIdsFile = make(chan string, 100000)
 		go func() {
-			for {
-				select {
-				case id := <-logIdsFile:
-					_, _ = logFile.WriteString(id + "\n")
-				}
+			for id := range logIdsFile {
+				_, _ = logFile.WriteString(id + "\n")
 			}
 		}()
 	}
