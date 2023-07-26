@@ -10,6 +10,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -26,7 +27,6 @@ type miningCandidateResponse struct {
 }
 
 type BlockAssembler struct {
-	mu               sync.RWMutex
 	logger           utils.Logger
 	txMetaClient     txmeta_store.Store
 	utxoStore        utxostore.Interface
@@ -65,16 +65,18 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 	// start a subscription for the best block header
 	// this will be used to reset the subtree processor when a new block is mined
-	var bestBlockHeaderCh chan *blockchain.BestBlockHeader
+	var blockchainSubscriptionCh chan *model.Notification
 	go func() {
-		bestBlockHeaderCh, err = b.blockchainClient.SubscribeBestBlockHeader(context.Background())
+		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context.Background())
 		if err != nil {
-			logger.Errorf("[BlockAssembler] error subscribing to best block header: %v", err)
+			logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
 		}
 
 		var block *model.Block
 		var blockHeaders []*model.BlockHeader
+		var header *model.BlockHeader
+		var height uint32
 		for {
 			select {
 			case <-ctx.Done():
@@ -89,48 +91,54 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 					err:             err,
 				}
 
-			case header := <-bestBlockHeaderCh:
-				b.logger.Infof("[BlockAssembler] best block header subscription received new header: %s", header.Header.Hash().String())
-				// reset the subtree processor
+			case notification := <-blockchainSubscriptionCh:
+				switch notification.Type {
+				case int32(blockchain_api.Type_Block):
+					header, height, err = b.blockchainClient.GetBestBlockHeader(context.Background())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+						continue
+					}
 
-				if header.Header.Hash().IsEqual(b.bestBlockHeader.Hash()) {
-					// we already have this block, nothing to do
-					continue
-				} else if !header.Header.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
-					// TODO check what is going on here, maybe we are on a different tip, or need to
-					// reorg, or something else
+					if header.Hash().IsEqual(b.bestBlockHeader.Hash()) {
+						// we already have this block, nothing to do
+						continue
+					} else if !header.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
+						// TODO check what is going on here, maybe we are on a different tip, or need to
+						// reorg, or something else
 
-					b.logger.Errorf("[BlockAssembler] best block header subscription received new header with incorrect prev hash: %s", header.Header.HashPrevBlock.String())
-					continue
+						b.logger.Errorf("[BlockAssembler] best block header subscription received new header with incorrect prev hash: %s", header.HashPrevBlock.String())
+						continue
+					}
+
+					if block, err = b.blockchainClient.GetBlock(context.Background(), header.Hash()); err != nil {
+						b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
+						continue
+					}
+
+					if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
+						b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
+						continue
+					}
+
+					b.bestBlockHeader = header
+					b.bestBlockHeight = height
+
+					blockHeaders, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error getting block headers from blockchain: %v", err)
+						// todo should we stop here, we are in a weird state
+						continue
+					}
+
+					b.currentChainMapMu.Lock()
+					b.currentChainMap = make(map[chainhash.Hash]uint32, 100)
+					for _, blockHeader := range blockHeaders {
+						// todo set the height instead of timestamp
+						b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
+					}
+					b.currentChainMapMu.Unlock()
 				}
-
-				if block, err = b.blockchainClient.GetBlock(context.Background(), header.Header.Hash()); err != nil {
-					b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
-					continue
-				}
-
-				if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-					b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
-					continue
-				}
-
-				b.bestBlockHeader = header.Header
-				b.bestBlockHeight = header.Height
-
-				blockHeaders, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
-				if err != nil {
-					b.logger.Errorf("[BlockAssembler] error getting block headers from blockchain: %v", err)
-					// todo should we stop here, we are in a weird state
-					continue
-				}
-
-				b.currentChainMapMu.Lock()
-				b.currentChainMap = make(map[chainhash.Hash]uint32, 100)
-				for _, blockHeader := range blockHeaders {
-					// todo set the height instead of timestamp
-					b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
-				}
-				b.currentChainMapMu.Unlock()
 			}
 		}
 	}()
@@ -150,6 +158,9 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 		return err
 	}
 
+	// looking this up here and adding to the subtree processor, might create a situation where a transaction
+	// that was in a block from a competing miner, is added to the subtree processor when it shouldn't
+	// TODO should this be done in the subtree processor?
 	if len(txMetadata.BlockHashes) > 0 {
 		b.currentChainMapMu.RLock()
 		for _, hash := range txMetadata.BlockHashes {
@@ -195,9 +206,6 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 }
 
 func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	if b.bestBlockHeader == nil {
 		return nil, nil, fmt.Errorf("best block header is not available")
 	}

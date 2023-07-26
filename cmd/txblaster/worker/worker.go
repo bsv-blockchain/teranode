@@ -90,6 +90,7 @@ type Worker struct {
 	ipv6MulticastConn    *net.UDPConn
 	ipv6MulticastChan    chan Ipv6MulticastMsg
 	printProgress        uint64
+	logIdsCh             chan string
 }
 
 func NewWorker(
@@ -104,6 +105,7 @@ func NewWorker(
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,
 	printProgress uint64,
+	logIdsCh chan string,
 ) *Worker {
 
 	//logger.Debugf("Received transaction with txid %x and %d outputs", res.Txid, res.NumberOfOutputs)
@@ -121,6 +123,7 @@ func NewWorker(
 		ipv6MulticastConn:    ipv6MulticastConn,
 		ipv6MulticastChan:    ipv6MulticastChan,
 		printProgress:        printProgress,
+		logIdsCh:             logIdsCh,
 	}
 }
 
@@ -238,6 +241,10 @@ func (w *Worker) fireTransactions(ctx context.Context, u *bt.UTXO, keySet *extra
 			prometheusInvalidTransactions.Inc()
 			return err
 		}
+	}
+
+	if w.logIdsCh != nil {
+		w.logIdsCh <- tx.TxID()
 	}
 
 	// increment prometheus counter

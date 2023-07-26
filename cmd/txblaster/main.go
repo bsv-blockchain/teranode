@@ -11,6 +11,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -54,6 +55,8 @@ func init() {
 }
 
 func main() {
+	_ = os.Chdir("../../")
+
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
@@ -64,6 +67,7 @@ func main() {
 	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
 	ipv6Interface := flag.String("ipv6Interface", "en0", "IPv6 multicast interface - if applicable")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
+	logIds := flag.Bool("log", false, "log tx ids")
 
 	flag.Parse()
 
@@ -251,6 +255,24 @@ func main() {
 		logger.Infof("Starting %d workers", *workers)
 	}
 
+	var logIdsFile chan string
+	if *logIds {
+		logFile, err := os.OpenFile("data/txblaster.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			panic(err)
+		}
+
+		logIdsFile = make(chan string, 100000)
+		go func() {
+			for {
+				select {
+				case id := <-logIdsFile:
+					_, _ = logFile.WriteString(id + "\n")
+				}
+			}
+		}()
+	}
+
 	for i := 0; i < *workers; i++ {
 		w := worker.NewWorker(
 			numberOfOutputs,
@@ -264,6 +286,7 @@ func main() {
 			ipv6MulticastConn,
 			ipv6MulticastChan,
 			printProgress,
+			logIdsFile,
 		)
 
 		g.Go(func() error {

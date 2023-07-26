@@ -558,6 +558,18 @@ func main() {
 		blobServer.Stop(shutdownCtx)
 	}
 
+	//
+	// close all the stores
+	//
+
+	if txStore != nil {
+		_ = txStore.Close(shutdownCtx)
+	}
+
+	if subtreeStore != nil {
+		_ = subtreeStore.Close(shutdownCtx)
+	}
+
 	logger.Info("\U0001f6d1 All services stopped.")
 	// wait for clean shutdown for 5 seconds, otherwise force exit
 	go func() {

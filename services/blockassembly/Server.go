@@ -166,7 +166,7 @@ func New(ctx context.Context, logger utils.Logger, subtreeStore blob.Store) *Blo
 				continue
 			}
 
-			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Size())
+			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}
 	}()
 
@@ -319,6 +319,8 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %s", req.Id)
+
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
 		return nil, err
@@ -410,16 +412,26 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 	}
 
+	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
 	if ok, err = block.Valid(ctx, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
 	}
 
+	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
+
+	// update the subtree TTLs
+	//for _, subtree := range subtreesInJob {
+	//	err = ba.subtreeStore.SetTTL(ctx, subtree.RootHash()[:], 0)
+	//	if err != nil {
+	//		ba.logger.Errorf("failed to update subtree TTL: %w", err)
+	//	}
+	//}
 
 	// remove job, we have already mined a block with it
 	// TODO do we need to remove the rest of the jobs as well? Our subtree processor is completely different now

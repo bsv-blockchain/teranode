@@ -90,17 +90,6 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64) error {
 	return nil
 }
 
-func (st *Subtree) AddNodes(nodes []*chainhash.Hash) error {
-	if (len(st.Nodes) + len(nodes)) > st.treeSize {
-		return fmt.Errorf("subtree is full")
-	}
-
-	st.Nodes = append(st.Nodes, nodes...)
-	st.rootHash = nil // reset rootHash
-
-	return nil
-}
-
 func (st *Subtree) RootHash() *chainhash.Hash {
 	if st.rootHash != nil {
 		return st.rootHash
@@ -311,11 +300,13 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		return fmt.Errorf("unable to read number of leaves: %v", err)
 	}
 
-	if !IsPowerOfTwo(int(numLeaves)) {
-		return fmt.Errorf("numberOfLeaves must be a power of two")
-	}
+	// we must be able to support incomplete subtrees
+	//if !IsPowerOfTwo(int(numLeaves)) {
+	//	return fmt.Errorf("numberOfLeaves must be a power of two")
+	//}
 
 	st.treeSize = int(numLeaves)
+	// the height of a subtree is always a power of two
 	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
 
 	// read leaves

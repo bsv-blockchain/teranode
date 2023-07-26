@@ -17,6 +17,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/validator"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
@@ -289,7 +290,8 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, err
 	}
 
-	if err = u.txStore.Set(traceSpan.Ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.Bytes()); err != nil {
+	// TODO should we store the extended bytes of transactions in our store?
+	if err = u.txStore.Set(traceSpan.Ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.ExtendedBytes()); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
@@ -302,11 +304,11 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, fmt.Errorf("received coinbase transaction: %s", btTx.TxID())
 	}
 
-	if !IsExtended(btTx) {
+	if !util.IsExtended(btTx) {
 		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
 
-	// if !IsExtended(btTx) {
+	// if !util.IsExtended(btTx) {
 	// 	extendSpan := tracing.Start(traceSpan.Ctx, "PropagationServer:ExtendTransaction")
 	// 	err = ExtendTransaction(extendSpan.Ctx, btTx, u.txStore)
 	// 	if err != nil {
@@ -328,18 +330,4 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &emptypb.Empty{}, nil
-}
-
-func IsExtended(tx *bt.Tx) bool {
-	if tx == nil || tx.Inputs == nil {
-		return false
-	}
-
-	for _, input := range tx.Inputs {
-		if input.PreviousTxScript == nil || (input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData()) {
-			return false
-		}
-	}
-
-	return true
 }

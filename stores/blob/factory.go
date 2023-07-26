@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/stores/blob/badger"
+	"github.com/TAAL-GmbH/ubsv/stores/blob/file"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/kinesiss3"
 	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
@@ -23,7 +24,11 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		}
 	case "memory":
 		store = memory.New()
-
+	case "file":
+		store, err = file.New("." + storeUrl.Path) // relative
+		if err != nil {
+			return nil, fmt.Errorf("error creating file blob store: %v", err)
+		}
 	case "badger":
 		store, err = badger.New("." + storeUrl.Path) // relative
 		if err != nil {

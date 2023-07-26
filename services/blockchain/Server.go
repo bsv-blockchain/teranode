@@ -51,6 +51,7 @@ type Blockchain struct {
 	deadSubscriptions chan subscriber
 	subscribers       map[subscriber]bool
 	notifications     chan *blockchain_api.Notification
+	newBlock          chan struct{}
 }
 
 func Enabled() bool {
@@ -81,6 +82,7 @@ func New(logger utils.Logger) (*Blockchain, error) {
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]bool),
 		notifications:     make(chan *blockchain_api.Notification, 100),
+		newBlock:          make(chan struct{}, 10),
 	}, nil
 }
 
@@ -176,6 +178,8 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
+	b.logger.Infof("[Blockchain] AddBlock called: %s", header.Hash().String())
+
 	btCoinbaseTx, err := bt.NewTxFromBytes(request.CoinbaseTx)
 	if err != nil {
 		return nil, err
@@ -202,6 +206,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	}
 
 	prometheusBlockchainAddBlock.Inc()
+
+	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: blockchain_api.Type_Block,
+		Hash: block.Hash().CloneBytes(),
+	})
 
 	return &emptypb.Empty{}, nil
 }
@@ -274,7 +283,8 @@ func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchai
 		// Exit on stream context done
 		case <-stream.Context().Done():
 			return nil
-		case <-timer.C:
+		case <-b.newBlock:
+			b.logger.Debugf("[Blockchain] publish new block from event")
 			header, height, err := b.store.GetBestBlockHeader(stream.Context())
 			if err != nil {
 				b.logger.Errorf("error getting chain tip: %s", err.Error())
@@ -282,6 +292,31 @@ func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchai
 			}
 			currentHeaderHashStr := header.Hash().String()
 			if currentHeaderHashStr == lastHeaderHashStr {
+				b.logger.Debugf("[Blockchain] chain tip has not changed: %s", currentHeaderHashStr)
+				continue
+			}
+
+			// Send the Hardware stats on the stream
+			err = stream.Send(&blockchain_api.BestBlockHeaderResponse{
+				BlockHeader: header.Bytes(),
+				Height:      height,
+			})
+			if err != nil {
+				b.logger.Errorf("error sending chain tip: %s", err.Error())
+				continue
+			}
+
+			lastHeaderHashStr = header.Hash().String()
+		case <-timer.C:
+			b.logger.Debugf("[Blockchain] publish new block from timer")
+			header, height, err := b.store.GetBestBlockHeader(stream.Context())
+			if err != nil {
+				b.logger.Errorf("error getting chain tip: %s", err.Error())
+				continue
+			}
+			currentHeaderHashStr := header.Hash().String()
+			if currentHeaderHashStr == lastHeaderHashStr {
+				b.logger.Debugf("[Blockchain] chain tip has not changed: %s", currentHeaderHashStr)
 				continue
 			}
 

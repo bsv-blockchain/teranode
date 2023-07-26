@@ -13,4 +13,5 @@ type Store interface {
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 	Del(ctx context.Context, key []byte) error
+	Close(ctx context.Context) error
 }

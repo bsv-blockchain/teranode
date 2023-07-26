@@ -39,7 +39,7 @@ func New(bucketName string) (*GCS, error) {
 	return gcs, nil
 }
 
-func (g *GCS) Close(ctx context.Context) error {
+func (g *GCS) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_gcs").NewStat("Close").AddTime(start)

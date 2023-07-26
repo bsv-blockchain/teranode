@@ -88,12 +88,12 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	traceSpan := tracing.Start(ctx, "Badger:Set")
 	defer traceSpan.Finish()
 
-	options := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(opts...)
 
 	if err := s.store.Update(func(tx *badger.Txn) error {
 		entry := badger.NewEntry(key, value)
-		if options.TTL > 0 {
-			entry = entry.WithTTL(options.TTL)
+		if setOptions.TTL > 0 {
+			entry = entry.WithTTL(setOptions.TTL)
 		}
 		return tx.SetEntry(entry)
 	}); err != nil {
