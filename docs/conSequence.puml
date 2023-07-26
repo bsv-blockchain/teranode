@@ -1,0 +1,58 @@
+@startuml Coinbase Overlay Node Service
+
+actor TxBlaster
+entity Node
+entity CON
+database Store
+
+CON -> Node: Subscribe
+note right
+  CON could listen to the network for new blocks rather than subscribing to a node
+end note
+
+loop For each new block
+  Node -> CON: New Block Notification
+  CON -> Node: Get Block
+  CON -> CON: Parse Block
+  CON -> Store: Store Block and coinbase UTXOs
+note right
+  <b>Database Schema</b>
+<code>
+Blocks
+Height
+Block hash
+Prev block hash
+nb. needs to be aware of forks
+
+
+Coinbase UTXOS
+Txid
+Vout 
+Script
+Address / Pubkey - searchable
+Blockhash
+Status (spent/spendable/locked)
+</code>
+end note
+end
+
+group Blast
+TxBlaster -> CON: RequestUTXOs (pubkey, amount)
+CON -> Store: Get UTXOs
+Store -> CON: Return UTXOs
+CON -> TxBlaster: Return UTXOs
+
+TxBlaster -> TxBlaster: Create Transaction
+
+TxBlaster -> CON: Submit Transaction
+CON -> Node: Submit Transaction
+note right
+  CON may want to poll or listen for tx confirmation
+end note
+CON -> Store: Mark UTXOs as spent
+end
+
+
+
+
+@enduml
