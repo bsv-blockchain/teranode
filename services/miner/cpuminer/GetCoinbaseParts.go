@@ -40,6 +40,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/ordishs/gocore"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.
@@ -139,16 +141,31 @@ func makeCoinbaseOutputTransactions(coinbaseValue uint64, wallet string) ([]byte
 		return nil, err
 	}
 
-	buf := make([]byte, 8)
+	numberOfOutputs, _ := gocore.Config().GetInt("coinbase_number_of_outputs", 1)
+	outputValue := coinbaseValue / uint64(numberOfOutputs)
+	outputChange := coinbaseValue % uint64(numberOfOutputs)
 
-	binary.LittleEndian.PutUint64(buf[0:], coinbaseValue)
+	buf := make([]byte, 0)
 
-	buf = append(buf, VarInt(uint64(len(lockingScript)))...)
-	buf = append(buf, lockingScript...)
+	// Add the number of outputs
+	buf = append(buf, VarInt(uint64(numberOfOutputs))...)
 
-	numberOfTransactions := 1
+	// Add each output (the first output may have any rounding error change added to it)
+	for i := 0; i < numberOfOutputs; i++ {
+		outputBytes := make([]byte, 8)
 
-	buf = append(VarInt(uint64(numberOfTransactions)), buf...)
+		if i == 0 {
+			binary.LittleEndian.PutUint64(outputBytes[0:], outputValue+outputChange)
+		} else {
+			binary.LittleEndian.PutUint64(outputBytes[0:], outputValue)
+		}
+
+		outputBytes = append(outputBytes, VarInt(uint64(len(lockingScript)))...)
+		outputBytes = append(outputBytes, lockingScript...)
+
+		buf = append(buf, outputBytes...)
+	}
+
 	return buf, nil
 }
 

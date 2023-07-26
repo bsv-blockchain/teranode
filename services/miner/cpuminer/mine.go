@@ -2,19 +2,28 @@ package cpuminer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningSolution, error) {
 	// Create a new coinbase transaction
 
-	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, "/TERANODE/", "18VWHjMt4ixHddPPbs6righWTs3Sg2QNcn")
+	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+	walletAddress, found := gocore.Config().Get("coinbase_wallet_address")
+	if !found {
+		log.Fatal(errors.New("coinbase_wallet_address not found in config"))
+	}
+
+	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddress)
 	if err != nil {
 		return nil, fmt.Errorf("error creating coinbase transaction: %v", err)
 	}

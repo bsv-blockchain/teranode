@@ -58,6 +58,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			}
 
 			m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
+			m.logger.Infof(solution.Stringify())
 			err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
 			if err != nil {
 				m.logger.Errorf("Error submitting mining solution: %v", err)

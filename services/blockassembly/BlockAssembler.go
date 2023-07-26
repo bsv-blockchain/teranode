@@ -16,6 +16,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type miningCandidateResponse struct {
@@ -224,7 +225,9 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
 	// nBits := bestBlockHeader.Bits
 	// TEMP for testing only - moved from blockchain sql store
-	nBits := model.NewNBitFromString("2000ffff") // TEMP We want hashes with 2 leading zeros
+
+	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros
+	nBits := model.NewNBitFromString(nBitsString)
 
 	var coinbaseMerkleProofBytes [][]byte
 	if len(subtrees) > 0 {

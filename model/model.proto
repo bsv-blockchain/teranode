@@ -15,6 +15,7 @@ message MiningCandidate {
   uint32 height = 7;
   repeated bytes merkle_proof = 8;
 }
+
 // swagger:model MiningSolution
 message MiningSolution {
   bytes id = 1;
