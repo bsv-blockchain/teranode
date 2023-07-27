@@ -321,7 +321,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %s", req.Id)
+	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %x", req.Id)
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
