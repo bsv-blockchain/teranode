@@ -352,7 +352,7 @@ func main() {
 				logger.Infof("Starting Block Assembly Server")
 
 				baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
-				blockAssemblyService = blockassembly.New(ctx, baLogger, subtreeStore)
+				blockAssemblyService = blockassembly.New(ctx, baLogger, txStore, subtreeStore)
 
 				if err := blockAssemblyService.Start(); err != nil {
 					logger.Errorf("blockassembly errored: %v", err)

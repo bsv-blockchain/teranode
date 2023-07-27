@@ -12,9 +12,10 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
-	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -28,8 +29,9 @@ type miningCandidateResponse struct {
 
 type BlockAssembler struct {
 	logger           utils.Logger
-	txMetaClient     txmeta_store.Store
+	txMetaClient     txmetastore.Store
 	utxoStore        utxostore.Interface
+	txStore          blob.Store
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
@@ -41,13 +43,14 @@ type BlockAssembler struct {
 	currentChainMapMu sync.RWMutex
 }
 
-func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmeta_store.Store, utxoStore utxostore.Interface,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
+func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmetastore.Store, utxoStore utxostore.Interface,
+	txStore blob.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	b := &BlockAssembler{
 		logger:            logger,
 		txMetaClient:      txMetaClient,
 		utxoStore:         utxoStore,
+		txStore:           txStore,
 		subtreeStore:      subtreeStore,
 		blockchainClient:  blockchainClient,
 		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(logger, subtreeStore, newSubtreeChan),
@@ -73,10 +76,15 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 			return
 		}
 
+		// variables are defined here to prevent unnecessary allocations
 		var block *model.Block
 		var blockHeaders []*model.BlockHeader
 		var header *model.BlockHeader
 		var height uint32
+		var blockHeight uint32
+		var txIDHash *chainhash.Hash
+		var utxoHash *chainhash.Hash
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -107,7 +115,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						// TODO check what is going on here, maybe we are on a different tip, or need to
 						// reorg, or something else
 
-						b.logger.Errorf("[BlockAssembler] best block header subscription received new header with incorrect prev hash: %s", header.HashPrevBlock.String())
+						b.logger.Errorf("[BlockAssembler] best block header subscription received new header with incorrect prev utxoHash: %s", header.HashPrevBlock.String())
 						continue
 					}
 
@@ -116,17 +124,21 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						continue
 					}
 
-					// TODO: Add the coinbase to the tx lake
-
-					// Build up the items we need to store the outputs in the utxostore.  We do this here so that
-					// any errors that occur will happen before we do any further processing.
-					txidHash, err := chainhash.NewHashFromStr(block.CoinbaseTx.TxID())
+					err = b.txStore.Set(context.Background(), bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()), block.CoinbaseTx.ExtendedBytes())
 					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error getting txid hash from string: %v", err)
+						b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
 						continue
 					}
 
-					blockHeight, err := block.ExtractCoinbaseHeight()
+					// Build up the items we need to store the outputs in the utxostore.  We do this here so that
+					// any errors that occur will happen before we do any further processing.
+					txIDHash, err = chainhash.NewHashFromStr(block.CoinbaseTx.TxID())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error getting txid utxoHash from string: %v", err)
+						continue
+					}
+
+					blockHeight, err = block.ExtractCoinbaseHeight()
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error extracting coinbase height: %v", err)
 						continue
@@ -137,19 +149,19 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 					for i, output := range block.CoinbaseTx.Outputs {
 						if output.Satoshis > 0 {
-							hash, err := util.UTXOHashFromOutput(txidHash, output, uint32(i))
+							utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 							if err != nil {
-								b.logger.Errorf("[BlockAssembler] error getting utxo hash from output: %v", err)
+								b.logger.Errorf("[BlockAssembler] error getting utxo utxoHash from output: %v", err)
 								continue
 							}
 
-							if resp, err := b.utxoStore.Store(ctx, hash, blockHeight+100); err != nil {
+							if resp, err := b.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
 								b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
 								success = false
 								break
 							}
 
-							utxoHashes = append(utxoHashes, hash)
+							utxoHashes = append(utxoHashes, utxoHash)
 						}
 					}
 
@@ -194,6 +206,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 func (b *BlockAssembler) removeAllAdded(ctx context.Context, hashes []*chainhash.Hash) {
 	// Remove all the utxos we added
 	for _, hash := range hashes {
+		// TODO should we be deleting here?
 		if resp, err := b.utxoStore.Reset(ctx, hash); err != nil {
 			b.logger.Errorf("[BlockAssembler] error resetting utxo (%v): %w", resp, err)
 		}

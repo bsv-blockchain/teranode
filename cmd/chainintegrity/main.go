@@ -167,13 +167,26 @@ func main() {
 							continue
 						}
 
-						fees, err := util.GetFees(btTx)
-						if err != nil {
-							logger.Errorf("failed to get the fees for tx: %s", btTx.String())
-							continue
-						}
+						// check the topological order of the transactions
+						// TODO this can only be done after the seeder has been sunset and the CON is working
+						//for _, input := range btTx.Inputs {
+						//	// the input tx id (parent tx) should already be in the transaction map
+						//	inputHash := chainhash.Hash(input.PreviousTxID())
+						//	_, ok = transactionMap[inputHash]
+						//	if !ok {
+						//		logger.Errorf("transaction %s parent %s does not exist in any subtree in any block", node, inputHash)
+						//	}
+						//}
 
-						subtreeFees += fees
+						// the coinbase fees are calculated differently to check if everything matches up
+						if !btTx.IsCoinbase() {
+							fees, err := util.GetFees(btTx)
+							if err != nil {
+								logger.Errorf("failed to get the fees for tx: %s", btTx.String())
+								continue
+							}
+							subtreeFees += fees
+						}
 					}
 				}
 				logger.Debugf("subtree %s has %d transactions and %d in fees", subtreeHash, len(subtree.Nodes), subtreeFees)

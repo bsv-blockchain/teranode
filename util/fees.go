@@ -7,11 +7,23 @@ import (
 )
 
 func GetFees(btTx *bt.Tx) (uint64, error) {
+	fees := uint64(0)
+
+	if btTx.IsCoinbase() {
+		fmt.Printf("coinbase tx: %s\n", btTx.String())
+
+		for _, output := range btTx.Outputs {
+			if output.Satoshis > 0 {
+				fees += output.Satoshis
+			}
+		}
+
+		return fees, nil
+	}
+
 	if !IsExtended(btTx) {
 		return 0, fmt.Errorf("cannot get fees for non extended tx")
 	}
-
-	fees := uint64(0)
 
 	for _, input := range btTx.Inputs {
 		fees += input.PreviousTxSatoshis
