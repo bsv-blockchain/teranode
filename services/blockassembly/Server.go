@@ -428,12 +428,12 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	// update the subtree TTLs
-	//for _, subtree := range subtreesInJob {
-	//	err = ba.subtreeStore.SetTTL(ctx, subtree.RootHash()[:], 0)
-	//	if err != nil {
-	//		ba.logger.Errorf("failed to update subtree TTL: %w", err)
-	//	}
-	//}
+	for _, subtree := range block.Subtrees {
+		err = ba.subtreeStore.SetTTL(ctx, subtree[:], 0)
+		if err != nil {
+			ba.logger.Errorf("failed to update subtree TTL: %w", err)
+		}
+	}
 
 	// remove job, we have already mined a block with it
 	// TODO do we need to remove the rest of the jobs as well? Our subtree processor is completely different now
