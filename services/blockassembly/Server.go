@@ -81,6 +81,7 @@ type BlockAssembly struct {
 
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
+	txStore          blob.Store
 	subtreeStore     blob.Store
 	jobStoreMutex    sync.RWMutex
 	jobStore         map[chainhash.Hash]*subtreeprocessor.Job
@@ -92,7 +93,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger utils.Logger, subtreeStore blob.Store) *BlockAssembly {
+func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeStore blob.Store) *BlockAssembly {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		panic(err)
@@ -135,12 +136,13 @@ func New(ctx context.Context, logger utils.Logger, subtreeStore blob.Store) *Blo
 	}
 
 	newSubtreeChan := make(chan *util.Subtree)
-	blockAssembler := NewBlockAssembler(ctx, logger, txMetaStore, utxoStore, subtreeStore, blockchainClient, newSubtreeChan)
+	blockAssembler := NewBlockAssembler(ctx, logger, txMetaStore, utxoStore, txStore, subtreeStore, blockchainClient, newSubtreeChan)
 
 	ba := &BlockAssembly{
 		blockAssembler:   blockAssembler,
 		logger:           logger,
 		blockchainClient: blockchainClient,
+		txStore:          txStore,
 		subtreeStore:     subtreeStore,
 		jobStore:         make(map[chainhash.Hash]*subtreeprocessor.Job),
 	}

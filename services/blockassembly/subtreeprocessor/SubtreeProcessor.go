@@ -136,7 +136,9 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64) {
 
 	if stp.currentSubtree.IsComplete() {
 		subtree := stp.currentSubtree
-		stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+
+		// create a new subtree with the same height as the previous subtree
+		stp.currentSubtree = util.NewTree(subtree.Height)
 
 		// Add the subtree to the chain
 		// this needs to happen here, so we can wait for the append action to complete
