@@ -8,7 +8,7 @@ import (
 
 	"github.com/dolthub/swiss"
 	"github.com/holiman/uint256"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/puzpuzpuz/xsync/v2"
 )

@@ -15,7 +15,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -86,10 +86,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// TODO what checks do we need to do on a coinbase tx?
 		// not just anyone should be able to send a coinbase tx through the system
-		txid, err := chainhash.NewHash(bt.ReverseBytes(tx.TxIDBytes()))
-		if err != nil {
-			return err
-		}
+		txid := tx.TxIDChainHash()
 
 		hash, err := util.UTXOHashFromOutput(txid, tx.Outputs[0], 0)
 		if err != nil {
@@ -126,15 +123,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:CheckUtxos")
 
 	// check the utxos
-	txIDBytes := bt.ReverseBytes(tx.TxIDBytes())
-	txIDChainHash, err := chainhash.NewHash(txIDBytes)
-	if err != nil {
-		return err
-	}
+	txIDChainHash := tx.TxIDChainHash()
 
 	var hash *chainhash.Hash
 	var utxoResponse *utxostore.UTXOResponse
 	var parentTxHash *chainhash.Hash
+	var err error
 
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	parentTxHashes := make([]*chainhash.Hash, 0, len(tx.Inputs))

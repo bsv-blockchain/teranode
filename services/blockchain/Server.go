@@ -11,7 +11,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"

@@ -15,8 +15,7 @@ import (
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -124,7 +123,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						continue
 					}
 
-					err = b.txStore.Set(context.Background(), bt.ReverseBytes(block.CoinbaseTx.TxIDBytes()), block.CoinbaseTx.ExtendedBytes())
+					err = b.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
 						continue
@@ -132,11 +131,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 					// Build up the items we need to store the outputs in the utxostore.  We do this here so that
 					// any errors that occur will happen before we do any further processing.
-					txIDHash, err = chainhash.NewHashFromStr(block.CoinbaseTx.TxID())
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error getting txid utxoHash from string: %v", err)
-						continue
-					}
+					txIDHash = block.CoinbaseTx.TxIDChainHash()
 
 					blockHeight, err = block.ExtractCoinbaseHeight()
 					if err != nil {

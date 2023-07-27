@@ -25,7 +25,7 @@ import (
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -345,10 +345,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	if err != nil {
 		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTx: %w", err)
 	}
-	coinbaseTxIDHash, err := chainhash.NewHashFromStr(coinbaseTx.TxID())
-	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTxHash: %w", err)
-	}
+	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
 	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
 	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))

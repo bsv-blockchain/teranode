@@ -3,7 +3,7 @@ package util
 import (
 	"fmt"
 
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {

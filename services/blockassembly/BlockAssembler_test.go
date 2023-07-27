@@ -17,8 +17,8 @@ import (
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +27,7 @@ import (
 type baTestItems struct {
 	utxoStore        *utxostore.Memory
 	txMetaStore      *txmetastore.Memory
+	txStore          *memory.Memory
 	blobStore        *memory.Memory
 	newSubtreeChan   chan *util.Subtree
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
@@ -124,6 +125,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items.utxoStore = utxostore.New(false) // utxo memory store
 	items.txMetaStore = txmetastore.New()  // tx status memory store
 	items.blobStore = memory.New()         // blob memory store
+	items.txStore = memory.New()           // tx memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan *util.Subtree)
@@ -139,7 +141,16 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
-	ba := NewBlockAssembler(context.Background(), p2p.TestLogger{}, items.txMetaStore, items.utxoStore, items.blobStore, blockchainClient, items.newSubtreeChan)
+	ba := NewBlockAssembler(
+		context.Background(),
+		p2p.TestLogger{},
+		items.txMetaStore,
+		items.utxoStore,
+		items.txStore,
+		items.blobStore,
+		blockchainClient,
+		items.newSubtreeChan,
+	)
 
 	items.blockAssembler = ba
 

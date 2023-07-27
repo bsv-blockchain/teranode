@@ -5,7 +5,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/txmeta/txmeta_api"
 	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"

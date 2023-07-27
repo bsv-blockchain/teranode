@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (

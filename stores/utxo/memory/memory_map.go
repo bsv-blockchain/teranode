@@ -5,7 +5,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type MapWithLocking struct {

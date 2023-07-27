@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
 )
 

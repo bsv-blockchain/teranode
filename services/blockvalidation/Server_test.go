@@ -9,7 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +43,8 @@ func TestOneTransaction(t *testing.T) {
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
-	coinbaseHash, err := chainhash.NewHash(bt.ReverseBytes(coinbaseTx.TxIDBytes()))
-	require.NoError(t, err)
+	coinbaseHash := coinbaseTx.TxIDChainHash()
+
 	subtrees[0].ReplaceRootNode(coinbaseHash)
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
@@ -53,7 +53,7 @@ func TestOneTransaction(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
-	merkleRootHash, _ := chainhash.NewHash(bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	merkleRootHash := coinbaseTx.TxIDChainHash()
 	block := &model.Block{
 		Header: &model.BlockHeader{
 			HashMerkleRoot: merkleRootHash,
@@ -83,12 +83,12 @@ func TestTwoTransactions(t *testing.T) {
 	txid1, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
 	expectedMerkleRoot, _ := chainhash.NewHashFromStr("7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5")
 
-	assert.Equal(t, coinbaseTxID.String(), coinbaseTx.TxID())
+	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
 	subtrees := make([]*util.Subtree, 1)
 	subtrees[0] = util.NewTree(1)
 
-	var empty *chainhash.Hash
+	empty := &chainhash.Hash{}
 	err := subtrees[0].AddNode(empty, 0)
 	require.NoError(t, err)
 
@@ -100,7 +100,7 @@ func TestTwoTransactions(t *testing.T) {
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
-	coinbaseHash, err := chainhash.NewHash(bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	coinbaseHash := coinbaseTx.TxIDChainHash()
 	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash)
 
@@ -172,7 +172,7 @@ func TestMerkleRoot(t *testing.T) {
 
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
-	coinbaseHash, err := chainhash.NewHash(bt.ReverseBytes(coinbaseTx.TxIDBytes()))
+	coinbaseHash := coinbaseTx.TxIDChainHash()
 	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash)
 

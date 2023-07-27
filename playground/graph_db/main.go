@@ -6,7 +6,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 

@@ -11,8 +11,8 @@ import (
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/ordishs/verifysignature"
 )
@@ -85,7 +85,7 @@ func main() {
 		panic(err)
 	}
 
-	log.Printf("TXID: %x", tx.TxIDBytes())
+	log.Printf("TXID: %s", tx.TxIDChainHash().String())
 
 	ns := &NullStore{}
 

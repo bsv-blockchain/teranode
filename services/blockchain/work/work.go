@@ -5,7 +5,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func CalculateWork(prevWork *chainhash.Hash, nBits model.NBit) (*chainhash.Hash, error) {

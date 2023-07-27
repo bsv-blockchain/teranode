@@ -12,7 +12,7 @@ import (
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
 )
 
@@ -300,11 +300,7 @@ func (b *Block) CheckMerkleRoot() error {
 	for i, subtree := range b.subtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
-			coinbaseHash, err := chainhash.NewHash(b.CoinbaseTx.TxIDBytes())
-			if err != nil {
-				return err
-			}
-			subtree.ReplaceRootNode(coinbaseHash)
+			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash())
 		}
 
 		hashes[i] = subtree.RootHash()

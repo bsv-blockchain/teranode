@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 

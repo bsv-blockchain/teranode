@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type SpendableTransaction struct {

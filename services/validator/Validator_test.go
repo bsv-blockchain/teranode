@@ -9,8 +9,8 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 
 type NullStore struct{}

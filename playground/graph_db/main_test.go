@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -226,7 +226,7 @@ func generateRandomUtxo(hash *chainhash.Hash, numVouts uint32) *Utxo {
 	}
 
 	script := make([]byte, 64)
-	rand.Read(script)
+	_, _ = rand.Read(script)
 
 	return &Utxo{
 		Hash:     hash,
@@ -238,7 +238,7 @@ func generateRandomUtxo(hash *chainhash.Hash, numVouts uint32) *Utxo {
 
 func generateRandomHash() *chainhash.Hash {
 	bytes := make([]byte, 32)
-	rand.Read(bytes)
+	_, _ = rand.Read(bytes)
 	c, _ := chainhash.NewHash(bytes)
 	return c
 }

@@ -21,7 +21,7 @@ func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSo
 	if err != nil {
 		return nil, err
 	}
-	merkleRoot := util.BuildMerkleRootFromCoinbase(bt.ReverseBytes(coinbaseTx.TxIDBytes()), candidate.MerkleProof)
+	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDChainHash().CloneBytes(), candidate.MerkleProof)
 
 	a := []byte{}
 	a = append(a, v...)

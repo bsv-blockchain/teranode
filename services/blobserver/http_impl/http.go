@@ -6,7 +6,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Memory struct {

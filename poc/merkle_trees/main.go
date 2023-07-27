@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/libsv/go-bk/crypto"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func main() {

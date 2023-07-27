@@ -291,7 +291,7 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	}
 
 	// TODO should we store the extended bytes of transactions in our store?
-	if err = u.txStore.Set(traceSpan.Ctx, bt.ReverseBytes(btTx.TxIDBytes()), btTx.ExtendedBytes()); err != nil {
+	if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
