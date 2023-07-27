@@ -37,14 +37,14 @@ end note
 end
 
 group Blast
-TxBlaster -> CON: RequestUTXOs (pubkey, amount)
+TxBlaster -> CON: GetUTXOs (pubkey, amount)
 CON -> Store: Get UTXOs
 Store -> CON: Return UTXOs
 CON -> TxBlaster: Return UTXOs
 
 TxBlaster -> TxBlaster: Create Transaction
 
-TxBlaster -> CON: Submit Transaction
+TxBlaster -> CON: SubmitTransaction
 CON -> Node: Submit Transaction
 note right
   CON may want to poll or listen for tx confirmation
