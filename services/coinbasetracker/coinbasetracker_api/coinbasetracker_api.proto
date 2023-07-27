@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+option go_package = ".;coinbasetracker_api";
+
+package coinbasetracker_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service CoinbasetrackerAPI {
+  // Health returns the health of the API.
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc GetUtxos (GetUtxoRequest) returns (GetUtxoResponse) {}
+  rpc SubmitTransaction (SubmitTransactionRequest) returns (google.protobuf.Empty) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// swagger:model GetUtxoRequest
+message GetUtxoRequest {
+  bytes publickey = 1;
+  uint64 amount = 2;
+}
+
+// swagger:model GetUtxoResponse
+message GetUtxoResponse {
+  repeated Utxo utxos = 1;
+}
+
+message Utxo {
+  bytes txId = 1;
+  uint32 vout = 2;
+  bytes script  = 3;
+  uint64 satoshis = 4;
+}
+
+// swagger:model SubmitTransactionRequest
+message SubmitTransactionRequest {
+  bytes tx = 1;
+}
