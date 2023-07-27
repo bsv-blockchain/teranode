@@ -3,6 +3,7 @@ package util
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 
@@ -13,21 +14,27 @@ import (
 type Subtree struct {
 	Height           int
 	Fees             uint64
+	FeeHash          chainhash.Hash
 	Nodes            []*chainhash.Hash
 	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
 
 	// temporary (calculated) variables
-	rootHash *chainhash.Hash
-	treeSize int
+	rootHash     *chainhash.Hash
+	treeSize     int
+	feeBytes     []byte
+	feeHashBytes []byte
 }
 
 // NewTree creates a new Subtree with a fixed height
 func NewTree(height int) *Subtree {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &Subtree{
-		Nodes:    make([]*chainhash.Hash, 0, treeSize),
-		Height:   height,
-		treeSize: treeSize,
+		Nodes:        make([]*chainhash.Hash, 0, treeSize),
+		Height:       height,
+		FeeHash:      chainhash.Hash{},
+		treeSize:     treeSize,
+		feeBytes:     make([]byte, 8),
+		feeHashBytes: make([]byte, 40),
 	}
 }
 
@@ -81,6 +88,15 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash) *chainhash.Hash {
 func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
+	}
+
+	// AddNode is not concurrency safe, so we can reuse the same byte arrays
+	binary.LittleEndian.PutUint64(st.feeBytes, fee)
+	st.feeHashBytes = append(node[:], st.feeBytes[:]...)
+	if len(st.Nodes) == 0 {
+		st.FeeHash = chainhash.HashH(st.feeHashBytes)
+	} else {
+		st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
 	}
 
 	st.Nodes = append(st.Nodes, node)
