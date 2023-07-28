@@ -4,30 +4,24 @@ option go_package = ".;bootstrap_api";
 
 package bootstrap_api;
 
-import "google/protobuf/timestamp.proto";
-import "google/protobuf/empty.proto";
-
 service BootstrapAPI {
-  // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc GetPeers(google.protobuf.Empty) returns (PeerList) {}
-  rpc AddPeer(Peer) returns (google.protobuf.Empty) {}
+  rpc Connect(Info) returns (stream Notification) {}
 }
 
-// swagger:model HealthResponse
-message HealthResponse {
-  bool ok = 1;
-  string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+enum Type {
+    PING = 0;
+    ADD = 1;
+    REMOVE = 2;
 }
 
 // swagger:enum Peer
-message Peer {
-    string id = 1;
-    string address = 2;
+message Info {
+  string local_address = 1;
+  string remote_address = 2;
 }
 
-// swagger:enum PeerList
-message PeerList {
-    repeated Peer peers = 1;
+// swagger:enum Notification
+message Notification {
+  Type type = 1;
+  Info info = 2;
 }

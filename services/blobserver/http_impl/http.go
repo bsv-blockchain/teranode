@@ -32,6 +32,7 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 	e := echo.New()
 	e.HideBanner = true
+	e.HidePort = true
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
@@ -125,6 +126,8 @@ func New(repository *repository.Repository) (*HTTP, error) {
 }
 
 func (h *HTTP) Start(addr string) error {
+	h.logger.Infof("BlobServer HTTP service listening on %s", addr)
+
 	return h.e.Start(addr)
 }
 

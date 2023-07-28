@@ -521,6 +521,14 @@ func main() {
 		}
 	}
 
+	g.Go(func() (err error) {
+		bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
+			logger.Infof("New peer announced: %s / %s", p.LocalAddress, p.RemoteAddress)
+		})
+
+		return bootstrapClient.Start(ctx)
+	})
+
 	// start http health check server
 	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

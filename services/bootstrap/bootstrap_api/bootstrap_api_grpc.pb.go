@@ -11,7 +11,6 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -20,19 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BootstrapAPI_Health_FullMethodName   = "/bootstrap_api.BootstrapAPI/Health"
-	BootstrapAPI_GetPeers_FullMethodName = "/bootstrap_api.BootstrapAPI/GetPeers"
-	BootstrapAPI_AddPeer_FullMethodName  = "/bootstrap_api.BootstrapAPI/AddPeer"
+	BootstrapAPI_Connect_FullMethodName = "/bootstrap_api.BootstrapAPI/Connect"
 )
 
 // BootstrapAPIClient is the client API for BootstrapAPI service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BootstrapAPIClient interface {
-	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*PeerList, error)
-	AddPeer(ctx context.Context, in *Peer, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error)
 }
 
 type bootstrapAPIClient struct {
@@ -43,41 +37,43 @@ func NewBootstrapAPIClient(cc grpc.ClientConnInterface) BootstrapAPIClient {
 	return &bootstrapAPIClient{cc}
 }
 
-func (c *bootstrapAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
-	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, BootstrapAPI_Health_FullMethodName, in, out, opts...)
+func (c *bootstrapAPIClient) Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error) {
+	stream, err := c.cc.NewStream(ctx, &BootstrapAPI_ServiceDesc.Streams[0], BootstrapAPI_Connect_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &bootstrapAPIConnectClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
 
-func (c *bootstrapAPIClient) GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*PeerList, error) {
-	out := new(PeerList)
-	err := c.cc.Invoke(ctx, BootstrapAPI_GetPeers_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+type BootstrapAPI_ConnectClient interface {
+	Recv() (*Notification, error)
+	grpc.ClientStream
 }
 
-func (c *bootstrapAPIClient) AddPeer(ctx context.Context, in *Peer, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BootstrapAPI_AddPeer_FullMethodName, in, out, opts...)
-	if err != nil {
+type bootstrapAPIConnectClient struct {
+	grpc.ClientStream
+}
+
+func (x *bootstrapAPIConnectClient) Recv() (*Notification, error) {
+	m := new(Notification)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return m, nil
 }
 
 // BootstrapAPIServer is the server API for BootstrapAPI service.
 // All implementations must embed UnimplementedBootstrapAPIServer
 // for forward compatibility
 type BootstrapAPIServer interface {
-	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	GetPeers(context.Context, *emptypb.Empty) (*PeerList, error)
-	AddPeer(context.Context, *Peer) (*emptypb.Empty, error)
+	Connect(*Info, BootstrapAPI_ConnectServer) error
 	mustEmbedUnimplementedBootstrapAPIServer()
 }
 
@@ -85,14 +81,8 @@ type BootstrapAPIServer interface {
 type UnimplementedBootstrapAPIServer struct {
 }
 
-func (UnimplementedBootstrapAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
-}
-func (UnimplementedBootstrapAPIServer) GetPeers(context.Context, *emptypb.Empty) (*PeerList, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetPeers not implemented")
-}
-func (UnimplementedBootstrapAPIServer) AddPeer(context.Context, *Peer) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AddPeer not implemented")
+func (UnimplementedBootstrapAPIServer) Connect(*Info, BootstrapAPI_ConnectServer) error {
+	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
 }
 func (UnimplementedBootstrapAPIServer) mustEmbedUnimplementedBootstrapAPIServer() {}
 
@@ -107,58 +97,25 @@ func RegisterBootstrapAPIServer(s grpc.ServiceRegistrar, srv BootstrapAPIServer)
 	s.RegisterService(&BootstrapAPI_ServiceDesc, srv)
 }
 
-func _BootstrapAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
+func _BootstrapAPI_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(Info)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(BootstrapAPIServer).Health(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BootstrapAPI_Health_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BootstrapAPIServer).Health(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(BootstrapAPIServer).Connect(m, &bootstrapAPIConnectServer{stream})
 }
 
-func _BootstrapAPI_GetPeers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BootstrapAPIServer).GetPeers(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BootstrapAPI_GetPeers_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BootstrapAPIServer).GetPeers(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
+type BootstrapAPI_ConnectServer interface {
+	Send(*Notification) error
+	grpc.ServerStream
 }
 
-func _BootstrapAPI_AddPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Peer)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BootstrapAPIServer).AddPeer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BootstrapAPI_AddPeer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BootstrapAPIServer).AddPeer(ctx, req.(*Peer))
-	}
-	return interceptor(ctx, in, info, handler)
+type bootstrapAPIConnectServer struct {
+	grpc.ServerStream
+}
+
+func (x *bootstrapAPIConnectServer) Send(m *Notification) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 // BootstrapAPI_ServiceDesc is the grpc.ServiceDesc for BootstrapAPI service.
@@ -167,20 +124,13 @@ func _BootstrapAPI_AddPeer_Handler(srv interface{}, ctx context.Context, dec fun
 var BootstrapAPI_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bootstrap_api.BootstrapAPI",
 	HandlerType: (*BootstrapAPIServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Health",
-			Handler:    _BootstrapAPI_Health_Handler,
-		},
-		{
-			MethodName: "GetPeers",
-			Handler:    _BootstrapAPI_GetPeers_Handler,
-		},
-		{
-			MethodName: "AddPeer",
-			Handler:    _BootstrapAPI_AddPeer_Handler,
+			StreamName:    "Connect",
+			Handler:       _BootstrapAPI_Connect_Handler,
+			ServerStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "services/bootstrap/bootstrap_api/bootstrap_api.proto",
 }
