@@ -39,6 +39,12 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) 
 }
 
 func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered in NewBlockFromBytes", r)
+		}
+	}()
+
 	block := &Block{}
 
 	var err error
@@ -140,7 +146,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 
 	// only do the subtree checks if we have a subtree store
 	// missing the subtreeStore should only happen when we are validating an internal block
-	if subtreeStore != nil {
+	if subtreeStore != nil && len(b.Subtrees) > 0 {
 		// 6. Get and validate any missing subtrees.
 		if err = b.GetAndValidateSubtrees(ctx, subtreeStore); err != nil {
 			return false, err
@@ -311,11 +317,13 @@ func (b *Block) CheckMerkleRoot() (err error) {
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
-	if len(b.Subtrees) > 0 {
+	if len(hashes) == 1 {
+		calculatedMerkleRootHash = hashes[0]
+	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
 		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
-		for _, hash := range b.Subtrees {
-			err := st.AddNode(hash, 1)
+		for _, hash := range hashes {
+			err = st.AddNode(hash, 1)
 			if err != nil {
 				return err
 			}

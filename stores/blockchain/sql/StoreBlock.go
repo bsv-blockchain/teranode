@@ -157,7 +157,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	blockHeader2 := block.Header
 	_ = blockHeader2
 
-	if err = s.db.QueryRowContext(ctx, q,
+	rows, err := s.db.QueryContext(ctx, q,
 		previousBlockId,
 		block.Header.Version,
 		block.Hash().CloneBytes(),
@@ -173,7 +173,17 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		subtreeBytes,
 		block.CoinbaseTx.Bytes(),
 		orphaned,
-	).Scan(&previousBlockId); err != nil {
+	)
+	if err != nil {
+		return err
+	}
+
+	rowFound := rows.Next()
+	if !rowFound {
+		return fmt.Errorf("block already exists: %s", block.Hash())
+	}
+
+	if err = rows.Scan(&previousBlockId); err != nil {
 		return err
 	}
 
