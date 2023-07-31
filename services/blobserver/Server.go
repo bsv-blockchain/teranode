@@ -91,6 +91,15 @@ func (v *Server) Start() error {
 
 			})
 
+			localAddress, found := gocore.Config().Get("blobserver_localAddress")
+			if found {
+				bootstrapClient.WithLocalAddress(localAddress)
+			}
+			remoteAddress, found := gocore.Config().Get("blobserver_remoteAddress")
+			if found {
+				bootstrapClient.WithRemoteAddress(remoteAddress)
+			}
+
 			return bootstrapClient.Start(ctx)
 		})
 
