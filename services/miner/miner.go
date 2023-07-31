@@ -2,6 +2,7 @@ package miner
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
@@ -25,8 +26,9 @@ const (
 )
 
 func NewMiner() *Miner {
+	logLevel, _ := gocore.Config().Get("logLevel")
 	return &Miner{
-		logger:              gocore.Log("miner"),
+		logger:              gocore.Log("miner", gocore.NewLogLevelFromString(logLevel)),
 		blockAssemblyClient: blockassembly.NewClient(),
 	}
 }
@@ -60,6 +62,11 @@ func (m *Miner) Start(ctx context.Context) error {
 			if solution == nil {
 				continue
 			}
+
+			// Wait a bit before submitting the solution to simulate high difficulty
+			randWait := rand.Intn(60)
+			m.logger.Warnf("Found block, waiting %ds before submitting", randWait)
+			time.Sleep(time.Duration(randWait) * time.Second)
 
 			m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
 			m.logger.Debugf(solution.Stringify())

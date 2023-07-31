@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/util"
@@ -64,10 +63,6 @@ miningLoop:
 			if headerValid { // header is valid if the hash is less than the target
 				break miningLoop
 			}
-
-			// TODO: remove this when Siggi gets a laptop without a fan...
-			// 😂
-			time.Sleep(10 * time.Millisecond)
 
 			nonce++
 		}
