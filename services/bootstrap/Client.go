@@ -9,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 type Peer struct {
@@ -91,7 +92,9 @@ func (c *Client) Start(ctx context.Context) error {
 
 	port := strings.Split(blobServerAddress, ":")[1]
 
-	go func() {
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
 
 		c.logger.Infof("Local / remote addresses: %s:%s / %s:%s", c.localAddress, port, c.remoteAddress, port)
 
@@ -100,7 +103,7 @@ func (c *Client) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				c.logger.Infof("Stopping BootstrapClient as ctx is done")
-				return
+				return ctx.Err()
 
 			default:
 				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
@@ -148,7 +151,9 @@ func (c *Client) Start(ctx context.Context) error {
 				}
 			}
 		}
-	}()
+
+		return nil
+	})
 
 	return nil
 }
