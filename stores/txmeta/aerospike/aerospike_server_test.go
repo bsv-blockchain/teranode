@@ -61,7 +61,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), hash, 101, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash})
+		err = db.Create(context.Background(), hash, 101, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -77,7 +77,7 @@ func TestAerospike(t *testing.T) {
 		assert.LessOrEqual(t, int(time.Now().Unix()), value.Bins["firstSeen"].(int))
 		assert.Nil(t, value.Bins["blockHashes"])
 
-		err = db.Create(context.Background(), hash, 102, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash})
+		err = db.Create(context.Background(), hash, 102, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		// not allowed
 		require.Error(t, err)
 
@@ -102,7 +102,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), hash, 103, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash})
+		err = db.Create(context.Background(), hash, 103, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		require.NoError(t, err)
 
 		var value *txmeta.Data

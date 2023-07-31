@@ -11,9 +11,9 @@ import (
 type ClientI interface {
 	Health(ctx context.Context) (*blockchain_api.HealthResponse, error)
 	AddBlock(ctx context.Context, block *model.Block) error
+	SendNotification(ctx context.Context, notification *model.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error)
-	SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error)
-	Subscribe(ctx context.Context) (chan *model.Notification, error)
+	Subscribe(ctx context.Context, source string) (chan *model.Notification, error)
 }

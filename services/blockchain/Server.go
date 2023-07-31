@@ -37,6 +37,7 @@ func init() {
 
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer
+	source       string
 	done         chan struct{}
 }
 
@@ -118,12 +119,12 @@ func (b *Blockchain) Start() error {
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
-				b.logger.Infof("New Subscription received (Total=%d).", len(b.subscribers))
+				b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)
 				close(s.done)
-				b.logger.Infof("Subscription removed (Total=%d).", len(b.subscribers))
+				b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
 			}
 		}
 	}()
@@ -157,7 +158,7 @@ func (b *Blockchain) Stop(ctx context.Context) {
 	// logic. Will be addressed during refactoring. For now, allow the node
 	// to shut down without waiting for the clients' connections to terminate
 	// gracefully. Keep the default value as false to encourage the original
-	// behavior.
+	// behaviour.
 	if gocore.Config().GetBool("blockchain_grpcForceShutdown", false) {
 		b.grpcServer.Stop()
 	} else {
@@ -208,7 +209,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	prometheusBlockchainAddBlock.Inc()
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
-		Type: blockchain_api.Type_Block,
+		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),
 	})
 
@@ -335,13 +336,14 @@ func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchai
 	}
 }
 
-func (b *Blockchain) Subscribe(_ *emptypb.Empty, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
+func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 
 	b.newSubscriptions <- subscriber{
 		subscription: sub,
 		done:         ch,
+		source:       req.Source,
 	}
 
 	<-ch

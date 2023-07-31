@@ -10,7 +10,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
@@ -69,7 +68,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	// this will be used to reset the subtree processor when a new block is mined
 	var blockchainSubscriptionCh chan *model.Notification
 	go func() {
-		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context.Background())
+		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context.Background(), "BlockAssembler")
 		if err != nil {
 			logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
@@ -100,7 +99,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 			case notification := <-blockchainSubscriptionCh:
 				switch notification.Type {
-				case int32(blockchain_api.Type_Block):
+				case model.NotificationType_Block:
 					header, height, err = b.blockchainClient.GetBestBlockHeader(context.Background())
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)

@@ -390,8 +390,7 @@ func (b *Block) Bytes() ([]byte, error) {
 	// TODO not tested, due to discussion around storing subtrees in the block
 
 	// write the header
-	hash := b.Header.Hash()
-	buf := bytes.NewBuffer(hash[:])
+	buf := bytes.NewBuffer(b.Header.Bytes())
 
 	// write the subtree list
 	subtreeBytes, err := b.SubTreeBytes()

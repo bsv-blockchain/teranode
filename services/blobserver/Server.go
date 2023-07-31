@@ -7,6 +7,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/http_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
+	"github.com/TAAL-GmbH/ubsv/services/bootstrap"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
@@ -74,6 +75,25 @@ func (v *Server) Start() error {
 		g.Go(func() error {
 			return v.grpcServer.Start(v.grpcAddr)
 		})
+
+		// We need to react to new nodes connecting to the network and we do this by subscribing to
+		// the bootstrap service.  Each time a new node connects to the network, we will start a new
+		// blobserver subscription for that node.
+
+		// TODO - This may need to be moved to a separate location in the code
+		g.Go(func() error {
+			bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
+				// Start a subscription to the new peer's blob server
+				g.Go(func() error {
+					v.logger.Infof("Connecting to blob server at: %s", p.RemoteAddress)
+					return NewClient(p.RemoteAddress).Start(context.Background())
+				})
+
+			})
+
+			return bootstrapClient.Start(context.Background())
+		})
+
 	}
 
 	if v.httpServer != nil {

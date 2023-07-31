@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/TAAL-GmbH/ubsv/services/validator"
@@ -81,91 +79,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 		blockValidation:  NewBlockValidation(logger, blockchainClient, subtreeStore, txMetaStore, validatorClient),
 	}
 
-	// todo: this should be done in a peer manager type thing with reconnect etc.
-	//       should we just use the old peer 2 peer code?
-	go func() {
-		// subscribe to all peers
-		peersList, ok := gocore.Config().Get("blockvalidation_peers")
-		if ok {
-			peers := strings.Split(peersList, ",")
-			for _, peer := range peers {
-				go func(peer string) {
-					err = peerListener(logger, peer, bVal)
-					if err != nil {
-						logger.Errorf("could not subscribe to peer [%s] [%v]", peer, err)
-					}
-				}(peer)
-			}
-		}
-	}()
-
 	return bVal, nil
-}
-
-func peerListener(logger utils.Logger, peer string, bVal *BlockValidationServer) error {
-	grpcConn, err := utils.GetGRPCClient(context.Background(), peer, &utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		return fmt.Errorf("could not connect to peer [%s] [%v]", peer, err)
-	}
-	api := blobserver_api.NewBlobServerAPIClient(grpcConn)
-	client, err := api.Subscribe(context.Background(), &emptypb.Empty{})
-	if err != nil {
-		return fmt.Errorf("could not subscribe to peer [%s] [%v]", peer, err)
-	}
-
-	var msg interface{}
-	var blockResponse *blobserver_api.Blob
-	var block *model.Block
-	for {
-		err = client.RecvMsg(&msg)
-		if err != nil {
-			logger.Errorf("could not receive message from peer [%s] [%v]", peer, err)
-			break
-		}
-
-		notification, ok := msg.(*blobserver_api.Notification)
-		if !ok {
-			logger.Errorf("received message from peer [%s] that was not a notification", peer)
-			continue
-		}
-
-		switch notification.GetType() {
-		case blobserver_api.Type_Block:
-			// get block over http from baseUrl
-			blockResponse, err = api.GetBlock(context.Background(), &blobserver_api.HashOrHeight{
-				Value: &blobserver_api.HashOrHeight_Hash{
-					Hash: notification.GetHash(),
-				},
-			})
-			if err != nil {
-				logger.Errorf("could not get block from peer [%s] [%v]", peer, err)
-				continue
-			}
-			block, err = model.NewBlockFromBytes(blockResponse.Blob)
-			if err != nil {
-				logger.Errorf("could not get block from peer [%s] [%v]", peer, err)
-				continue
-			}
-			err = bVal.blockValidation.BlockFound(context.Background(), block, notification.BaseUrl)
-			if err != nil {
-				logger.Errorf("could not process block from peer [%s] [%v]", peer, err)
-				continue
-			}
-		case blobserver_api.Type_Subtree:
-			hash := chainhash.Hash(notification.GetHash())
-			ok = bVal.blockValidation.validateSubtree(context.Background(), &hash, notification.BaseUrl)
-			if !ok {
-				logger.Errorf("could not validate subtree from peer [%s]", peer)
-				continue
-			}
-		}
-	}
-
-	return nil
 }
 
 // Start function
@@ -223,7 +137,12 @@ func (u *BlockValidationServer) Health(_ context.Context, _ *emptypb.Empty) (*bl
 func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
 
-	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", req.GetBaseUrl(), req.Hash))
+	hash, err := chainhash.NewHash(req.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", req.GetBaseUrl(), hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block from peer [%w]", err)
 	}
@@ -235,13 +154,13 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 
 	// validate the block in the background
 	go func() {
-		err = u.blockValidation.BlockFound(ctx, block, req.GetBaseUrl())
+		err = u.blockValidation.BlockFound(context.Background(), block, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("failed to process block [%s] [%v]", block.String(), err)
 		}
 	}()
 
-	return nil, nil
+	return &emptypb.Empty{}, nil
 }
 
 func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
@@ -259,12 +178,12 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 	// validate the subtree in the background
 	// TODO make sure we are not processing the same subtree twice at the same time
 	go func() {
-		ok := u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
+		ok := u.blockValidation.validateSubtree(context.Background(), subtreeHash, req.GetBaseUrl())
 		if !ok {
 			u.logger.Errorf("invalid subtree found [%s]", subtreeHash.String())
 			return
 		}
 	}()
 
-	return nil, nil
+	return &emptypb.Empty{}, nil
 }

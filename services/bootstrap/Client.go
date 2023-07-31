@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
@@ -56,7 +57,7 @@ func (c *Client) WithRemoteAddress(remoteAddress string) *Client {
 }
 
 func (c *Client) Start(ctx context.Context) error {
-	if c.localAddress != "" {
+	if c.localAddress == "" {
 		hint, _ := gocore.Config().Get("ip_address_hint", "")
 		localAddresses, err := utils.GetIPAddressesWithHint(hint)
 		if err != nil {
@@ -66,7 +67,7 @@ func (c *Client) Start(ctx context.Context) error {
 		c.localAddress = localAddresses[0]
 	}
 
-	if c.remoteAddress != "" {
+	if c.remoteAddress == "" {
 		remoteAddress, err := utils.GetPublicIPAddress()
 		if err != nil {
 			return fmt.Errorf("failed to get remote ip address: %s", err)
@@ -83,13 +84,22 @@ func (c *Client) Start(ctx context.Context) error {
 
 	c.client = bootstrap_api.NewBootstrapAPIClient(conn)
 
+	blobServerAddress, found := gocore.Config().Get("blobserver_grpcAddress")
+	if !found {
+		return fmt.Errorf("blobserver_grpcAddress not found in config")
+	}
+
+	port := strings.Split(blobServerAddress, ":")[1]
+
 	go func() {
+
+		c.logger.Infof("Local / remote addresses: %s:%s / %s:%s", c.localAddress, port, c.remoteAddress, port)
 
 	RETRY:
 		for {
 			stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
-				LocalAddress:  c.localAddress,
-				RemoteAddress: c.remoteAddress,
+				LocalAddress:  fmt.Sprintf("%s:%s", c.localAddress, port),
+				RemoteAddress: fmt.Sprintf("%s:%s", c.remoteAddress, port),
 			})
 			if err != nil {
 				time.Sleep(1 * time.Second)

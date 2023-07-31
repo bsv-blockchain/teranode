@@ -16,6 +16,7 @@ import (
 
 type Client struct {
 	client blockchain_api.BlockchainAPIClient
+	logger utils.Logger
 }
 
 type BestBlockHeader struct {
@@ -39,6 +40,7 @@ func NewClient() (ClientI, error) {
 
 	return &Client{
 		client: blockchain_api.NewBlockchainAPIClient(baConn),
+		logger: gocore.Log("blkcC"),
 	}, nil
 }
 
@@ -130,41 +132,20 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	return headers, nil
 }
 
-func (c Client) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error) {
-	stream, err := c.client.SubscribeBestBlockHeader(ctx, &emptypb.Empty{})
+func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {
+	_, err := c.client.SendNotification(ctx, &blockchain_api.Notification{
+		Type: notification.Type,
+		Hash: notification.Hash[:],
+	})
+
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	ch := make(chan *BestBlockHeader)
-	go func() {
-		defer close(ch)
-
-		for {
-			var resp *blockchain_api.BestBlockHeaderResponse
-			var header *model.BlockHeader
-
-			resp, err = stream.Recv()
-			if err != nil {
-				return
-			}
-
-			header, err = model.NewBlockHeaderFromBytes(resp.BlockHeader)
-			if err != nil {
-				return
-			}
-
-			ch <- &BestBlockHeader{
-				Header: header,
-				Height: resp.Height,
-			}
-		}
-	}()
-
-	return ch, nil
+	return nil
 }
 
-func (c Client) Subscribe(ctx context.Context) (chan *model.Notification, error) {
+func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
 	ch := make(chan *model.Notification)
 
 	go func() {
@@ -172,7 +153,9 @@ func (c Client) Subscribe(ctx context.Context) (chan *model.Notification, error)
 
 	RETRY:
 		for {
-			stream, err := c.client.Subscribe(ctx, &emptypb.Empty{})
+			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
+				Source: source,
+			})
 			if err != nil {
 				time.Sleep(1 * time.Second)
 				break RETRY
@@ -185,10 +168,15 @@ func (c Client) Subscribe(ctx context.Context) (chan *model.Notification, error)
 					break RETRY
 				}
 
+				hash, err := chainhash.NewHash(resp.Hash)
+				if err != nil {
+					c.logger.Errorf("failed to parse hash", err)
+					continue
+				}
+
 				ch <- &model.Notification{
-					Type:    int32(resp.Type),
-					Hash:    resp.Hash,
-					BaseUrl: resp.BaseUrl,
+					Type: resp.Type,
+					Hash: hash,
 				}
 			}
 		}

@@ -159,7 +159,9 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 				continue
 			}
 
-			if err = ba.subtreeStore.Set(context.Background(),
+			ctx := context.Background()
+
+			if err = ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
 				subtreeBytes,
 				options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
@@ -167,6 +169,11 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 				logger.Errorf("Failed to store subtree [%s]", err)
 				continue
 			}
+
+			ba.blockchainClient.SendNotification(ctx, &model.Notification{
+				Type: model.NotificationType_Subtree,
+				Hash: subtree.RootHash(),
+			})
 
 			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}

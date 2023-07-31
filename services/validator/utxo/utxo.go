@@ -8,7 +8,6 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 )
@@ -40,7 +39,7 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 		if err != nil {
 			panic(err)
 		}
-		blockchainSubscriptionCh, err = blockchainClient.Subscribe(context.Background())
+		blockchainSubscriptionCh, err = blockchainClient.Subscribe(context.Background(), "Validator")
 		if err != nil {
 			panic(err)
 		}
@@ -48,7 +47,7 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 		go func() {
 			var height uint32
 			for notification := range blockchainSubscriptionCh {
-				if notification.Type == int32(blockchain_api.Type_Block) {
+				if notification.Type == model.NotificationType_Block {
 					_, height, err = blockchainClient.GetBestBlockHeader(context.Background())
 					if err != nil {
 						logger.Errorf("[UTXOStore] error getting best block header: %v", err)

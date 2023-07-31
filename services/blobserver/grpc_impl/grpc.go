@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	blobserver_api "github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
@@ -27,6 +28,7 @@ var (
 	prometheusBlobServerGRPCGetBlockHeader *prometheus.CounterVec
 	prometheusBlobServerGRPCGetBlock       *prometheus.CounterVec
 	prometheusBlobServerGRPCGetUTXO        *prometheus.CounterVec
+	baseURL                                string
 )
 
 type subscriber struct {
@@ -44,6 +46,78 @@ type GRPC struct {
 	deadSubscriptions chan subscriber
 	subscribers       map[subscriber]bool
 	notifications     chan *blobserver_api.Notification
+}
+
+func init() {
+	prometheusBlobServerGRPCGetTransaction = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_grpc_get_transaction",
+			Help: "Number of Get transactions ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerGRPCGetSubtree = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_grpc_get_subtree",
+			Help: "Number of Get subtree ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerGRPCGetBlockHeader = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_grpc_get_block_header",
+			Help: "Number of Get block header ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerGRPCGetBlock = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_grpc_get_block",
+			Help: "Number of Get block ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerGRPCGetUTXO = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_grpc_get_utxo",
+			Help: "Number of Get UTXO ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	baseURL, _ = gocore.Config().Get("blobserver_baseURL")
+
+	if baseURL == "" {
+		remoteAddress, err := utils.GetPublicIPAddress()
+		if err != nil {
+			panic(err)
+		}
+
+		blobServerAddress, _ := gocore.Config().Get("blobserver_httpAddress")
+
+		port := strings.Split(blobServerAddress, ":")[1]
+
+		baseURL = fmt.Sprintf("http://%s:%s", remoteAddress, port)
+	}
 }
 
 func New(repository *repository.Repository) (*GRPC, error) {
@@ -83,7 +157,7 @@ func New(repository *repository.Repository) (*GRPC, error) {
 
 func (g *GRPC) Start(addr string) error {
 	// Subscribe to the blockchain service
-	blockchainSubscription, err := g.blockchainClient.Subscribe(context.Background())
+	blockchainSubscription, err := g.blockchainClient.Subscribe(context.Background(), "blobserver")
 	if err != nil {
 		return err
 	}
@@ -95,8 +169,8 @@ func (g *GRPC) Start(addr string) error {
 			}
 			g.notifications <- &blobserver_api.Notification{
 				Type:    blobserver_api.Type(notification.Type),
-				Hash:    notification.Hash,
-				BaseUrl: notification.BaseUrl,
+				Hash:    notification.Hash[:],
+				BaseUrl: baseURL,
 			}
 		}
 	}()
@@ -115,12 +189,12 @@ func (g *GRPC) Start(addr string) error {
 
 			case s := <-g.newSubscriptions:
 				g.subscribers[s] = true
-				g.logger.Infof("New Subscription received (Total=%d).", len(g.subscribers))
+				g.logger.Infof("[BlobServer] New Subscription received (Total=%d).", len(g.subscribers))
 
 			case s := <-g.deadSubscriptions:
 				delete(g.subscribers, s)
 				close(s.done)
-				g.logger.Infof("Subscription removed (Total=%d).", len(g.subscribers))
+				g.logger.Infof("[BlobServer] Subscription removed (Total=%d).", len(g.subscribers))
 			}
 		}
 	}()
@@ -235,63 +309,6 @@ func (g *GRPC) GetUTXO(ctx context.Context, req *blobserver_api.Hash) (*blobserv
 	return &blobserver_api.Blob{
 		Blob: tx,
 	}, nil
-}
-
-func init() {
-	prometheusBlobServerGRPCGetTransaction = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_transaction",
-			Help: "Number of Get transactions ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetSubtree = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_subtree",
-			Help: "Number of Get subtree ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetBlockHeader = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_block_header",
-			Help: "Number of Get block header ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetBlock = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_block",
-			Help: "Number of Get block ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetUTXO = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_utxo",
-			Help: "Number of Get UTXO ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
 }
 
 func (g *GRPC) Subscribe(_ *emptypb.Empty, sub blobserver_api.BlobServerAPI_SubscribeServer) error {

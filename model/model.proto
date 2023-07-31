@@ -24,3 +24,9 @@ message MiningSolution {
   uint32 nonce = 4;
   uint32 version = 5;
 }
+
+// swagger:enum Type
+enum NotificationType {
+  Subtree = 0;
+  Block = 1;
+}

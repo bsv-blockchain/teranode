@@ -42,7 +42,7 @@ type BlockchainAPIClient interface {
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error)
 	SubscribeBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlockchainAPI_SubscribeBestBlockHeaderClient, error)
-	Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlockchainAPI_SubscribeClient, error)
+	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlockchainAPI_SubscribeClient, error)
 	SendNotification(ctx context.Context, in *Notification, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
@@ -131,7 +131,7 @@ func (x *blockchainAPISubscribeBestBlockHeaderClient) Recv() (*BestBlockHeaderRe
 	return m, nil
 }
 
-func (c *blockchainAPIClient) Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlockchainAPI_SubscribeClient, error) {
+func (c *blockchainAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlockchainAPI_SubscribeClient, error) {
 	stream, err := c.cc.NewStream(ctx, &BlockchainAPI_ServiceDesc.Streams[1], BlockchainAPI_Subscribe_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ type BlockchainAPIServer interface {
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error)
 	SubscribeBestBlockHeader(*emptypb.Empty, BlockchainAPI_SubscribeBestBlockHeaderServer) error
-	Subscribe(*emptypb.Empty, BlockchainAPI_SubscribeServer) error
+	Subscribe(*SubscribeRequest, BlockchainAPI_SubscribeServer) error
 	SendNotification(context.Context, *Notification) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
@@ -211,7 +211,7 @@ func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emp
 func (UnimplementedBlockchainAPIServer) SubscribeBestBlockHeader(*emptypb.Empty, BlockchainAPI_SubscribeBestBlockHeaderServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeBestBlockHeader not implemented")
 }
-func (UnimplementedBlockchainAPIServer) Subscribe(*emptypb.Empty, BlockchainAPI_SubscribeServer) error {
+func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, BlockchainAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendNotification(context.Context, *Notification) (*emptypb.Empty, error) {
@@ -342,7 +342,7 @@ func (x *blockchainAPISubscribeBestBlockHeaderServer) Send(m *BestBlockHeaderRes
 }
 
 func _BlockchainAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(emptypb.Empty)
+	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}

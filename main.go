@@ -241,6 +241,7 @@ func main() {
 	var minerServer *miner.Miner
 	var blobServer *blobserver.Server
 	var bootstrapServer *bootstrap.Server
+	var blockValidationService *blockvalidation.BlockValidationServer
 
 	// blockchain service needs to start first !
 	if *startBlockchain {
@@ -377,12 +378,12 @@ func main() {
 
 	// blockValidation
 	if *startBlockValidation {
-		if _, found = gocore.Config().Get("blockValidation_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockvalidation_grpcAddress"); found {
 			g.Go(func() error {
 				logger.Infof("Starting Block Validation Server")
 
 				bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
-				blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, subtreeStore, txMetaStore, validatorClient)
+				blockValidationService, err = blockvalidation.New(bvLogger, utxoStore, subtreeStore, txMetaStore, validatorClient)
 				if err != nil {
 					panic(err)
 				}
@@ -520,14 +521,6 @@ func main() {
 			})
 		}
 	}
-
-	g.Go(func() (err error) {
-		bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
-			logger.Infof("New peer announced: %s / %s", p.LocalAddress, p.RemoteAddress)
-		})
-
-		return bootstrapClient.Start(ctx)
-	})
 
 	// start http health check server
 	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

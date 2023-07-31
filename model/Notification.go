@@ -1,7 +1,8 @@
 package model
 
+import "github.com/libsv/go-bt/v2/chainhash"
+
 type Notification struct {
-	Type    int32
-	Hash    []byte
-	BaseUrl string
+	Type NotificationType
+	Hash *chainhash.Hash
 }

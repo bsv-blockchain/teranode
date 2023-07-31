@@ -50,6 +50,10 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
+func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {
+	return nil
+}
+
 func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error) {
 	timer := time.NewTicker(10 * time.Second)
 	ch := make(chan *BestBlockHeader)
@@ -84,6 +88,6 @@ func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBl
 	return ch, nil
 }
 
-func (c LocalClient) Subscribe(ctx context.Context) (chan *model.Notification, error) {
+func (c LocalClient) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
 	return nil, nil
 }
