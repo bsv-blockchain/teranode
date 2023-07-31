@@ -53,6 +53,9 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 	// create new buffer reader for the block bytes
 	buf := bytes.NewReader(blockBytes[80:])
 
+	// read the transaction count
+	block.TransactionCount, err = wire.ReadVarInt(buf, 0)
+
 	// read the length of the subtree list
 	block.subtreeLength, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
@@ -62,6 +65,7 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 	// read the subtree list
 	var hashBytes [32]byte
 	var subtreeHash *chainhash.Hash
+	block.Subtrees = make([]*chainhash.Hash, 0, block.subtreeLength)
 	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
 		if err != nil {
@@ -291,7 +295,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	return nil
 }
 
-func (b *Block) CheckMerkleRoot() error {
+func (b *Block) CheckMerkleRoot() (err error) {
 	if len(b.Subtrees) != len(b.subtreeSlices) {
 		return fmt.Errorf("number of subtrees does not match number of subtree slices")
 	}
@@ -306,19 +310,24 @@ func (b *Block) CheckMerkleRoot() error {
 		hashes[i] = subtree.RootHash()
 	}
 
-	// Create a new subtree with the hashes of the subtrees
-	st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
-	for _, hash := range b.Subtrees {
-		err := st.AddNode(hash, 1)
+	var calculatedMerkleRootHash *chainhash.Hash
+	if len(b.Subtrees) > 0 {
+		// Create a new subtree with the hashes of the subtrees
+		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		for _, hash := range b.Subtrees {
+			err := st.AddNode(hash, 1)
+			if err != nil {
+				return err
+			}
+		}
+
+		calculatedMerkleRoot := st.RootHash()
+		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
 			return err
 		}
-	}
-
-	calculatedMerkleRoot := st.RootHash()
-	calculatedMerkleRootHash, err := chainhash.NewHash(calculatedMerkleRoot[:])
-	if err != nil {
-		return err
+	} else {
+		calculatedMerkleRootHash = b.CoinbaseTx.TxIDChainHash()
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
@@ -387,10 +396,19 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 }
 
 func (b *Block) Bytes() ([]byte, error) {
-	// TODO not tested, due to discussion around storing subtrees in the block
+	if b.Header == nil {
+		return nil, fmt.Errorf("block has no header")
+	}
+
+	if b.CoinbaseTx == nil {
+		return nil, fmt.Errorf("block has no coinbase tx")
+	}
 
 	// write the header
 	buf := bytes.NewBuffer(b.Header.Bytes())
+
+	// write the transaction count
+	err := wire.WriteVarInt(buf, 0, b.TransactionCount)
 
 	// write the subtree list
 	subtreeBytes, err := b.SubTreeBytes()
