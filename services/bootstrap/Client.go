@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
@@ -89,18 +88,10 @@ func (c *Client) Start(ctx context.Context) error {
 
 	c.client = bootstrap_api.NewBootstrapAPIClient(conn)
 
-	blobServerAddress, found := gocore.Config().Get("blobserver_grpcAddress")
-	if !found {
-		return fmt.Errorf("blobserver_grpcAddress not found in config")
-	}
-
-	port := strings.Split(blobServerAddress, ":")[1]
-
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-
-		c.logger.Infof("Local / remote addresses: %s:%s / %s:%s", c.localAddress, port, c.remoteAddress, port)
+		c.logger.Infof("Local / remote addresses: %s / %s", c.localAddress, c.remoteAddress)
 
 	RETRY:
 		for {
@@ -113,8 +104,8 @@ func (c *Client) Start(ctx context.Context) error {
 				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
 				c.logger.Debugf("Local / remote addresses: %s / %s", c.localAddress, c.remoteAddress)
 				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
-					LocalAddress:  fmt.Sprintf("%s:%s", c.localAddress, port),
-					RemoteAddress: fmt.Sprintf("%s:%s", c.remoteAddress, port),
+					LocalAddress:  c.localAddress,
+					RemoteAddress: c.remoteAddress,
 				})
 				if err != nil {
 					time.Sleep(1 * time.Second)
