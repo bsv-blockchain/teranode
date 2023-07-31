@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"gorm.io/gorm"
 )
 
 type MongoManager struct {
@@ -85,5 +86,21 @@ func (m *MongoManager) Disconnect() error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (m *MongoManager) Create(model *gorm.Model) error {
+	return nil
+}
+
+func (m *MongoManager) Read(model *gorm.Model) error {
+	return nil
+}
+
+func (m *MongoManager) Update(model *gorm.Model) error {
+	return nil
+}
+
+func (m *MongoManager) Delete(model *gorm.Model) error {
 	return nil
 }

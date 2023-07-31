@@ -43,3 +43,23 @@ func (m *SqliteManager) Disconnect() error {
 	}
 	return nil
 }
+
+func (m *SqliteManager) Create(model *gorm.Model) error {
+	result := m.db.Create(model)
+	return result.Error
+}
+
+func (m *SqliteManager) Read(model *gorm.Model) error {
+	result := m.db.First(model)
+	return result.Error
+}
+
+func (m *SqliteManager) Update(model *gorm.Model) error {
+	result := m.db.Save(model)
+	return result.Error
+}
+
+func (m *SqliteManager) Delete(model *gorm.Model) error {
+	result := m.db.Delete(model, model.ID)
+	return result.Error
+}

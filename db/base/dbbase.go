@@ -1,5 +1,7 @@
 package base
 
+import "gorm.io/gorm"
+
 type DbManagerBase interface {
 	Connect() error
 	Disconnect() error
@@ -14,6 +16,10 @@ type DbFactories struct {
 }
 
 type CRUD interface {
+	Create(*gorm.Model) error
+	Read(*gorm.Model) error
+	Update(*gorm.Model) error
+	Delete(*gorm.Model) error
 }
 
 type DbManager interface {
