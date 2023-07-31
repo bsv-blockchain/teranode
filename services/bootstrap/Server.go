@@ -12,6 +12,8 @@ import (
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type void struct{}
@@ -51,14 +53,14 @@ func NewServer() *Server {
 }
 
 // Start function
-func (v *Server) Start() error {
+func (s *Server) Start() error {
 	address, ok := gocore.Config().Get("bootstrap_grpcAddress")
 	if !ok {
 		return errors.New("no bootstrap_grpcAddress setting found")
 	}
 
 	var err error
-	v.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
+	s.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
 		MaxMessageSize: 10_000,
 	})
 	if err != nil {
@@ -72,10 +74,10 @@ func (v *Server) Start() error {
 		return fmt.Errorf("GRPC server failed to listen [%w]", err)
 	}
 
-	bootstrap_api.RegisterBootstrapAPIServer(v.grpcServer, v)
+	bootstrap_api.RegisterBootstrapAPIServer(s.grpcServer, s)
 
 	// Register reflection service on gRPC server.
-	reflection.Register(v.grpcServer)
+	reflection.Register(s.grpcServer)
 
 	ticker := time.NewTicker(10 * time.Second)
 
@@ -83,88 +85,88 @@ func (v *Server) Start() error {
 		for {
 			select {
 			case <-ticker.C:
-				for sub := range v.subscribers {
-					go func(s subscriber) {
-						if err := s.subscription.Send(&bootstrap_api.Notification{
+				for sub := range s.subscribers {
+					go func(sub subscriber) {
+						if err = sub.subscription.Send(&bootstrap_api.Notification{
 							Type: bootstrap_api.Type_PING,
 						}); err != nil {
-							v.deadSubscriptions <- s
+							s.deadSubscriptions <- sub
 						}
 					}(sub)
 				}
 
-			case notification := <-v.notifications:
-				for sub := range v.subscribers {
-					go func(s subscriber) {
-						if err := s.subscription.Send(notification); err != nil {
-							v.deadSubscriptions <- s
+			case notification := <-s.notifications:
+				for sub := range s.subscribers {
+					go func(sub subscriber) {
+						if err = sub.subscription.Send(notification); err != nil {
+							s.deadSubscriptions <- sub
 						}
 					}(sub)
 				}
 
-			case newSubscriber := <-v.newSubscriptions:
+			case newSubscriber := <-s.newSubscriptions:
 				// Send this new subscription a list of the currently known subscribers
-				for sub := range v.subscribers {
-					go func(s subscriber) {
-						if err := newSubscriber.subscription.Send(&bootstrap_api.Notification{
+				for sub := range s.subscribers {
+					go func(sub subscriber) {
+						if err = newSubscriber.subscription.Send(&bootstrap_api.Notification{
 							Type: bootstrap_api.Type_ADD,
 							Info: &bootstrap_api.Info{
-								LocalAddress:  s.localAddress,
-								RemoteAddress: s.remoteAddress,
+								LocalAddress:  sub.localAddress,
+								RemoteAddress: sub.remoteAddress,
 							},
 						}); err != nil {
-							v.deadSubscriptions <- s
+							s.deadSubscriptions <- sub
 						}
 					}(sub)
 				}
 
 				// Notify all the other subscribers of the new subscription
-				for sub := range v.subscribers {
-					go func(s subscriber) {
-						if err := s.subscription.Send(&bootstrap_api.Notification{
+				for sub := range s.subscribers {
+					go func(sub subscriber) {
+						if err = sub.subscription.Send(&bootstrap_api.Notification{
 							Type: bootstrap_api.Type_ADD,
 							Info: &bootstrap_api.Info{
 								LocalAddress:  newSubscriber.localAddress,
 								RemoteAddress: newSubscriber.remoteAddress,
 							},
 						}); err != nil {
-							v.deadSubscriptions <- s
+							s.deadSubscriptions <- sub
 						}
 					}(sub)
 				}
 
 				// Add the newSubscriber to our map
-				v.subscribers[newSubscriber] = void{}
+				s.subscribers[newSubscriber] = void{}
 
-				v.logger.Infof("[Bootstrap] New Subscription received (Total=%d).", len(v.subscribers))
+				s.logger.Infof("[Bootstrap] New Subscription received (Total=%d).", len(s.subscribers))
 
-			case deadSubscriber := <-v.deadSubscriptions:
-				delete(v.subscribers, deadSubscriber)
+			case deadSubscriber := <-s.deadSubscriptions:
+				delete(s.subscribers, deadSubscriber)
 				close(deadSubscriber.done)
 
 				// Notify all the remaining subscription of the removed subscription
-				for sub := range v.subscribers {
-					go func(s subscriber) {
-						if err := s.subscription.Send(&bootstrap_api.Notification{
+				for sub := range s.subscribers {
+					go func(sub subscriber) {
+						if err = sub.subscription.Send(&bootstrap_api.Notification{
 							Type: bootstrap_api.Type_REMOVE,
 							Info: &bootstrap_api.Info{
 								LocalAddress:  deadSubscriber.localAddress,
 								RemoteAddress: deadSubscriber.remoteAddress,
 							},
 						}); err != nil {
-							v.deadSubscriptions <- s
+							s.deadSubscriptions <- sub
 						}
 					}(sub)
 				}
 
-				v.logger.Infof("[Bootstrap] Subscription removed (Total=%d).", len(v.subscribers))
+				s.logger.Infof("[Bootstrap] Subscription removed (Total=%d).", len(s.subscribers))
 			}
 		}
 	}()
 
-	v.logger.Infof("Bootstrap GRPC service listening on %s", address)
+	s.logger.Infof("Bootstrap GRPC service listening on %s", address)
 
-	if err = v.grpcServer.Serve(lis); err != nil {
+	if err = s.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)
 	}
 
@@ -178,7 +180,14 @@ func (s *Server) Stop(ctx context.Context) {
 	s.grpcServer.GracefulStop()
 }
 
-// Subscribe to this service and receive updates whenever a peer is added or removed
+func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.HealthResponse, error) {
+	return &bootstrap_api.HealthResponse{
+		Ok:        true,
+		Timestamp: timestamppb.New(time.Now()),
+	}, nil
+}
+
+// Connect Subscribe to this service and receive updates whenever a peer is added or removed
 func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.BootstrapAPI_ConnectServer) error {
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})

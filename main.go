@@ -168,7 +168,7 @@ func main() {
 		fmt.Println("    -blobserver=<1|0>")
 		fmt.Println("          whether to start the blob server")
 		fmt.Println("")
-		fmt.Println("    -bootstrapserver=<1|0>")
+		fmt.Println("    -bootstrap=<1|0>")
 		fmt.Println("          whether to start the bootstrap server")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")

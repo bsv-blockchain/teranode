@@ -4,7 +4,11 @@ option go_package = ".;bootstrap_api";
 
 package bootstrap_api;
 
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
 service BootstrapAPI {
+  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Connect(Info) returns (stream Notification) {}
 }
 
@@ -12,6 +16,13 @@ enum Type {
     PING = 0;
     ADD = 1;
     REMOVE = 2;
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 // swagger:enum Peer

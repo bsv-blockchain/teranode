@@ -11,6 +11,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -19,6 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
+	BootstrapAPI_Health_FullMethodName  = "/bootstrap_api.BootstrapAPI/Health"
 	BootstrapAPI_Connect_FullMethodName = "/bootstrap_api.BootstrapAPI/Connect"
 )
 
@@ -26,6 +28,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BootstrapAPIClient interface {
+	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error)
 }
 
@@ -35,6 +38,15 @@ type bootstrapAPIClient struct {
 
 func NewBootstrapAPIClient(cc grpc.ClientConnInterface) BootstrapAPIClient {
 	return &bootstrapAPIClient{cc}
+}
+
+func (c *bootstrapAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+	out := new(HealthResponse)
+	err := c.cc.Invoke(ctx, BootstrapAPI_Health_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *bootstrapAPIClient) Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error) {
@@ -73,6 +85,7 @@ func (x *bootstrapAPIConnectClient) Recv() (*Notification, error) {
 // All implementations must embed UnimplementedBootstrapAPIServer
 // for forward compatibility
 type BootstrapAPIServer interface {
+	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	Connect(*Info, BootstrapAPI_ConnectServer) error
 	mustEmbedUnimplementedBootstrapAPIServer()
 }
@@ -81,6 +94,9 @@ type BootstrapAPIServer interface {
 type UnimplementedBootstrapAPIServer struct {
 }
 
+func (UnimplementedBootstrapAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+}
 func (UnimplementedBootstrapAPIServer) Connect(*Info, BootstrapAPI_ConnectServer) error {
 	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
 }
@@ -95,6 +111,24 @@ type UnsafeBootstrapAPIServer interface {
 
 func RegisterBootstrapAPIServer(s grpc.ServiceRegistrar, srv BootstrapAPIServer) {
 	s.RegisterService(&BootstrapAPI_ServiceDesc, srv)
+}
+
+func _BootstrapAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapAPIServer).Health(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapAPI_Health_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapAPIServer).Health(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _BootstrapAPI_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -124,7 +158,12 @@ func (x *bootstrapAPIConnectServer) Send(m *Notification) error {
 var BootstrapAPI_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bootstrap_api.BootstrapAPI",
 	HandlerType: (*BootstrapAPIServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Health",
+			Handler:    _BootstrapAPI_Health_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Connect",
