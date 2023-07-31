@@ -69,7 +69,7 @@ func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.S
 
 // Start function
 func (v *Server) Start() error {
-	g, _ := errgroup.WithContext(context.Background())
+	g, ctx := errgroup.WithContext(context.Background())
 
 	if v.grpcServer != nil {
 		g.Go(func() error {
@@ -91,7 +91,7 @@ func (v *Server) Start() error {
 
 			})
 
-			return bootstrapClient.Start(context.Background())
+			return bootstrapClient.Start(ctx)
 		})
 
 	}

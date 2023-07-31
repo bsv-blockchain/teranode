@@ -97,47 +97,54 @@ func (c *Client) Start(ctx context.Context) error {
 
 	RETRY:
 		for {
-			stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
-				LocalAddress:  fmt.Sprintf("%s:%s", c.localAddress, port),
-				RemoteAddress: fmt.Sprintf("%s:%s", c.remoteAddress, port),
-			})
-			if err != nil {
-				time.Sleep(1 * time.Second)
-				break RETRY
-			}
+			select {
+			case <-ctx.Done():
+				c.logger.Infof("Stopping BootstrapClient as ctx is done")
+				return
 
-			for {
-				resp, err := stream.Recv()
+			default:
+				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
+					LocalAddress:  fmt.Sprintf("%s:%s", c.localAddress, port),
+					RemoteAddress: fmt.Sprintf("%s:%s", c.remoteAddress, port),
+				})
 				if err != nil {
 					time.Sleep(1 * time.Second)
 					break RETRY
 				}
 
-				switch resp.Type {
-				case bootstrap_api.Type_PING:
-					// Ignore
-
-				case bootstrap_api.Type_ADD:
-					peer := Peer{
-						LocalAddress:  resp.Info.LocalAddress,
-						RemoteAddress: resp.Info.RemoteAddress,
+				for {
+					resp, err := stream.Recv()
+					if err != nil {
+						time.Sleep(1 * time.Second)
+						break RETRY
 					}
 
-					c.peers[peer] = void{}
-					c.logger.Infof("Added peer %s / %s", resp.Info.LocalAddress, resp.Info.RemoteAddress)
+					switch resp.Type {
+					case bootstrap_api.Type_PING:
+						// Ignore
 
-					if c.callbackFunc != nil {
-						c.callbackFunc(peer)
+					case bootstrap_api.Type_ADD:
+						peer := Peer{
+							LocalAddress:  resp.Info.LocalAddress,
+							RemoteAddress: resp.Info.RemoteAddress,
+						}
+
+						c.peers[peer] = void{}
+						c.logger.Infof("Added peer %s / %s", resp.Info.LocalAddress, resp.Info.RemoteAddress)
+
+						if c.callbackFunc != nil {
+							c.callbackFunc(peer)
+						}
+
+					case bootstrap_api.Type_REMOVE:
+						peer := Peer{
+							LocalAddress:  resp.Info.LocalAddress,
+							RemoteAddress: resp.Info.RemoteAddress,
+						}
+
+						delete(c.peers, peer)
+						c.logger.Infof("Removed peer %s / %s", resp.Info.LocalAddress, resp.Info.RemoteAddress)
 					}
-
-				case bootstrap_api.Type_REMOVE:
-					peer := Peer{
-						LocalAddress:  resp.Info.LocalAddress,
-						RemoteAddress: resp.Info.RemoteAddress,
-					}
-
-					delete(c.peers, peer)
-					c.logger.Infof("Removed peer %s / %s", resp.Info.LocalAddress, resp.Info.RemoteAddress)
 				}
 			}
 		}

@@ -25,7 +25,7 @@ message MiningSolution {
   uint32 version = 5;
 }
 
-// swagger:enum Type
+// swagger:enum NotificationType
 enum NotificationType {
   Subtree = 0;
   Block = 1;
