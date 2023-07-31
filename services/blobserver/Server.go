@@ -93,10 +93,12 @@ func (v *Server) Start() error {
 
 			localAddress, found := gocore.Config().Get("blobserver_localAddress")
 			if found {
+				v.logger.Infof("Connecting to bootstrap server with local address: %s", localAddress)
 				bootstrapClient.WithLocalAddress(localAddress)
 			}
 			remoteAddress, found := gocore.Config().Get("blobserver_remoteAddress")
 			if found {
+				v.logger.Infof("Connecting to bootstrap server with remote address: %s", remoteAddress)
 				bootstrapClient.WithRemoteAddress(remoteAddress)
 			}
 

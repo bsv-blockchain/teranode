@@ -48,12 +48,14 @@ func (c *Client) WithCallback(callbackFunc func(peer Peer)) *Client {
 // WithLocalAddress overrides the local address for the client
 func (c *Client) WithLocalAddress(localAddress string) *Client {
 	c.localAddress = localAddress
+	c.logger.Debugf("Local address set to: %s", c.localAddress)
 	return c
 }
 
 // WithRemoteAddress overrides the remote address for the client
 func (c *Client) WithRemoteAddress(remoteAddress string) *Client {
 	c.remoteAddress = remoteAddress
+	c.logger.Debugf("Remote address set to: %s", c.remoteAddress)
 	return c
 }
 
@@ -66,6 +68,7 @@ func (c *Client) Start(ctx context.Context) error {
 		}
 
 		c.localAddress = localAddresses[0]
+		c.logger.Debugf("Local address automatically set to: %s", c.localAddress)
 	}
 
 	if c.remoteAddress == "" {
@@ -75,6 +78,7 @@ func (c *Client) Start(ctx context.Context) error {
 		}
 
 		c.remoteAddress = remoteAddress
+		c.logger.Debugf("Remote address automatically set to: %s", c.remoteAddress)
 	}
 
 	bootstrap_grpcAddress, _ := gocore.Config().Get("bootstrap_grpcAddress")
@@ -106,6 +110,8 @@ func (c *Client) Start(ctx context.Context) error {
 				return ctx.Err()
 
 			default:
+				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
+				c.logger.Debugf("Local / remote addresses: %s / %s", c.localAddress, c.remoteAddress)
 				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
 					LocalAddress:  fmt.Sprintf("%s:%s", c.localAddress, port),
 					RemoteAddress: fmt.Sprintf("%s:%s", c.remoteAddress, port),

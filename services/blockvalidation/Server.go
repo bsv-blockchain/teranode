@@ -170,6 +170,8 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 		return nil, fmt.Errorf("block could not be created from bytes: %v", blockBytes)
 	}
 
+	// TODO do we need to catchup?
+
 	// validate the block in the background
 	go func() {
 		err = u.blockValidation.BlockFound(context.Background(), block, req.GetBaseUrl())
