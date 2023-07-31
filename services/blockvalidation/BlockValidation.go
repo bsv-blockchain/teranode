@@ -99,23 +99,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	// do http request to baseUrl + subtreeHash.String()
-	httpClient := &http.Client{}
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		u.logger.Errorf("failed to create http request [%s]", err.Error())
-		return false
-	}
-	resp, err := httpClient.Do(req)
+	subtreeBytes, err := u.doHTTPRequest(ctx, url)
 	if err != nil {
 		u.logger.Errorf("failed to do http request [%s]", err.Error())
-		return false
-	}
-	defer resp.Body.Close()
-
-	subtreeBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		u.logger.Errorf("failed to read http response body [%s]", err.Error())
 		return false
 	}
 
@@ -166,6 +153,27 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	return true
+}
+
+func (u *BlockValidation) doHTTPRequest(ctx context.Context, url string) ([]byte, error) {
+	httpClient := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
+	}
+	defer resp.Body.Close()
+
+	subtreeBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read http response body [%s]", err.Error())
+	}
+
+	return subtreeBytes, nil
 }
 
 func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*txmeta.Data, error) {

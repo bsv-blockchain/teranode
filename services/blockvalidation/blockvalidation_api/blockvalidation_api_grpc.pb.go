@@ -20,8 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockValidationAPI_Health_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/Health"
-	BlockValidationAPI_BlockFound_FullMethodName = "/blockvalidation_api.BlockValidationAPI/BlockFound"
+	BlockValidationAPI_Health_FullMethodName       = "/blockvalidation_api.BlockValidationAPI/Health"
+	BlockValidationAPI_BlockFound_FullMethodName   = "/blockvalidation_api.BlockValidationAPI/BlockFound"
+	BlockValidationAPI_SubtreeFound_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SubtreeFound"
 )
 
 // BlockValidationAPIClient is the client API for BlockValidationAPI service.
@@ -31,6 +32,7 @@ type BlockValidationAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type blockValidationAPIClient struct {
@@ -59,6 +61,15 @@ func (c *blockValidationAPIClient) BlockFound(ctx context.Context, in *BlockFoun
 	return out, nil
 }
 
+func (c *blockValidationAPIClient) SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_SubtreeFound_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockValidationAPIServer is the server API for BlockValidationAPI service.
 // All implementations must embed UnimplementedBlockValidationAPIServer
 // for forward compatibility
@@ -66,6 +77,7 @@ type BlockValidationAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	BlockFound(context.Context, *BlockFoundRequest) (*emptypb.Empty, error)
+	SubtreeFound(context.Context, *SubtreeFoundRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
 
@@ -78,6 +90,9 @@ func (UnimplementedBlockValidationAPIServer) Health(context.Context, *emptypb.Em
 }
 func (UnimplementedBlockValidationAPIServer) BlockFound(context.Context, *BlockFoundRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BlockFound not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) SubtreeFound(context.Context, *SubtreeFoundRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubtreeFound not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) mustEmbedUnimplementedBlockValidationAPIServer() {}
 
@@ -128,6 +143,24 @@ func _BlockValidationAPI_BlockFound_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockValidationAPI_SubtreeFound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubtreeFoundRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).SubtreeFound(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_SubtreeFound_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).SubtreeFound(ctx, req.(*SubtreeFoundRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockValidationAPI_ServiceDesc is the grpc.ServiceDesc for BlockValidationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -142,6 +175,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BlockFound",
 			Handler:    _BlockValidationAPI_BlockFound_Handler,
+		},
+		{
+			MethodName: "SubtreeFound",
+			Handler:    _BlockValidationAPI_SubtreeFound_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

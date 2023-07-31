@@ -11,6 +11,7 @@ service BlockValidationAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc BlockFound (BlockFoundRequest) returns (google.protobuf.Empty) {}
+  rpc SubtreeFound (SubtreeFoundRequest) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse
@@ -22,7 +23,12 @@ message HealthResponse {
 
 // swagger:model BlockFoundRequest
 message BlockFoundRequest {
-  bytes block_header = 1;
-  bytes coinbase = 2;
-  repeated bytes subtree_hashes = 3;
+  bytes hash = 1;
+  string base_url = 2;
+}
+
+// swagger:model SubtreeFoundRequest
+message SubtreeFoundRequest {
+  bytes hash = 1;
+  string base_url = 2;
 }

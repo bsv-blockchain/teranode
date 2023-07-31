@@ -17,7 +17,6 @@ import (
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/util"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -224,30 +223,48 @@ func (u *BlockValidationServer) Health(_ context.Context, _ *emptypb.Empty) (*bl
 func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
 
-	blockHeader, err := model.NewBlockHeaderFromBytes(req.BlockHeader)
+	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", req.GetBaseUrl(), req.Hash))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create block header from bytes [%w]", err)
+		return nil, fmt.Errorf("failed to get block from peer [%w]", err)
 	}
 
-	coinbaseTx, err := bt.NewTxFromBytes(req.Coinbase)
+	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create coinbase tx from bytes [%w]", err)
+		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
 	}
 
-	subtrees := make([]*chainhash.Hash, len(req.SubtreeHashes))
-	for i, subtree := range req.SubtreeHashes {
-		subtreeHash, err := chainhash.NewHash(subtree)
+	// validate the block in the background
+	go func() {
+		err = u.blockValidation.BlockFound(ctx, block, req.GetBaseUrl())
 		if err != nil {
-			return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
+			u.logger.Errorf("failed to process block [%s] [%v]", block.String(), err)
 		}
-		subtrees[i] = subtreeHash
+	}()
+
+	return nil, nil
+}
+
+func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
+	prometheusBlockValidationBlockFound.Inc()
+
+	subtreeHash, err := chainhash.NewHash(req.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
 	}
 
-	block := &model.Block{
-		Header:     blockHeader,
-		CoinbaseTx: coinbaseTx,
-		Subtrees:   subtrees,
+	if req.GetBaseUrl() == "" {
+		return nil, fmt.Errorf("base url is empty")
 	}
 
-	return nil, u.blockValidation.BlockFound(ctx, block, "")
+	// validate the subtree in the background
+	// TODO make sure we are not processing the same subtree twice at the same time
+	go func() {
+		ok := u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
+		if !ok {
+			u.logger.Errorf("invalid subtree found [%s]", subtreeHash.String())
+			return
+		}
+	}()
+
+	return nil, nil
 }

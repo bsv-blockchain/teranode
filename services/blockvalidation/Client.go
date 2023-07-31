@@ -4,15 +4,16 @@ import (
 	"context"
 
 	blockvalidation_api "github.com/TAAL-GmbH/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
-type Store struct {
-	client blockvalidation_api.BlockValidationAPIClient
+type Client struct {
+	apiClient blockvalidation_api.BlockValidationAPIClient
 }
 
-func NewClient() *Store {
+func NewClient() *Client {
 	ctx := context.Background()
 
 	blockValidationGrpcAddress, ok := gocore.Config().Get("blockvalidation_grpcAddress")
@@ -26,7 +27,35 @@ func NewClient() *Store {
 		panic(err)
 	}
 
-	return &Store{
-		client: blockvalidation_api.NewBlockValidationAPIClient(baConn),
+	return &Client{
+		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
 	}
+}
+
+func (s Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) error {
+	req := &blockvalidation_api.BlockFoundRequest{
+		Hash:    blockHash.CloneBytes(),
+		BaseUrl: baseUrl,
+	}
+
+	_, err := s.apiClient.BlockFound(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+	req := &blockvalidation_api.SubtreeFoundRequest{
+		Hash:    subtreeHash.CloneBytes(),
+		BaseUrl: baseUrl,
+	}
+
+	_, err := s.apiClient.SubtreeFound(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
