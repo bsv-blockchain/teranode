@@ -240,6 +240,22 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
+	blockHash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := b.store.GetBlockExists(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetBlockExistsResponse{
+		Exists: exists,
+	}, nil
+}
+
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
 	chainTip, height, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {

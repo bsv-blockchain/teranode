@@ -17,6 +17,24 @@ var (
 )
 
 func TestBlock_Bytes(t *testing.T) {
+	t.Run("test block bytes - min size", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		block := &Block{
+			Header:           blockHeader,
+			CoinbaseTx:       &bt.Tx{},
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		assert.Equal(t, 92, len(blockBytes))
+	})
+
 	t.Run("test block bytes", func(t *testing.T) {
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)

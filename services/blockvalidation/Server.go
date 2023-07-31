@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -49,9 +50,11 @@ type BlockValidationServer struct {
 	subtreeStore     blob.Store
 	txMetaStore      txmeta_store.Store
 
-	blockFoundCh    chan *model.Block
-	subtreeFoundCh  chan *util.Subtree
-	blockValidation *BlockValidation
+	blockFoundCh        chan *model.Block
+	subtreeFoundCh      chan *util.Subtree
+	blockValidation     *BlockValidation
+	processingSubtreeMu sync.Mutex
+	processingSubtree   map[chainhash.Hash]bool
 }
 
 func Enabled() bool {
@@ -142,6 +145,17 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 		return nil, err
 	}
 
+	// first check if the block exists, it is very expensive to do all the checks below
+	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if block exists [%w]", err)
+	}
+
+	if exists {
+		u.logger.Warnf("block found that already exists [%s]", hash.String())
+		return &emptypb.Empty{}, nil
+	}
+
 	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", req.GetBaseUrl(), hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block from peer [%w]", err)
@@ -150,6 +164,10 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
+	}
+
+	if block == nil {
+		return nil, fmt.Errorf("block could not be created from bytes: %v", blockBytes)
 	}
 
 	// validate the block in the background
@@ -171,14 +189,39 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
 	}
 
+	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if subtree exists [%w]", err)
+	}
+
+	if exists {
+		u.logger.Warnf("subtree found that already exists [%s]", subtreeHash.String())
+		return &emptypb.Empty{}, nil
+	}
+
 	if req.GetBaseUrl() == "" {
 		return nil, fmt.Errorf("base url is empty")
 	}
 
 	// validate the subtree in the background
-	// TODO make sure we are not processing the same subtree twice at the same time
 	go func() {
-		ok := u.blockValidation.validateSubtree(context.Background(), subtreeHash, req.GetBaseUrl())
+		u.processingSubtreeMu.Lock()
+		processing, ok := u.processingSubtree[*subtreeHash]
+		if ok && processing {
+			u.processingSubtreeMu.Unlock()
+			return
+		}
+
+		u.processingSubtree[*subtreeHash] = true
+		u.processingSubtreeMu.Unlock()
+
+		defer func() {
+			u.processingSubtreeMu.Lock()
+			delete(u.processingSubtree, *subtreeHash)
+			u.processingSubtreeMu.Unlock()
+		}()
+
+		ok = u.blockValidation.validateSubtree(context.Background(), subtreeHash, req.GetBaseUrl())
 		if !ok {
 			u.logger.Errorf("invalid subtree found [%s]", subtreeHash.String())
 			return

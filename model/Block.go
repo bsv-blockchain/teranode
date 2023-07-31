@@ -45,6 +45,12 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 		}
 	}()
 
+	// check minimal block size
+	// 92 bytes is the bare minimum, but will not be valid
+	if len(blockBytes) < 92 {
+		return nil, errors.New("block is too small")
+	}
+
 	block := &Block{}
 
 	var err error

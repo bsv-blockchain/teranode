@@ -42,6 +42,15 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
+func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	exists, err := c.store.GetBlockExists(ctx, blockHash)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
 func (c LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	return c.store.GetBestBlockHeader(ctx)
 }

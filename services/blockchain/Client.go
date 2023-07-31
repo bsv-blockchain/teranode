@@ -97,6 +97,17 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes)
 }
 
+func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
+		Hash: blockHash[:],
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return resp.Exists, nil
+}
+
 func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {

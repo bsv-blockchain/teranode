@@ -49,7 +49,7 @@ func (m *Miner) Start(ctx context.Context) error {
 				m.logger.Warnf("Error getting mining candidate: %v", err)
 				continue
 			}
-			m.logger.Infof(candidate.Stringify())
+			m.logger.Debugf(candidate.Stringify())
 
 			solution, err := cpuminer.Mine(ctx, candidate)
 			if err != nil {
@@ -62,7 +62,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			}
 
 			m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(solution.Id))
-			m.logger.Infof(solution.Stringify())
+			m.logger.Debugf(solution.Stringify())
 			err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
 			if err != nil {
 				m.logger.Errorf("Error submitting mining solution: %v", err)

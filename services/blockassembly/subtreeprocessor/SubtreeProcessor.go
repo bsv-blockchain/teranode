@@ -226,6 +226,10 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 
 	// copy the current subtree into a temp variable
 	lastIncompleteSubtree := stp.currentSubtree
+	if lastIncompleteSubtree.Length() == 1 && lastIncompleteSubtree.Nodes[0].IsEqual(model.CoinbasePlaceholderHash) {
+		// drop the first coinbase placeholder transaction
+		lastIncompleteSubtree.Nodes = lastIncompleteSubtree.Nodes[1:]
+	}
 	// reset the current subtree
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
@@ -271,6 +275,11 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block) error {
 		if len(chainedSubtrees) > 0 {
 			// just use the first subtree, each subtree should be the same size
 			chainedSubtreeSize = chainedSubtrees[0].Size()
+
+			if len(chainedSubtrees[0].Nodes) > 0 && chainedSubtrees[0].Nodes[0].IsEqual(model.CoinbasePlaceholderHash) {
+				// drop the first coinbase placeholder transaction
+				chainedSubtrees[0].Nodes = chainedSubtrees[0].Nodes[1:]
+			}
 		}
 		r := make([]*chainhash.Hash, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
 		remainderTxHashes = &r

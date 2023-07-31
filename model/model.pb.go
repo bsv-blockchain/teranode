@@ -20,7 +20,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// swagger:enum Type
+// swagger:enum NotificationType
 type NotificationType int32
 
 const (
