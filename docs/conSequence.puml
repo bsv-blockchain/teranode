@@ -19,19 +19,24 @@ note right
   <b>Database Schema</b>
 <code>
 Blocks
-Height
-Block hash
-Prev block hash
-nb. needs to be aware of forks
-
+--------------------------------
+Height          uint64
+Address         string/base64 encoded
+Block hash      string/base64 encoded
+Prev block hash string/base64 encoded
+--------------------------------
+Note: Fork awareness is achieved by identifying the entries
+which poin to the previous block hash more than once.
 
 Coinbase UTXOS
-Txid
-Vout 
-Script
-Address / Pubkey - searchable
-Blockhash
-Status (spent/spendable/locked)
+--------------------------------
+Txid    string
+Vout    uint32
+Script  string
+Address string/base64 encoded
+Blockhash string/base64 encoded
+Status (spent/spendable/locked) | enum?
+--------------------------------
 </code>
 end note
 end
