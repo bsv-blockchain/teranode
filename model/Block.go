@@ -67,6 +67,9 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 
 	// read the transaction count
 	block.TransactionCount, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return nil, err
+	}
 
 	// read the length of the subtree list
 	block.subtreeLength, err = wire.ReadVarInt(buf, 0)
@@ -423,6 +426,9 @@ func (b *Block) Bytes() ([]byte, error) {
 
 	// write the transaction count
 	err := wire.WriteVarInt(buf, 0, b.TransactionCount)
+	if err != nil {
+		return nil, err
+	}
 
 	// write the subtree list
 	subtreeBytes, err := b.SubTreeBytes()

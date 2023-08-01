@@ -170,10 +170,12 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 				continue
 			}
 
-			ba.blockchainClient.SendNotification(ctx, &model.Notification{
+			if err := ba.blockchainClient.SendNotification(ctx, &model.Notification{
 				Type: model.NotificationType_Subtree,
 				Hash: subtree.RootHash(),
-			})
+			}); err != nil {
+				logger.Errorf("Failed to send subtree notification [%s]", err)
+			}
 
 			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}
