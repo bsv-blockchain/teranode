@@ -37,6 +37,7 @@ type BlockAssembler struct {
 	miningCandidateCh chan chan *miningCandidateResponse
 	bestBlockHeader   *model.BlockHeader
 	bestBlockHeight   uint32
+	currentChain      []*model.BlockHeader
 	currentChainMap   map[chainhash.Hash]uint32
 	currentChainMapMu sync.RWMutex
 }
@@ -76,7 +77,6 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 		// variables are defined here to prevent unnecessary allocations
 		var block *model.Block
-		var blockHeaders []*model.BlockHeader
 		var header *model.BlockHeader
 		var height uint32
 		var blockHeight uint32
@@ -110,91 +110,94 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						// we already have this block, nothing to do
 						continue
 					} else if !header.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
-						// TODO check what is going on here, maybe we are on a different tip, or need to
-						// reorg, or something else
+						err = b.handleReorg(ctx, header)
+						if err != nil {
+							b.logger.Errorf("[BlockAssembler] error handling reorg: %v", err)
+							continue
+						}
+					} else {
+						if block, err = b.blockchainClient.GetBlock(context.Background(), header.Hash()); err != nil {
+							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
+							continue
+						}
 
-						b.logger.Errorf("[BlockAssembler] best block header subscription received new header with incorrect prev utxoHash: %s", header.HashPrevBlock.String())
-						continue
-					}
+						err = b.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+						if err != nil {
+							b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
+							continue
+						}
 
-					if block, err = b.blockchainClient.GetBlock(context.Background(), header.Hash()); err != nil {
-						b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
-						continue
-					}
+						// Build up the items we need to store the outputs in the utxostore.  We do this here so that
+						// any errors that occur will happen before we do any further processing.
+						txIDHash = block.CoinbaseTx.TxIDChainHash()
 
-					err = b.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
-						continue
-					}
+						blockHeight, err = block.ExtractCoinbaseHeight()
+						if err != nil {
+							b.logger.Errorf("[BlockAssembler] error extracting coinbase height: %v", err)
+							continue
+						}
 
-					// Build up the items we need to store the outputs in the utxostore.  We do this here so that
-					// any errors that occur will happen before we do any further processing.
-					txIDHash = block.CoinbaseTx.TxIDChainHash()
+						utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
+						success := true
 
-					blockHeight, err = block.ExtractCoinbaseHeight()
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error extracting coinbase height: %v", err)
-						continue
-					}
+						for i, output := range block.CoinbaseTx.Outputs {
+							if output.Satoshis > 0 {
+								utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
+								if err != nil {
+									b.logger.Errorf("[BlockAssembler] error getting utxo utxoHash from output: %v", err)
+									continue
+								}
 
-					utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
-					success := true
+								if resp, err := b.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
+									b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
+									success = false
+									break
+								}
 
-					for i, output := range block.CoinbaseTx.Outputs {
-						if output.Satoshis > 0 {
-							utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
-							if err != nil {
-								b.logger.Errorf("[BlockAssembler] error getting utxo utxoHash from output: %v", err)
-								continue
+								utxoHashes = append(utxoHashes, utxoHash)
 							}
+						}
 
-							if resp, err := b.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-								b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
-								success = false
-								break
-							}
+						if !success {
+							b.removeAllAdded(ctx, utxoHashes)
+							continue
+						}
 
-							utxoHashes = append(utxoHashes, utxoHash)
+						if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
+							b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
+							b.removeAllAdded(ctx, utxoHashes)
+							continue
 						}
 					}
 
-					if !success {
-						b.removeAllAdded(ctx, utxoHashes)
-						continue
-					}
-
-					if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-						b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
-						b.removeAllAdded(ctx, utxoHashes)
-						continue
-					}
-
-					// Add the outputs of the coinbase to the utxostore with locktime of 100 blocks
-
 					b.bestBlockHeader = header
 					b.bestBlockHeight = height
-
-					blockHeaders, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
+					err = b.setCurrentChain()
 					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error getting block headers from blockchain: %v", err)
-						// todo should we stop here, we are in a weird state
-						continue
+						b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
 					}
-
-					b.currentChainMapMu.Lock()
-					b.currentChainMap = make(map[chainhash.Hash]uint32, 100)
-					for _, blockHeader := range blockHeaders {
-						// todo set the height instead of timestamp
-						b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
-					}
-					b.currentChainMapMu.Unlock()
 				}
 			}
 		}
 	}()
 
 	return b
+}
+
+func (b *BlockAssembler) setCurrentChain() (err error) {
+	b.currentChain, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
+	if err != nil {
+		return fmt.Errorf("error getting block headers from blockchain: %v", err)
+	}
+
+	b.currentChainMapMu.Lock()
+	b.currentChainMap = make(map[chainhash.Hash]uint32, len(b.currentChain))
+	for _, blockHeader := range b.currentChain {
+		b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
+	}
+	b.currentChainMapMu.Unlock()
+
+	return nil
 }
 
 func (b *BlockAssembler) removeAllAdded(ctx context.Context, hashes []*chainhash.Hash) {
@@ -326,4 +329,100 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	}
 
 	return miningCandidate, subtrees, nil
+}
+
+func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader) error {
+
+	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
+	if err != nil {
+		return fmt.Errorf("error getting reorg blocks: %w", err)
+	}
+
+	// now do the reorg in the subtree processor
+	if err = b.subtreeProcessor.Reorg(moveDownBlocks, moveUpBlocks); err != nil {
+		return fmt.Errorf("error doing reorg: %w", err)
+	}
+
+	return nil
+}
+
+func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader) ([]*model.Block, []*model.Block, error) {
+	moveDownBlockHeaders, moveUpBlockHeaders, err := b.getReorgBlockHeaders(ctx, header)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting reorg block headers: %w", err)
+	}
+
+	// moveUpBlocks will contain all blocks we need to move up to get to the new tip from the common ancestor
+	moveUpBlocks := make([]*model.Block, 0, len(moveUpBlockHeaders))
+
+	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
+	moveDownBlocks := make([]*model.Block, 0, len(moveDownBlockHeaders))
+
+	var block *model.Block
+	for _, blockHeader := range moveUpBlockHeaders {
+		block, err = b.blockchainClient.GetBlock(ctx, blockHeader.Hash())
+		if err != nil {
+			return nil, nil, fmt.Errorf("error getting block: %w", err)
+		}
+
+		moveUpBlocks = append(moveUpBlocks, block)
+	}
+
+	for _, blockHeader := range moveDownBlockHeaders {
+		block, err = b.blockchainClient.GetBlock(ctx, blockHeader.Hash())
+		if err != nil {
+			return nil, nil, fmt.Errorf("error getting block: %w", err)
+		}
+
+		moveDownBlocks = append(moveDownBlocks, block)
+	}
+
+	return moveDownBlocks, moveUpBlocks, nil
+}
+
+func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model.BlockHeader) ([]*model.BlockHeader, []*model.BlockHeader, error) {
+	if header == nil {
+		return nil, nil, fmt.Errorf("header is nil")
+	}
+
+	newChain, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), 100)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting new chain: %w", err)
+	}
+
+	// moveUpBlockHeaders will contain all block headers we need to move up to get to the new tip from the common ancestor
+	moveUpBlockHeaders := make([]*model.BlockHeader, 0, 100)
+
+	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
+	moveDownBlockHeaders := make([]*model.BlockHeader, 0, 100)
+
+	// find the first blockHeader that is the same in both chains
+	var commonAncestor *model.BlockHeader
+	for _, blockHeader := range newChain {
+		// check whether the blockHeader is in the current chain
+		if _, ok := b.currentChainMap[*blockHeader.Hash()]; ok {
+			commonAncestor = blockHeader
+			break
+		}
+
+		moveUpBlockHeaders = append(moveUpBlockHeaders, blockHeader)
+	}
+	// reverse moveUpBlocks slice
+	for i := len(moveUpBlockHeaders)/2 - 1; i >= 0; i-- {
+		opp := len(moveUpBlockHeaders) - 1 - i
+		moveUpBlockHeaders[i], moveUpBlockHeaders[opp] = moveUpBlockHeaders[opp], moveUpBlockHeaders[i]
+	}
+
+	// traverse b.currentChain in reverse order until we find the common ancestor
+	// skipping the current block, start at the previous block (len-2)
+	for i := len(b.currentChain) - 1; i >= 0; i-- {
+		blockHeader := b.currentChain[i]
+		if blockHeader.Hash().IsEqual(commonAncestor.Hash()) {
+			break
+		}
+
+		moveDownBlockHeaders = append(moveDownBlockHeaders, blockHeader)
+	}
+
+	return moveDownBlockHeaders, moveUpBlockHeaders, nil
 }

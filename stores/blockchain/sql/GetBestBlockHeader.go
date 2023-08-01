@@ -31,8 +31,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 		,b.n_bits
 		,b.height
 		FROM blocks b
-		WHERE b.orphaned = FALSE
-		ORDER BY B.height DESC
+		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 	`
 

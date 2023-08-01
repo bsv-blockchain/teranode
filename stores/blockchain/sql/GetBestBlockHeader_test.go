@@ -65,14 +65,21 @@ func TestSQL_GetChainTip(t *testing.T) {
 		err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
-		// add a block that should be orphaned
-		err = s.StoreBlock(context.Background(), blockAlternative2)
-		require.NoError(t, err)
-
 		tip, height, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
 		// block 2 (000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd) should be the tip
+		assert.Equal(t, uint32(2), height)
+		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
+
+		// add a block that should not become the new tip
+		err = s.StoreBlock(context.Background(), blockAlternative2)
+		require.NoError(t, err)
+
+		tip, height, err = s.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+
+		// block 2 (000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd) should still be the tip
 		assert.Equal(t, uint32(2), height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 		assert.Equal(t, uint32(1), tip.Version)

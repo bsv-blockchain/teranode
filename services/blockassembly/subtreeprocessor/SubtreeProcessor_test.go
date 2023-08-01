@@ -209,7 +209,7 @@ func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 The moveUpBlock method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
 *
 */
-func TestReset(t *testing.T) {
+func TestMoveUpBlock(t *testing.T) {
 
 	n := 18
 	txIds := make([]string, n)
@@ -286,7 +286,7 @@ func TestReset(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
-func TestIncompleteSubtreeReset(t *testing.T) {
+func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 
 	n := 17
 	txIds := make([]string, n)
@@ -360,7 +360,7 @@ func TestIncompleteSubtreeReset(t *testing.T) {
 }
 
 // current subtree should have 1 tx which due to the new added coinbase placeholder
-func TestSubtreeResetNewCurrent(t *testing.T) {
+func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 
 	n := 16
 	txIds := make([]string, n)
@@ -433,7 +433,7 @@ func TestSubtreeResetNewCurrent(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
-func TestResetLarge(t *testing.T) {
+func TestMoveUpBlockLarge(t *testing.T) {
 	util.SkipLongTests(t)
 
 	n := 1049576

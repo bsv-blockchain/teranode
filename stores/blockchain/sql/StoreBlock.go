@@ -25,7 +25,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	var err error
 	var previousBlockId uint64
 	var previousChainWork []byte
-	var orphaned bool
 	var previousHeight uint64
 	var height uint64
 
@@ -34,7 +33,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		// genesis block
 		previousBlockId = 0
 		previousChainWork = make([]byte, 32)
-		orphaned = false
 		previousHeight = 0
 		height = 0
 	} else {
@@ -42,7 +40,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			SELECT
 			 b.id
 			,b.chain_work
-			,b.orphaned
 			,b.height
 			FROM blocks b
 			WHERE b.hash = $1
@@ -50,7 +47,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		if err = s.db.QueryRowContext(ctx, q, block.Header.HashPrevBlock[:]).Scan(
 			&previousBlockId,
 			&previousChainWork,
-			&orphaned,
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -72,21 +68,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 				return fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 			}
 		}
-
-		// check whether there is another block with the same height that is not orphaned
-		var activeBlockId uint64
-		q = `
-			SELECT
-			 b.id
-			FROM blocks b
-			WHERE b.height = $1
-			  AND b.orphaned = FALSE
-		`
-		_ = s.db.QueryRowContext(ctx, q, height).Scan(&activeBlockId)
-		if activeBlockId != 0 {
-			// this block is an orphan
-			orphaned = true
-		}
 	}
 
 	q := `
@@ -105,7 +86,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		,subtree_count
 		,subtrees
     ,coinbase_tx
-	  ,orphaned
 		) VALUES (
 		 $1
 		,$2
@@ -121,7 +101,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		,$12
 		,$13
 		,$14
-		,$15
 		)
 		ON CONFLICT DO NOTHING
 		RETURNING id
@@ -172,7 +151,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		len(block.Subtrees),
 		subtreeBytes,
 		block.CoinbaseTx.Bytes(),
-		orphaned,
 	)
 	if err != nil {
 		return err

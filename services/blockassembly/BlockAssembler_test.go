@@ -17,6 +17,7 @@ import (
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
 	"github.com/ordishs/go-utils"
@@ -32,6 +33,7 @@ type baTestItems struct {
 	newSubtreeChan   chan *util.Subtree
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	blockAssembler   *BlockAssembler
+	blockchainClient blockchain.ClientI
 }
 
 var (
@@ -119,6 +121,153 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 	})
 }
 
+var (
+	hashGenesisBlock, _ = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	blockHeader1        = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashGenesisBlock,
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader2 = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader1.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader3 = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader2.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          3,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader4 = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader3.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          4,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader2_alt = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader1.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          12,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader3_alt = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader2_alt.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          13,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+	blockHeader4_alt = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader3_alt.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          14,
+		Bits:           model.NewNBitFromString("1d00ffff"),
+	}
+)
+
+func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
+	t.Run("getReorgBlocks nil", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		items.blockAssembler.bestBlockHeader = blockHeader1
+		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil)
+		require.Error(t, err)
+	})
+
+	t.Run("getReorgBlocks", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		// set the cached BlockAssembler items to the correct values
+		items.blockAssembler.bestBlockHeader = blockHeader4
+		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader1, blockHeader2, blockHeader3, blockHeader4}
+		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
+			*blockHeader1.Hash(): 1,
+			*blockHeader2.Hash(): 2,
+			*blockHeader3.Hash(): 3,
+			*blockHeader4.Hash(): 4,
+		}
+
+		err := items.addBlock(blockHeader1)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader2)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader3)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader4)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader2_alt)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader3_alt)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader4_alt)
+		require.NoError(t, err)
+
+		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4_alt)
+		require.NoError(t, err)
+
+		assert.Len(t, moveDownBlockHeaders, 3)
+		assert.Equal(t, blockHeader4.Hash(), moveDownBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader3.Hash(), moveDownBlockHeaders[1].Hash())
+		assert.Equal(t, blockHeader2.Hash(), moveDownBlockHeaders[2].Hash())
+
+		assert.Len(t, moveUpBlockHeaders, 3)
+		assert.Equal(t, blockHeader2_alt.Hash(), moveUpBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader3_alt.Hash(), moveUpBlockHeaders[1].Hash())
+		assert.Equal(t, blockHeader4_alt.Hash(), moveUpBlockHeaders[2].Hash())
+	})
+
+	t.Run("getReorgBlocks - missing block", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		// set the cached BlockAssembler items to the correct values
+		items.blockAssembler.bestBlockHeader = blockHeader2
+		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader1, blockHeader2}
+		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
+			*blockHeader1.Hash(): 1,
+			*blockHeader2.Hash(): 2,
+		}
+
+		err := items.addBlock(blockHeader1)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader2)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader3)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader4)
+		require.NoError(t, err)
+
+		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4)
+		require.NoError(t, err)
+
+		assert.Len(t, moveDownBlockHeaders, 0)
+
+		assert.Len(t, moveUpBlockHeaders, 2)
+		assert.Equal(t, blockHeader3.Hash(), moveUpBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader4.Hash(), moveUpBlockHeaders[1].Hash())
+	})
+}
+
+func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
+	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       &bt.Tx{},
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	})
+}
+
 func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items := baTestItems{}
 
@@ -137,7 +286,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	blockchainStore, err := blockchainstore.NewStore(p2p.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(p2p.TestLogger{}, blockchainStore)
+	items.blockchainClient, err = blockchain.NewLocalClient(p2p.TestLogger{}, blockchainStore)
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
@@ -148,7 +297,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		items.utxoStore,
 		items.txStore,
 		items.blobStore,
-		blockchainClient,
+		items.blockchainClient,
 		items.newSubtreeChan,
 	)
 
