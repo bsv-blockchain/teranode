@@ -9,7 +9,7 @@ type SqliteFactory struct {
 	logger u.Logger
 }
 
-func New(logger u.Logger) *SqliteFactory {
+func New(logger u.Logger) base.DbFactory {
 	return &SqliteFactory{
 		logger: logger,
 	}

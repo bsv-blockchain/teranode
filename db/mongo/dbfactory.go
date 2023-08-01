@@ -9,7 +9,7 @@ type MongoFactory struct {
 	logger u.Logger
 }
 
-func New(logger u.Logger) *MongoFactory {
+func New(logger u.Logger) base.DbFactory {
 	return &MongoFactory{logger: logger}
 }
 

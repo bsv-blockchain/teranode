@@ -9,7 +9,7 @@ type PostgresFactory struct {
 	logger u.Logger
 }
 
-func New(logger u.Logger) *PostgresFactory {
+func New(logger u.Logger) base.DbFactory {
 	return &PostgresFactory{logger: logger}
 }
 
