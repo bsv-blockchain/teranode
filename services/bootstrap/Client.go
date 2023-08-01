@@ -93,6 +93,9 @@ func (c *Client) Start(ctx context.Context) error {
 	g.Go(func() error {
 		c.logger.Infof("Local / remote addresses: %s / %s", c.localAddress, c.remoteAddress)
 
+		var stream bootstrap_api.BootstrapAPI_ConnectClient
+		var resp *bootstrap_api.Notification
+
 	RETRY:
 		for {
 			select {
@@ -103,7 +106,7 @@ func (c *Client) Start(ctx context.Context) error {
 			default:
 				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
 				c.logger.Debugf("Local / remote addresses: %s / %s", c.localAddress, c.remoteAddress)
-				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
+				stream, err = c.client.Connect(ctx, &bootstrap_api.Info{
 					LocalAddress:  c.localAddress,
 					RemoteAddress: c.remoteAddress,
 				})
@@ -113,7 +116,7 @@ func (c *Client) Start(ctx context.Context) error {
 				}
 
 				for {
-					resp, err := stream.Recv()
+					resp, err = stream.Recv()
 					if err != nil {
 						time.Sleep(1 * time.Second)
 						break RETRY

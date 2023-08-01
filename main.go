@@ -329,32 +329,25 @@ func main() {
 
 	// txmeta store
 	if *startTxMetaStore {
-		txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-		if err != nil {
-			panic(err)
+		if txMetaStoreURL.Scheme != "memory" {
+			panic("txmeta grpc server only supports memory store")
 		}
 
-		if found {
-			if txMetaStoreURL.Scheme != "memory" {
-				panic("txmeta grpc server only supports memory store")
+		g.Go(func() (err error) {
+			logger.Infof("Starting Tx Status Client on: %s", txMetaStoreURL.Host)
+
+			txMetaLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
+			txMetaStoreServer, err = txmeta.New(txMetaLogger, txMetaStoreURL)
+			if err != nil {
+				panic(err)
 			}
 
-			g.Go(func() (err error) {
-				logger.Infof("Starting Tx Status Client on: %s", txMetaStoreURL.Host)
+			if err := txMetaStoreServer.Start(); err != nil {
+				logger.Errorf("txMetaStoreServer errored: %v", err)
+			}
 
-				txMetaLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
-				txMetaStoreServer, err = txmeta.New(txMetaLogger, txMetaStoreURL)
-				if err != nil {
-					panic(err)
-				}
-
-				if err := txMetaStoreServer.Start(); err != nil {
-					logger.Errorf("txMetaStoreServer errored: %v", err)
-				}
-
-				return nil
-			})
-		}
+			return nil
+		})
 	}
 
 	// blockAssembly

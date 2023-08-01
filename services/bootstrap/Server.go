@@ -138,7 +138,7 @@ func (s *Server) Start() error {
 				// Add the newSubscriber to our map
 				s.subscribers[newSubscriber] = void{}
 
-				s.logger.Infof("[Bootstrap] New Subscription received (Total=%d).", len(s.subscribers))
+				s.logger.Infof("[Bootstrap] New Subscription received from %s (Total=%d).", newSubscriber.remoteAddress, len(s.subscribers))
 
 			case deadSubscriber := <-s.deadSubscriptions:
 				delete(s.subscribers, deadSubscriber)
