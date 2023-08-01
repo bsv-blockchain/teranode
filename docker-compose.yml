@@ -1,38 +1,108 @@
 version: '3.8'
 
 services:
+  bootstrap-server:
+    container_name: bootstrap-server
+    image: taal/ubsv:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SETTINGS_CONTEXT: "bootstrap-server" # hacky way to get bootstrap-server to start on different settings
+      startBootstrapServer: "true"
+    expose:
+      - 8089
+    ports:
+        - "8089:8089"
+    networks:
+      - ubsv-network
   ubsv-1:
     container_name: ubsv-1
     image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      startBootstrapServer: "false"
+      blobserver_grpcAddress: ":8091"
+      blobserver_httpAddress: ":8090"
+      blockassembly_grpcAddress: ":8085"
+      blockchain_grpcAddress: ":8087"
+      blockvalidation_grpcAddress: ":8088"
+      gocore_stats_addr: ":9092"
+      propagation_grpcAddress: ":8084"
+      txmeta_grpcAddress: ":8086"
+      validator_grpcAddress: ":8081"
+      seeder_grpcAddress: ":8083"
+      blobserver_baseURL: "http://ubsv-1:8090"
+      blobserver_remoteAddress: "ubsv-1:8091"
+      bootstrap_grpcAddress: "bootstrap-server:8089"
+    expose:
+      - 8081-8091
     ports:
       - "18081-18088:8081-8088"
       - "18090-18091:8090-8091"
-
+    networks:
+      - ubsv-network
   ubsv-2:
     container_name: ubsv-2
     image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      startBootstrapServer: "false"
+      blobserver_grpcAddress: ":8091"
+      blobserver_httpAddress: ":8090"
+      blockassembly_grpcAddress: ":8085"
+      blockchain_grpcAddress: ":8087"
+      blockvalidation_grpcAddress: ":8088"
+      gocore_stats_addr: ":9092"
+      propagation_grpcAddress: ":8084"
+      txmeta_grpcAddress: ":8086"
+      validator_grpcAddress: ":8081"
+      seeder_grpcAddress: ":8083"
+      blobserver_baseURL: "http://ubsv-2:8090"
+      blobserver_remoteAddress: "ubsv-2:8091"
+      bootstrap_grpcAddress: "bootstrap-server:8089"
+    expose:
+      - 8081-8091
     ports:
       - "28081-28088:8081-8088"
       - "28090-28091:8090-8091"
-
+    networks:
+      - ubsv-network
   ubsv-3:
     container_name: ubsv-3
     image: taal/ubsv:latest
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      startBootstrapServer: "false"
+      blobserver_grpcAddress: ":8091"
+      blobserver_httpAddress: ":8090"
+      blockassembly_grpcAddress: ":8085"
+      blockchain_grpcAddress: ":8087"
+      blockvalidation_grpcAddress: ":8088"
+      gocore_stats_addr: ":9092"
+      propagation_grpcAddress: ":8084"
+      txmeta_grpcAddress: ":8086"
+      validator_grpcAddress: ":8081"
+      seeder_grpcAddress: ":8083"
+      blobserver_baseURL: "http://ubsv-3:8090"
+      blobserver_remoteAddress: "ubsv-3:8091"
+      bootstrap_grpcAddress: "bootstrap-server:8089"
+    expose:
+      - 8081-8091
     ports:
       - "38081-38088:8081-8088"
       - "38090-38091:8090-8091"
-  
+    networks:
+      - ubsv-network
+
 networks:
-  network1:
-    name: my-pre-existing-network
+  ubsv-network:
+    name: my-ubsv-network
     external: true
 
