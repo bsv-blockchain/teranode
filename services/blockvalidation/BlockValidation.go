@@ -169,7 +169,7 @@ func (u *BlockValidation) doHTTPRequest(ctx context.Context, url string) ([]byte
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http request returned status code [%d]", resp.StatusCode)
+		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
 	subtreeBytes, err := io.ReadAll(resp.Body)
