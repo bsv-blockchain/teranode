@@ -19,9 +19,9 @@ func initDbFactories() *base.DbFactories {
 	logger := gocore.Log("ubsv.db", gocore.NewLogLevelFromString(logLevel))
 	return &base.DbFactories{
 		Factories: map[string]base.DbFactory{
-			"postgres": &postgres.PostgresFactory{logger: logger},
-			"mongo":    &mongo.MongoFactory{logger: logger},
-			"sqlite":   &sqlite.SQLiteFactory{logger: logger},
+			"postgres": postgres.New(logger),
+			"mongo":    mongo.New(logger),
+			"sqlite":   sqlite.New(logger),
 		},
 	}
 }

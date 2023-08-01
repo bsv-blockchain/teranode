@@ -9,6 +9,12 @@ type SqliteFactory struct {
 	logger u.Logger
 }
 
+func New(logger u.Logger) base.DbFactory {
+	return &SqliteFactory{
+		logger: logger,
+	}
+}
+
 func (f *SqliteFactory) Create() base.DbManager {
 	m := &SqliteManager{logger: f.logger}
 	if err := m.Connect(); err != nil {
