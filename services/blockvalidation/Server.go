@@ -15,7 +15,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -40,6 +39,11 @@ func init() {
 	)
 }
 
+type processBlockFound struct {
+	hash    *chainhash.Hash
+	baseURL string
+}
+
 // BlockValidationServer type carries the logger within it
 type BlockValidationServer struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
@@ -50,8 +54,7 @@ type BlockValidationServer struct {
 	subtreeStore     blob.Store
 	txMetaStore      txmeta_store.Store
 
-	blockFoundCh        chan *model.Block
-	subtreeFoundCh      chan *util.Subtree
+	blockFoundCh        chan processBlockFound
 	blockValidation     *BlockValidation
 	processingSubtreeMu sync.Mutex
 	processingSubtree   map[chainhash.Hash]bool
@@ -77,10 +80,19 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 		blockchainClient: blockchainClient,
 		subtreeStore:     subtreeStore,
 		txMetaStore:      txMetaStore,
-		blockFoundCh:     make(chan *model.Block, 2),
-		subtreeFoundCh:   make(chan *util.Subtree, 100),
+		blockFoundCh:     make(chan processBlockFound, 100),
 		blockValidation:  NewBlockValidation(logger, blockchainClient, subtreeStore, txMetaStore, validatorClient),
 	}
+
+	// process blocks found from channel
+	go func() {
+		for b := range bVal.blockFoundCh {
+			err = bVal.processBlockFound(context.Background(), b.hash, b.baseURL)
+			if err != nil {
+				bVal.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+			}
+		}
+	}()
 
 	return bVal, nil
 }
@@ -156,31 +168,52 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 		return &emptypb.Empty{}, nil
 	}
 
-	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", req.GetBaseUrl(), hash.String()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block from peer [%w]", err)
-	}
-
-	block, err := model.NewBlockFromBytes(blockBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
-	}
-
-	if block == nil {
-		return nil, fmt.Errorf("block could not be created from bytes: %v", blockBytes)
-	}
-
-	// TODO do we need to catchup?
-
-	// validate the block in the background
+	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {
-		err = u.blockValidation.BlockFound(context.Background(), block, req.GetBaseUrl())
-		if err != nil {
-			u.logger.Errorf("failed to process block [%s] [%v]", block.String(), err)
+		u.blockFoundCh <- processBlockFound{
+			hash:    hash,
+			baseURL: req.GetBaseUrl(),
 		}
 	}()
 
 	return &emptypb.Empty{}, nil
+}
+
+func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
+	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
+	if err != nil {
+		return fmt.Errorf("failed to get block from peer [%w]", err)
+	}
+
+	block, err := model.NewBlockFromBytes(blockBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create block from bytes [%w]", err)
+	}
+
+	if block == nil {
+		return fmt.Errorf("block could not be created from bytes: %v", blockBytes)
+	}
+
+	// catchup if we are missing the parent block
+	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	if err != nil {
+		return fmt.Errorf("failed to check if parent block exists [%w]", err)
+	}
+
+	if !parentExists {
+		err = u.processBlockFound(ctx, block.Header.HashPrevBlock, baseUrl)
+		if err != nil {
+			return fmt.Errorf("failed to process parent block [%w]", err)
+		}
+	}
+
+	// validate the block
+	err = u.blockValidation.BlockFound(context.Background(), block, baseUrl)
+	if err != nil {
+		u.logger.Errorf("failed to process block [%s] [%v]", block.String(), err)
+	}
+
+	return nil
 }
 
 func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
@@ -207,6 +240,7 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 
 	// validate the subtree in the background
 	go func() {
+		// check if we are already processing this subtree
 		u.processingSubtreeMu.Lock()
 		processing, ok := u.processingSubtree[*subtreeHash]
 		if ok && processing {
@@ -214,9 +248,11 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 			return
 		}
 
+		// add to processing map
 		u.processingSubtree[*subtreeHash] = true
 		u.processingSubtreeMu.Unlock()
 
+		// remove from processing map when done
 		defer func() {
 			u.processingSubtreeMu.Lock()
 			delete(u.processingSubtree, *subtreeHash)
