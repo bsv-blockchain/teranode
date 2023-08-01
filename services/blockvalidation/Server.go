@@ -180,14 +180,16 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 }
 
 func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
+	u.logger.Infof("processing block found [%s]", hash.String())
+
 	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
-		return fmt.Errorf("failed to get block from peer [%w]", err)
+		return fmt.Errorf("failed to get block %s from peer [%w]", hash.String(), err)
 	}
 
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return fmt.Errorf("failed to create block from bytes [%w]", err)
+		return fmt.Errorf("failed to create block %s from bytes [%w]", hash.String(), err)
 	}
 
 	if block == nil {
@@ -197,13 +199,14 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 	// catchup if we are missing the parent block
 	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return fmt.Errorf("failed to check if parent block exists [%w]", err)
+		return fmt.Errorf("failed to check if parent block %s exists [%w]", block.Header.HashPrevBlock.String(), err)
 	}
 
 	if !parentExists {
+		u.logger.Infof("parent block %s does not exist, processing it first", block.Header.HashPrevBlock.String())
 		err = u.processBlockFound(ctx, block.Header.HashPrevBlock, baseUrl)
 		if err != nil {
-			return fmt.Errorf("failed to process parent block [%w]", err)
+			return fmt.Errorf("failed to process parent block %s [%w]", block.Header.HashPrevBlock.String(), err)
 		}
 	}
 

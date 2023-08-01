@@ -41,7 +41,7 @@ func (c *Client) WithCallback(callbackFunc func(peer Peer)) *Client {
 	return c
 }
 
-// WithLocalAddress overrides the local address for the client
+// WithBlobServerGrpcAddress overrides the local address for the client
 func (c *Client) WithBlobServerGrpcAddress(addr string) *Client {
 	c.blobServerGrpcAddress = addr
 	c.logger.Debugf("Local address set to: %s", c.blobServerGrpcAddress)
