@@ -62,7 +62,6 @@ func (c *Client) Start(ctx context.Context) error {
 	g.Go(func() error {
 		c.logger.Infof("BlobServer GRPC address: %s", c.blobServerGrpcAddress)
 
-		var stream bootstrap_api.BootstrapAPI_ConnectClient
 		var resp *bootstrap_api.Notification
 
 	RETRY:
