@@ -321,10 +321,13 @@ func main() {
 	}
 	//
 	//----------------------------------------------------------------
+	var validatorClient *validator.Client
 
-	validatorClient, err := validator.NewClient(context.Background(), logger)
-	if err != nil {
-		logger.Fatalf("error creating validator client: %v", err)
+	if *startBlockValidation || *startPropagation {
+		validatorClient, err = validator.NewClient(context.Background(), logger)
+		if err != nil {
+			logger.Fatalf("error creating validator client: %v", err)
+		}
 	}
 
 	// txmeta store
