@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
@@ -315,16 +316,20 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		coinbaseMerkleProofBytes = [][]byte{}
 	}
 
+	timeNow := uint32(time.Now().Unix())
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNow)
+
 	previousHash := b.bestBlockHeader.Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{
 		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
-		Id:            chainhash.HashB(append(id[:], previousHash...)),
+		Id:            chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
 		PreviousHash:  previousHash,
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
 		Height:        b.bestBlockHeight + 1,
-		Time:          uint32(time.Now().Unix()),
+		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
 	}
 

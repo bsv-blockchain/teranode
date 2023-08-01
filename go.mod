@@ -15,6 +15,7 @@ require (
 	github.com/dolthub/swiss v0.1.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/holiman/uint256 v1.2.2
+	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/lib/pq v1.10.7
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6

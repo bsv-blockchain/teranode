@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/url"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -41,6 +41,8 @@ var (
 	prometheusTxMetaGetDuration           prometheus.Histogram
 	prometheusUtxoStoreDuration           prometheus.Histogram
 	prometheusSubtreeAddToChannelDuration prometheus.Histogram
+
+	jobTTL = 10 * time.Minute
 )
 
 func init() {
@@ -83,8 +85,7 @@ type BlockAssembly struct {
 	blockchainClient blockchain.ClientI
 	txStore          blob.Store
 	subtreeStore     blob.Store
-	jobStoreMutex    sync.RWMutex
-	jobStore         map[chainhash.Hash]*subtreeprocessor.Job
+	jobStore         *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 }
 
 func Enabled() bool {
@@ -144,7 +145,7 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 		blockchainClient: blockchainClient,
 		txStore:          txStore,
 		subtreeStore:     subtreeStore,
-		jobStore:         make(map[chainhash.Hash]*subtreeprocessor.Job),
+		jobStore:         ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 	}
 
 	go func() {
@@ -318,13 +319,11 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 	}
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)
-	ba.jobStoreMutex.Lock()
-	ba.jobStore[*id] = &subtreeprocessor.Job{
+	ba.jobStore.Set(*id, &subtreeprocessor.Job{
 		ID:              id,
 		Subtrees:        subtrees,
 		MiningCandidate: miningCandidate,
-	}
-	ba.jobStoreMutex.Unlock()
+	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
 	return miningCandidate, nil
 }
@@ -337,13 +336,11 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, err
 	}
 
-	ba.jobStoreMutex.RLock()
-	job, ok := ba.jobStore[*storeId]
-	ba.jobStoreMutex.RUnlock()
-
-	if !ok {
+	jobItem := ba.jobStore.Get(*storeId)
+	if jobItem == nil {
 		return nil, fmt.Errorf("[BlockAssembly] job not found")
 	}
+	job := jobItem.Value()
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
@@ -422,7 +419,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err = block.Valid(ctx, nil, nil, nil); !ok {
+	if ok, err := block.Valid(ctx, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
 	}
@@ -442,10 +439,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 
 	// remove job, we have already mined a block with it
-	// TODO do we need to remove the rest of the jobs as well? Our subtree processor is completely different now
-	ba.jobStoreMutex.Lock()
-	delete(ba.jobStore, *storeId)
-	ba.jobStoreMutex.Unlock()
+	ba.jobStore.Delete(*storeId)
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
