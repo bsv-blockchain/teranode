@@ -2,8 +2,24 @@
 
 actor TxBlaster
 entity Node
+entity Bootstrap
 entity CON
 database Store
+
+CON -> Bootstrap: Discover
+note right
+  CON requests a list of Nodes to connect to
+end note
+
+CON -> Node: Connect
+note right
+  CON connects to the neighboring nodes
+end note
+
+CON -> Node: Synchronize
+note right
+  CON syncronizes its store with the latest blocks in the nodes
+end note
 
 CON -> Node: Subscribe
 note right
@@ -17,27 +33,35 @@ loop For each new block
   CON -> Store: Store Block and coinbase UTXOs
 note right
   <b>Database Schema</b>
-<code>
-Blocks
---------------------------------
-Height          uint64
-Address         string/base64 encoded
-Block hash      string/base64 encoded
-Prev block hash string/base64 encoded
---------------------------------
-Note: Fork awareness is achieved by identifying the entries
-which poin to the previous block hash more than once.
+  <code>
+  Block
+  --------------------------------
+  ID              uint (ORM)
+  CreatedAt       time (ORM)
+  UpdatedAt       time (ORM)
+  Height          uint64
+  Address         string/base58 encoded
+  Block hash      string/hex encoded
+  Prev block hash string/hex encoded
+  --------------------------------
 
-Coinbase UTXOS
---------------------------------
-Txid    string
-Vout    uint32
-Script  string
-Address string/base64 encoded
-Blockhash string/base64 encoded
-Status (spent/spendable/locked) | enum?
---------------------------------
-</code>
+  <b>Note</b>: Fork awareness is achieved by identifying the entries
+  which poin to the previous block hash more than once.
+
+  <code>
+  Coinbase UTXO
+  --------------------------------
+  ID        uint (ORM)
+  CreatedAt time (ORM)
+  UpdatedAt time (ORM)
+  Txid      string
+  Vout      uint32
+  Script    string
+  Amount    uint64
+  Address   string/base58 encoded
+  Spent     bool
+  --------------------------------
+
 end note
 end
 

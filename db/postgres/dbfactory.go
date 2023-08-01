@@ -9,6 +9,10 @@ type PostgresFactory struct {
 	logger u.Logger
 }
 
+func New(logger u.Logger) *PostgresFactory {
+	return &PostgresFactory{logger: logger}
+}
+
 func (f *PostgresFactory) Create() base.DbManager {
 	m := &PostgresManager{logger: f.logger}
 	if err := m.Connect(); err != nil {

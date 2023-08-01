@@ -9,6 +9,10 @@ type MongoFactory struct {
 	logger u.Logger
 }
 
+func New(logger u.Logger) *MongoFactory {
+	return &MongoFactory{logger: logger}
+}
+
 func (f *MongoFactory) Create() base.DbManager {
 	m := &MongoManager{logger: f.logger}
 	if err := m.Connect(); err != nil {
