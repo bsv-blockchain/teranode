@@ -81,7 +81,7 @@ func (v *Server) Start() error {
 		// blobserver subscription for that node.
 
 		// TODO - This may need to be moved to a separate location in the code
-		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
+		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_remoteAddress")
 
 		g.Go(func() error {
 			bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
