@@ -19,10 +19,9 @@ import (
 type void struct{}
 
 type subscriber struct {
-	subscription  bootstrap_api.BootstrapAPI_ConnectServer
-	done          chan struct{}
-	localAddress  string
-	remoteAddress string
+	subscription          bootstrap_api.BootstrapAPI_ConnectServer
+	done                  chan struct{}
+	blobServerGrpcAddress string
 }
 
 // Server type carries the logger within it
@@ -53,7 +52,7 @@ func NewServer() *Server {
 }
 
 // Start function
-func (s *Server) Start() error {
+func (s *Server) Start(ctx context.Context) error {
 	address, ok := gocore.Config().Get("bootstrap_grpcAddress")
 	if !ok {
 		return errors.New("no bootstrap_grpcAddress setting found")
@@ -84,6 +83,13 @@ func (s *Server) Start() error {
 	go func() {
 		for {
 			select {
+			case <-ctx.Done():
+				// Close all subscriptions
+				for sub := range s.subscribers {
+					safeClose(sub.done)
+				}
+				return // returning not to leak the goroutine
+
 			case <-ticker.C:
 				for sub := range s.subscribers {
 					go func(sub subscriber) {
@@ -96,70 +102,83 @@ func (s *Server) Start() error {
 				}
 
 			case notification := <-s.notifications:
-				for sub := range s.subscribers {
-					go func(sub subscriber) {
-						if err = sub.subscription.Send(notification); err != nil {
-							s.deadSubscriptions <- sub
-						}
-					}(sub)
+				if notification.Info.BlobServerGrpcAddress != "" {
+					for sub := range s.subscribers {
+						go func(sub subscriber) {
+							if err = sub.subscription.Send(notification); err != nil {
+								s.deadSubscriptions <- sub
+							}
+						}(sub)
+					}
 				}
 
 			case newSubscriber := <-s.newSubscriptions:
 				// Send this new subscription a list of the currently known subscribers
 				for sub := range s.subscribers {
 					go func(sub subscriber) {
-						if err = newSubscriber.subscription.Send(&bootstrap_api.Notification{
-							Type: bootstrap_api.Type_ADD,
-							Info: &bootstrap_api.Info{
-								LocalAddress:  sub.localAddress,
-								RemoteAddress: sub.remoteAddress,
-							},
-						}); err != nil {
-							s.deadSubscriptions <- sub
+						if sub.blobServerGrpcAddress != "" {
+							if err = newSubscriber.subscription.Send(&bootstrap_api.Notification{
+								Type: bootstrap_api.Type_ADD,
+								Info: &bootstrap_api.Info{
+									BlobServerGrpcAddress: sub.blobServerGrpcAddress,
+								},
+							}); err != nil {
+								s.deadSubscriptions <- sub
+							}
 						}
 					}(sub)
 				}
 
-				// Notify all the other subscribers of the new subscription
-				for sub := range s.subscribers {
-					go func(sub subscriber) {
-						if err = sub.subscription.Send(&bootstrap_api.Notification{
-							Type: bootstrap_api.Type_ADD,
-							Info: &bootstrap_api.Info{
-								LocalAddress:  newSubscriber.localAddress,
-								RemoteAddress: newSubscriber.remoteAddress,
-							},
-						}); err != nil {
-							s.deadSubscriptions <- sub
-						}
-					}(sub)
+				// Notify all the other subscribers of the new subscription if it is advertising a blobServerGrpcAddress
+				if newSubscriber.blobServerGrpcAddress != "" {
+					for sub := range s.subscribers {
+						go func(sub subscriber) {
+							if err = sub.subscription.Send(&bootstrap_api.Notification{
+								Type: bootstrap_api.Type_ADD,
+								Info: &bootstrap_api.Info{
+									BlobServerGrpcAddress: newSubscriber.blobServerGrpcAddress,
+								},
+							}); err != nil {
+								s.deadSubscriptions <- sub
+							}
+						}(sub)
+					}
 				}
 
 				// Add the newSubscriber to our map
 				s.subscribers[newSubscriber] = void{}
 
-				s.logger.Infof("[Bootstrap] New Subscription received from %s (Total=%d).", newSubscriber.remoteAddress, len(s.subscribers))
+				if newSubscriber.blobServerGrpcAddress == "" {
+					s.logger.Infof("[Bootstrap] New Anonymous Subscription received (Total=%d).", len(s.subscribers))
+				} else {
+					s.logger.Infof("[Bootstrap] New Subscription received [%s] (Total=%d).", newSubscriber.blobServerGrpcAddress, len(s.subscribers))
+				}
 
 			case deadSubscriber := <-s.deadSubscriptions:
 				delete(s.subscribers, deadSubscriber)
-				close(deadSubscriber.done)
+				safeClose(deadSubscriber.done)
 
-				// Notify all the remaining subscription of the removed subscription
-				for sub := range s.subscribers {
-					go func(sub subscriber) {
-						if err = sub.subscription.Send(&bootstrap_api.Notification{
-							Type: bootstrap_api.Type_REMOVE,
-							Info: &bootstrap_api.Info{
-								LocalAddress:  deadSubscriber.localAddress,
-								RemoteAddress: deadSubscriber.remoteAddress,
-							},
-						}); err != nil {
-							s.deadSubscriptions <- sub
-						}
-					}(sub)
+				// Notify all the remaining subscription of the removed subscription if it had a blobServerGrpcAddress
+				if deadSubscriber.blobServerGrpcAddress != "" {
+					for sub := range s.subscribers {
+						go func(sub subscriber) {
+							if err = sub.subscription.Send(&bootstrap_api.Notification{
+								Type: bootstrap_api.Type_REMOVE,
+								Info: &bootstrap_api.Info{
+									BlobServerGrpcAddress: deadSubscriber.blobServerGrpcAddress,
+								},
+							}); err != nil {
+								s.deadSubscriptions <- sub
+							}
+						}(sub)
+					}
 				}
 
-				s.logger.Infof("[Bootstrap] Subscription removed (Total=%d).", len(s.subscribers))
+				if deadSubscriber.blobServerGrpcAddress == "" {
+					s.logger.Infof("[Bootstrap] Anonymous Subscription removed (Total=%d).", len(s.subscribers))
+				} else {
+					s.logger.Infof("[Bootstrap] Subscription removed [%s] (Total=%d).", deadSubscriber.blobServerGrpcAddress, len(s.subscribers))
+				}
 			}
 		}
 	}()
@@ -193,13 +212,20 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 	ch := make(chan struct{})
 
 	s.newSubscriptions <- subscriber{
-		subscription:  stream,
-		localAddress:  info.LocalAddress,
-		remoteAddress: info.RemoteAddress,
-		done:          ch,
+		subscription:          stream,
+		blobServerGrpcAddress: info.BlobServerGrpcAddress,
+		done:                  ch,
 	}
 
 	<-ch
 
 	return nil
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }

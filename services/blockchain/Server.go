@@ -289,69 +289,6 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
-func (b *Blockchain) SubscribeBestBlockHeader(_ *emptypb.Empty, stream blockchain_api.BlockchainAPI_SubscribeBestBlockHeaderServer) error {
-	// Start a ticker that executes each 10 seconds
-	// TODO change this to an event when a new chaintip is added
-	timer := time.NewTicker(10 * time.Second)
-
-	var lastHeaderHashStr string
-	for {
-		select {
-		// Exit on stream context done
-		case <-stream.Context().Done():
-			return nil
-		case <-b.newBlock:
-			b.logger.Debugf("[Blockchain] publish new block from event")
-			header, height, err := b.store.GetBestBlockHeader(stream.Context())
-			if err != nil {
-				b.logger.Errorf("error getting chain tip: %s", err.Error())
-				continue
-			}
-			currentHeaderHashStr := header.Hash().String()
-			if currentHeaderHashStr == lastHeaderHashStr {
-				b.logger.Debugf("[Blockchain] chain tip has not changed: %s", currentHeaderHashStr)
-				continue
-			}
-
-			// Send the Hardware stats on the stream
-			err = stream.Send(&blockchain_api.BestBlockHeaderResponse{
-				BlockHeader: header.Bytes(),
-				Height:      height,
-			})
-			if err != nil {
-				b.logger.Errorf("error sending chain tip: %s", err.Error())
-				continue
-			}
-
-			lastHeaderHashStr = header.Hash().String()
-		case <-timer.C:
-			b.logger.Debugf("[Blockchain] publish new block from timer")
-			header, height, err := b.store.GetBestBlockHeader(stream.Context())
-			if err != nil {
-				b.logger.Errorf("error getting chain tip: %s", err.Error())
-				continue
-			}
-			currentHeaderHashStr := header.Hash().String()
-			if currentHeaderHashStr == lastHeaderHashStr {
-				b.logger.Debugf("[Blockchain] chain tip has not changed: %s", currentHeaderHashStr)
-				continue
-			}
-
-			// Send the Hardware stats on the stream
-			err = stream.Send(&blockchain_api.BestBlockHeaderResponse{
-				BlockHeader: header.Bytes(),
-				Height:      height,
-			})
-			if err != nil {
-				b.logger.Errorf("error sending chain tip: %s", err.Error())
-				continue
-			}
-
-			lastHeaderHashStr = header.Hash().String()
-		}
-	}
-}
-
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})

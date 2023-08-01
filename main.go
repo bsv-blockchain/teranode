@@ -481,7 +481,7 @@ func main() {
 		g.Go(func() (err error) {
 			bootstrapServer = bootstrap.NewServer()
 
-			if err := bootstrapServer.Start(); err != nil {
+			if err := bootstrapServer.Start(ctx); err != nil {
 				return err
 			}
 

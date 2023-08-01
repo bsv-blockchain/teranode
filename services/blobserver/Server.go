@@ -81,26 +81,16 @@ func (v *Server) Start() error {
 		// blobserver subscription for that node.
 
 		// TODO - This may need to be moved to a separate location in the code
+		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
+
 		g.Go(func() error {
 			bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
 				// Start a subscription to the new peer's blob server
 				g.Go(func() error {
-					v.logger.Infof("Connecting to blob server at: %s", p.RemoteAddress)
-					return NewClient(p.RemoteAddress).Start(context.Background())
+					v.logger.Infof("Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+					return NewClient(p.BlobServerGrpcAddress).Start(context.Background())
 				})
-
-			})
-
-			localAddress, found := gocore.Config().Get("blobserver_localAddress")
-			if found {
-				v.logger.Infof("Connecting to bootstrap server with local address: %s", localAddress)
-				bootstrapClient.WithLocalAddress(localAddress)
-			}
-			remoteAddress, found := gocore.Config().Get("blobserver_remoteAddress")
-			if found {
-				v.logger.Infof("Connecting to bootstrap server with remote address: %s", remoteAddress)
-				bootstrapClient.WithRemoteAddress(remoteAddress)
-			}
+			}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
 
 			return bootstrapClient.Start(ctx)
 		})

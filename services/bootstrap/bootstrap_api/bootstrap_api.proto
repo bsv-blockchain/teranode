@@ -27,8 +27,7 @@ message HealthResponse {
 
 // swagger:enum Peer
 message Info {
-  string local_address = 1;
-  string remote_address = 2;
+  string blob_server_grpc_address = 1;
 }
 
 // swagger:enum Notification

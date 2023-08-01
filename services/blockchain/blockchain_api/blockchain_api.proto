@@ -18,7 +18,6 @@ service BlockchainAPI {
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
-  rpc SubscribeBestBlockHeader (google.protobuf.Empty) returns (stream BestBlockHeaderResponse) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
 }
