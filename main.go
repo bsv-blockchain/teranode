@@ -15,6 +15,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
+	"github.com/TAAL-GmbH/ubsv/services/coinbasetracker"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
@@ -72,6 +73,7 @@ func main() {
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	startMiner := flag.Bool("miner", false, "start miner service")
 	startBlobServer := flag.Bool("blobserver", false, "start blob server")
+	startCoinbaseTracker := flag.Bool("coinbasetracker", false, "start coinbase tracker server")
 	// startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
@@ -117,6 +119,9 @@ func main() {
 	if !*startBlobServer {
 		*startBlobServer = gocore.Config().GetBool("startBlobServer", false)
 	}
+	if !*startCoinbaseTracker {
+		*startCoinbaseTracker = gocore.Config().GetBool("startCoinbaseTracker", false)
+	}
 
 	// if !*startBootstrapServer {
 	// 	*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
@@ -133,7 +138,8 @@ func main() {
 			!*startSeeder &&
 			!*startMiner &&
 			// !*startBootstrapServer &&
-			!*startBlobServer) {
+			!*startBlobServer &&
+			!*startCoinbaseTracker) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -166,6 +172,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -blobserver=<1|0>")
 		fmt.Println("          whether to start the blob server")
+		fmt.Println("")
+		fmt.Println("    -coinbasetracker=<1|0>")
+		fmt.Println("          whether to start the coinbase tracker server")
 		fmt.Println("")
 		// fmt.Println("    -bootstrap=<1|0>")
 		// fmt.Println("          whether to start the bootstrap server")
@@ -239,6 +248,7 @@ func main() {
 	var seederService *seeder.Server
 	var minerServer *miner.Miner
 	var blobServer *blobserver.Server
+	var coinbaseTrackerServer *coinbasetracker.CoinbaseTrackerServer
 	// var bootstrapServer *bootstrap.Server
 	var blockValidationService *blockvalidation.BlockValidationServer
 
@@ -478,6 +488,23 @@ func main() {
 		})
 	}
 
+	// coinbase tracker server
+	if *startCoinbaseTracker {
+		coinbaseTrackerLogger := gocore.Log("con", gocore.NewLogLevelFromString(logLevel))
+		g.Go(func() (err error) {
+			coinbaseTrackerServer, err = coinbasetracker.New(coinbaseTrackerLogger)
+			if err != nil {
+				return err
+			}
+
+			if err := coinbaseTrackerServer.Start(); err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
 	// bootstrap server
 	// if *startBootstrapServer {
 	// 	g.Go(func() (err error) {
@@ -576,6 +603,10 @@ func main() {
 
 	if blobServer != nil {
 		blobServer.Stop(shutdownCtx)
+	}
+
+	if coinbaseTrackerServer != nil {
+		coinbaseTrackerServer.Stop(shutdownCtx)
 	}
 
 	// if bootstrapServer != nil {
