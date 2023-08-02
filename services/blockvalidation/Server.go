@@ -27,7 +27,8 @@ import (
 )
 
 var (
-	prometheusBlockValidationBlockFound prometheus.Counter
+	prometheusBlockValidationBlockFound   prometheus.Counter
+	prometheusBlockValidationSubtreeFound prometheus.Counter
 )
 
 func init() {
@@ -35,6 +36,12 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blockvalidation_block_found",
 			Help: "Number of blocks found",
+		},
+	)
+	prometheusBlockValidationSubtreeFound = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "blockvalidation_subtree_found",
+			Help: "Number of subtrees found",
 		},
 	)
 }
@@ -75,13 +82,14 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 	}
 
 	bVal := &BlockValidationServer{
-		utxoStore:        utxoStore,
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		txMetaStore:      txMetaStore,
-		blockFoundCh:     make(chan processBlockFound, 100),
-		blockValidation:  NewBlockValidation(logger, blockchainClient, subtreeStore, txMetaStore, validatorClient),
+		utxoStore:         utxoStore,
+		logger:            logger,
+		blockchainClient:  blockchainClient,
+		subtreeStore:      subtreeStore,
+		txMetaStore:       txMetaStore,
+		blockFoundCh:      make(chan processBlockFound, 100),
+		blockValidation:   NewBlockValidation(logger, blockchainClient, subtreeStore, txMetaStore, validatorClient),
+		processingSubtree: make(map[chainhash.Hash]bool),
 	}
 
 	// process blocks found from channel
@@ -220,7 +228,8 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 }
 
 func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
-	prometheusBlockValidationBlockFound.Inc()
+	prometheusBlockValidationSubtreeFound.Inc()
+	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
 
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {

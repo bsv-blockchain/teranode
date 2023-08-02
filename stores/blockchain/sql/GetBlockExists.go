@@ -35,5 +35,5 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		return false, err
 	}
 
-	return height > 0, nil
+	return true, nil
 }
