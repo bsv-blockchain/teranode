@@ -64,7 +64,6 @@ func (c *Client) Start(ctx context.Context) error {
 
 		var resp *bootstrap_api.Notification
 
-	RETRY:
 		for {
 			select {
 			case <-ctx.Done():
@@ -86,7 +85,7 @@ func (c *Client) Start(ctx context.Context) error {
 					resp, err = stream.Recv()
 					if err != nil {
 						time.Sleep(1 * time.Second)
-						break RETRY
+						break
 					}
 
 					switch resp.Type {
