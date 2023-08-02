@@ -70,22 +70,29 @@ func main() {
 				table := tablewriter.NewWriter(os.Stdout)
 				table.SetBorder(false)
 				table.SetHeader([]string{"Miner", "Height", "Last block hash", "Previous block hash"})
+				fmt.Print("\033[H\033[2J")
+				fmt.Printf("Current time: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+
 				for _, minerAddress := range minerList {
 					miner := miners[minerAddress]
 					blockHeader, height, err := miner.GetBestBlockHeader(ctx)
 					if err != nil {
-						logger.Errorf("error getting best block header from miner %s: %s", minerAddress, err)
-						continue
+						table.Append([]string{
+							minerAddress,
+							"",
+							err.Error(),
+							"",
+						})
+					} else {
+						table.Append([]string{
+							minerAddress,
+							strconv.Itoa(int(height)),
+							blockHeader.Hash().String(),
+							blockHeader.HashPrevBlock.String(),
+						})
 					}
-					table.Append([]string{
-						minerAddress,
-						strconv.Itoa(int(height)),
-						blockHeader.Hash().String(),
-						blockHeader.HashPrevBlock.String(),
-					})
 				}
-				fmt.Print("\033[H\033[2J")
-				fmt.Printf("Current time: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+
 				table.Render()
 				time.Sleep(time.Duration(*refresh) * time.Second)
 			}

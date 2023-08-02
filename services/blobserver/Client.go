@@ -51,14 +51,16 @@ func (c *Client) Start(ctx context.Context) error {
 				Source: c.source,
 			})
 			if err != nil {
-				//time.Sleep(10 * time.Second)
-				//break RETRY
 				c.logger.Errorf("could not subscribe to blobserver: %v", err)
-				return
+				time.Sleep(10 * time.Second)
+				break RETRY
+				//return
 			}
 
 			resp, err = stream.Recv()
 			if err != nil {
+				c.logger.Errorf("could not receive from blobserver: %v", err)
+				_ = stream.CloseSend()
 				time.Sleep(10 * time.Second)
 				break RETRY
 			}

@@ -420,8 +420,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 
 	// traverse b.currentChain in reverse order until we find the common ancestor
 	// skipping the current block, start at the previous block (len-2)
-	for i := len(b.currentChain) - 1; i >= 0; i-- {
-		blockHeader := b.currentChain[i]
+	for _, blockHeader := range b.currentChain {
 		if blockHeader.Hash().IsEqual(commonAncestor.Hash()) {
 			break
 		}

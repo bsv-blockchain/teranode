@@ -190,12 +190,17 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader = blockHeader4
-		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader1, blockHeader2, blockHeader3, blockHeader4}
+		items.blockAssembler.currentChain = []*model.BlockHeader{
+			blockHeader4,
+			blockHeader3,
+			blockHeader2,
+			blockHeader1,
+		}
 		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
-			*blockHeader1.Hash(): 1,
-			*blockHeader2.Hash(): 2,
-			*blockHeader3.Hash(): 3,
 			*blockHeader4.Hash(): 4,
+			*blockHeader3.Hash(): 3,
+			*blockHeader2.Hash(): 2,
+			*blockHeader1.Hash(): 1,
 		}
 
 		err := items.addBlock(blockHeader1)

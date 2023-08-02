@@ -101,7 +101,7 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 				getSubtreesChan <- chainedSubtrees
 
 			case reorgReq := <-stp.reorgBlockChan:
-				logger.Infof("[SubtreeProcessor] moveDownBlock subtree processor")
+				logger.Infof("[SubtreeProcessor] reorgReq subtree processor")
 				err := stp.reorgBlocks(reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
 				if err == nil {
 					stp.currentBlockHeader = reorgReq.moveUpBlocks[len(reorgReq.moveUpBlocks)-1].Header
@@ -109,7 +109,7 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 				reorgReq.errChan <- err
 
 			case moveUpReq := <-stp.moveUpBlockChan:
-				logger.Infof("[SubtreeProcessor] moveUpBlock subtree processor")
+				logger.Infof("[SubtreeProcessor] moveUpBlock subtree processor: %s", moveUpReq.block.String())
 				err := stp.moveUpBlock(moveUpReq.block, false)
 				if err == nil {
 					stp.currentBlockHeader = moveUpReq.block.Header
@@ -326,7 +326,7 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block, skipNotification bo
 	//	return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
 	//}
 
-	stp.logger.Infof("resetting the subtrees with block %s", block.String())
+	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
 	// create a reverse lookup map of all the subtrees in the block
