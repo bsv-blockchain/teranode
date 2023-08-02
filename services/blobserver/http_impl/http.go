@@ -3,6 +3,7 @@ package http_impl
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
 	"github.com/labstack/echo/v4"
@@ -46,7 +47,11 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 		b, err := repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
-			return err
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
 		}
 
 		prometheusBlobServerHttpGetTransaction.WithLabelValues("OK", "200").Inc()
@@ -62,7 +67,11 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 		b, err := repository.GetSubtree(c.Request().Context(), hash)
 		if err != nil {
-			return err
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
 		}
 
 		prometheusBlobServerHttpGetSubtree.WithLabelValues("OK", "200").Inc()
@@ -78,7 +87,11 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 		b, err := repository.GetBlockHeaderByHash(c.Request().Context(), hash)
 		if err != nil {
-			return err
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
 		}
 
 		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
@@ -94,7 +107,11 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 		b, err := repository.GetBlockByHash(c.Request().Context(), hash)
 		if err != nil {
-			return err
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
 		}
 
 		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
@@ -110,7 +127,11 @@ func New(repository *repository.Repository) (*HTTP, error) {
 
 		b, err := repository.GetUtxo(c.Request().Context(), hash)
 		if err != nil {
-			return err
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
 		}
 
 		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()
