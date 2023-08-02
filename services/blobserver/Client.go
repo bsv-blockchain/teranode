@@ -47,7 +47,6 @@ func (c *Client) Start(ctx context.Context) error {
 
 	go func() {
 
-	RETRY:
 		for c.running {
 			c.logger.Infof("starting new subscription to blobserver: %v", c.address)
 			stream, err = c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
@@ -65,7 +64,7 @@ func (c *Client) Start(ctx context.Context) error {
 					c.logger.Errorf("could not receive from blobserver: %v", err)
 					_ = stream.CloseSend()
 					time.Sleep(10 * time.Second)
-					break RETRY
+					break
 				}
 
 				hash, err = chainhash.NewHash(resp.Hash)
