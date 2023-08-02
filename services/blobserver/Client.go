@@ -21,8 +21,10 @@ type Client struct {
 }
 
 func NewClient(source string, addr string) *Client {
+	logLevel, _ := gocore.Config().Get("logLevel")
+
 	return &Client{
-		logger:           gocore.Log("blobC"),
+		logger:           gocore.Log("blobC", gocore.NewLogLevelFromString(logLevel)),
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(),
