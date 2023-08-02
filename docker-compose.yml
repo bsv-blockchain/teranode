@@ -1,21 +1,6 @@
 version: '3.8'
 
 services:
-  bootstrap-server:
-    container_name: bootstrap-server
-    image: taal/ubsv:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      SETTINGS_CONTEXT: "bootstrap-server" # hacky way to get bootstrap-server to start on different settings
-      startBootstrapServer: "true"
-    expose:
-      - 8089
-    ports:
-        - "8089:8089"
-    networks:
-      - ubsv-network
   ubsv-1:
     container_name: ubsv-1
     image: taal/ubsv:latest
@@ -23,7 +8,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBootstrapServer: "false"
+      startBlobServer: "true"
+      blobserver_remoteAddresses: "ubsv-2:8091|ubsv-3:8091"
       blobserver_grpcAddress: ":8091"
       blobserver_httpAddress: ":8090"
       blockassembly_grpcAddress: ":8085"
@@ -51,7 +37,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBootstrapServer: "false"
+      startBlobServer: "true"
+      blobserver_remoteAddresses: "ubsv-1:8091|ubsv-3:8091"
       blobserver_grpcAddress: ":8091"
       blobserver_httpAddress: ":8090"
       blockassembly_grpcAddress: ":8085"
@@ -79,7 +66,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBootstrapServer: "false"
+      startBlobServer: "true"
+      blobserver_remoteAddresses: "ubsv-1:8091|ubsv-2:8091"
       blobserver_grpcAddress: ":8091"
       blobserver_httpAddress: ":8090"
       blockassembly_grpcAddress: ":8085"
