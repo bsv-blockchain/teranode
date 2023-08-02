@@ -27,11 +27,27 @@ type BestBlockHeader struct {
 func NewClient() (ClientI, error) {
 	ctx := context.Background()
 
-	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
+	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
 		return nil, fmt.Errorf("no blockchain_grpcAddress setting found")
 	}
-	baConn, err := utils.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &utils.ConnectionOptions{
+	baConn, err := utils.GetGRPCClient(ctx, blockchainGrpcAddress, &utils.ConnectionOptions{
+		MaxRetries: 3,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{
+		client: blockchain_api.NewBlockchainAPIClient(baConn),
+		logger: gocore.Log("blkcC"),
+	}, nil
+}
+
+func NewClientWithAddress(address string) (ClientI, error) {
+	ctx := context.Background()
+
+	baConn, err := utils.GetGRPCClient(ctx, address, &utils.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {

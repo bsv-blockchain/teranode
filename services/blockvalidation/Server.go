@@ -190,6 +190,16 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
 	u.logger.Infof("processing block found [%s]", hash.String())
 
+	// first check if the block exists, it might have already been processed
+	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("failed to check if block exists [%w]", err)
+	}
+	if exists {
+		u.logger.Warnf("not processing block that already was found [%s]", hash.String())
+		return nil
+	}
+
 	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
 		return fmt.Errorf("failed to get block %s from peer [%w]", hash.String(), err)

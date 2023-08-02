@@ -23,6 +23,7 @@ require (
 	github.com/libsv/go-p2p v0.1.3
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/neo4j/neo4j-go-driver/v4 v4.4.7
+	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
 	github.com/ordishs/go-utils v1.0.47
@@ -79,6 +80,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.4 // indirect
+	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/mattn/go-sqlite3 v1.14.17 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
