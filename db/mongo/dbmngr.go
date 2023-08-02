@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"gorm.io/gorm"
 )
 
 type MongoManager struct {
@@ -25,7 +25,7 @@ const (
 	MONGODB_URI_TEMPLATE = "mongodb://%s:%s@%s:%s/?maxPoolSize=20&w=majority"
 )
 
-func (m *MongoManager) Connect() error {
+func (m *MongoManager) Connect(db_config string) error {
 	// We assume two separate criteria are to be present to enable stats collection
 	// and writing to mongodb: 1. stats option to enable stats 2. env vars to point
 	// to a working/accessable mongodb instance
@@ -89,18 +89,22 @@ func (m *MongoManager) Disconnect() error {
 	return nil
 }
 
-func (m *MongoManager) Create(model *gorm.Model) error {
+func (m *MongoManager) Create(model any) error {
+	panic(errors.New("MongoManager - Mongodb not implemented"))
+}
+
+func (m *MongoManager) Read(model any) error {
 	return nil
 }
 
-func (m *MongoManager) Read(model *gorm.Model) error {
+func (m *MongoManager) Read_All_Cond(model any, cond *[]string) error {
 	return nil
 }
 
-func (m *MongoManager) Update(model *gorm.Model) error {
+func (m *MongoManager) Update(model any) error {
 	return nil
 }
 
-func (m *MongoManager) Delete(model *gorm.Model) error {
+func (m *MongoManager) Delete(model any) error {
 	return nil
 }

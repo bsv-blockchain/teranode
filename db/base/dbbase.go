@@ -1,14 +1,12 @@
 package base
 
-import "gorm.io/gorm"
-
 type DbManagerBase interface {
-	Connect() error
+	Connect(db_config string) error
 	Disconnect() error
 }
 
 type DbFactory interface {
-	Create() DbManager
+	Create(db_config string) DbManager
 }
 
 type DbFactories struct {
@@ -16,10 +14,11 @@ type DbFactories struct {
 }
 
 type CRUD interface {
-	Create(*gorm.Model) error
-	Read(*gorm.Model) error
-	Update(*gorm.Model) error
-	Delete(*gorm.Model) error
+	Create(any) error
+	Read(any) error
+	Read_All_Cond(any, *[]string) error
+	Update(any) error
+	Delete(any) error
 }
 
 type DbManager interface {

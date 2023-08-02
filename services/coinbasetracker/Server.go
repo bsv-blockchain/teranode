@@ -8,7 +8,6 @@ import (
 	"time"
 
 	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/ordishs/go-utils"
@@ -96,7 +95,7 @@ func (u *CoinbaseTrackerServer) Start() error {
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
-
+	u.coinbaseTracker.Stop()
 	u.grpcServer.GracefulStop()
 }
 
@@ -108,29 +107,31 @@ func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*co
 }
 
 func (u *CoinbaseTrackerServer) GetUtxoxs(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
-	pubKeyHash, err := chainhash.NewHash(req.Publickey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pubkey hash hash from bytes [%w]", err)
-	}
+	// pubKeyHash, err := chainhash.NewHash(req.Publickey)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create pubkey hash hash from bytes [%w]", err)
+	// }
 
-	utxos, err := u.coinbaseTracker.GetUtxos(ctx, pubKeyHash, req.Amount)
-	if err != nil {
-		return nil, err
-	}
+	// Note: [Olek] Need to decide whether we pass pubKeyHash or pubKey/Address.
+	// utxos, err := u.coinbaseTracker.GetUtxos(ctx, pubKeyHash, req.Amount)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	respUtxos := make([]*coinbasetracker_api.Utxo, len(utxos))
-	for i, utxo := range utxos {
-		respUtxos[i] = &coinbasetracker_api.Utxo{
-			TxId:     utxo.TxID,
-			Vout:     utxo.Vout,
-			Script:   *utxo.LockingScript,
-			Satoshis: utxo.Satoshis,
-		}
+	// respUtxos := make([]*coinbasetracker_api.Utxo, len(utxos))
+	// for i, utxo := range utxos {
+	// 	respUtxos[i] = &coinbasetracker_api.Utxo{
+	// 		TxId:     utxo.TxID,
+	// 		Vout:     utxo.Vout,
+	// 		Script:   *utxo.LockingScript,
+	// 		Satoshis: utxo.Satoshis,
+	// 	}
 
-	}
-	resp := &coinbasetracker_api.GetUtxoResponse{}
-	resp.Utxos = respUtxos
-	return resp, nil
+	// }
+	// resp := &coinbasetracker_api.GetUtxoResponse{}
+	// resp.Utxos = respUtxos
+	//return resp, nil
+	return nil, nil
 }
 
 func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.SubmitTransactionRequest) (*emptypb.Empty, error) {

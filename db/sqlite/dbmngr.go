@@ -1,6 +1,9 @@
 package sqlite
 
 import (
+	"errors"
+
+	"github.com/TAAL-GmbH/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -11,9 +14,9 @@ type SqliteManager struct {
 	logger u.Logger
 }
 
-func (m *SqliteManager) Connect() error {
-	m.logger.Debugf("Connecting to sqlite...")
-	db, err := gorm.Open(sqlite.Open("con.db"), &gorm.Config{})
+func (m *SqliteManager) Connect(db_config string) error {
+	m.logger.Debugf("Connecting to sqlite: %s", db_config)
+	db, err := gorm.Open(sqlite.Open(db_config), &gorm.Config{})
 	if err != nil {
 		m.logger.Errorf("Failed to open sqlite: %s", err.Error())
 		return err
@@ -24,7 +27,26 @@ func (m *SqliteManager) Connect() error {
 		m.logger.Errorf("Failed to ping sqlite: %s", err.Error())
 		return err
 	}
-	m.logger.Debugf("sqlite stats: %s", sqldb.Stats())
+	m.logger.Debugf("sqlite stats: %+v", sqldb.Stats())
+
+	// Check table for `Block` exists or not
+	if !db.Migrator().HasTable(&model.Block{}) {
+		err = db.Migrator().CreateTable(&model.Block{})
+		if err != nil {
+			m.logger.Errorf("Failed to create table: %s", err.Error())
+			return err
+		}
+	}
+
+	// Check table for `UTXO` exists or not
+	if !db.Migrator().HasTable(&model.UTXO{}) {
+		err = db.Migrator().CreateTable(&model.UTXO{})
+		if err != nil {
+			m.logger.Errorf("Failed to create table: %s", err.Error())
+			return err
+		}
+	}
+
 	m.db = db
 	return nil
 }
@@ -44,22 +66,31 @@ func (m *SqliteManager) Disconnect() error {
 	return nil
 }
 
-func (m *SqliteManager) Create(model *gorm.Model) error {
+func (m *SqliteManager) Create(model any) error {
 	result := m.db.Create(model)
 	return result.Error
 }
 
-func (m *SqliteManager) Read(model *gorm.Model) error {
-	result := m.db.First(model)
+func (m *SqliteManager) Read(model any) error {
+	result := m.db.Last(model)
 	return result.Error
 }
 
-func (m *SqliteManager) Update(model *gorm.Model) error {
+func (m *SqliteManager) Read_All_Cond(model any, cond *[]string) error {
+	result := m.db.Where((*cond)[0], (*cond)[1:]).Find(model)
+	return result.Error
+}
+
+func (m *SqliteManager) Update(model any) error {
 	result := m.db.Save(model)
 	return result.Error
 }
 
-func (m *SqliteManager) Delete(model *gorm.Model) error {
-	result := m.db.Delete(model, model.ID)
-	return result.Error
+func (m *SqliteManager) Delete(model any) error {
+	gm, ok := model.(*gorm.Model)
+	if ok && gm != nil {
+		result := m.db.Delete(model, gm.ID)
+		return result.Error
+	}
+	return errors.New("not a gorm model based data structure")
 }

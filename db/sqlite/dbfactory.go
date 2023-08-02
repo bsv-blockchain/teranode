@@ -15,9 +15,9 @@ func New(logger u.Logger) base.DbFactory {
 	}
 }
 
-func (f *SqliteFactory) Create() base.DbManager {
+func (f *SqliteFactory) Create(db_config string) base.DbManager {
 	m := &SqliteManager{logger: f.logger}
-	if err := m.Connect(); err != nil {
+	if err := m.Connect(db_config); err != nil {
 		return nil
 	}
 	return m
