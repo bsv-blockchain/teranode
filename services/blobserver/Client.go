@@ -47,6 +47,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 	RETRY:
 		for c.running {
+			c.logger.Infof("starting new subscription to blobserver: %v", c.address)
 			stream, err = c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
 				Source: c.source,
 			})
