@@ -57,33 +57,34 @@ func (c *Client) Start(ctx context.Context) error {
 				//return
 			}
 
-			resp, err = stream.Recv()
-			if err != nil {
-				c.logger.Errorf("could not receive from blobserver: %v", err)
-				_ = stream.CloseSend()
-				time.Sleep(10 * time.Second)
-				break RETRY
-			}
+			for c.running {
+				resp, err = stream.Recv()
+				if err != nil {
+					c.logger.Errorf("could not receive from blobserver: %v", err)
+					_ = stream.CloseSend()
+					time.Sleep(10 * time.Second)
+					break RETRY
+				}
 
-			hash, err = chainhash.NewHash(resp.Hash)
-			if err != nil {
-				c.logger.Errorf("could not create hash from bytes", "err", err)
-				continue
-			}
-
-			switch resp.Type {
-			case blobserver_api.Type_Subtree:
-				if err = c.validationClient.SubtreeFound(context.Background(), hash, resp.BaseUrl); err != nil {
-					c.logger.Errorf("could not validate subtree", "err", err)
+				hash, err = chainhash.NewHash(resp.Hash)
+				if err != nil {
+					c.logger.Errorf("could not create hash from bytes", "err", err)
 					continue
 				}
 
-			case blobserver_api.Type_Block:
-				if err = c.validationClient.BlockFound(context.Background(), hash, resp.BaseUrl); err != nil {
-					c.logger.Errorf("could not validate block", "err", err)
-					continue
-				}
+				switch resp.Type {
+				case blobserver_api.Type_Subtree:
+					if err = c.validationClient.SubtreeFound(context.Background(), hash, resp.BaseUrl); err != nil {
+						c.logger.Errorf("could not validate subtree", "err", err)
+						continue
+					}
 
+				case blobserver_api.Type_Block:
+					if err = c.validationClient.BlockFound(context.Background(), hash, resp.BaseUrl); err != nil {
+						c.logger.Errorf("could not validate block", "err", err)
+						continue
+					}
+				}
 			}
 		}
 	}()
