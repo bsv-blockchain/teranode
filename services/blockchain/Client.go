@@ -185,7 +185,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 			})
 			if err != nil {
 				time.Sleep(1 * time.Second)
-				break RETRY
+				continue
 			}
 
 			for {

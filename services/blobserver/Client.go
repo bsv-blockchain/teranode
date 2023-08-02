@@ -56,8 +56,7 @@ func (c *Client) Start(ctx context.Context) error {
 			if err != nil {
 				c.logger.Errorf("could not subscribe to blobserver: %v", err)
 				time.Sleep(10 * time.Second)
-				break RETRY
-				//return
+				continue
 			}
 
 			for c.running {

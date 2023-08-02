@@ -79,7 +79,7 @@ func (c *Client) Start(ctx context.Context) error {
 				})
 				if err != nil {
 					time.Sleep(1 * time.Second)
-					break RETRY
+					continue
 				}
 
 				for {
