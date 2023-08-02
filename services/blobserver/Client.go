@@ -9,21 +9,22 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Client struct {
 	client           blobserver_api.BlobServerAPIClient
+	source           string
 	validationClient *blockvalidation.Client
 	logger           utils.Logger
 	address          string
 	running          bool
 }
 
-func NewClient(addr string) *Client {
+func NewClient(source string, addr string) *Client {
 	return &Client{
 		logger:           gocore.Log("blobC"),
 		address:          addr,
+		source:           source,
 		validationClient: blockvalidation.NewClient(),
 		running:          true,
 	}
@@ -46,7 +47,9 @@ func (c *Client) Start(ctx context.Context) error {
 
 	RETRY:
 		for c.running {
-			stream, err = c.client.Subscribe(ctx, &emptypb.Empty{})
+			stream, err = c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
+				Source: c.source,
+			})
 			if err != nil {
 				//time.Sleep(10 * time.Second)
 				//break RETRY

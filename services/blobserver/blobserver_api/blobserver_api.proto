@@ -15,7 +15,7 @@ service BlobServerAPI {
   rpc GetBlockHeader (HashOrHeight) returns (Blob) {}
   rpc GetBlock (HashOrHeight) returns (Blob) {}
   rpc GetUTXO (Hash) returns (Blob) {}
-  rpc Subscribe (google.protobuf.Empty) returns (stream Notification) {}
+  rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
 }
 
 
@@ -55,4 +55,9 @@ message Notification {
   Type type = 1;
   bytes hash = 2;
   string base_url = 3;
+}
+
+// swagger:model SubscribeRequest
+message SubscribeRequest {
+  string source = 1;
 }

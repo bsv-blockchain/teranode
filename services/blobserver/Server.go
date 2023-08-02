@@ -115,9 +115,10 @@ func (v *Server) Start() error {
 			b := blobServer
 			g.Go(func() error {
 				v.logger.Infof("Connecting to blob server at: %s", b)
-				return NewClient(b).Start(ctx)
+				return NewClient("blobserver", b).Start(ctx)
 			})
 		}
+
 	}
 
 	if v.httpServer != nil {

@@ -40,7 +40,7 @@ type BlobServerAPIClient interface {
 	GetBlockHeader(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
 	GetBlock(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
 	GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
-	Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
+	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
 type blobServerAPIClient struct {
@@ -105,7 +105,7 @@ func (c *blobServerAPIClient) GetUTXO(ctx context.Context, in *Hash, opts ...grp
 	return out, nil
 }
 
-func (c *blobServerAPIClient) Subscribe(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error) {
+func (c *blobServerAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error) {
 	stream, err := c.cc.NewStream(ctx, &BlobServerAPI_ServiceDesc.Streams[0], BlobServerAPI_Subscribe_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ type BlobServerAPIServer interface {
 	GetBlockHeader(context.Context, *HashOrHeight) (*Blob, error)
 	GetBlock(context.Context, *HashOrHeight) (*Blob, error)
 	GetUTXO(context.Context, *Hash) (*Blob, error)
-	Subscribe(*emptypb.Empty, BlobServerAPI_SubscribeServer) error
+	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
 
@@ -174,7 +174,7 @@ func (UnimplementedBlobServerAPIServer) GetBlock(context.Context, *HashOrHeight)
 func (UnimplementedBlobServerAPIServer) GetUTXO(context.Context, *Hash) (*Blob, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUTXO not implemented")
 }
-func (UnimplementedBlobServerAPIServer) Subscribe(*emptypb.Empty, BlobServerAPI_SubscribeServer) error {
+func (UnimplementedBlobServerAPIServer) Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
 }
 func (UnimplementedBlobServerAPIServer) mustEmbedUnimplementedBlobServerAPIServer() {}
@@ -299,7 +299,7 @@ func _BlobServerAPI_GetUTXO_Handler(srv interface{}, ctx context.Context, dec fu
 }
 
 func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(emptypb.Empty)
+	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}

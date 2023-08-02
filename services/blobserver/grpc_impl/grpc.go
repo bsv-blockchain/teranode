@@ -33,6 +33,7 @@ var (
 
 type subscriber struct {
 	subscription blobserver_api.BlobServerAPI_SubscribeServer
+	source       string
 	done         chan struct{}
 }
 
@@ -189,12 +190,12 @@ func (g *GRPC) Start(addr string) error {
 
 			case s := <-g.newSubscriptions:
 				g.subscribers[s] = true
-				g.logger.Infof("[BlobServer] New Subscription received (Total=%d).", len(g.subscribers))
+				g.logger.Infof("[BlobServer] New Subscription received [%s] (Total=%d).", s.source, len(g.subscribers))
 
 			case s := <-g.deadSubscriptions:
 				delete(g.subscribers, s)
 				close(s.done)
-				g.logger.Infof("[BlobServer] Subscription removed (Total=%d).", len(g.subscribers))
+				g.logger.Infof("[BlobServer] Subscription removed [%s] (Total=%d).", s.source, len(g.subscribers))
 			}
 		}
 	}()
@@ -311,12 +312,13 @@ func (g *GRPC) GetUTXO(ctx context.Context, req *blobserver_api.Hash) (*blobserv
 	}, nil
 }
 
-func (g *GRPC) Subscribe(_ *emptypb.Empty, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
+func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 
 	g.newSubscriptions <- subscriber{
 		subscription: sub,
+		source:       req.Source,
 		done:         ch,
 	}
 
