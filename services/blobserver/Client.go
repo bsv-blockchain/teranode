@@ -73,14 +73,20 @@ func (c *Client) Start(ctx context.Context) error {
 					continue
 				}
 
+				c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
+
 				switch resp.Type {
 				case blobserver_api.Type_Subtree:
+					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
+
 					if err = c.validationClient.SubtreeFound(context.Background(), hash, resp.BaseUrl); err != nil {
 						c.logger.Errorf("could not validate subtree", "err", err)
 						continue
 					}
 
 				case blobserver_api.Type_Block:
+					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
+
 					if err = c.validationClient.BlockFound(context.Background(), hash, resp.BaseUrl); err != nil {
 						c.logger.Errorf("could not validate block", "err", err)
 						continue

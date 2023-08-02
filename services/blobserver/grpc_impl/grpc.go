@@ -168,6 +168,9 @@ func (g *GRPC) Start(addr string) error {
 			if notification == nil {
 				continue
 			}
+
+			g.logger.Debugf("SendingReceived %s notification: %s", blobserver_api.Type(notification.Type).String(), notification.Hash.String())
+
 			g.notifications <- &blobserver_api.Notification{
 				Type:    blobserver_api.Type(notification.Type),
 				Hash:    notification.Hash[:],
