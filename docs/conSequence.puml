@@ -8,17 +8,21 @@ database Store
 
 CON -> Bootstrap: Discover
 note right
-  CON requests a list of Nodes to connect to
+  CON requests a list of Nodes to connect to (alt: just use a list of nodes)
 end note
 
 CON -> Node: Connect
 note right
   CON connects to the neighboring nodes
 end note
-
+CON -> Node: Get best block
+note right
+  Get the latest block from the network
+end note
 CON -> Node: Synchronize
 note right
-  CON syncronizes its store with the latest blocks in the nodes
+  If there are any blocks in the db and the DB chain tip isn't the best block we just
+  recieved then get previous block and repeat until we have the DB chain tip block
 end note
 
 CON -> Node: Subscribe
@@ -40,7 +44,6 @@ note right
   CreatedAt       time (ORM)
   UpdatedAt       time (ORM)
   Height          uint64
-  Address         string/base58 encoded
   Block hash      string/hex encoded
   Prev block hash string/hex encoded
   --------------------------------
