@@ -15,7 +15,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
-	"github.com/TAAL-GmbH/ubsv/services/bootstrap"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
 	"github.com/TAAL-GmbH/ubsv/services/seeder"
@@ -73,7 +72,7 @@ func main() {
 	startSeeder := flag.Bool("seeder", false, "start seeder service")
 	startMiner := flag.Bool("miner", false, "start miner service")
 	startBlobServer := flag.Bool("blobserver", false, "start blob server")
-	startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
+	// startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
@@ -119,9 +118,9 @@ func main() {
 		*startBlobServer = gocore.Config().GetBool("startBlobServer", false)
 	}
 
-	if !*startBootstrapServer {
-		*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
-	}
+	// if !*startBootstrapServer {
+	// 	*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
+	// }
 
 	if help != nil && *help ||
 		(!*startBlockchain &&
@@ -133,8 +132,8 @@ func main() {
 			!*startPropagation &&
 			!*startSeeder &&
 			!*startMiner &&
-			!*startBlobServer &&
-			!*startBootstrapServer) {
+			// !*startBootstrapServer &&
+			!*startBlobServer) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -168,9 +167,9 @@ func main() {
 		fmt.Println("    -blobserver=<1|0>")
 		fmt.Println("          whether to start the blob server")
 		fmt.Println("")
-		fmt.Println("    -bootstrap=<1|0>")
-		fmt.Println("          whether to start the bootstrap server")
-		fmt.Println("")
+		// fmt.Println("    -bootstrap=<1|0>")
+		// fmt.Println("          whether to start the bootstrap server")
+		// fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
 		fmt.Println("")
@@ -240,7 +239,7 @@ func main() {
 	var seederService *seeder.Server
 	var minerServer *miner.Miner
 	var blobServer *blobserver.Server
-	var bootstrapServer *bootstrap.Server
+	// var bootstrapServer *bootstrap.Server
 	var blockValidationService *blockvalidation.BlockValidationServer
 
 	// blockchain service needs to start first !
@@ -480,17 +479,17 @@ func main() {
 	}
 
 	// bootstrap server
-	if *startBootstrapServer {
-		g.Go(func() (err error) {
-			bootstrapServer = bootstrap.NewServer()
+	// if *startBootstrapServer {
+	// 	g.Go(func() (err error) {
+	// 		bootstrapServer = bootstrap.NewServer()
 
-			if err := bootstrapServer.Start(ctx); err != nil {
-				return err
-			}
+	// 		if err := bootstrapServer.Start(ctx); err != nil {
+	// 			return err
+	// 		}
 
-			return nil
-		})
-	}
+	// 		return nil
+	// 	})
+	// }
 
 	// propagation
 	if *startPropagation {
@@ -579,9 +578,9 @@ func main() {
 		blobServer.Stop(shutdownCtx)
 	}
 
-	if bootstrapServer != nil {
-		bootstrapServer.Stop(shutdownCtx)
-	}
+	// if bootstrapServer != nil {
+	// 	bootstrapServer.Stop(shutdownCtx)
+	// }
 
 	//
 	// close all the stores
