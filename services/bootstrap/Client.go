@@ -115,8 +115,6 @@ func (c *Client) Start(ctx context.Context) error {
 				}
 			}
 		}
-
-		return nil
 	})
 
 	return nil

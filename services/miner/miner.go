@@ -39,7 +39,10 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
-	miningCtx, cancel := context.WithCancel(ctx)
+	var miningCtx context.Context
+	var cancel context.CancelFunc
+
+	_, cancel = context.WithCancel(ctx)
 	for {
 		select {
 		case <-ctx.Done():
