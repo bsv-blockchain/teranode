@@ -24,11 +24,12 @@ type BlockValidation struct {
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
 	txMetaStore      txmeta.Store
-	validatorClient  *validator.Client
+	validatorClient  validator.Interface
+	httpClient       *http.Client
 }
 
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txMetaStore txmeta.Store, validatorClient *validator.Client) *BlockValidation {
+	txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
 	bv := &BlockValidation{
 		logger:           logger,
@@ -36,6 +37,7 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 		subtreeStore:     subtreeStore,
 		txMetaStore:      txMetaStore,
 		validatorClient:  validatorClient,
+		httpClient:       &http.Client{},
 	}
 
 	return bv
@@ -209,14 +211,13 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	}
 
 	// do http request to baseUrl + txHash.String()
-	httpClient := &http.Client{}
 	url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := u.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
 	}
@@ -241,6 +242,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	// TODO should this request over network, whereby it will be added to block assembly?
 	err = u.validatorClient.Validate(ctx, tx)
 	if err != nil {
+		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
 		return nil, fmt.Errorf("failed to validate transaction [%s]", err.Error())
 	}
 
