@@ -9,6 +9,7 @@ import (
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/work"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -111,7 +112,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		return fmt.Errorf("failed to get subtree bytes: %w", err)
 	}
 
-	chainWorkHash, err := chainhash.NewHash(previousChainWork)
+	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
 	if err != nil {
 		return fmt.Errorf("failed to convert chain work hash: %w", err)
 	}
@@ -146,7 +147,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		block.Header.Bits.CloneBytes(),
 		block.Header.Nonce,
 		height,
-		cumulativeChainWork.CloneBytes(),
+		bt.ReverseBytes(cumulativeChainWork.CloneBytes()),
 		block.TransactionCount,
 		len(block.Subtrees),
 		subtreeBytes,

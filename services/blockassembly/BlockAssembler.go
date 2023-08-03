@@ -271,6 +271,8 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 }
 
 func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
+	b.logger.Debugf("[BlockAssembler] getting mining candidate for header: %s", b.bestBlockHeader.Hash())
+
 	if b.bestBlockHeader == nil {
 		return nil, nil, fmt.Errorf("best block header is not available")
 	}

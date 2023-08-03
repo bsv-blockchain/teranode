@@ -109,8 +109,10 @@ func (b *Blockchain) Start() error {
 		for {
 			select {
 			case notification := <-b.notifications:
+				b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
 				for sub := range b.subscribers {
 					go func(s subscriber) {
+						//b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
 						if err := s.subscription.Send(notification); err != nil {
 							b.deadSubscriptions <- s
 						}
