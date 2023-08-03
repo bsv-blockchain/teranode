@@ -362,7 +362,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 		subtreesInJob[i] = subtree
 		if i == 0 {
-			subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash)
+			subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0)
 		}
 		rootHash := subtree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])

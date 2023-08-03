@@ -148,15 +148,15 @@ func main() {
 
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
-					if !model.CoinbasePlaceholderHash.IsEqual(node) {
-						_, ok := transactionMap[*node]
+					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
+						_, ok := transactionMap[*node.Hash]
 						if ok {
 							logger.Errorf("transaction %s already exists in subtree %s in block %s", node, subtreeHash, block.Hash())
 						} else {
-							transactionMap[*node] = *block.Hash()
+							transactionMap[*node.Hash] = *block.Hash()
 						}
 
-						tx, err := txStore.Get(ctx, node[:])
+						tx, err := txStore.Get(ctx, node.Hash[:])
 						if err != nil {
 							logger.Errorf("failed to get transaction %s from tx store: %s", node, err)
 							continue

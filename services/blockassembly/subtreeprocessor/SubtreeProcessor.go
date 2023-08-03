@@ -90,7 +90,7 @@ func NewSubtreeProcessor(logger utils.Logger, subtreeStore blob.Store, newSubtre
 				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
 					incompleteSubtree := util.NewTreeByLeafCount(stp.currentItemsPerFile)
 					for _, node := range stp.currentSubtree.Nodes {
-						_ = incompleteSubtree.AddNode(node, 0)
+						_ = incompleteSubtree.AddNode(node.Hash, node.Fee)
 					}
 					incompleteSubtree.Fees = stp.currentSubtree.Fees
 					chainedSubtrees = append(chainedSubtrees, incompleteSubtree)
@@ -287,13 +287,13 @@ func (stp *SubtreeProcessor) moveDownBlock(block *model.Block) error {
 				//}
 			}
 
-			// ship the first transaction of the first subtree (coinbase)
+			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtree.Nodes); i++ {
-				stp.addNode(*subtree.Nodes[i], 0, true)
+				stp.addNode(*subtree.Nodes[i].Hash, subtree.Nodes[i].Fee, true)
 			}
 		} else {
 			for _, node := range subtree.Nodes {
-				stp.addNode(*node, 0, true)
+				stp.addNode(*node.Hash, node.Fee, true)
 			}
 		}
 	}
@@ -301,13 +301,13 @@ func (stp *SubtreeProcessor) moveDownBlock(block *model.Block) error {
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			stp.addNode(*node, 0, true)
+			stp.addNode(*node.Hash, node.Fee, true)
 		}
 	}
 
 	// add all the transactions from the last incomplete subtree
 	for _, node := range lastIncompleteSubtree.Nodes {
-		stp.addNode(*node, 0, true)
+		stp.addNode(*node.Hash, node.Fee, true)
 	}
 
 	return nil
@@ -364,13 +364,10 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block, skipNotification bo
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
 	//      or are they going to be caught by the tx meta lookup?
 
-	fees := lastIncompleteSubtree.Fees
-
-	var remainderTxHashes *[]*chainhash.Hash
+	var remainderTxHashes *[]util.SubtreeNode
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
 		for _, subtree := range chainedSubtrees {
-			fees += subtree.Fees
 			remainderSubtrees = append(remainderSubtrees, subtree)
 		}
 		remainderSubtrees = append(remainderSubtrees, lastIncompleteSubtree)
@@ -383,14 +380,12 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block, skipNotification bo
 			// just use the first subtree, each subtree should be the same size
 			chainedSubtreeSize = chainedSubtrees[0].Size()
 		}
-		r := make([]*chainhash.Hash, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
+		r := make([]util.SubtreeNode, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
 		remainderTxHashes = &r
 
 		*remainderTxHashes = append(*remainderTxHashes, lastIncompleteSubtree.Nodes...)
 
 		for _, subtree := range chainedSubtrees {
-			fees += subtree.Fees
-
 			*remainderTxHashes = append(*remainderTxHashes, subtree.Nodes...)
 		}
 	}
@@ -403,30 +398,24 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block, skipNotification bo
 	// remainderTxHashes is from early trees, so they need to be added before the current subtree nodes
 	if remainderTxHashes != nil {
 		for _, node := range *remainderTxHashes {
-			if !node.Equal(*model.CoinbasePlaceholderHash) {
-				stp.addNode(*node, 0, skipNotification)
+			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+				stp.addNode(*node.Hash, node.Fee, skipNotification)
 			}
 		}
 	}
 	// remainderTxHashes = nil
 
-	if len(stp.chainedSubtrees) > 0 {
-		stp.chainedSubtrees[len(stp.chainedSubtrees)-1].Fees = fees
-	} else {
-		stp.currentSubtree.Fees = fees
-	}
-
 	return nil
 }
 
-func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtree, transactionMap *util.SplitSwissMap) *[]*chainhash.Hash {
+func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtree, transactionMap *util.SplitSwissMap) *[]util.SubtreeNode {
 	var hashCount atomic.Int64
 
 	// clean out the transactions from the old current subtree that were in the block
-	// and add the remainderTxHashes to the new current subtree
+	// and add the remainderSubtreeNodes to the new current subtree
 	var wg sync.WaitGroup
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
-	remainderSubtreeHashes := make([][]*chainhash.Hash, len(chainedSubtrees))
+	remainderSubtreeHashes := make([][]util.SubtreeNode, len(chainedSubtrees))
 	for idx, subtree := range chainedSubtrees {
 		wg.Add(1)
 		go func(idx int, st *util.Subtree) {
@@ -448,11 +437,11 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 	wg.Wait()
 
 	// add all found tx hashes to the final list
-	remainderTxHashes := make([]*chainhash.Hash, 0, hashCount.Load())
+	remainderSubtreeNodes := make([]util.SubtreeNode, 0, hashCount.Load())
 	for _, subtreeHashes := range remainderSubtreeHashes {
-		remainderTxHashes = append(remainderTxHashes, subtreeHashes...)
+		remainderSubtreeNodes = append(remainderSubtreeNodes, subtreeHashes...)
 	}
-	return &remainderTxHashes
+	return &remainderSubtreeNodes
 }
 
 func (stp *SubtreeProcessor) createTransactionMap(blockSubtreesMap map[chainhash.Hash]int) *util.SplitSwissMap {
@@ -483,7 +472,7 @@ func (stp *SubtreeProcessor) createTransactionMap(blockSubtreesMap map[chainhash
 			}
 
 			for _, node := range subtree.Nodes {
-				_ = transactionMap.Put(*node)
+				_ = transactionMap.Put(*node.Hash)
 			}
 		}(subtreeHash)
 	}

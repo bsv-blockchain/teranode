@@ -106,19 +106,28 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return false
 	}
 
-	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
-	if err != nil {
-		u.logger.Errorf("failed to create subtree from bytes [%s]", err.Error())
-		return false
+	// the subtree bytes we got from our competing miner only contain the transaction hashes
+	// it's basically just a list of 32 byte transaction hashes
+	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
+	for i := 0; i < len(subtreeBytes); i += 32 {
+		txHashes[i/32], err = chainhash.NewHash(subtreeBytes[i : i+32])
+		if err != nil {
+			u.logger.Errorf("failed to create transaction hash from bytes [%s]", err.Error())
+			return false
+		}
 	}
 
+	// create the empty subtree
+	subtree := util.NewTreeByLeafCount(len(txHashes))
+
 	// validate the subtree
-	for _, txHash := range subtree.Nodes {
+	var txMeta *txmeta.Data
+	for _, txHash := range txHashes {
 		// is the txid in the store?
 		// no - get it from the network
 		// yes - is the txid blessed?
 		// if all txs in tree are blessed, then bless the tree
-		txMeta, err := u.txMetaStore.Get(ctx, txHash)
+		txMeta, err = u.txMetaStore.Get(ctx, txHash)
 		if err != nil {
 			if errors.Is(err, txmeta.ErrNotFound) {
 				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
@@ -136,6 +145,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			u.logger.Errorf("tx meta is nil [%s]", txHash.String())
 			return false
 		}
+
+		// finally add the transaction hash and fee to the subtree
+		err = subtree.AddNode(txHash, txMeta.Fee)
+		if err != nil {
+			u.logger.Errorf("failed to add node to subtree [%s]", err.Error())
+			return false
+		}
 	}
 
 	// does the merkle tree give the correct root?
@@ -145,8 +161,14 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return false
 	}
 
+	completeSubtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		u.logger.Errorf("failed to serialize subtree [%s]", err.Error())
+		return false
+	}
+
 	// store subtree in store
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], subtreeBytes)
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes)
 	if err != nil {
 		u.logger.Errorf("failed to store subtree [%s]", err.Error())
 		return false

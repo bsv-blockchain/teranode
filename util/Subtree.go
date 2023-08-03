@@ -11,11 +11,16 @@ import (
 	"github.com/libsv/go-p2p/wire"
 )
 
+type SubtreeNode struct {
+	Hash *chainhash.Hash
+	Fee  uint64
+}
+
 type Subtree struct {
 	Height           int
 	Fees             uint64
 	FeeHash          chainhash.Hash
-	Nodes            []*chainhash.Hash
+	Nodes            []SubtreeNode
 	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
 
 	// temporary (calculated) variables
@@ -29,7 +34,7 @@ type Subtree struct {
 func NewTree(height int) *Subtree {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &Subtree{
-		Nodes:        make([]*chainhash.Hash, 0, treeSize),
+		Nodes:        make([]SubtreeNode, 0, treeSize),
 		Height:       height,
 		FeeHash:      chainhash.Hash{},
 		treeSize:     treeSize,
@@ -73,11 +78,17 @@ func (st *Subtree) IsComplete() bool {
 	return len(st.Nodes) == cap(st.Nodes)
 }
 
-func (st *Subtree) ReplaceRootNode(node *chainhash.Hash) *chainhash.Hash {
+func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64) *chainhash.Hash {
 	if len(st.Nodes) < 1 {
-		st.Nodes = append(st.Nodes, node)
+		st.Nodes = append(st.Nodes, SubtreeNode{
+			Hash: node,
+			Fee:  fee,
+		})
 	} else {
-		st.Nodes[0] = node
+		st.Nodes[0] = SubtreeNode{
+			Hash: node,
+			Fee:  fee,
+		}
 	}
 
 	st.rootHash = nil // reset rootHash
@@ -99,7 +110,10 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64) error {
 		st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
 	}
 
-	st.Nodes = append(st.Nodes, node)
+	st.Nodes = append(st.Nodes, SubtreeNode{
+		Hash: node,
+		Fee:  fee,
+	})
 	st.rootHash = nil // reset rootHash
 	st.Fees += fee
 
@@ -122,12 +136,12 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
-func (st *Subtree) Difference(ids TxMap) ([]*chainhash.Hash, error) {
+func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
-	diff := make([]*chainhash.Hash, 0, 1_000)
-	for _, id := range st.Nodes {
-		if !ids.Exists(*id) {
-			diff = append(diff, id)
+	diff := make([]SubtreeNode, 0, 1_000)
+	for _, node := range st.Nodes {
+		if !ids.Exists(*node.Hash) {
+			diff = append(diff, node)
 		}
 	}
 
@@ -163,9 +177,9 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 		if i == height {
 			// we are at the leaf level and read from the Nodes array
 			if index%2 == 0 {
-				nodes = append(nodes, st.Nodes[index+1])
+				nodes = append(nodes, st.Nodes[index+1].Hash)
 			} else {
-				nodes = append(nodes, st.Nodes[index-1])
+				nodes = append(nodes, st.Nodes[index-1].Hash)
 			}
 		} else {
 			treePos := treeIndexPos + treeIndex
@@ -199,7 +213,7 @@ func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 	if arraySize == 1 {
 		// Handle this Bitcoin exception that the merkle root is the same as the transaction hash if there
 		// is only one transaction.
-		return st.Nodes, nil
+		return []*chainhash.Hash{st.Nodes[0].Hash}, nil
 	}
 
 	// Start the array offset after the last transaction and adjusted to the
@@ -213,13 +227,13 @@ func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 			if i >= len(st.Nodes) {
 				currentMerkle = nil
 			} else {
-				currentMerkle = st.Nodes[i]
+				currentMerkle = st.Nodes[i].Hash
 			}
 
 			if i+1 >= len(st.Nodes) {
 				currentMerkle1 = nil
 			} else {
-				currentMerkle1 = st.Nodes[i+1]
+				currentMerkle1 = st.Nodes[i+1].Hash
 			}
 		} else {
 			currentMerkle = merkles[i-nextPoT]
@@ -272,9 +286,15 @@ func (st *Subtree) Serialize() ([]byte, error) {
 
 	// write nodes
 	for _, node := range st.Nodes {
-		_, err = buf.Write(node[:])
+		_, err = buf.Write(node.Hash[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to write node: %v", err)
+		}
+		feeBytes := make([]byte, 8)
+		binary.LittleEndian.PutUint64(feeBytes, node.Fee)
+		_, err = buf.Write(feeBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to write fee: %v", err)
 		}
 	}
 
@@ -288,6 +308,23 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		_, err = buf.Write(node[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to write conflicting node: %v", err)
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// SerializeNodes serializes only the nodes (list of transaction ids), not the root hash, fees, etc.
+func (st *Subtree) SerializeNodes() ([]byte, error) {
+	buf := bytes.NewBuffer([]byte{})
+
+	var err error
+
+	// write nodes
+	for _, node := range st.Nodes {
+		_, err = buf.Write(node.Hash[:])
+		if err != nil {
+			return nil, fmt.Errorf("unable to write node: %v", err)
 		}
 	}
 
@@ -326,11 +363,20 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
 
 	// read leaves
-	st.Nodes = make([]*chainhash.Hash, numLeaves)
+	st.Nodes = make([]SubtreeNode, numLeaves)
+	var hash *chainhash.Hash
 	for i := uint64(0); i < numLeaves; i++ {
-		st.Nodes[i], err = chainhash.NewHash(buf.Next(32))
+		hash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return fmt.Errorf("unable to read leaves: %v", err)
+		}
+
+		feeBytes := buf.Next(8)
+		fee := binary.LittleEndian.Uint64(feeBytes)
+
+		st.Nodes[i] = SubtreeNode{
+			Hash: hash,
+			Fee:  fee,
 		}
 	}
 
