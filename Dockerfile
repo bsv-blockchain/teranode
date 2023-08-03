@@ -39,6 +39,9 @@ RUN go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB
 # Build TX Blaster
 RUN go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
 
+# Build node status
+RUN go build -o status.run ./cmd/status/
+
 # Install Delve debugger
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
@@ -54,6 +57,7 @@ COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs .
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
+COPY --from=0 /app/status.run .
 COPY --from=0 /root/go/bin/dlv .
 #COPY --from=0 /usr/lib/libfdb_c.so .
 COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
