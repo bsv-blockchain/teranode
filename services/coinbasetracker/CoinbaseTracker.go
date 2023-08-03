@@ -11,6 +11,7 @@ import (
 	networkModel "github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -105,11 +106,29 @@ func (ct *CoinbaseTracker) AddUtxo(ctx context.Context, utxo *model.UTXO) error 
 }
 
 func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount uint64) ([]*bt.UTXO, error) {
-	cond := &[]string{"address = ? AND amount = ?", address, strconv.FormatInt(int64(amount), 10)}
+	cond := []interface{}{"address = ? AND amount = ?", address, strconv.FormatInt(int64(amount), 10)}
 	utxos := []model.UTXO{}
-	err := ct.store.Read_All_Cond(&utxos, cond)
-	// do model conversion
-	return nil, err
+	payload, err := ct.store.Read_All_Cond(&utxos, cond)
+	if err != nil {
+		return nil, err
+	}
+	res := []*bt.UTXO{}
+	for _, i := range payload {
+		v, ok := i.(*model.UTXO)
+		if !ok {
+			ct.logger.Errorf("received result is not a model.UTXO")
+			// should we panic?
+			continue
+		}
+		script := bscript.Script([]byte(v.Script))
+		res = append(res, &bt.UTXO{
+			TxID:          []byte(v.Txid),
+			Vout:          v.Vout,
+			LockingScript: &script,
+			Satoshis:      v.Amount,
+		})
+	}
+	return res, nil
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {

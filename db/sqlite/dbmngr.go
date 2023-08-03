@@ -76,9 +76,18 @@ func (m *SqliteManager) Read(model any) error {
 	return result.Error
 }
 
-func (m *SqliteManager) Read_All_Cond(model any, cond *[]string) error {
-	result := m.db.Where((*cond)[0], (*cond)[1:]).Find(model)
-	return result.Error
+func (m *SqliteManager) Read_All_Cond(model any, cond []any) ([]any, error) {
+	batch_size := 100
+	payload := []any{}
+	result := m.db.Where(cond[0], cond[1:]...).
+		FindInBatches(model, batch_size,
+			func(tx *gorm.DB, batch int) error {
+				payload = append(payload, tx.Statement.Dest)
+				return nil
+			},
+		)
+
+	return payload, result.Error
 }
 
 func (m *SqliteManager) Update(model any) error {
