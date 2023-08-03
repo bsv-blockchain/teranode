@@ -73,7 +73,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 
 	q := `
 		INSERT INTO blocks (
-		 parentId
+		 parent_id
     ,version
 	  ,hash
 	  ,previous_hash
