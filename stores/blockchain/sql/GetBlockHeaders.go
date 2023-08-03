@@ -24,6 +24,10 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 
 	blockHeader, err := s.GetHeader(ctx, blockHashFrom)
 	if err != nil {
+		if errors.Is(err, store.ErrBlockNotFound) {
+			// could not find header, return empty list
+			return blockHeaders, nil
+		}
 		return nil, fmt.Errorf("failed to get header: %w", err)
 	}
 
