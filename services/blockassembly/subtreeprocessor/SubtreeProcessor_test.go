@@ -65,7 +65,7 @@ func TestRotate(t *testing.T) {
 			assert.Equal(t, "fd8e7ab196c23534961ef2e792e13426844f831e83b856aa99998ab9908d854f", merkleRoot.String())
 
 			// Test the merkle root with the coinbase placeholder replaced
-			merkleRoot = subtree.ReplaceRootNode(coinbaseHash)
+			merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0)
 			assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", merkleRoot.String())
 
 			endTestChan <- true
@@ -147,7 +147,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			require.NoError(t, err)
 
 			if i == 0 {
-				stp.currentSubtree.ReplaceRootNode(hash)
+				stp.currentSubtree.ReplaceRootNode(hash, 0)
 			} else {
 				stp.Add(*hash, 1, waitCh)
 				<-waitCh
@@ -179,7 +179,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			require.NoError(t, err)
 
 			if i == 0 {
-				stp.currentSubtree.ReplaceRootNode(hash)
+				stp.currentSubtree.ReplaceRootNode(hash, 0)
 			} else {
 				stp.Add(*hash, 1, waitCh)
 				<-waitCh
@@ -246,7 +246,7 @@ func TestMoveUpBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash)
+			stp.currentSubtree.ReplaceRootNode(hash, 0)
 		} else {
 			stp.Add(*hash, 1, waitCh)
 			<-waitCh
@@ -321,7 +321,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash)
+			stp.currentSubtree.ReplaceRootNode(hash, 0)
 		} else {
 			stp.Add(*hash, 1, waitCh)
 			<-waitCh
@@ -395,7 +395,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash)
+			stp.currentSubtree.ReplaceRootNode(hash, 0)
 		} else {
 			stp.Add(*hash, 1, waitCh)
 			<-waitCh
@@ -469,7 +469,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash)
+			stp.currentSubtree.ReplaceRootNode(hash, 0)
 		} else {
 			stp.Add(*hash, 1, waitCh)
 			<-waitCh
@@ -543,7 +543,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	subtreeProcessor := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, hash := range hashes {
 		if i == 0 {
-			subtreeProcessor.currentSubtree.ReplaceRootNode(hash)
+			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0)
 		} else {
 			subtreeProcessor.Add(*hash, 111)
 		}
@@ -577,7 +577,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtrees)))
 	for idx, subtree := range subtrees {
 		if idx == 0 {
-			subtree.ReplaceRootNode(coinbaseHash)
+			subtree.ReplaceRootNode(coinbaseHash, 0)
 		}
 		err = topTree.AddNode(subtree.RootHash(), 1)
 		require.NoError(t, err)

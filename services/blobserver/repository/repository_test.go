@@ -97,14 +97,22 @@ func TestSubtree(t *testing.T) {
 	repo, err := repository.NewRepository(utxoStore, txStore, subtreeStore)
 	require.NoError(t, err)
 
-	// Get the transaction from the repository
+	// Get the subtree node bytes from the repository
 	b, err := repo.GetSubtree(context.Background(), key)
 	require.NoError(t, err)
 
-	var subtree2 util.Subtree
-	err = subtree2.Deserialize(b)
-	require.NoError(t, err)
+	subtreeNodes := make([]*chainhash.Hash, len(b)/32)
+	for i := 0; i < len(b); i += 32 {
+		subtreeNodes[i/32], err = chainhash.NewHash(b[i : i+32])
+		require.NoError(t, err)
+	}
 
-	assert.Equal(t, txns[0], subtree2.Nodes[0])
-	assert.Equal(t, txns[1], subtree2.Nodes[1])
+	subtree2 := util.NewTreeByLeafCount(len(b) / 32)
+	for _, hash := range subtreeNodes {
+		err = subtree2.AddNode(hash, 0)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
+	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
 }

@@ -62,7 +62,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		go func() {
 			subtree := <-testItems.newSubtreeChan
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *model.CoinbasePlaceholderHash, *subtree.Nodes[0])
+			assert.Equal(t, *model.CoinbasePlaceholderHash, *subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(666), subtree.Fees)
 			wg.Done()
@@ -238,7 +238,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader = blockHeader2
-		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader1, blockHeader2}
+		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader2, blockHeader1}
 		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
 			*blockHeader1.Hash(): 1,
 			*blockHeader2.Hash(): 2,

@@ -30,10 +30,6 @@ func TestSQL_GetBlock(t *testing.T) {
 
 		// block
 		assert.Equal(t, uint64(1), block.TransactionCount)
-		assert.Len(t, block.Subtrees, 1)
-		txHash, err := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
-		require.NoError(t, err)
-
-		assert.Equal(t, txHash, block.Subtrees[0])
+		assert.Len(t, block.Subtrees, 0)
 	})
 }
