@@ -15,6 +15,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
+	"github.com/TAAL-GmbH/ubsv/services/bootstrap"
 	"github.com/TAAL-GmbH/ubsv/services/coinbasetracker"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
@@ -74,7 +75,7 @@ func main() {
 	startMiner := flag.Bool("miner", false, "start miner service")
 	startBlobServer := flag.Bool("blobserver", false, "start blob server")
 	startCoinbaseTracker := flag.Bool("coinbasetracker", false, "start coinbase tracker server")
-	// startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
+	startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
 	help := flag.Bool("help", false, "Show help")
 
@@ -123,9 +124,9 @@ func main() {
 		*startCoinbaseTracker = gocore.Config().GetBool("startCoinbaseTracker", false)
 	}
 
-	// if !*startBootstrapServer {
-	// 	*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
-	// }
+	if !*startBootstrapServer {
+		*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
+	}
 
 	if help != nil && *help ||
 		(!*startBlockchain &&
@@ -137,7 +138,7 @@ func main() {
 			!*startPropagation &&
 			!*startSeeder &&
 			!*startMiner &&
-			// !*startBootstrapServer &&
+			!*startBootstrapServer &&
 			!*startBlobServer &&
 			!*startCoinbaseTracker) {
 		fmt.Println("usage: main [options]")
@@ -176,9 +177,9 @@ func main() {
 		fmt.Println("    -coinbasetracker=<1|0>")
 		fmt.Println("          whether to start the coinbase tracker server")
 		fmt.Println("")
-		// fmt.Println("    -bootstrap=<1|0>")
-		// fmt.Println("          whether to start the bootstrap server")
-		// fmt.Println("")
+		fmt.Println("    -bootstrap=<1|0>")
+		fmt.Println("          whether to start the bootstrap server")
+		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
 		fmt.Println("")
@@ -249,7 +250,7 @@ func main() {
 	var minerServer *miner.Miner
 	var blobServer *blobserver.Server
 	var coinbaseTrackerServer *coinbasetracker.CoinbaseTrackerServer
-	// var bootstrapServer *bootstrap.Server
+	var bootstrapServer *bootstrap.Server
 	var blockValidationService *blockvalidation.BlockValidationServer
 
 	// blockchain service needs to start first !
@@ -506,17 +507,17 @@ func main() {
 	}
 
 	// bootstrap server
-	// if *startBootstrapServer {
-	// 	g.Go(func() (err error) {
-	// 		bootstrapServer = bootstrap.NewServer()
+	if *startBootstrapServer {
+		g.Go(func() (err error) {
+			bootstrapServer = bootstrap.NewServer()
 
-	// 		if err := bootstrapServer.Start(ctx); err != nil {
-	// 			return err
-	// 		}
+			if err := bootstrapServer.Start(ctx); err != nil {
+				return err
+			}
 
-	// 		return nil
-	// 	})
-	// }
+			return nil
+		})
+	}
 
 	// propagation
 	if *startPropagation {
@@ -609,9 +610,9 @@ func main() {
 		coinbaseTrackerServer.Stop(shutdownCtx)
 	}
 
-	// if bootstrapServer != nil {
-	// 	bootstrapServer.Stop(shutdownCtx)
-	// }
+	if bootstrapServer != nil {
+		bootstrapServer.Stop(shutdownCtx)
+	}
 
 	//
 	// close all the stores

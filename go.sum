@@ -528,8 +528,8 @@ github.com/ordishs/go-bt/v2 v2.2.4 h1:jbaT03z+ti4A4RwSrHOgBfbWbcuGfUnm/nXWSDxVx5
 github.com/ordishs/go-bt/v2 v2.2.4/go.mod h1:YC71+kRox9h0uCEFZ6OR5+mZG/8ARvoxVp4ZekqWy7s=
 github.com/ordishs/go-utils v1.0.47 h1:7eGz8IYpgb3Fwki8bLobnjEFKIYZG/1Upm+43olFB7I=
 github.com/ordishs/go-utils v1.0.47/go.mod h1:D+ICh6tfd2grJ/qAV4M3jzpt3LyDyhbLwVI12e3jsd4=
-github.com/ordishs/gocore v1.0.35 h1:dasWlk2xEjibXCWRltlw74nkwqzJVxo2ZB3Fvl2u4IE=
-github.com/ordishs/gocore v1.0.35/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
+github.com/ordishs/gocore v1.0.38 h1:PjxWUHa5oO5PP1y+Y6eFD3eIdYq8WudE13rJB6n2bMs=
+github.com/ordishs/gocore v1.0.38/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
 github.com/ordishs/verifysignature v1.0.7 h1:fNECSYHBCGit65WilWgapdzJCJPh1p/qcCZcPCs32jY=
 github.com/ordishs/verifysignature v1.0.7/go.mod h1:gPWrg+ypbDcOFD51pNkkDeeOXHfBTYMP+R9mG2g4JKU=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
@@ -680,6 +680,7 @@ go.opentelemetry.io/otel/trace v1.14.0 h1:wp2Mmvj41tDsyAJXiWDWpfNsOiIyd38fy85pyK
 go.opentelemetry.io/otel/trace v1.14.0/go.mod h1:8avnQLK+CG77yNLUae4ea2JDQ6iT+gozhnZjy/rw9G8=
 go.uber.org/atomic v1.10.0 h1:9qC72Qh0+3MqyJbAn8YU5xVq1frD8bn3JtD2oXtafVQ=
 go.uber.org/atomic v1.10.0/go.mod h1:LUxbIzbOniOlMKjJjyPfpl4v+PKK2cNJn91OQbhoJI0=
+go.uber.org/goleak v1.1.10 h1:z+mqJhf6ss6BSfSM671tgKyZBFPTTJM+HLxnhPC3wu0=
 golang.org/x/crypto v0.0.0-20180904163835-0709b304e793/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/crypto v0.0.0-20181203042331-505ab145d0a9/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
@@ -720,6 +721,7 @@ golang.org/x/lint v0.0.0-20190930215403-16217165b5de/go.mod h1:6SW0HCj/g11FgYtHl
 golang.org/x/lint v0.0.0-20191125180803-fdd1cda4f05f/go.mod h1:5qLYkcX4OjUUV8bRuDixDT3tpyyb+LUpUlRWLxfhWrs=
 golang.org/x/lint v0.0.0-20200130185559-910be7a94367/go.mod h1:3xt1FjdF8hUf6vQPIChWIBhFzV8gjjsPE/fR3IyQdNY=
 golang.org/x/lint v0.0.0-20200302205851-738671d3881b/go.mod h1:3xt1FjdF8hUf6vQPIChWIBhFzV8gjjsPE/fR3IyQdNY=
+golang.org/x/lint v0.0.0-20201208152925-83fdc39ff7b5 h1:2M3HP5CCK1Si9FQhwnzYhXdG6DXeebvUHFpre8QvbyI=
 golang.org/x/lint v0.0.0-20201208152925-83fdc39ff7b5/go.mod h1:3xt1FjdF8hUf6vQPIChWIBhFzV8gjjsPE/fR3IyQdNY=
 golang.org/x/mobile v0.0.0-20190312151609-d3739f865fa6/go.mod h1:z+o9i4GpDbdi3rU15maQ/Ox0txvL9dWGYEHz965HBQE=
 golang.org/x/mobile v0.0.0-20190719004257-d2bd2a29d028/go.mod h1:E/iHnbuqvinMTCcRqshq8CkpyQDoeVncDDYHnLhea+o=
