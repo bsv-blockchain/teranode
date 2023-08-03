@@ -45,7 +45,7 @@ func TestOneTransaction(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash)
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0)
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 	for i, subTree := range subtrees {
@@ -102,7 +102,7 @@ func TestTwoTransactions(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 	require.NoError(t, err)
-	subtrees[0].ReplaceRootNode(coinbaseHash)
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0)
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 	for i, subTree := range subtrees {
@@ -174,7 +174,7 @@ func TestMerkleRoot(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 	require.NoError(t, err)
-	subtrees[0].ReplaceRootNode(coinbaseHash)
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()

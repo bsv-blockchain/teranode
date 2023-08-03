@@ -231,7 +231,7 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 	// validate the block
 	err = u.blockValidation.BlockFound(context.Background(), block, baseUrl)
 	if err != nil {
-		u.logger.Errorf("failed to process block [%s] [%v]", block.String(), err)
+		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
 
 	return nil

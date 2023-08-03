@@ -198,7 +198,7 @@ func createSqliteSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS blocks (
 		 id           INTEGER PRIMARY KEY AUTOINCREMENT
-		,parentId	  INTEGER REFERENCES blocks(id)
+		,parent_id	  INTEGER REFERENCES blocks(id)
         ,version        INTEGER NOT NULL
 	    ,hash           BLOB NOT NULL
 	    ,previous_hash  BLOB NOT NULL

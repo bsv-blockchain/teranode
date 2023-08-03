@@ -22,7 +22,6 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-1:8090"
       blobserver_remoteAddress: "ubsv-1:8091"
-      bootstrap_grpcAddress: "bootstrap-server:8089"
     expose:
       - 8081-8091
     ports:
@@ -51,7 +50,6 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-2:8090"
       blobserver_remoteAddress: "ubsv-2:8091"
-      bootstrap_grpcAddress: "bootstrap-server:8089"
     expose:
       - 8081-8091
     ports:
@@ -80,7 +78,6 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-3:8090"
       blobserver_remoteAddress: "ubsv-3:8091"
-      bootstrap_grpcAddress: "bootstrap-server:8089"
     expose:
       - 8081-8091
     ports:

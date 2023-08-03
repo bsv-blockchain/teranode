@@ -24,11 +24,12 @@ type BlockValidation struct {
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
 	txMetaStore      txmeta.Store
-	validatorClient  *validator.Client
+	validatorClient  validator.Interface
+	httpClient       *http.Client
 }
 
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txMetaStore txmeta.Store, validatorClient *validator.Client) *BlockValidation {
+	txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
 	bv := &BlockValidation{
 		logger:           logger,
@@ -36,6 +37,7 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 		subtreeStore:     subtreeStore,
 		txMetaStore:      txMetaStore,
 		validatorClient:  validatorClient,
+		httpClient:       &http.Client{},
 	}
 
 	return bv
@@ -106,19 +108,28 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return false
 	}
 
-	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
-	if err != nil {
-		u.logger.Errorf("failed to create subtree from bytes [%s]", err.Error())
-		return false
+	// the subtree bytes we got from our competing miner only contain the transaction hashes
+	// it's basically just a list of 32 byte transaction hashes
+	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
+	for i := 0; i < len(subtreeBytes); i += 32 {
+		txHashes[i/32], err = chainhash.NewHash(subtreeBytes[i : i+32])
+		if err != nil {
+			u.logger.Errorf("failed to create transaction hash from bytes [%s]", err.Error())
+			return false
+		}
 	}
 
+	// create the empty subtree
+	subtree := util.NewTreeByLeafCount(len(txHashes))
+
 	// validate the subtree
-	for _, txHash := range subtree.Nodes {
+	var txMeta *txmeta.Data
+	for _, txHash := range txHashes {
 		// is the txid in the store?
 		// no - get it from the network
 		// yes - is the txid blessed?
 		// if all txs in tree are blessed, then bless the tree
-		txMeta, err := u.txMetaStore.Get(ctx, txHash)
+		txMeta, err = u.txMetaStore.Get(ctx, txHash)
 		if err != nil {
 			if errors.Is(err, txmeta.ErrNotFound) {
 				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
@@ -136,6 +147,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			u.logger.Errorf("tx meta is nil [%s]", txHash.String())
 			return false
 		}
+
+		// finally add the transaction hash and fee to the subtree
+		err = subtree.AddNode(txHash, txMeta.Fee)
+		if err != nil {
+			u.logger.Errorf("failed to add node to subtree [%s]", err.Error())
+			return false
+		}
 	}
 
 	// does the merkle tree give the correct root?
@@ -145,8 +163,14 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return false
 	}
 
+	completeSubtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		u.logger.Errorf("failed to serialize subtree [%s]", err.Error())
+		return false
+	}
+
 	// store subtree in store
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], subtreeBytes)
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes)
 	if err != nil {
 		u.logger.Errorf("failed to store subtree [%s]", err.Error())
 		return false
@@ -187,14 +211,13 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	}
 
 	// do http request to baseUrl + txHash.String()
-	httpClient := &http.Client{}
 	url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := u.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
 	}
@@ -219,6 +242,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	// TODO should this request over network, whereby it will be added to block assembly?
 	err = u.validatorClient.Validate(ctx, tx)
 	if err != nil {
+		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
 		return nil, fmt.Errorf("failed to validate transaction [%s]", err.Error())
 	}
 

@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// get all block headers
-	blockHeaders, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 1000)
+	blockHeaders, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000)
 	if err != nil {
 		panic(err)
 	}
@@ -130,7 +130,7 @@ func main() {
 			}
 
 			// check subtrees
-			logger.Debugf("checking subtrees")
+			logger.Debugf("checking subtrees: %d", len(block.Subtrees))
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("checking subtree %s", subtreeHash)
 
@@ -148,15 +148,15 @@ func main() {
 
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
-					if !model.CoinbasePlaceholderHash.IsEqual(node) {
-						_, ok := transactionMap[*node]
+					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
+						_, ok := transactionMap[*node.Hash]
 						if ok {
 							logger.Errorf("transaction %s already exists in subtree %s in block %s", node, subtreeHash, block.Hash())
 						} else {
-							transactionMap[*node] = *block.Hash()
+							transactionMap[*node.Hash] = *block.Hash()
 						}
 
-						tx, err := txStore.Get(ctx, node[:])
+						tx, err := txStore.Get(ctx, node.Hash[:])
 						if err != nil {
 							logger.Errorf("failed to get transaction %s from tx store: %s", node, err)
 							continue

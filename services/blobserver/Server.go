@@ -8,6 +8,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/http_impl"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
+	"github.com/TAAL-GmbH/ubsv/services/bootstrap"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
@@ -83,42 +84,45 @@ func (v *Server) Start() error {
 		// TODO - This may need to be moved to a separate location in the code
 		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_remoteAddress")
 
-		// g.Go(func() error {
-		// 	bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
-		// 		// Start a subscription to the new peer's blob server
-		// 		g.Go(func() error {
-		// 			v.logger.Infof("Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-		// 			return NewClient(p.BlobServerGrpcAddress).Start(context.Background())
-		// 		})
-		// 	}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
-
-		// 	return bootstrapClient.Start(ctx)
-		// })
-
 		// Get a list of all blob servers
 		blobServersList, _ := gocore.Config().Get("blobserver_remoteAddresses")
+		if blobServersList == "" {
+			// Start a subscription to the bootstrap service
 
-		tokens := strings.Split(blobServersList, "|")
+			g.Go(func() error {
+				bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
+					// Start a subscription to the new peer's blob server
+					g.Go(func() error {
+						v.logger.Infof("Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+						return NewClient("blobserver_bs", p.BlobServerGrpcAddress).Start(context.Background())
+					})
+				}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
 
-		// Remove myself from the list
-		blobServers := make([]string, 0, len(tokens))
+				return bootstrapClient.Start(ctx)
+			})
+		} else {
 
-		for _, token := range tokens {
-			token = strings.TrimSpace(token)
-			if token != blobServerGrpcAddress {
-				blobServers = append(blobServers, token)
+			tokens := strings.Split(blobServersList, "|")
+
+			// Remove myself from the list
+			blobServers := make([]string, 0, len(tokens))
+
+			for _, token := range tokens {
+				token = strings.TrimSpace(token)
+				if token != blobServerGrpcAddress {
+					blobServers = append(blobServers, token)
+				}
+			}
+
+			// Now create a client connection to all remaining blobServers
+			for _, blobServer := range blobServers {
+				b := blobServer
+				g.Go(func() error {
+					v.logger.Infof("Connecting to blob server at: %s", b)
+					return NewClient("blobserver_gc", b).Start(ctx)
+				})
 			}
 		}
-
-		// Now create a client connection to all remaining blobServers
-		for _, blobServer := range blobServers {
-			b := blobServer
-			g.Go(func() error {
-				v.logger.Infof("Connecting to blob server at: %s", b)
-				return NewClient("blobserver", b).Start(ctx)
-			})
-		}
-
 	}
 
 	if v.httpServer != nil {

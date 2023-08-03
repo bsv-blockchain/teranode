@@ -122,7 +122,8 @@ func init() {
 }
 
 func New(repository *repository.Repository) (*GRPC, error) {
-	logger := gocore.Log("b_grpc")
+	logLevel, _ := gocore.Config().Get("logLevel")
+	logger := gocore.Log("b_grpc", gocore.NewLogLevelFromString(logLevel))
 
 	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -168,6 +169,9 @@ func (g *GRPC) Start(addr string) error {
 			if notification == nil {
 				continue
 			}
+
+			g.logger.Debugf("Sending %s notification: %s to %d subscribers", blobserver_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
+
 			g.notifications <- &blobserver_api.Notification{
 				Type:    blobserver_api.Type(notification.Type),
 				Hash:    notification.Hash[:],

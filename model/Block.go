@@ -162,7 +162,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if *b.subtreeSlices[0].Nodes[0] != CoinbasePlaceholder {
+		if *b.subtreeSlices[0].Nodes[0].Hash != CoinbasePlaceholder {
 			return false, fmt.Errorf("first transaction in first subtree is not a coinbase placeholder")
 		}
 
@@ -222,13 +222,13 @@ func (b *Block) checkDuplicateTransactions() error {
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
 	for subIdx, subtree := range b.subtreeSlices {
 		size := len(subtree.Nodes)
-		for txIdx, txHash := range subtree.Nodes {
-			if b.txMap.Exists(*txHash) {
-				return fmt.Errorf("duplicate transaction %s", txHash.String())
+		for txIdx, subtreeNode := range subtree.Nodes {
+			if b.txMap.Exists(*subtreeNode.Hash) {
+				return fmt.Errorf("duplicate transaction %s", subtreeNode.Hash.String())
 			}
-			err := b.txMap.Put(*txHash, uint64((subIdx*size)+txIdx))
+			err := b.txMap.Put(*subtreeNode.Hash, uint64((subIdx*size)+txIdx))
 			if err != nil {
-				return fmt.Errorf("error adding transaction %s to txMap: %v", txHash.String(), err)
+				return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
 			}
 		}
 	}
@@ -242,24 +242,24 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 	}
 
 	for _, subtree := range b.subtreeSlices {
-		for _, txHash := range subtree.Nodes {
-			txMeta, err := txMetaStore.Get(ctx, txHash)
+		for _, subtreeNode := range subtree.Nodes {
+			txMeta, err := txMetaStore.Get(ctx, subtreeNode.Hash)
 			if err != nil {
 				return err
 			}
 
 			if txMeta == nil {
-				return fmt.Errorf("transaction %s is not blessed", txHash.String())
+				return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
 			}
 
 			if len(txMeta.BlockHashes) > 0 {
 				// TODO check whether this tx is on our chain, it should NOT be
-				return fmt.Errorf("transaction %s is blessed by block(s) %s, not by block %s", txHash.String(), txMeta.BlockHashes, b.Hash().String())
+				return fmt.Errorf("transaction %s is blessed by block(s) %s, not by block %s", subtreeNode.Hash.String(), txMeta.BlockHashes, b.Hash().String())
 			}
 
-			txIdx, ok := b.txMap.Get(*txHash)
+			txIdx, ok := b.txMap.Get(*subtreeNode.Hash)
 			if !ok {
-				return fmt.Errorf("transaction %s is not in the txMap", txHash.String())
+				return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
 			}
 
 			for _, parentTxHash := range txMeta.ParentTxHashes {
@@ -277,7 +277,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 				}
 
 				if parentTxIdx > txIdx {
-					return fmt.Errorf("transaction %s is before parent transaction %s", txHash.String(), parentTxHash.String())
+					return fmt.Errorf("transaction %s is before parent transaction %s", subtreeNode.Hash.String(), parentTxHash.String())
 				}
 			}
 		}
@@ -319,7 +319,7 @@ func (b *Block) CheckMerkleRoot() (err error) {
 	for i, subtree := range b.subtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
-			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash())
+			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0)
 		}
 
 		hashes[i] = subtree.RootHash()

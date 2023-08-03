@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	"github.com/libsv/go-p2p"
 	"github.com/olekukonko/tablewriter"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -27,14 +28,11 @@ var commit string
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
-	logger = gocore.Log("work", gocore.NewLogLevelFromString("debug"))
+	logger = p2p.TestLogger{}
 }
 
 func main() {
 	_ = os.Chdir("../../")
-
-	stats := gocore.Config().Stats()
-	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	clients := flag.String("miners", "", "blockchain miners to watch")
 	refresh := flag.Int("refresh", 5, "refresh rate in seconds")
@@ -52,7 +50,7 @@ func main() {
 
 	miners := make(map[string]blockchain.ClientI)
 	for _, minerAddress := range minerList {
-		client, err := blockchain.NewClientWithAddress(minerAddress)
+		client, err := blockchain.NewClientWithAddress(logger, minerAddress)
 		if err != nil {
 			logger.Fatalf("error connecting to minerAddress %s: %s", minerAddress, err)
 		}
@@ -80,7 +78,7 @@ func main() {
 						table.Append([]string{
 							minerAddress,
 							"",
-							err.Error(),
+							"not available",
 							"",
 						})
 					} else {

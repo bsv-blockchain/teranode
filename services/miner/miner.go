@@ -39,7 +39,10 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
-	miningCtx, cancel := context.WithCancel(ctx)
+	var miningCtx context.Context
+	var cancel context.CancelFunc
+
+	_, cancel = context.WithCancel(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -94,21 +97,26 @@ func (m *Miner) mine(ctx context.Context) error {
 	}
 
 	// Wait a bit before submitting the solution to simulate high difficulty
-	randWait := rand.Intn(waitSeconds)
-	m.logger.Warnf("Found block on job %s, waiting %ds before submitting", candidateId, randWait)
+	if waitSeconds > 0 {
+		randWait := rand.Intn(waitSeconds)
 
-MineWait:
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("canceled mining on job %s", candidateId)
-		default:
-			time.Sleep(1 * time.Second)
-			randWait--
-			if randWait <= 0 {
-				break MineWait
+		m.logger.Warnf("Found block on job %s, waiting %ds before submitting", candidateId, randWait)
+
+	MineWait:
+		for {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("canceled mining on job %s", candidateId)
+			default:
+				time.Sleep(1 * time.Second)
+				randWait--
+				if randWait <= 0 {
+					break MineWait
+				}
 			}
 		}
+	} else {
+		m.logger.Warnf("Found block on job %s, submitting", candidateId)
 	}
 
 	m.logger.Infof("submitting mining solution: %s", candidateId)

@@ -2,6 +2,7 @@ package cpuminer
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -29,6 +30,7 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 
 	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
 	extranonce := make([]byte, 12)
+	_, _ = rand.Read(extranonce)
 	a = append(a, extranonce...)
 	a = append(a, b...)
 

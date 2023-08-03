@@ -12,6 +12,18 @@ import (
 )
 
 func TestSQL_GetBlockHeaders(t *testing.T) {
+	t.Run("empty - no error", func(t *testing.T) {
+		storeUrl, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(storeUrl)
+		require.NoError(t, err)
+
+		headers, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(headers))
+	})
+
 	t.Run("", func(t *testing.T) {
 		storeUrl, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)

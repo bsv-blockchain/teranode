@@ -15,6 +15,7 @@ require (
 	github.com/dolthub/swiss v0.1.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/holiman/uint256 v1.2.2
+	github.com/jarcoal/httpmock v1.2.0
 	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/lib/pq v1.10.7
 	github.com/libsv/go-bc v0.1.11
@@ -27,7 +28,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.79
 	github.com/ordishs/go-utils v1.0.47
-	github.com/ordishs/gocore v1.0.35
+	github.com/ordishs/gocore v1.0.38
 	github.com/ordishs/verifysignature v1.0.7
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.14.0

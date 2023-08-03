@@ -44,7 +44,7 @@ func NewClient() (ClientI, error) {
 	}, nil
 }
 
-func NewClientWithAddress(address string) (ClientI, error) {
+func NewClientWithAddress(logger utils.Logger, address string) (ClientI, error) {
 	ctx := context.Background()
 
 	baConn, err := utils.GetGRPCClient(ctx, address, &utils.ConnectionOptions{
@@ -56,7 +56,7 @@ func NewClientWithAddress(address string) (ClientI, error) {
 
 	return &Client{
 		client: blockchain_api.NewBlockchainAPIClient(baConn),
-		logger: gocore.Log("blkcC"),
+		logger: logger,
 	}, nil
 }
 
@@ -178,21 +178,20 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	go func() {
 		defer close(ch)
 
-	RETRY:
 		for {
 			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
 			if err != nil {
 				time.Sleep(1 * time.Second)
-				break RETRY
+				continue
 			}
 
 			for {
 				resp, err := stream.Recv()
 				if err != nil {
 					time.Sleep(1 * time.Second)
-					break RETRY
+					break
 				}
 
 				hash, err := chainhash.NewHash(resp.Hash)

@@ -7,6 +7,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	"github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -71,12 +72,22 @@ func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) 
 }
 
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtree, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
+	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
 		return nil, err
 	}
 
-	return subtree, nil
+	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeNodeBytes, err := subtree.SerializeNodes()
+	if err != nil {
+		return nil, err
+	}
+
+	return subtreeNodeBytes, nil
 }
 
 func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {

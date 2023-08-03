@@ -138,7 +138,8 @@ func Test_Serialize(t *testing.T) {
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
 		for i := 0; i < len(st.Nodes); i++ {
-			assert.Equal(t, st.Nodes[i].String(), newSubtree.Nodes[i].String())
+			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
+			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
 		}
 	})
 
@@ -173,7 +174,8 @@ func Test_Serialize(t *testing.T) {
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
 		for i := 0; i < len(st.Nodes); i++ {
-			assert.Equal(t, st.Nodes[i].String(), newSubtree.Nodes[i].String())
+			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
+			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
 		}
 
 		assert.Equal(t, len(st.ConflictingNodes), len(newSubtree.ConflictingNodes))
