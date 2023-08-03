@@ -44,7 +44,7 @@ func NewClient() (ClientI, error) {
 	}, nil
 }
 
-func NewClientWithAddress(address string) (ClientI, error) {
+func NewClientWithAddress(logger utils.Logger, address string) (ClientI, error) {
 	ctx := context.Background()
 
 	baConn, err := utils.GetGRPCClient(ctx, address, &utils.ConnectionOptions{
@@ -56,7 +56,7 @@ func NewClientWithAddress(address string) (ClientI, error) {
 
 	return &Client{
 		client: blockchain_api.NewBlockchainAPIClient(baConn),
-		logger: gocore.Log("blkcC"),
+		logger: logger,
 	}, nil
 }
 
