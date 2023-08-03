@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// get all block headers
-	blockHeaders, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 1000)
+	blockHeaders, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000)
 	if err != nil {
 		panic(err)
 	}
@@ -130,7 +130,7 @@ func main() {
 			}
 
 			// check subtrees
-			logger.Debugf("checking subtrees")
+			logger.Debugf("checking subtrees: %d", len(block.Subtrees))
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("checking subtree %s", subtreeHash)
 
