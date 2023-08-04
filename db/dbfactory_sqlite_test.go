@@ -70,10 +70,10 @@ func TestAddBlock(t *testing.T) {
 	}
 
 	tn1bin := make([]byte, 32)
-	rand.Read(tn1bin)
+	_, _ = rand.Read(tn1bin)
 	hash1, _ := chainhash.NewHash(tn1bin)
 	tn2bin := make([]byte, 32)
-	rand.Read(tn2bin)
+	_, _ = rand.Read(tn2bin)
 	hash2, _ := chainhash.NewHash(tn2bin)
 
 	m := &model.Block{
@@ -112,10 +112,10 @@ func TestAddReadBlock(t *testing.T) {
 	}
 
 	tn1bin := make([]byte, 32)
-	rand.Read(tn1bin)
+	_, _ = rand.Read(tn1bin)
 	hash1, _ := chainhash.NewHash(tn1bin)
 	tn2bin := make([]byte, 32)
-	rand.Read(tn2bin)
+	_, _ = rand.Read(tn2bin)
 	hash2, _ := chainhash.NewHash(tn2bin)
 
 	m := &model.Block{
@@ -162,7 +162,7 @@ func TestAddUtxo(t *testing.T) {
 	}
 
 	tx1bin := make([]byte, 32)
-	rand.Read(tx1bin)
+	_, _ = rand.Read(tx1bin)
 	hash1, _ := chainhash.NewHash(tx1bin)
 
 	pk, _ := bec.NewPrivateKey(bec.S256())
@@ -216,7 +216,7 @@ func TestAddReadUtxo(t *testing.T) {
 	}
 
 	tx1bin := make([]byte, 32)
-	rand.Read(tx1bin)
+	_, _ = rand.Read(tx1bin)
 	hash1, _ := chainhash.NewHash(tx1bin)
 
 	pk, _ := bec.NewPrivateKey(bec.S256())
@@ -280,7 +280,7 @@ func TestAddReadCondUtxo(t *testing.T) {
 	}
 
 	tx1bin := make([]byte, 32)
-	rand.Read(tx1bin)
+	_, _ = rand.Read(tx1bin)
 	hash1, _ := chainhash.NewHash(tx1bin)
 
 	pk, _ := bec.NewPrivateKey(bec.S256())

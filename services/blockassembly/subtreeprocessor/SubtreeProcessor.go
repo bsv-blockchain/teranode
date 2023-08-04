@@ -367,9 +367,8 @@ func (stp *SubtreeProcessor) moveUpBlock(block *model.Block, skipNotification bo
 	var remainderTxHashes *[]util.SubtreeNode
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
-		for _, subtree := range chainedSubtrees {
-			remainderSubtrees = append(remainderSubtrees, subtree)
-		}
+
+		remainderSubtrees = append(remainderSubtrees, chainedSubtrees...)
 		remainderSubtrees = append(remainderSubtrees, lastIncompleteSubtree)
 
 		remainderTxHashes = stp.getRemainderTxHashes(remainderSubtrees, transactionMap)

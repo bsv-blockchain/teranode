@@ -98,7 +98,7 @@ func (u *CoinbaseTrackerServer) Start() error {
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
-	u.coinbaseTracker.Stop()
+	_ = u.coinbaseTracker.Stop()
 	u.grpcServer.GracefulStop()
 }
 

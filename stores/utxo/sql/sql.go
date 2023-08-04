@@ -22,15 +22,15 @@ import (
 )
 
 var (
-	prometheusUtxoGet        prometheus.Counter
-	prometheusUtxoStore      prometheus.Counter
-	prometheusUtxoReStore    prometheus.Counter
-	prometheusUtxoStoreSpent prometheus.Counter
-	prometheusUtxoSpend      prometheus.Counter
-	prometheusUtxoReSpend    prometheus.Counter
-	prometheusUtxoSpendSpent prometheus.Counter
-	prometheusUtxoReset      prometheus.Counter
-	prometheusUtxoErrors     *prometheus.CounterVec
+	prometheusUtxoGet   prometheus.Counter
+	prometheusUtxoStore prometheus.Counter
+	// prometheusUtxoReStore    prometheus.Counter
+	// prometheusUtxoStoreSpent prometheus.Counter
+	prometheusUtxoSpend prometheus.Counter
+	// prometheusUtxoReSpend    prometheus.Counter
+	// prometheusUtxoSpendSpent prometheus.Counter
+	prometheusUtxoReset  prometheus.Counter
+	prometheusUtxoErrors *prometheus.CounterVec
 )
 
 func init() {
@@ -46,36 +46,36 @@ func init() {
 			Help: "Number of utxo store calls done to sql",
 		},
 	)
-	prometheusUtxoStoreSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_store_spent",
-			Help: "Number of utxo store calls that were already spent to sql",
-		},
-	)
-	prometheusUtxoReStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_restore",
-			Help: "Number of utxo restore calls done to sql",
-		},
-	)
+	// prometheusUtxoStoreSpent = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "sql_utxo_store_spent",
+	// 		Help: "Number of utxo store calls that were already spent to sql",
+	// 	},
+	// )
+	// prometheusUtxoReStore = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "sql_utxo_restore",
+	// 		Help: "Number of utxo restore calls done to sql",
+	// 	},
+	// )
 	prometheusUtxoSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "sql_utxo_spend",
 			Help: "Number of utxo spend calls done to sql",
 		},
 	)
-	prometheusUtxoReSpend = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_respend",
-			Help: "Number of utxo respend calls done to sql",
-		},
-	)
-	prometheusUtxoSpendSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_spend_spent",
-			Help: "Number of utxo spend calls that were already spent done to sql",
-		},
-	)
+	// prometheusUtxoReSpend = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "sql_utxo_respend",
+	// 		Help: "Number of utxo respend calls done to sql",
+	// 	},
+	// )
+	// prometheusUtxoSpendSpent = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "sql_utxo_spend_spent",
+	// 		Help: "Number of utxo spend calls that were already spent done to sql",
+	// 	},
+	// )
 	prometheusUtxoReset = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "sql_utxo_reset",
@@ -231,7 +231,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 
 func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	q := `
-		INSERT INTO utxos 
+		INSERT INTO utxos
 		    (hash, lock_time)
 		VALUES
 		    ($1, $2)
