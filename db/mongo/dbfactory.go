@@ -13,9 +13,9 @@ func New(logger u.Logger) base.DbFactory {
 	return &MongoFactory{logger: logger}
 }
 
-func (f *MongoFactory) Create() base.DbManager {
+func (f *MongoFactory) Create(db_config string) base.DbManager {
 	m := &MongoManager{logger: f.logger}
-	if err := m.Connect(); err != nil {
+	if err := m.Connect(db_config); err != nil {
 		return nil
 	}
 	return m

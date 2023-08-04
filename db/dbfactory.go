@@ -26,10 +26,10 @@ func initDbFactories() *base.DbFactories {
 	}
 }
 
-func Create(db_type string) base.DbManager {
+func Create(db_type string, db_config string) base.DbManager {
 	val, ok := factories.Factories[db_type]
 	if ok {
-		return val.Create()
+		return val.Create(db_config)
 	}
 	return nil
 }

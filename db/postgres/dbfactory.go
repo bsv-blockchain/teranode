@@ -13,9 +13,9 @@ func New(logger u.Logger) base.DbFactory {
 	return &PostgresFactory{logger: logger}
 }
 
-func (f *PostgresFactory) Create() base.DbManager {
+func (f *PostgresFactory) Create(db_config string) base.DbManager {
 	m := &PostgresManager{logger: f.logger}
-	if err := m.Connect(); err != nil {
+	if err := m.Connect(db_config); err != nil {
 		return nil
 	}
 	return m

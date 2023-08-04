@@ -7,10 +7,10 @@ import (
 	"net"
 	"time"
 
-	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
-
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -26,6 +26,7 @@ type CoinbaseTrackerServer struct {
 	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	coinbaseTracker  *CoinbaseTracker
+	testnet          bool
 }
 
 func Enabled() bool {
@@ -45,6 +46,7 @@ func New(logger utils.Logger) (*CoinbaseTrackerServer, error) {
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		coinbaseTracker:  NewCoinbaseTracker(logger, blockchainClient),
+		testnet:          gocore.Config().GetBool("network", true),
 	}
 
 	return con, nil
@@ -96,7 +98,7 @@ func (u *CoinbaseTrackerServer) Start() error {
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
-
+	u.coinbaseTracker.Stop()
 	u.grpcServer.GracefulStop()
 }
 
@@ -108,12 +110,16 @@ func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*co
 }
 
 func (u *CoinbaseTrackerServer) GetUtxoxs(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
-	pubKeyHash, err := chainhash.NewHash(req.Publickey)
+	pubkey, err := bec.ParsePubKey(req.Publickey, bec.S256())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pubkey hash hash from bytes [%w]", err)
+		return nil, err
+	}
+	addr, err := bscript.NewAddressFromPublicKey(pubkey, !u.testnet)
+	if err != nil {
+		return nil, err
 	}
 
-	utxos, err := u.coinbaseTracker.GetUtxos(ctx, pubKeyHash, req.Amount)
+	utxos, err := u.coinbaseTracker.GetUtxos(ctx, addr.AddressString, req.Amount)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +132,6 @@ func (u *CoinbaseTrackerServer) GetUtxoxs(ctx context.Context, req *coinbasetrac
 			Script:   *utxo.LockingScript,
 			Satoshis: utxo.Satoshis,
 		}
-
 	}
 	resp := &coinbasetracker_api.GetUtxoResponse{}
 	resp.Utxos = respUtxos
