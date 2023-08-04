@@ -3,6 +3,7 @@ package http_impl
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
@@ -79,6 +80,25 @@ func New(repository *repository.Repository) (*HTTP, error) {
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})
 
+	e.GET("/header/:height/height", func(c echo.Context) error {
+		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+
+		b, err := repository.GetBlockHeaderByHeight(c.Request().Context(), uint32(h))
+		if err != nil {
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+		}
+		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
 	e.GET("/header/:hash", func(c echo.Context) error {
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
@@ -95,6 +115,25 @@ func New(repository *repository.Repository) (*HTTP, error) {
 		}
 
 		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	})
+
+	e.GET("/block/:height/height", func(c echo.Context) error {
+		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+
+		b, err := repository.GetBlockByHeight(c.Request().Context(), uint32(h))
+		if err != nil {
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+		}
+		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		return c.Blob(200, echo.MIMEOctetStream, b)
 	})

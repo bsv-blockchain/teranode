@@ -20,13 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlobServerAPI_Health_FullMethodName         = "/blobserver_api.BlobServerAPI/Health"
-	BlobServerAPI_GetTransaction_FullMethodName = "/blobserver_api.BlobServerAPI/GetTransaction"
-	BlobServerAPI_GetSubtree_FullMethodName     = "/blobserver_api.BlobServerAPI/GetSubtree"
-	BlobServerAPI_GetBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBlockHeader"
-	BlobServerAPI_GetBlock_FullMethodName       = "/blobserver_api.BlobServerAPI/GetBlock"
-	BlobServerAPI_GetUTXO_FullMethodName        = "/blobserver_api.BlobServerAPI/GetUTXO"
-	BlobServerAPI_Subscribe_FullMethodName      = "/blobserver_api.BlobServerAPI/Subscribe"
+	BlobServerAPI_Health_FullMethodName    = "/blobserver_api.BlobServerAPI/Health"
+	BlobServerAPI_Subscribe_FullMethodName = "/blobserver_api.BlobServerAPI/Subscribe"
 )
 
 // BlobServerAPIClient is the client API for BlobServerAPI service.
@@ -35,11 +30,6 @@ const (
 type BlobServerAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	GetTransaction(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
-	GetSubtree(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
-	GetBlockHeader(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
-	GetBlock(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error)
-	GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
@@ -54,51 +44,6 @@ func NewBlobServerAPIClient(cc grpc.ClientConnInterface) BlobServerAPIClient {
 func (c *blobServerAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, BlobServerAPI_Health_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blobServerAPIClient) GetTransaction(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error) {
-	out := new(Blob)
-	err := c.cc.Invoke(ctx, BlobServerAPI_GetTransaction_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blobServerAPIClient) GetSubtree(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error) {
-	out := new(Blob)
-	err := c.cc.Invoke(ctx, BlobServerAPI_GetSubtree_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blobServerAPIClient) GetBlockHeader(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error) {
-	out := new(Blob)
-	err := c.cc.Invoke(ctx, BlobServerAPI_GetBlockHeader_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blobServerAPIClient) GetBlock(ctx context.Context, in *HashOrHeight, opts ...grpc.CallOption) (*Blob, error) {
-	out := new(Blob)
-	err := c.cc.Invoke(ctx, BlobServerAPI_GetBlock_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blobServerAPIClient) GetUTXO(ctx context.Context, in *Hash, opts ...grpc.CallOption) (*Blob, error) {
-	out := new(Blob)
-	err := c.cc.Invoke(ctx, BlobServerAPI_GetUTXO_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -143,11 +88,6 @@ func (x *blobServerAPISubscribeClient) Recv() (*Notification, error) {
 type BlobServerAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	GetTransaction(context.Context, *Hash) (*Blob, error)
-	GetSubtree(context.Context, *Hash) (*Blob, error)
-	GetBlockHeader(context.Context, *HashOrHeight) (*Blob, error)
-	GetBlock(context.Context, *HashOrHeight) (*Blob, error)
-	GetUTXO(context.Context, *Hash) (*Blob, error)
 	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
@@ -158,21 +98,6 @@ type UnimplementedBlobServerAPIServer struct {
 
 func (UnimplementedBlobServerAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
-}
-func (UnimplementedBlobServerAPIServer) GetTransaction(context.Context, *Hash) (*Blob, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetTransaction not implemented")
-}
-func (UnimplementedBlobServerAPIServer) GetSubtree(context.Context, *Hash) (*Blob, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetSubtree not implemented")
-}
-func (UnimplementedBlobServerAPIServer) GetBlockHeader(context.Context, *HashOrHeight) (*Blob, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeader not implemented")
-}
-func (UnimplementedBlobServerAPIServer) GetBlock(context.Context, *HashOrHeight) (*Blob, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
-}
-func (UnimplementedBlobServerAPIServer) GetUTXO(context.Context, *Hash) (*Blob, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetUTXO not implemented")
 }
 func (UnimplementedBlobServerAPIServer) Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
@@ -208,96 +133,6 @@ func _BlobServerAPI_Health_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlobServerAPI_GetTransaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Hash)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlobServerAPIServer).GetTransaction(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlobServerAPI_GetTransaction_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlobServerAPIServer).GetTransaction(ctx, req.(*Hash))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlobServerAPI_GetSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Hash)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlobServerAPIServer).GetSubtree(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlobServerAPI_GetSubtree_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlobServerAPIServer).GetSubtree(ctx, req.(*Hash))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlobServerAPI_GetBlockHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HashOrHeight)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlobServerAPIServer).GetBlockHeader(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlobServerAPI_GetBlockHeader_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlobServerAPIServer).GetBlockHeader(ctx, req.(*HashOrHeight))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlobServerAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HashOrHeight)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlobServerAPIServer).GetBlock(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlobServerAPI_GetBlock_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlobServerAPIServer).GetBlock(ctx, req.(*HashOrHeight))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlobServerAPI_GetUTXO_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Hash)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlobServerAPIServer).GetUTXO(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlobServerAPI_GetUTXO_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlobServerAPIServer).GetUTXO(ctx, req.(*Hash))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -329,26 +164,6 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _BlobServerAPI_Health_Handler,
-		},
-		{
-			MethodName: "GetTransaction",
-			Handler:    _BlobServerAPI_GetTransaction_Handler,
-		},
-		{
-			MethodName: "GetSubtree",
-			Handler:    _BlobServerAPI_GetSubtree_Handler,
-		},
-		{
-			MethodName: "GetBlockHeader",
-			Handler:    _BlobServerAPI_GetBlockHeader_Handler,
-		},
-		{
-			MethodName: "GetBlock",
-			Handler:    _BlobServerAPI_GetBlock_Handler,
-		},
-		{
-			MethodName: "GetUTXO",
-			Handler:    _BlobServerAPI_GetUTXO_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

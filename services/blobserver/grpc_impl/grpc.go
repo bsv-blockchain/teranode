@@ -10,11 +10,8 @@ import (
 	blobserver_api "github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -23,12 +20,7 @@ import (
 )
 
 var (
-	prometheusBlobServerGRPCGetTransaction *prometheus.CounterVec
-	prometheusBlobServerGRPCGetSubtree     *prometheus.CounterVec
-	prometheusBlobServerGRPCGetBlockHeader *prometheus.CounterVec
-	prometheusBlobServerGRPCGetBlock       *prometheus.CounterVec
-	prometheusBlobServerGRPCGetUTXO        *prometheus.CounterVec
-	baseURL                                string
+	baseURL string
 )
 
 type subscriber struct {
@@ -50,61 +42,6 @@ type GRPC struct {
 }
 
 func init() {
-	prometheusBlobServerGRPCGetTransaction = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_transaction",
-			Help: "Number of Get transactions ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetSubtree = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_subtree",
-			Help: "Number of Get subtree ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetBlockHeader = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_block_header",
-			Help: "Number of Get block header ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetBlock = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_block",
-			Help: "Number of Get block ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
-	prometheusBlobServerGRPCGetUTXO = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "blobserver_grpc_get_utxo",
-			Help: "Number of Get UTXO ops",
-		},
-		[]string{
-			"function",  //function tracking the operation
-			"operation", // type of operation achieved
-		},
-	)
-
 	baseURL, _ = gocore.Config().Get("blobserver_baseURL")
 
 	if baseURL == "" {
@@ -223,96 +160,6 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 	return &blobserver_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
-	}, nil
-}
-
-func (g *GRPC) GetTransaction(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
-	hash, err := chainhash.NewHash(req.Hash)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := g.repository.GetTransaction(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlobServerGRPCGetTransaction.WithLabelValues("OK").Inc()
-
-	return &blobserver_api.Blob{
-		Blob: tx,
-	}, nil
-}
-
-func (g *GRPC) GetSubtree(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
-	hash, err := chainhash.NewHash(req.Hash)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := g.repository.GetSubtree(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlobServerGRPCGetSubtree.WithLabelValues("OK").Inc()
-
-	return &blobserver_api.Blob{
-		Blob: tx,
-	}, nil
-}
-
-func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
-	hash, err := chainhash.NewHash(req.GetHash())
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := g.repository.GetBlockHeaderByHash(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlobServerGRPCGetBlockHeader.WithLabelValues("OK").Inc()
-
-	return &blobserver_api.Blob{
-		Blob: tx,
-	}, nil
-}
-
-func (g *GRPC) GetBlock(ctx context.Context, req *blobserver_api.HashOrHeight) (*blobserver_api.Blob, error) {
-	hash, err := chainhash.NewHash(req.GetHash())
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := g.repository.GetBlockByHash(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlobServerGRPCGetBlock.WithLabelValues("OK").Inc()
-
-	return &blobserver_api.Blob{
-		Blob: tx,
-	}, nil
-}
-
-func (g *GRPC) GetUTXO(ctx context.Context, req *blobserver_api.Hash) (*blobserver_api.Blob, error) {
-	hash, err := chainhash.NewHash(req.GetHash())
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := g.repository.GetUtxo(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlobServerGRPCGetUTXO.WithLabelValues("OK").Inc()
-
-	return &blobserver_api.Blob{
-		Blob: tx,
 	}, nil
 }
 
