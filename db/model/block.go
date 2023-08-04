@@ -10,3 +10,9 @@ type Block struct {
 	BlockHash     string
 	PrevBlockHash string
 }
+
+func (b *Block) Equal(other *Block) bool {
+	return b.Height == other.Height &&
+		b.BlockHash == other.BlockHash &&
+		b.PrevBlockHash == other.PrevBlockHash
+}

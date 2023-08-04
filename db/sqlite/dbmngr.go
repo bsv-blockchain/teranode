@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"errors"
-
+	"os"
+	"strings"
+	"path/filepath"
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
 	"gorm.io/driver/sqlite"
@@ -16,7 +18,28 @@ type SqliteManager struct {
 
 func (m *SqliteManager) Connect(db_config string) error {
 	m.logger.Debugf("Connecting to sqlite: %s", db_config)
-	db, err := gorm.Open(sqlite.Open(db_config), &gorm.Config{})
+	var dsn string
+	if strings.Contains(db_config, ":memory:") {
+		dsn = db_config
+	} else {
+		uhdir, err := os.UserHomeDir()
+		if err != nil {
+			m.logger.Errorf("cannot find user home directory: %s", err.Error())
+			return err
+		}
+		data_path := filepath.Join(uhdir, "data")
+		if _, err := os.Stat(data_path); os.IsNotExist(err) {
+			if err := os.Mkdir(data_path, 0755); os.IsExist(err) {
+				dsn = filepath.Join(data_path, db_config)
+			} else {
+				m.logger.Errorf("cannot create data directory: %s", err.Error())
+				dsn = db_config
+			}
+		} else {
+			dsn = filepath.Join(data_path, db_config)
+		}
+	}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		m.logger.Errorf("Failed to open sqlite: %s", err.Error())
 		return err

@@ -63,7 +63,28 @@ func (ct *CoinbaseTracker) synchronize() {
 }
 
 func (ct *CoinbaseTracker) syncUp() {
-	// do sync up between the db and the network
+	block_network, err := ct.GetBestBlockFromNetwork(context.Background())
+	if err != nil {
+		ct.logger.Errorf("failed to get best block from network: %s", err.Error())
+		return
+	}
+	block_db, err := ct.GetBestBlockFromDb(context.Background())
+	if err != nil {
+		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
+		return
+	}
+	if !block_db.Equal(block_network) {
+		err = ct.AddBlock(context.Background(), block_network)
+		if err != nil {
+			ct.logger.Errorf("failed to add block to the store: %s", err.Error())
+			return
+		}
+	}
+	ct.checkStoreForBlockGaps()
+}
+
+func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
+	//NOOP
 }
 
 func (ct *CoinbaseTracker) Stop() error {
