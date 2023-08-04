@@ -188,7 +188,11 @@ func (u *CoinbaseTrackerServer) Start() error {
 						missingBlocks = append(missingBlocks, newBlock)
 						// get the previous block until the previous block hash is equal to the bestBlock hash
 						for newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
-							newBlock, err := u.coinbaseTracker.GetBlockFromNetwork(ctx, newBlock.Header.HashPrevBlock.String())
+							b, err := doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
+							if err != nil {
+								continue
+							}
+							newBlock, err := networkModel.NewBlockFromBytes(b)
 							if err != nil {
 								u.logger.Errorf("could not get block from network %+v", err)
 								break
