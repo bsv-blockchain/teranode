@@ -97,6 +97,10 @@ func (m *MongoManager) Read(model any) error {
 	return nil
 }
 
+func (m *MongoManager) Read_Cond(model any, cond []any) (any, error) {
+	return nil, nil
+}
+
 func (m *MongoManager) Read_All_Cond(model any, cond []any) ([]any, error) {
 	return nil, nil
 }

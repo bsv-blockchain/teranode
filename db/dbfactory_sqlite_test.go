@@ -332,3 +332,72 @@ func TestAddReadCondUtxo(t *testing.T) {
 		t.Fatalf("Cannot disconnect sqlite database instance %s | %s: %s", store, store_config, err)
 	}
 }
+
+func TestAddReadCond1Utxo(t *testing.T) {
+	store, ok := gocore.Config().Get("coinbasetracker_store")
+	if !ok {
+		fmt.Println("coinbasetracker_store is not set. Using sqlite.")
+		store = "sqlite"
+	}
+
+	store_config, ok := gocore.Config().Get("coinbasetracker_store_config")
+	if !ok {
+		fmt.Println("coinbasetracker_store_config is not set. Using sqlite in-mem.")
+		store_config = "file::memory:?cache=shared"
+	}
+
+	mgr := Create(store, store_config)
+	if mgr == nil {
+		t.Fatalf("Cannot create sqlite database instance with %s | %s", store, store_config)
+	}
+
+	tx1bin := make([]byte, 32)
+	_, _ = rand.Read(tx1bin)
+	hash1, _ := chainhash.NewHash(tx1bin)
+
+	pk, _ := bec.NewPrivateKey(bec.S256())
+	pubkey := pk.PubKey()
+	script, err := bscript.NewP2PKHFromPubKeyBytes(pubkey.SerialiseCompressed())
+	if err != nil {
+		t.Fatalf("Failed to generate script: %+v", err)
+	}
+
+	addr, err := bscript.NewAddressFromPublicKey(pubkey, false)
+	if err != nil {
+		t.Fatalf("Failed to generate address: %+v", err)
+	}
+
+	m1 := &model.UTXO{
+		Txid:    hash1.String(),
+		Vout:    mrand.Uint32(),
+		Script:  script.String(),
+		Amount:  uint64(mrand.Uint32()) + 1,
+		Address: addr.AddressString,
+		Spent:   mrand.Int31n(2) > 0,
+	}
+
+	err = mgr.Create(m1)
+	if err != nil {
+		t.Fatalf("Create failed: %s", err.Error())
+	}
+
+	m2 := &model.UTXO{}
+	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Amount), 10)}
+
+	payload, err := mgr.Read_Cond(m2, cond)
+	if err != nil {
+		t.Fatalf("Read failed: %s", err.Error())
+	}
+	x, ok := payload.(*model.UTXO)
+	if !ok {
+		t.Fatal("Result is not a model.UTXO")
+	}
+	if !equalUtxos(*m1, *x) {
+		t.Fatal("UTXO(Write) and UTXO(Read) should be equal")
+	}
+
+	err = mgr.Disconnect()
+	if err != nil {
+		t.Fatalf("Cannot disconnect sqlite database instance %s | %s: %s", store, store_config, err)
+	}
+}

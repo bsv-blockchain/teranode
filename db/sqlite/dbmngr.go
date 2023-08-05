@@ -3,8 +3,9 @@ package sqlite
 import (
 	"errors"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
+
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
 	"gorm.io/driver/sqlite"
@@ -97,6 +98,11 @@ func (m *SqliteManager) Create(model any) error {
 func (m *SqliteManager) Read(model any) error {
 	result := m.db.Last(model)
 	return result.Error
+}
+
+func (m *SqliteManager) Read_Cond(model any, cond []any) (any, error) {
+	result := m.db.Where(cond[0], cond[1:]...).Find(model)
+	return result.Statement.Dest, result.Error
 }
 
 func (m *SqliteManager) Read_All_Cond(model any, cond []any) ([]any, error) {
