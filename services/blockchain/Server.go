@@ -306,6 +306,26 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	return nil
 }
 
+func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
+	data, err := b.store.GetState(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.StateResponse{
+		Data: data,
+	}, nil
+}
+
+func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
+	err := b.store.SetState(ctx, req.Key, req.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
 	b.notifications <- req
 

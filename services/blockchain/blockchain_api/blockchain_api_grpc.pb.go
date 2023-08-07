@@ -28,6 +28,8 @@ const (
 	BlockchainAPI_GetBestBlockHeader_FullMethodName = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_Subscribe_FullMethodName          = "/blockchain_api.BlockchainAPI/Subscribe"
 	BlockchainAPI_SendNotification_FullMethodName   = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetState_FullMethodName           = "/blockchain_api.BlockchainAPI/GetState"
+	BlockchainAPI_SetState_FullMethodName           = "/blockchain_api.BlockchainAPI/SetState"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -44,6 +46,8 @@ type BlockchainAPIClient interface {
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlockchainAPI_SubscribeClient, error)
 	SendNotification(ctx context.Context, in *Notification, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error)
+	SetState(ctx context.Context, in *SetStateRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type blockchainAPIClient struct {
@@ -149,6 +153,24 @@ func (c *blockchainAPIClient) SendNotification(ctx context.Context, in *Notifica
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error) {
+	out := new(StateResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) SetState(ctx context.Context, in *SetStateRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility
@@ -163,6 +185,8 @@ type BlockchainAPIServer interface {
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error)
 	Subscribe(*SubscribeRequest, BlockchainAPI_SubscribeServer) error
 	SendNotification(context.Context, *Notification) (*emptypb.Empty, error)
+	GetState(context.Context, *GetStateRequest) (*StateResponse, error)
+	SetState(context.Context, *SetStateRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -193,6 +217,12 @@ func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, BlockchainA
 }
 func (UnimplementedBlockchainAPIServer) SendNotification(context.Context, *Notification) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendNotification not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetState(context.Context, *GetStateRequest) (*StateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetState not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetState(context.Context, *SetStateRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -354,6 +384,42 @@ func _BlockchainAPI_SendNotification_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetState(ctx, req.(*GetStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_SetState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetState(ctx, req.(*SetStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -388,6 +454,14 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendNotification",
 			Handler:    _BlockchainAPI_SendNotification_Handler,
+		},
+		{
+			MethodName: "GetState",
+			Handler:    _BlockchainAPI_GetState_Handler,
+		},
+		{
+			MethodName: "SetState",
+			Handler:    _BlockchainAPI_SetState_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

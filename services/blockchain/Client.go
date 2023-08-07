@@ -210,3 +210,26 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 
 	return ch, nil
 }
+
+func (c Client) GetState(ctx context.Context, key string) ([]byte, error) {
+	resp, err := c.client.GetState(ctx, &blockchain_api.GetStateRequest{
+		Key: key,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Data, nil
+}
+
+func (c Client) SetState(ctx context.Context, key string, data []byte) error {
+	_, err := c.client.SetState(ctx, &blockchain_api.SetStateRequest{
+		Key:  key,
+		Data: data,
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

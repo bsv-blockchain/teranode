@@ -59,11 +59,23 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	}
 
 	var err error
-	b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
+	b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
 	if err != nil {
-		logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+		logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
 	} else {
+		logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Hash())
 		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
+	}
+
+	// we did not get any state back from the blockchain db, so we get the current best block header
+	if b.bestBlockHeader == nil || b.bestBlockHeight == 0 {
+		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+		} else {
+			logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Hash())
+			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
+		}
 	}
 
 	// start a subscription for the best block header
@@ -173,6 +185,12 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 					b.bestBlockHeader = header
 					b.bestBlockHeight = height
+
+					err = b.SetState(ctx)
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
+					}
+
 					err = b.setCurrentChain()
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
@@ -183,6 +201,34 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	}()
 
 	return b
+}
+
+func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint32, error) {
+	state, err := b.blockchainClient.GetState(ctx, "BlockAssembler")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	bestBlockHeight := binary.LittleEndian.Uint32(state[:4])
+	bestBlockHeader, err := model.NewBlockHeaderFromBytes(state[4:])
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return bestBlockHeader, bestBlockHeight, nil
+}
+
+func (b *BlockAssembler) SetState(ctx context.Context) error {
+	if b.bestBlockHeader == nil {
+		return fmt.Errorf("bestBlockHeader is nil")
+	}
+
+	state := make([]byte, 4+len(b.bestBlockHeader.Bytes()))
+	binary.LittleEndian.PutUint32(state[:4], b.bestBlockHeight)
+	state = append(state[:4], b.bestBlockHeader.Bytes()...)
+
+	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Hash())
+	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
 func (b *BlockAssembler) setCurrentChain() (err error) {

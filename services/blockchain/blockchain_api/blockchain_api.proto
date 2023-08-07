@@ -20,6 +20,8 @@ service BlockchainAPI {
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
+  rpc GetState(GetStateRequest) returns (StateResponse) {}
+  rpc SetState(SetStateRequest) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse
@@ -92,4 +94,20 @@ message Notification {
   model.NotificationType type = 1;
   bytes hash = 2;
   string base_url = 3;
+}
+
+// swagger:model StateRequest
+message GetStateRequest {
+  string key = 1;
+}
+
+// swagger:model StateResponse
+message StateResponse {
+  bytes data = 1;
+}
+
+// swagger:model SetStateRequest
+message SetStateRequest {
+  string key = 1;
+  bytes data = 2;
 }

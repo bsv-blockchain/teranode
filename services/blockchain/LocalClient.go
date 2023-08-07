@@ -2,7 +2,6 @@ package blockchain
 
 import (
 	"context"
-	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
@@ -60,43 +59,17 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 }
 
 func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {
-	return nil
-}
-
-func (c LocalClient) SubscribeBestBlockHeader(ctx context.Context) (chan *BestBlockHeader, error) {
-	timer := time.NewTicker(10 * time.Second)
-	ch := make(chan *BestBlockHeader)
-
-	var lastHeaderHashStr string
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				header, height, err := c.store.GetBestBlockHeader(ctx)
-				if err != nil {
-					c.logger.Errorf("error getting best block header: %s", err.Error())
-					continue
-				}
-				currentHeaderHashStr := header.Hash().String()
-				if currentHeaderHashStr == lastHeaderHashStr {
-					continue
-				}
-
-				ch <- &BestBlockHeader{
-					Header: header,
-					Height: height,
-				}
-
-				lastHeaderHashStr = header.Hash().String()
-			}
-		}
-	}()
-
-	return ch, nil
+	return c.SendNotification(ctx, notification)
 }
 
 func (c LocalClient) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
-	return nil, nil
+	return c.Subscribe(ctx, source)
+}
+
+func (c LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	return c.GetState(ctx, key)
+}
+
+func (c LocalClient) SetState(ctx context.Context, key string, data []byte) error {
+	return c.SetState(ctx, key, data)
 }

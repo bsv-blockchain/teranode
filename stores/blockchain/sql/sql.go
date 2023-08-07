@@ -133,6 +133,18 @@ func (s *SQL) Close() error {
 
 func createPostgresSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
+      CREATE TABLE IF NOT EXISTS state (
+	    key            VARCHAR(32) PRIMARY KEY
+	    ,data          BYTEA NOT NULL
+        ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ,updated_at    TIMESTAMPTZ NULL
+	  );
+	`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create state table - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS blocks (
 	    id              BIGSERIAL PRIMARY KEY
 		,parent_id	    BIGSERIAL REFERENCES blocks(id)
@@ -195,6 +207,18 @@ func createPostgresSchema(db *sql.DB) error {
 }
 
 func createSqliteSchema(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS state (
+		 key            VARCHAR(32) PRIMARY KEY
+	    ,data           BLOB NOT NULL
+        ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ,updated_at     TEXT NULL
+	  );
+	`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create blocks table - [%+v]", err)
+	}
+
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS blocks (
 		 id           INTEGER PRIMARY KEY AUTOINCREMENT
