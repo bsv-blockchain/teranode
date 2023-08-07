@@ -14,19 +14,19 @@ import (
 
 var availableDatabases = map[string]func(url *url.URL) (utxostore.Interface, error){}
 
-func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
+func NewStore(logger utils.Logger, storeUrl *url.URL) (utxostore.Interface, error) {
 
 	var port int
 	var err error
 
-	if url.Port() != "" {
-		port, err = strconv.Atoi(url.Port())
+	if storeUrl.Port() != "" {
+		port, err = strconv.Atoi(storeUrl.Port())
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	dbInit, ok := availableDatabases[url.Scheme]
+	dbInit, ok := availableDatabases[storeUrl.Scheme]
 	if ok {
 		var utxoStore utxostore.Interface
 		var blockchainClient blockchain.ClientI
@@ -34,8 +34,8 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 
 		// TODO retry on connection failure
 
-		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", url.Scheme, url.Hostname(), port)
-		utxoStore, err = dbInit(url)
+		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", storeUrl.Scheme, storeUrl.Hostname(), port)
+		utxoStore, err = dbInit(storeUrl)
 		if err != nil {
 			return nil, err
 		}
@@ -67,5 +67,5 @@ func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
 		return utxoStore, nil
 	}
 
-	return nil, fmt.Errorf("unknown scheme: %s", url.Scheme)
+	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
