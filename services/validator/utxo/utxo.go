@@ -15,9 +15,15 @@ import (
 var availableDatabases = map[string]func(url *url.URL) (utxostore.Interface, error){}
 
 func NewStore(logger utils.Logger, url *url.URL) (utxostore.Interface, error) {
-	port, err := strconv.Atoi(url.Port())
-	if err != nil {
-		return nil, err
+
+	var port int
+	var err error
+
+	if url.Port() != "" {
+		port, err = strconv.Atoi(url.Port())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	dbInit, ok := availableDatabases[url.Scheme]
