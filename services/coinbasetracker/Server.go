@@ -246,11 +246,11 @@ func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock 
 			break
 		}
 		err = u.coinbaseTracker.AddUtxo(ctx, &model.UTXO{
-			Txid:    newBlock.CoinbaseTx.TxID(),
-			Vout:    uint32(i),
-			Script:  o.LockingScript.String(),
-			Amount:  o.Satoshis,
-			Address: addr[0],
+			Txid:          newBlock.CoinbaseTx.TxID(),
+			Vout:          uint32(i),
+			LockingScript: o.LockingScript.String(),
+			Satoshis:      o.Satoshis,
+			Address:       addr[0],
 		})
 		if err != nil {
 			u.logger.Errorf("could not add utxo to db %+v", err)

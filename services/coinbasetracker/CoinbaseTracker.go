@@ -190,12 +190,12 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 			// should we panic?
 			continue
 		}
-		script := bscript.Script([]byte(v.Script))
+		script := bscript.Script([]byte(v.LockingScript))
 		res = append(res, &bt.UTXO{
 			TxID:          []byte(v.Txid),
 			Vout:          v.Vout,
 			LockingScript: &script,
-			Satoshis:      v.Amount,
+			Satoshis:      v.Satoshis,
 		})
 	}
 	return res, nil

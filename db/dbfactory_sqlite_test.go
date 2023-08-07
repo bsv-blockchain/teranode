@@ -21,8 +21,8 @@ func equalBlocks(a, b model.Block) bool {
 func equalUtxos(a, b model.UTXO) bool {
 	return a.Txid == b.Txid &&
 		a.Vout == b.Vout &&
-		a.Script == b.Script &&
-		a.Amount == b.Amount &&
+		a.LockingScript == b.LockingScript &&
+		a.Satoshis == b.Satoshis &&
 		a.Address == b.Address &&
 		a.Spent == b.Spent
 }
@@ -143,6 +143,40 @@ func TestAddReadBlock(t *testing.T) {
 	}
 }
 
+func TestBlockModelEq(t *testing.T) {
+
+	tn1bin := make([]byte, 32)
+	_, _ = rand.Read(tn1bin)
+	hash1, _ := chainhash.NewHash(tn1bin)
+	tn2bin := make([]byte, 32)
+	_, _ = rand.Read(tn2bin)
+	hash2, _ := chainhash.NewHash(tn2bin)
+
+	m1 := &model.Block{
+		Height:        uint64(mrand.Uint32()) + 1,
+		BlockHash:     hash2.String(),
+		PrevBlockHash: hash1.String(),
+	}
+
+	if !m1.Equal(m1) {
+		t.Fatal("Blocks mismatch")
+	}
+
+	m2 := &model.Block{}
+	if m1.Equal(m2) {
+		t.Fatal("Blocks are different")
+	}
+
+	if m1.Equal(nil) {
+		t.Fatal("Blocks are not equal")
+	}
+
+	var m0 *model.Block = nil
+	if m0.Equal(nil) {
+		t.Fatal("Nil block must return false")
+	}
+}
+
 func TestAddUtxo(t *testing.T) {
 	store, ok := gocore.Config().Get("coinbasetracker_store")
 	if !ok {
@@ -178,12 +212,12 @@ func TestAddUtxo(t *testing.T) {
 	}
 
 	m := &model.UTXO{
-		Txid:    hash1.String(),
-		Vout:    mrand.Uint32(),
-		Script:  script.String(),
-		Amount:  uint64(mrand.Uint32()) + 1,
-		Address: addr.AddressString,
-		Spent:   mrand.Int31n(2) > 0,
+		Txid:          hash1.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
 	}
 
 	err = mgr.Create(m)
@@ -232,12 +266,12 @@ func TestAddReadUtxo(t *testing.T) {
 	}
 
 	m1 := &model.UTXO{
-		Txid:    hash1.String(),
-		Vout:    mrand.Uint32(),
-		Script:  script.String(),
-		Amount:  uint64(mrand.Uint32()) + 1,
-		Address: addr.AddressString,
-		Spent:   mrand.Int31n(2) > 0,
+		Txid:          hash1.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
 	}
 
 	err = mgr.Create(m1)
@@ -258,6 +292,79 @@ func TestAddReadUtxo(t *testing.T) {
 	err = mgr.Disconnect()
 	if err != nil {
 		t.Fatalf("Cannot disconnect sqlite database instance %s | %s: %s", store, store_config, err)
+	}
+}
+
+func TestModelUtxo(t *testing.T) {
+
+	tx1bin := make([]byte, 32)
+	_, _ = rand.Read(tx1bin)
+	hash1, _ := chainhash.NewHash(tx1bin)
+
+	tx2bin := make([]byte, 32)
+	_, _ = rand.Read(tx2bin)
+	hash2, _ := chainhash.NewHash(tx2bin)
+
+	pk1, _ := bec.NewPrivateKey(bec.S256())
+	pubkey1 := pk1.PubKey()
+	script1, err := bscript.NewP2PKHFromPubKeyBytes(pubkey1.SerialiseCompressed())
+	if err != nil {
+		t.Fatalf("Failed to generate script: %+v", err)
+	}
+
+	addr1, err := bscript.NewAddressFromPublicKey(pubkey1, false)
+	if err != nil {
+		t.Fatalf("Failed to generate address: %+v", err)
+	}
+
+	m1 := &model.UTXO{
+		Txid:          hash1.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script1.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr1.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
+	}
+
+	pk2, _ := bec.NewPrivateKey(bec.S256())
+	pubkey2 := pk2.PubKey()
+	script2, err := bscript.NewP2PKHFromPubKeyBytes(pubkey2.SerialiseCompressed())
+	if err != nil {
+		t.Fatalf("Failed to generate script: %+v", err)
+	}
+
+	addr2, err := bscript.NewAddressFromPublicKey(pubkey2, false)
+	if err != nil {
+		t.Fatalf("Failed to generate address: %+v", err)
+	}
+
+	m2 := &model.UTXO{
+		Txid:          hash2.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script2.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr2.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
+	}
+
+	if m1.Equal(m2) {
+		t.Fatal("Blocks are not equal")
+	}
+
+	mE := &model.UTXO{}
+
+	if m1.Equal(mE) {
+		t.Fatal("Blocks are not equal")
+	}
+
+	var m0 *model.UTXO = nil
+
+	if m1.Equal(m0) {
+		t.Fatal("Blocks are not equal")
+	}
+
+	if m0.Equal(m1) {
+		t.Fatal("Blocks are not equal")
 	}
 }
 
@@ -296,12 +403,12 @@ func TestAddReadCondUtxo(t *testing.T) {
 	}
 
 	m1 := &model.UTXO{
-		Txid:    hash1.String(),
-		Vout:    mrand.Uint32(),
-		Script:  script.String(),
-		Amount:  uint64(mrand.Uint32()) + 1,
-		Address: addr.AddressString,
-		Spent:   mrand.Int31n(2) > 0,
+		Txid:          hash1.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
 	}
 
 	err = mgr.Create(m1)
@@ -310,7 +417,7 @@ func TestAddReadCondUtxo(t *testing.T) {
 	}
 
 	m2 := &model.UTXO{}
-	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Amount), 10)}
+	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Satoshis), 10)}
 
 	payload, err := mgr.Read_All_Cond(m2, cond)
 	if err != nil {
@@ -368,12 +475,12 @@ func TestAddReadCond1Utxo(t *testing.T) {
 	}
 
 	m1 := &model.UTXO{
-		Txid:    hash1.String(),
-		Vout:    mrand.Uint32(),
-		Script:  script.String(),
-		Amount:  uint64(mrand.Uint32()) + 1,
-		Address: addr.AddressString,
-		Spent:   mrand.Int31n(2) > 0,
+		Txid:          hash1.String(),
+		Vout:          mrand.Uint32(),
+		LockingScript: script.String(),
+		Satoshis:      uint64(mrand.Uint32()) + 1,
+		Address:       addr.AddressString,
+		Spent:         mrand.Int31n(2) > 0,
 	}
 
 	err = mgr.Create(m1)
@@ -382,7 +489,7 @@ func TestAddReadCond1Utxo(t *testing.T) {
 	}
 
 	m2 := &model.UTXO{}
-	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Amount), 10)}
+	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Satoshis), 10)}
 
 	payload, err := mgr.Read_Cond(m2, cond)
 	if err != nil {
