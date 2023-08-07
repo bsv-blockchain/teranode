@@ -139,15 +139,12 @@ func (u *CoinbaseTrackerServer) Start() error {
 					break
 				}
 
-				hash, err = chainhash.NewHash(resp.Hash)
-				if err != nil {
-					u.logger.Errorf("could not create hash from bytes", "err", err)
-					continue
-				}
-
-				u.logger.Debugf("Received notification: %s", hash.String())
-
 				if resp.Type == blobserver_api.Type_Block {
+					hash, err = chainhash.NewHash(resp.Hash)
+					if err != nil {
+						u.logger.Errorf("could not create hash from bytes", "err", err)
+						continue
+					}
 					u.logger.Debugf("Received BLOCK notification: %s", hash.String())
 					// get the block
 					b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
@@ -180,8 +177,13 @@ func (u *CoinbaseTrackerServer) Start() error {
 							u.logger.Errorf("could not add block to db %+v", err)
 							break
 						}
+						// add coinbase utxos
+						u.saveCoinbaseUtxos(ctx, newBlock)
+
 						break
 					}
+
+					// if the block is not the best block, then we need to fill in the gaps
 					if newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
 						newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
 						if err != nil {
@@ -220,6 +222,8 @@ func (u *CoinbaseTrackerServer) Start() error {
 								u.logger.Errorf("could not add block to db %+v", err)
 								break
 							}
+							// add coinbase utxos
+							u.saveCoinbaseUtxos(ctx, block)
 						}
 					}
 				}
@@ -232,6 +236,27 @@ func (u *CoinbaseTrackerServer) Start() error {
 	}
 
 	return nil
+}
+
+func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock *networkModel.Block) {
+	for i, o := range newBlock.CoinbaseTx.Outputs {
+		addr, err := o.LockingScript.Addresses()
+		if err != nil {
+			u.logger.Errorf("could not get address from script %+v", err)
+			break
+		}
+		err = u.coinbaseTracker.AddUtxo(ctx, &model.UTXO{
+			Txid:    newBlock.CoinbaseTx.TxID(),
+			Vout:    uint32(i),
+			Script:  o.LockingScript.String(),
+			Amount:  o.Satoshis,
+			Address: addr[0],
+		})
+		if err != nil {
+			u.logger.Errorf("could not add utxo to db %+v", err)
+			break
+		}
+	}
 }
 
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) {

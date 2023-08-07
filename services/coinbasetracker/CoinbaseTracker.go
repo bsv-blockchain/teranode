@@ -44,7 +44,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		ch:               make(chan bool),
 	}
 
-	go ct.synchronize()
+	// go ct.synchronize()
 
 	return ct
 }
