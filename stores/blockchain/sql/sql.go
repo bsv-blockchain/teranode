@@ -5,13 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"os"
-	"path"
-	"path/filepath"
-	"strconv"
 
 	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/labstack/gommon/random"
+	"github.com/TAAL-GmbH/ubsv/util"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -30,82 +26,21 @@ func init() {
 }
 
 func New(storeUrl *url.URL) (*SQL, error) {
-	var db *sql.DB
-	var err error
-
-	var memory bool
-
 	logLevel, _ := gocore.Config().Get("logLevel")
 	logger := gocore.Log("bcsql", gocore.NewLogLevelFromString(logLevel))
 
+	db, err := util.InitSQLDB(logger, storeUrl)
+	if err != nil {
+		return nil, err
+	}
+
 	switch storeUrl.Scheme {
 	case "postgres":
-		dbHost := storeUrl.Hostname()
-		port := storeUrl.Port()
-		dbPort, _ := strconv.Atoi(port)
-		dbName := storeUrl.Path[1:]
-		dbUser := ""
-		dbPassword := ""
-		if storeUrl.User != nil {
-			dbUser = storeUrl.User.Username()
-			dbPassword, _ = storeUrl.User.Password()
-		}
-
-		dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable host=%s port=%d", dbUser, dbPassword, dbName, dbHost, dbPort)
-
-		db, err = sql.Open(storeUrl.Scheme, dbInfo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open postgres DB: %+v", err)
-		}
-
-		idleConns, _ := gocore.Config().GetInt("blockchain_postgresMaxIdleConns", 10)
-		db.SetMaxIdleConns(idleConns)
-		maxOpenConns, _ := gocore.Config().GetInt("blockchain_postgresMaxOpenConns", 80)
-		db.SetMaxOpenConns(maxOpenConns)
-
 		if err = createPostgresSchema(db); err != nil {
 			return nil, fmt.Errorf("failed to create postgres schema: %+v", err)
 		}
 
-	case "sqlitememory":
-		memory = true
-		fallthrough
-	case "sqlite":
-		var filename string
-		if memory {
-			filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
-		} else {
-			folder, _ := gocore.Config().Get("dataFolder", "data")
-			if err = os.MkdirAll(folder, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create data folder %s: %+v", folder, err)
-			}
-
-			filename, err = filepath.Abs(path.Join(folder, "blockchain.db"))
-			if err != nil {
-				return nil, fmt.Errorf("failed to get absolute path for sqlite DB: %+v", err)
-			}
-
-			// filename = fmt.Sprintf("file:%s?cache=shared&mode=rwc", filename)
-			filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=10000&_pragma=journal_mode=WAL", filename)
-		}
-
-		logger.Infof("Using sqlite DB: %s", filename)
-
-		db, err = sql.Open("sqlite", filename)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open sqlite DB: %+v", err)
-		}
-
-		if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("could not enable foreign keys support: %+v", err)
-		}
-
-		if _, err = db.Exec(`PRAGMA locking_mode = SHARED;`); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("could not enable shared locking mode: %+v", err)
-		}
-
+	case "sqlite", "sqlitememory":
 		if err = createSqliteSchema(db); err != nil {
 			return nil, fmt.Errorf("failed to create sqlite schema: %+v", err)
 		}
