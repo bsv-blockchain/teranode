@@ -243,6 +243,10 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 		}
 
 		err = s.StoreBlock(context.Background(), genesisBlock)
+		if err != nil {
+			return fmt.Errorf("failed to insert genesis block: %+v", err)
+		}
+
 		logger.Infof("genesis block inserted")
 
 		// turn foreign key checks back on
@@ -253,5 +257,5 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 		}
 	}
 
-	return err
+	return nil
 }

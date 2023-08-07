@@ -29,6 +29,26 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	var previousHeight uint64
 	var height uint64
 
+	q := `
+		INSERT INTO blocks (
+		 parent_id
+        ,version
+	    ,hash
+	    ,previous_hash
+	    ,merkle_root
+        ,block_time
+        ,n_bits
+        ,nonce
+	    ,height
+        ,chain_work
+		,tx_count
+		,subtree_count
+		,subtrees
+        ,coinbase_tx
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14)
+		RETURNING id
+	`
+
 	coinbaseTxID := block.CoinbaseTx.TxID()
 	if coinbaseTxID == "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b" {
 		// genesis block
@@ -36,8 +56,30 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		previousChainWork = make([]byte, 32)
 		previousHeight = 0
 		height = 0
+
+		// genesis block has a different insert statement, because it has no parent
+		q = `
+			INSERT INTO blocks (
+			id
+			,parent_id
+			,version
+			,hash
+			,previous_hash
+			,merkle_root
+			,block_time
+			,n_bits
+			,nonce
+			,height
+			,chain_work
+			,tx_count
+			,subtree_count
+			,subtrees
+			,coinbase_tx
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14)
+			RETURNING id
+		`
 	} else {
-		q := `
+		qq := `
 			SELECT
 			 b.id
 			,b.chain_work
@@ -45,7 +87,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			FROM blocks b
 			WHERE b.hash = $1
 		`
-		if err = s.db.QueryRowContext(ctx, q, block.Header.HashPrevBlock[:]).Scan(
+		if err = s.db.QueryRowContext(ctx, qq, block.Header.HashPrevBlock[:]).Scan(
 			&previousBlockId,
 			&previousChainWork,
 			&previousHeight,
@@ -70,42 +112,6 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			}
 		}
 	}
-
-	q := `
-		INSERT INTO blocks (
-		 parent_id
-    ,version
-	  ,hash
-	  ,previous_hash
-	  ,merkle_root
-    ,block_time
-    ,n_bits
-    ,nonce
-	  ,height
-    ,chain_work
-		,tx_count
-		,subtree_count
-		,subtrees
-    ,coinbase_tx
-		) VALUES (
-		 $1
-		,$2
-		,$3
-		,$4
-		,$5
-		,$6
-		,$7
-		,$8
-		,$9
-		,$10
-		,$11
-		,$12
-		,$13
-		,$14
-		)
-		ON CONFLICT DO NOTHING
-		RETURNING id
-	`
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
