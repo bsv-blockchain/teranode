@@ -51,9 +51,8 @@ func init() {
 }
 
 type Store struct {
-	db          *sql.DB
-	engine      string
-	blockHeight uint32
+	db     *sql.DB
+	engine string
 }
 
 func New(storeUrl *url.URL) (*Store, error) {
@@ -90,11 +89,11 @@ func New(storeUrl *url.URL) (*Store, error) {
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	q := `
-	SELECT 
+	SELECT
 	    status,
-	    fee, 
-	    parents, 
-	    utxos, 
+	    fee,
+	    parents,
+	    utxos,
 	    blocks,
 	    lock_time
 	FROM txmeta
@@ -157,7 +156,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 
 func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 	q := `
-		INSERT INTO txmeta 
+		INSERT INTO txmeta
 		    (hash, status, fee, parents, utxos, lock_time)
 		VALUES ($1, $2, $3, $4, $5, $6)`
 
