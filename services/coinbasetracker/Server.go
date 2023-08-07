@@ -126,6 +126,10 @@ func (u *CoinbaseTrackerServer) Start() error {
 				continue
 			}
 
+			var b []byte
+			var newBlock *networkModel.Block
+			var bestBlock *model.Block
+			var newBlockHeight uint32
 			for {
 				resp, err = stream.Recv()
 				if err != nil {
@@ -146,22 +150,22 @@ func (u *CoinbaseTrackerServer) Start() error {
 				if resp.Type == blobserver_api.Type_Block {
 					u.logger.Debugf("Received BLOCK notification: %s", hash.String())
 					// get the block
-					b, err := doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
+					b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
 					if err != nil {
 						continue
 					}
-					newBlock, err := networkModel.NewBlockFromBytes(b)
+					newBlock, err = networkModel.NewBlockFromBytes(b)
 					if err != nil {
 						u.logger.Errorf("could not get block from network %+v", err)
 						break
 					}
 					// get the best block from the db.
 					// if the block is not the best block, then we need to fill in the gaps
-					bestBlock, err := u.coinbaseTracker.GetBestBlockFromDb(ctx)
+					bestBlock, err = u.coinbaseTracker.GetBestBlockFromDb(ctx)
 					if err != nil {
 						u.logger.Infof("No best block in db %+v", err)
 						// add the block to the db
-						newBlockHeight, err := newBlock.ExtractCoinbaseHeight()
+						newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
 						if err != nil {
 							u.logger.Errorf("could not extract block height", err)
 							break
@@ -179,7 +183,7 @@ func (u *CoinbaseTrackerServer) Start() error {
 						break
 					}
 					if newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
-						newBlockHeight, err := newBlock.ExtractCoinbaseHeight()
+						newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
 						if err != nil {
 							u.logger.Errorf("could not extract block height", err)
 							break
@@ -188,11 +192,11 @@ func (u *CoinbaseTrackerServer) Start() error {
 						missingBlocks = append(missingBlocks, newBlock)
 						// get the previous block until the previous block hash is equal to the bestBlock hash
 						for newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
-							b, err := doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
+							b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
 							if err != nil {
 								continue
 							}
-							newBlock, err := networkModel.NewBlockFromBytes(b)
+							newBlock, err = networkModel.NewBlockFromBytes(b)
 							if err != nil {
 								u.logger.Errorf("could not get block from network %+v", err)
 								break
@@ -200,8 +204,9 @@ func (u *CoinbaseTrackerServer) Start() error {
 							missingBlocks = append(missingBlocks, newBlock)
 						}
 						// add the blocks to the db
+						var height uint32
 						for _, block := range missingBlocks {
-							height, err := block.ExtractCoinbaseHeight()
+							height, err = block.ExtractCoinbaseHeight()
 							if err != nil {
 								u.logger.Errorf("could not extract block height", err)
 								break
