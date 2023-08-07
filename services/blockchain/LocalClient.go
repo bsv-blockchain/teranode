@@ -10,6 +10,7 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// LocalClient is an abstraction for a client that has a stored embedded directly
 type LocalClient struct {
 	store  blockchain.Store
 	logger utils.Logger
@@ -59,17 +60,17 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 }
 
 func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {
-	return c.SendNotification(ctx, notification)
+	return nil
 }
 
 func (c LocalClient) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
-	return c.Subscribe(ctx, source)
+	return nil, nil
 }
 
 func (c LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
-	return c.GetState(ctx, key)
+	return c.store.GetState(ctx, key)
 }
 
 func (c LocalClient) SetState(ctx context.Context, key string, data []byte) error {
-	return c.SetState(ctx, key, data)
+	return c.store.SetState(ctx, key, data)
 }
