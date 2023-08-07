@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -64,83 +65,36 @@ func main() {
 		logger.Fatalf("sentry.Init: %s", err)
 	}
 
-	startBlockchain := flag.Bool("blockchain", false, "start blockchain service")
-	startBlockAssembly := flag.Bool("blockassembly", false, "start blockassembly service")
-	startBlockValidation := flag.Bool("blockvalidation", false, "start blockvalidation service")
-	startValidator := flag.Bool("validator", false, "start validator service")
-	startUtxoStore := flag.Bool("utxostore", false, "start UTXO store")
-	startTxMetaStore := flag.Bool("txmeta", false, "start txmeta store service")
-	startPropagation := flag.Bool("propagation", false, "start propagation service")
-	startSeeder := flag.Bool("seeder", false, "start seeder service")
-	startMiner := flag.Bool("miner", false, "start miner service")
-	startBlobServer := flag.Bool("blobserver", false, "start blob server")
-	startCoinbaseTracker := flag.Bool("coinbasetracker", false, "start coinbase tracker server")
-	startBootstrapServer := flag.Bool("bootstrap", false, "start bootstrap server")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
-	help := flag.Bool("help", false, "Show help")
-
 	flag.Parse()
 
-	if !*startBlockchain {
-		*startBlockchain = gocore.Config().GetBool("startBlockchain", false)
-	}
+	startBlockchain := shouldStart("Blockchain")
+	startBlockAssembly := shouldStart("BlockAssembly")
+	startBlockValidation := shouldStart("BlockValidation")
+	startValidator := shouldStart("Validator")
+	startUtxoStore := shouldStart("UtxoStore")
+	startTxMetaStore := shouldStart("TxMetaStore")
+	startPropagation := shouldStart("Propagation")
+	startSeeder := shouldStart("Seeder")
+	startMiner := shouldStart("Miner")
+	startBlobServer := shouldStart("BlobServer")
+	startCoinbaseTracker := shouldStart("CoinbaseTracker")
+	startBootstrapServer := shouldStart("BootstrapServer")
+	help := shouldStart("help")
 
-	if !*startBlockAssembly {
-		*startBlockAssembly = gocore.Config().GetBool("startBlockAssembly", false)
-	}
-
-	if !*startBlockValidation {
-		*startBlockValidation = gocore.Config().GetBool("startBlockValidation", false)
-	}
-
-	if !*startValidator {
-		*startValidator = gocore.Config().GetBool("startValidator", false)
-	}
-
-	if !*startUtxoStore {
-		*startUtxoStore = gocore.Config().GetBool("startUtxoStore", false)
-	}
-
-	if !*startTxMetaStore {
-		*startTxMetaStore = gocore.Config().GetBool("startTxMetaStore", false)
-	}
-
-	if !*startPropagation {
-		*startPropagation = gocore.Config().GetBool("startPropagation", false)
-	}
-
-	if !*startSeeder {
-		*startSeeder = gocore.Config().GetBool("startSeeder", false)
-	}
-
-	if !*startMiner {
-		*startMiner = gocore.Config().GetBool("startMiner", false)
-	}
-
-	if !*startBlobServer {
-		*startBlobServer = gocore.Config().GetBool("startBlobServer", false)
-	}
-	if !*startCoinbaseTracker {
-		*startCoinbaseTracker = gocore.Config().GetBool("startCoinbaseTracker", false)
-	}
-
-	if !*startBootstrapServer {
-		*startBootstrapServer = gocore.Config().GetBool("startBootstrapServer", false)
-	}
-
-	if help != nil && *help ||
-		(!*startBlockchain &&
-			!*startBlockAssembly &&
-			!*startBlockValidation &&
-			!*startValidator &&
-			!*startUtxoStore &&
-			!*startTxMetaStore &&
-			!*startPropagation &&
-			!*startSeeder &&
-			!*startMiner &&
-			!*startBootstrapServer &&
-			!*startBlobServer &&
-			!*startCoinbaseTracker) {
+	if help ||
+		(!startBlockchain &&
+			!startBlockAssembly &&
+			!startBlockValidation &&
+			!startValidator &&
+			!startUtxoStore &&
+			!startTxMetaStore &&
+			!startPropagation &&
+			!startSeeder &&
+			!startMiner &&
+			!startBootstrapServer &&
+			!startBlobServer &&
+			!startCoinbaseTracker) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -254,7 +208,7 @@ func main() {
 	var blockValidationService *blockvalidation.BlockValidationServer
 
 	// blockchain service needs to start first !
-	if *startBlockchain {
+	if startBlockchain {
 		blockchainService, err = blockchain.New(logger)
 		if err != nil {
 			panic(err)
@@ -273,67 +227,93 @@ func main() {
 	//----------------------------------------------------------------
 	// These are the main stores used in the system
 	//
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-	utxoStore, err := validator_utxostore.NewStore(logger, utxostoreURL)
-	if err != nil {
-		panic(err)
+	var utxostoreURL *url.URL
+	var utxoStore utxostore.Interface
+
+	if startBlockValidation || startValidator || startUtxoStore {
+		var err error
+		var found bool
+
+		utxostoreURL, err, found = gocore.Config().GetURL("utxostore")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("no utxostore setting found")
+		}
+		utxoStore, err = validator_utxostore.NewStore(logger, utxostoreURL)
+		if err != nil {
+			panic(err)
+		}
 	}
 
-	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("txstore config not found")
-	}
-	txStore, err := blob.NewStore(txStoreUrl)
-	if err != nil {
-		panic(err)
+	var txStore blob.Store
+
+	if startBlockAssembly || startBlobServer || startPropagation {
+		var err error
+		txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("txstore config not found")
+		}
+		txStore, err = blob.NewStore(txStoreUrl)
+		if err != nil {
+			panic(err)
+		}
 	}
 
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
+	var txMetaStoreURL *url.URL
 	var txMetaStore txmetastore.Store
-	if txMetaStoreURL.Scheme == "memory" {
-		// the memory store is reached through a grpc client
-		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
+
+	if startTxMetaStore || startBlockValidation || startValidator {
+		var err error
+		var found bool
+
+		txMetaStoreURL, err, found = gocore.Config().GetURL("txmeta_store")
 		if err != nil {
 			panic(err)
 		}
-	} else {
-		txMetaStore, err = store.New(logger, txMetaStoreURL)
+		if !found {
+			panic("no txmeta_store setting found")
+		}
+
+		if txMetaStoreURL.Scheme == "memory" {
+			// the memory store is reached through a grpc client
+			txMetaStore, err = txmeta.NewClient(context.Background(), logger)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			txMetaStore, err = store.New(logger, txMetaStoreURL)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	var subtreeStore blob.Store
+
+	if startBlockAssembly || startBlockValidation || startBlobServer {
+		subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("subtreestore config not found")
+		}
+		subtreeStore, err = blob.NewStore(subtreeStoreUrl)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("subtreestore config not found")
-	}
-	subtreeStore, err := blob.NewStore(subtreeStoreUrl)
-	if err != nil {
-		panic(err)
-	}
 	//
 	//----------------------------------------------------------------
 	var validatorClient *validator.Client
 
-	if *startBlockValidation || *startPropagation {
+	if startBlockValidation || startPropagation {
 		validatorClient, err = validator.NewClient(context.Background(), logger)
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)
@@ -341,7 +321,7 @@ func main() {
 	}
 
 	// txmeta store
-	if *startTxMetaStore {
+	if startTxMetaStore {
 		if txMetaStoreURL.Scheme != "memory" {
 			panic("txmeta grpc server only supports memory store")
 		}
@@ -364,8 +344,8 @@ func main() {
 	}
 
 	// blockAssembly
-	if *startBlockAssembly {
-		if _, found = gocore.Config().Get("blockassembly_grpcAddress"); found {
+	if startBlockAssembly {
+		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
 			g.Go(func() error {
 				logger.Infof("Starting Block Assembly Server")
 
@@ -383,8 +363,8 @@ func main() {
 	}
 
 	// blockValidation
-	if *startBlockValidation {
-		if _, found = gocore.Config().Get("blockvalidation_grpcAddress"); found {
+	if startBlockValidation {
+		if _, found := gocore.Config().Get("blockvalidation_grpcAddress"); found {
 			g.Go(func() error {
 				logger.Infof("Starting Block Validation Server")
 
@@ -400,7 +380,7 @@ func main() {
 	}
 
 	// validator
-	if *startValidator {
+	if startValidator {
 		if validatorAddress, found := gocore.Config().Get("validator_grpcAddress"); found {
 			g.Go(func() error {
 				logger.Infof("Starting Validator Server on: %s", validatorAddress)
@@ -414,45 +394,38 @@ func main() {
 	}
 
 	// utxostore
-	if *startUtxoStore {
-		utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-		if err != nil {
-			panic(err)
-		}
+	if startUtxoStore && utxostoreURL != nil {
+		g.Go(func() (err error) {
+			logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
 
-		if found {
-			g.Go(func() (err error) {
-				logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
+			var s utxostore.Interface
+			switch utxostoreURL.Path {
+			case "/splitbyhash":
+				logger.Infof("[UTXOStore] using splitbyhash memory store")
+				s = memory.NewSplitByHash(true)
+			case "/swiss":
+				logger.Infof("[UTXOStore] using swissmap memory store")
+				s = memory.NewSwissMap(true)
+			case "/xsyncmap":
+				logger.Infof("[UTXOStore] using xsyncmap memory store")
+				s = memory.NewXSyncMap(true)
+			default:
+				logger.Infof("[UTXOStore] using default memory store")
+				s = memory.New(true)
+			}
 
-				var s utxostore.Interface
-				switch utxostoreURL.Path {
-				case "/splitbyhash":
-					logger.Infof("[UTXOStore] using splitbyhash memory store")
-					s = memory.NewSplitByHash(true)
-				case "/swiss":
-					logger.Infof("[UTXOStore] using swissmap memory store")
-					s = memory.NewSwissMap(true)
-				case "/xsyncmap":
-					logger.Infof("[UTXOStore] using xsyncmap memory store")
-					s = memory.NewXSyncMap(true)
-				default:
-					logger.Infof("[UTXOStore] using default memory store")
-					s = memory.New(true)
-				}
+			utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
+			utxoStoreServer, err = utxo.New(utxoLogger, s)
+			if err != nil {
+				panic(err)
+			}
 
-				utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
-				utxoStoreServer, err = utxo.New(utxoLogger, s)
-				if err != nil {
-					panic(err)
-				}
-
-				return utxoStoreServer.Start()
-			})
-		}
+			return utxoStoreServer.Start()
+		})
 	}
 
 	// seeder
-	if *startSeeder {
+	if startSeeder {
 		seederURL, found := gocore.Config().Get("seeder_grpcAddress")
 		if found {
 			g.Go(func() (err error) {
@@ -466,7 +439,7 @@ func main() {
 	}
 
 	// miner
-	if *startMiner {
+	if startMiner {
 		g.Go(func() (err error) {
 			minerServer = miner.NewMiner()
 			return minerServer.Start(ctx)
@@ -474,7 +447,7 @@ func main() {
 	}
 
 	// blob server
-	if *startBlobServer {
+	if startBlobServer {
 		g.Go(func() (err error) {
 			blobServer, err = blobserver.NewServer(utxoStore, txStore, subtreeStore)
 			if err != nil {
@@ -490,7 +463,7 @@ func main() {
 	}
 
 	// coinbase tracker server
-	if *startCoinbaseTracker {
+	if startCoinbaseTracker {
 		coinbaseTrackerLogger := gocore.Log("con", gocore.NewLogLevelFromString(logLevel))
 		g.Go(func() (err error) {
 			coinbaseTrackerServer, err = coinbasetracker.New(coinbaseTrackerLogger)
@@ -507,7 +480,7 @@ func main() {
 	}
 
 	// bootstrap server
-	if *startBootstrapServer {
+	if startBootstrapServer {
 		g.Go(func() (err error) {
 			bootstrapServer = bootstrap.NewServer()
 
@@ -520,7 +493,7 @@ func main() {
 	}
 
 	// propagation
-	if *startPropagation {
+	if startPropagation {
 		// g.Go(func() error {
 		// 	logger.Infof("Starting Propagation")
 
@@ -638,4 +611,18 @@ func main() {
 		logger.Errorf("server returning an error: %v", err)
 		os.Exit(2)
 	}
+}
+
+func shouldStart(app string) bool {
+
+	cmdArg := fmt.Sprintf("-%s=1", app)
+	for _, cmd := range os.Args[1:] {
+		if cmd == cmdArg {
+			return true
+		}
+	}
+
+	varArg := fmt.Sprintf("start%s", app)
+
+	return gocore.Config().GetBool(varArg)
 }
