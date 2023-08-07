@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,9 +64,6 @@ func main() {
 	if err != nil {
 		logger.Fatalf("sentry.Init: %s", err)
 	}
-
-	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
-	flag.Parse()
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -143,11 +140,7 @@ func main() {
 	go func() {
 		var profilerAddr string
 		var ok bool
-		if profileAddress != nil && *profileAddress != "" {
-			profilerAddr, ok = *profileAddress, true
-		} else {
-			profilerAddr, ok = gocore.Config().Get("profilerAddr")
-		}
+		profilerAddr, ok = gocore.Config().Get("profilerAddr")
 		if ok {
 			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
 			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
@@ -615,7 +608,7 @@ func main() {
 
 func shouldStart(app string) bool {
 
-	cmdArg := fmt.Sprintf("-%s=1", app)
+	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
 	for _, cmd := range os.Args[1:] {
 		if cmd == cmdArg {
 			return true
