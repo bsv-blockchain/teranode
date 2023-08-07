@@ -25,8 +25,12 @@ func NetworkBlockToStoreBlock(nblock *nmodel.Block) (*smodel.Block, error) {
 	if nblock == nil {
 		return nil, errors.New("nil network block")
 	}
+	height, err := nblock.ExtractCoinbaseHeight()
+	if err != nil {
+		return nil, err
+	}
 	return &smodel.Block{
-		// TODO: Height is missing. How can we know the height?
+		Height:        uint64(height),
 		BlockHash:     nblock.Hash().String(),
 		PrevBlockHash: nblock.Header.HashPrevBlock.String(),
 	}, nil

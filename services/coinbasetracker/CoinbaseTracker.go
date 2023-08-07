@@ -113,7 +113,7 @@ func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
 				ct.logger.Errorf("failed to get network block %s, %s", block_hash, err.Error())
 				break
 			}
-			block_db, err := NetworkBlockToStoreBlock(block_network)
+			block_db, err = NetworkBlockToStoreBlock(block_network)
 			if err != nil {
 				ct.logger.Errorf("failed to translate network block %s to store block, %s", block_hash, err.Error())
 				break
