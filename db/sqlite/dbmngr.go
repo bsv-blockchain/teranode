@@ -2,6 +2,9 @@ package sqlite
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
@@ -16,7 +19,28 @@ type SqliteManager struct {
 
 func (m *SqliteManager) Connect(db_config string) error {
 	m.logger.Debugf("Connecting to sqlite: %s", db_config)
-	db, err := gorm.Open(sqlite.Open(db_config), &gorm.Config{})
+	var dsn string
+	if strings.Contains(db_config, ":memory:") {
+		dsn = db_config
+	} else {
+		uhdir, err := os.UserHomeDir()
+		if err != nil {
+			m.logger.Errorf("cannot find user home directory: %s", err.Error())
+			return err
+		}
+		data_path := filepath.Join(uhdir, "data")
+		if _, err := os.Stat(data_path); os.IsNotExist(err) {
+			if err := os.Mkdir(data_path, 0755); os.IsExist(err) {
+				dsn = filepath.Join(data_path, db_config)
+			} else {
+				m.logger.Errorf("cannot create data directory: %s", err.Error())
+				dsn = db_config
+			}
+		} else {
+			dsn = filepath.Join(data_path, db_config)
+		}
+	}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		m.logger.Errorf("Failed to open sqlite: %s", err.Error())
 		return err
@@ -74,6 +98,11 @@ func (m *SqliteManager) Create(model any) error {
 func (m *SqliteManager) Read(model any) error {
 	result := m.db.Last(model)
 	return result.Error
+}
+
+func (m *SqliteManager) Read_Cond(model any, cond []any) (any, error) {
+	result := m.db.Where(cond[0], cond[1:]...).Find(model)
+	return result.Statement.Dest, result.Error
 }
 
 func (m *SqliteManager) Read_All_Cond(model any, cond []any) ([]any, error) {

@@ -63,7 +63,77 @@ func (ct *CoinbaseTracker) synchronize() {
 }
 
 func (ct *CoinbaseTracker) syncUp() {
-	// do sync up between the db and the network
+	block_network, err := ct.GetBestBlockFromNetwork(context.Background())
+	if err != nil {
+		ct.logger.Errorf("failed to get best block from network: %s", err.Error())
+		return
+	}
+	block_db, err := ct.GetBestBlockFromDb(context.Background())
+	if err != nil {
+		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
+		return
+	}
+	if !block_db.Equal(block_network) {
+		err = ct.AddBlock(context.Background(), block_network)
+		if err != nil {
+			ct.logger.Errorf("failed to add block to the store: %s", err.Error())
+			return
+		}
+	}
+	ct.checkStoreForBlockGaps()
+}
+
+func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
+	// How do we detect the latest block?
+	// The latest block is not referenced by any other blocks
+	// and has the current max height
+	block_db, err := ct.GetBestBlockFromDb(context.Background())
+	if err != nil {
+		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
+		return
+	}
+	// At this point we should have the latest network block in the database
+	if IsGenesisBlock(block_db) {
+		// This is the genesis block - nothing else to do
+		return
+	}
+	// loop through until genesis block is reached, requesting missing blocks
+	// along the way
+	block_hash := block_db.PrevBlockHash
+	for {
+		cond := []interface{}{"blockhash = ? ", block_hash}
+		prev_block_i, err := ct.store.Read_Cond(&model.Block{}, cond)
+		if err != nil {
+			ct.logger.Errorf("failed to read block %s from database: %s", &block_hash, err.Error())
+		}
+		if prev_block_i == nil {
+			// missing block condition
+			block_network, err := ct.GetBlockFromNetwork(context.Background(), block_hash)
+			if err != nil {
+				ct.logger.Errorf("failed to get network block %s, %s", block_hash, err.Error())
+				break
+			}
+			block_db, err = NetworkBlockToStoreBlock(block_network)
+			if err != nil {
+				ct.logger.Errorf("failed to translate network block %s to store block, %s", block_hash, err.Error())
+				break
+			}
+
+			err = ct.AddBlock(context.Background(), block_db)
+			if err != nil {
+				ct.logger.Errorf("failed to add block %s to store, %s", block_hash, err.Error())
+				panic(err.Error())
+			}
+			block_hash = block_db.PrevBlockHash
+		} else {
+			prev_block := prev_block_i.(*model.Block)
+			// If the previous block is genesis block - all is good and nothing to do
+			if IsGenesisBlock(prev_block) {
+				return
+			}
+			block_hash = prev_block.PrevBlockHash
+		}
+	}
 }
 
 func (ct *CoinbaseTracker) Stop() error {
@@ -74,7 +144,7 @@ func (ct *CoinbaseTracker) Stop() error {
 
 func (ct *CoinbaseTracker) GetBestBlockFromDb(ctx context.Context) (*model.Block, error) {
 	m := &model.Block{}
-	err := ct.store.Read(m)
+	err := ct.store.Read(m) // TODO: change logic to retrieve truly best block
 	return m, err
 }
 func (u *CoinbaseTracker) GetBestBlockFromNetwork(ctx context.Context) (*model.Block, error) {

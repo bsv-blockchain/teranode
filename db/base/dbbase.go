@@ -16,6 +16,7 @@ type DbFactories struct {
 type CRUD interface {
 	Create(any) error
 	Read(any) error
+	Read_Cond(any, []any) (any, error)
 	Read_All_Cond(any, []any) ([]any, error)
 	Update(any) error
 	Delete(any) error

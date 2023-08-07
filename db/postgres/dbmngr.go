@@ -28,6 +28,10 @@ func (m *PostgresManager) Read(model any) error {
 	return nil
 }
 
+func (m *PostgresManager) Read_Cond(model any, cond []any) (any, error) {
+	return nil, nil
+}
+
 func (m *PostgresManager) Read_All_Cond(model any, cond []any) ([]any, error) {
 	return nil, nil
 }
