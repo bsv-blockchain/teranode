@@ -2,7 +2,9 @@ package blockassembly
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -61,7 +63,11 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	var err error
 	b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
 	if err != nil {
-		logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			logger.Warnf("[BlockAssembler] no state found in blockchain db")
+		} else {
+			logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
+		}
 	} else {
 		logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Hash())
 		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)

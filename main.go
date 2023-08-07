@@ -328,8 +328,9 @@ func main() {
 				panic(err)
 			}
 
-			if err := txMetaStoreServer.Start(); err != nil {
+			if err = txMetaStoreServer.Start(); err != nil {
 				logger.Errorf("txMetaStoreServer errored: %v", err)
+				return err
 			}
 
 			return nil
@@ -345,7 +346,7 @@ func main() {
 				baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
 				blockAssemblyService = blockassembly.New(ctx, baLogger, txStore, subtreeStore)
 
-				if err := blockAssemblyService.Start(); err != nil {
+				if err = blockAssemblyService.Start(); err != nil {
 					logger.Errorf("blockassembly errored: %v", err)
 					return err
 				}
@@ -364,10 +365,17 @@ func main() {
 				bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
 				blockValidationService, err = blockvalidation.New(bvLogger, utxoStore, subtreeStore, txMetaStore, validatorClient)
 				if err != nil {
-					panic(err)
+					logger.Errorf("blockvalidation errored: %v", err)
+					return err
 				}
 
-				return blockValidationService.Start()
+				err = blockValidationService.Start()
+				if err != nil {
+					logger.Errorf("blockvalidation failed to start: %v", err)
+					return err
+				}
+
+				return nil
 			})
 		}
 	}
@@ -381,7 +389,13 @@ func main() {
 				validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
 				validatorService = validator.NewServer(validatorLogger, utxoStore, txMetaStore)
 
-				return validatorService.Start()
+				err = validatorService.Start()
+				if err != nil {
+					logger.Errorf("validator service failed: %v", err)
+					return err
+				}
+
+				return nil
 			})
 		}
 	}
@@ -410,10 +424,17 @@ func main() {
 			utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
 			utxoStoreServer, err = utxo.New(utxoLogger, s)
 			if err != nil {
-				panic(err)
+				logger.Errorf("utxo store failed: %v", err)
+				return err
 			}
 
-			return utxoStoreServer.Start()
+			err = utxoStoreServer.Start()
+			if err != nil {
+				logger.Errorf("utxo store failed to start: %v", err)
+				return err
+			}
+
+			return nil
 		})
 	}
 
@@ -426,7 +447,13 @@ func main() {
 
 				seederService = seeder.NewServer(gocore.Log("seed", gocore.NewLogLevelFromString(logLevel)))
 
-				return seederService.Start()
+				err = seederService.Start()
+				if err != nil {
+					logger.Errorf("seeder service failed: %v", err)
+					return err
+				}
+
+				return nil
 			})
 		}
 	}
@@ -435,7 +462,13 @@ func main() {
 	if startMiner {
 		g.Go(func() (err error) {
 			minerServer = miner.NewMiner()
-			return minerServer.Start(ctx)
+			err = minerServer.Start(ctx)
+			if err != nil {
+				logger.Errorf("miner service failed: %v", err)
+				return err
+			}
+
+			return nil
 		})
 	}
 
@@ -447,7 +480,8 @@ func main() {
 				return err
 			}
 
-			if err := blobServer.Start(); err != nil {
+			if err = blobServer.Start(); err != nil {
+				logger.Errorf("blobServer errored: %v", err)
 				return err
 			}
 
@@ -464,7 +498,8 @@ func main() {
 				return err
 			}
 
-			if err := coinbaseTrackerServer.Start(); err != nil {
+			if err = coinbaseTrackerServer.Start(); err != nil {
+				logger.Errorf("coinbaseTrackerServer errored: %v", err)
 				return err
 			}
 
@@ -477,7 +512,8 @@ func main() {
 		g.Go(func() (err error) {
 			bootstrapServer = bootstrap.NewServer()
 
-			if err := bootstrapServer.Start(ctx); err != nil {
+			if err = bootstrapServer.Start(ctx); err != nil {
+				logger.Errorf("bootstrapServer errored: %v", err)
 				return err
 			}
 
@@ -503,10 +539,17 @@ func main() {
 
 				propagationGRPCServer, err = propagation.New(logger, txStore, validatorClient)
 				if err != nil {
-					panic(err)
+					logger.Errorf("propagation grpc server failed: %v", err)
+					return err
 				}
 
-				return propagationGRPCServer.Start()
+				err = propagationGRPCServer.Start()
+				if err != nil {
+					logger.Errorf("propagation grpc server failed to start: %v", err)
+					return err
+				}
+
+				return nil
 			})
 		}
 	}
