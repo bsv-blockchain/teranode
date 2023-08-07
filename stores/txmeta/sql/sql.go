@@ -61,6 +61,9 @@ func New(storeUrl *url.URL) (*Store, error) {
 	logger := gocore.Log("tmsql", gocore.NewLogLevelFromString(logLevel))
 
 	db, err := util.InitSQLDB(logger, storeUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init sql db: %+v", err)
+	}
 
 	switch storeUrl.Scheme {
 	case "postgres":

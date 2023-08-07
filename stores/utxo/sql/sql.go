@@ -104,7 +104,7 @@ func New(storeUrl *url.URL) (*Store, error) {
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to init sql db: %+v", err)
 	}
 
 	switch storeUrl.Scheme {
