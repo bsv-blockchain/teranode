@@ -176,8 +176,20 @@ func (ct *CoinbaseTracker) AddUtxo(ctx context.Context, utxo *model.UTXO) error 
 }
 
 func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount uint64) ([]*bt.UTXO, error) {
+	// DevNote: Get a combination of UTXOs that satisfy the amount from the lowest
+	// number of inputs that are equal or greater than the desired amount
+	// or a higher number of inputs that are equal or greater than the desired amount.
+	// This is an itterative process where we continue looking for UTXOs that can satisfy the amount
+	// the amount.
+
+	// DevNote: This is our first stab at the problem: find a single UTXO that is equal or
+	// larger than the desired amount.
+	// Need to sort by the lowest to highest amount. The first lowest amount should be sufficient.
+	// If none exist, then grab lower amounts and build the best amount combination
+	// that satisfies the amount.
 	cond := []interface{}{"address = ? AND amount >= ?", address, strconv.FormatInt(int64(amount), 10)}
 	utxos := []model.UTXO{}
+
 	payload, err := ct.store.Read_All_Cond(&utxos, cond)
 	if err != nil {
 		return nil, err
