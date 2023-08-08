@@ -41,11 +41,11 @@ type NeoClient struct {
 	url      string
 }
 
-func NewNeoClient() (*NeoClient, error) {
+func NewNeoClient(url string, username string, password string) (*NeoClient, error) {
 	c := &NeoClient{}
-	c.url = "neo4j://localhost:7687"
-	c.username = "neo4j"
-	c.password = "localneo"
+	c.url = url
+	c.username = username
+	c.password = password
 	// Neo4j driver configuration
 	var err error
 	c.driver, err = neo4j.NewDriver(c.url, neo4j.BasicAuth(c.username, c.password, ""))

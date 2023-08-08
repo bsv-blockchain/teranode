@@ -1,14 +1,11 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log"
 	mathRand "math/rand"
 	"testing"
 	"time"
-
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -17,16 +14,17 @@ const (
 	chainCount                = 200
 	subtreeCount              = 3
 	blockCount                = 3
-)
 
-var txArray []string
-var subtreeHashes []string
+	neoTestUrl      = "neo4j://localhost:7687"
+	neoTestUsername = "neo4j"
+	neoTestPassword = "localneo"
+)
 
 func TestNeo4j(t *testing.T) {
 
 	txArray = make([]string, 0)
 
-	neoClient, err := NewNeoClient()
+	neoClient, err := NewNeoClient(neoTestUrl, neoTestUsername, neoTestPassword)
 	if err != nil {
 		log.Fatalf("Error creating NeoClient: %s", err.Error())
 	}
@@ -121,124 +119,4 @@ func TestNeo4j(t *testing.T) {
 	}
 	fmt.Printf("%d transactions not in subtrees\n", len(txs))
 	fmt.Printf("Time to get transactions not in subtrees: %v\n", time.Since(start))
-}
-
-func mineBlock(txs []string) (*BlockHeader, error) {
-
-	neoClient, err := NewNeoClient()
-	if err != nil {
-		log.Fatalf("Error creating NeoClient: %s", err.Error())
-	}
-	defer neoClient.Close()
-
-	// get the latest block in the db
-	b, err := neoClient.GetBestBlockheader()
-	if err != nil {
-		return nil, err
-	}
-	bh := &BlockHeader{}
-	ch, err := chainhash.NewHashFromStr("")
-	if err != nil {
-		return nil, err
-	}
-	// could be first block
-	if b == nil || b.Hash == nil {
-		bh.Hash = generateRandomHash()
-		bh.PreviousHash = ch
-		bh.Height = 1
-		bh.Chainwork = 10101010
-	} else {
-		bh.Hash = generateRandomHash()
-		bh.PreviousHash = b.Hash
-		bh.Height = b.Height + 1
-		bh.Chainwork = b.Chainwork
-
-	}
-	// create a new block
-
-	// save block
-
-	err = neoClient.SaveBlock(bh, txArray)
-	if err != nil {
-		return nil, err
-	}
-	return bh, nil
-}
-
-func generateChain(chainLength int) ([]*TxInfo, error) {
-	transactions := make([]*TxInfo, chainLength)
-
-	// Start with a random initial transaction that has no inputs and one output
-	firstTxHash := generateRandomHash()
-	firstInputHash := generateRandomHash()
-	transactions[0] = generateRandomChainedTxInfo(firstTxHash, []*Utxo{generateRandomUtxo(firstInputHash, 1)}, []*Utxo{generateRandomUtxo(firstTxHash, 1)})
-
-	// Generate a chain of transactions where each transaction spends the outputs of the previous one
-	for i := 1; i < chainLength; i++ {
-		txHash := generateRandomHash()
-		inputs := transactions[i-1].Outputs
-		outputs := []*Utxo{generateRandomUtxo(txHash, 1)} // Each transaction generates one new output
-		transactions[i] = generateRandomChainedTxInfo(txHash, inputs, outputs)
-	}
-
-	// Now `transactions` contains a chain of 100,000 transactions where each transaction
-	// spends the outputs of the previous one. You can use these to populate your Neo4j database.
-
-	return transactions, nil
-}
-
-func generateRandomChainedTxInfo(hash *chainhash.Hash, inputs, outputs []*Utxo) *TxInfo {
-	return &TxInfo{
-		Hash:    hash,
-		Fee:     1,
-		Inputs:  inputs,
-		Outputs: outputs,
-	}
-}
-
-func generateRandomTxInfo(numInputs, numOutputs int) *TxInfo {
-
-	hash := generateRandomHash()
-	inputHash := generateRandomHash()
-
-	inputs := make([]*Utxo, numInputs)
-	for i := range inputs {
-		inputs[i] = generateRandomUtxo(inputHash, 1)
-	}
-
-	outputs := make([]*Utxo, numOutputs)
-	for i := range outputs {
-		outputs[i] = generateRandomUtxo(hash, 1)
-	}
-
-	return &TxInfo{
-		Hash:    hash,
-		Fee:     1,
-		Inputs:  inputs,
-		Outputs: outputs,
-	}
-}
-
-func generateRandomUtxo(hash *chainhash.Hash, numVouts uint32) *Utxo {
-	vouts := make([]uint32, numVouts)
-	for i := range vouts {
-		vouts[i] = uint32(i)
-	}
-
-	script := make([]byte, 64)
-	_, _ = rand.Read(script)
-
-	return &Utxo{
-		Hash:     hash,
-		Vout:     vouts,
-		Satoshis: 10000, // Or some other random value
-		Script:   script,
-	}
-}
-
-func generateRandomHash() *chainhash.Hash {
-	bytes := make([]byte, 32)
-	_, _ = rand.Read(bytes)
-	c, _ := chainhash.NewHash(bytes)
-	return c
 }
