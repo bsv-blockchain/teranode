@@ -176,7 +176,7 @@ func (ct *CoinbaseTracker) AddUtxo(ctx context.Context, utxo *model.UTXO) error 
 }
 
 func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount uint64) ([]*bt.UTXO, error) {
-	cond := []interface{}{"address = ? AND amount = ?", address, strconv.FormatInt(int64(amount), 10)}
+	cond := []interface{}{"address = ? AND amount >= ?", address, strconv.FormatInt(int64(amount), 10)}
 	utxos := []model.UTXO{}
 	payload, err := ct.store.Read_All_Cond(&utxos, cond)
 	if err != nil {
