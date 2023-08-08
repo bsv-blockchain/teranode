@@ -2,6 +2,8 @@ package coinbasetracker
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"strconv"
 	"time"
 
@@ -187,30 +189,91 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	// Need to sort by the lowest to highest amount. The first lowest amount should be sufficient.
 	// If none exist, then grab lower amounts and build the best amount combination
 	// that satisfies the amount.
-	cond := []interface{}{"address = ? AND amount >= ?", address, strconv.FormatInt(int64(amount), 10)}
+	cond := []interface{}{"address = ? AND amount >= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
 	utxos := []model.UTXO{}
+	res := []*bt.UTXO{}
 
 	payload, err := ct.store.Read_All_Cond(&utxos, cond)
 	if err != nil {
 		return nil, err
 	}
-	res := []*bt.UTXO{}
-	for _, i := range payload {
-		v, ok := i.(*model.UTXO)
-		if !ok {
-			ct.logger.Errorf("received result is not a model.UTXO")
-			// should we panic?
-			continue
+	// Check if we have utxo amounts that cover the amount
+	if len(payload) > 0 {
+		utxo_candidates := []*model.UTXO{}
+		for _, i := range payload {
+			u, ok := i.(*model.UTXO)
+			if !ok {
+				err := errors.New("received result is not a model.UTXO")
+				ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
+				panic(err.Error())
+			}
+			utxo_candidates = append(utxo_candidates, u)
 		}
-		script := bscript.Script([]byte(v.LockingScript))
-		res = append(res, &bt.UTXO{
-			TxID:          []byte(v.Txid),
-			Vout:          v.Vout,
-			LockingScript: &script,
-			Satoshis:      v.Satoshis,
+
+		sort.Slice(utxo_candidates, func(i, j int) bool {
+			return utxo_candidates[i].Satoshis < utxo_candidates[j].Satoshis
 		})
+
+		// return the first utxo that satisfies the given amount
+
+		script := bscript.Script([]byte(utxo_candidates[0].LockingScript))
+		res = append(res, &bt.UTXO{
+			TxID:          []byte(utxo_candidates[0].Txid),
+			Vout:          utxo_candidates[0].Vout,
+			LockingScript: &script,
+			Satoshis:      utxo_candidates[0].Satoshis,
+		})
+		return res, nil
 	}
-	return res, nil
+	// we are at a point where we couldn't find a single transaction that
+	// satisfies the given amount; Check if we can find an ideal combination
+	// of utxo candidates that satisfy the given amount
+	cond = []interface{}{"address = ? AND amount <= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
+	utxos = []model.UTXO{}
+	res = []*bt.UTXO{}
+
+	payload, err = ct.store.Read_All_Cond(&utxos, cond)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > 0 {
+		utxo_candidates := []*model.UTXO{}
+		for _, i := range payload {
+			u, ok := i.(*model.UTXO)
+			if !ok {
+				err := errors.New("received result is not a model.UTXO")
+				ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
+				panic(err.Error())
+			}
+			utxo_candidates = append(utxo_candidates, u)
+		}
+		// let's do a reverse sort
+		sort.Slice(utxo_candidates, func(i, j int) bool {
+			return utxo_candidates[i].Satoshis > utxo_candidates[j].Satoshis
+		})
+
+		var total uint64 = 0
+		// traverse the utxo candidates from greatest amount down
+		// and keep adding tx until the total counter becomes equal to or greater
+		// than the desired amount.
+		for _, u := range utxo_candidates {
+			total += uint64(u.Satoshis)
+			script := bscript.Script([]byte(u.LockingScript))
+			res = append(res, &bt.UTXO{
+				TxID:          []byte(u.Txid),
+				Vout:          u.Vout,
+				LockingScript: &script,
+				Satoshis:      u.Satoshis,
+			})
+			// sufficient funds have been accumulated - we want to return as few
+			// transactions as possible to preserve better transactional anonymity
+			if total >= amount {
+				break
+			}
+		}
+		return res, nil
+	}
+	return nil, nil
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
