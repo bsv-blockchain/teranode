@@ -417,7 +417,7 @@ func TestAddReadCondUtxo(t *testing.T) {
 	}
 
 	m2 := &model.UTXO{}
-	cond := []interface{}{"address = ? AND amount = ?", m1.Address, strconv.FormatInt(int64(m1.Satoshis), 10)}
+	cond := []interface{}{"address = ? AND satoshis = ?", m1.Address, strconv.FormatInt(int64(m1.Satoshis), 10)}
 
 	payload, err := mgr.Read_All_Cond(m2, cond)
 	if err != nil {
