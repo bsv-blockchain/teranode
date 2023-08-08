@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/aerospike/aerospike-client-go/v6"
 )

@@ -21,7 +21,7 @@ func main() {
 	get <bucket_name> <file_name>
 	remove <bucket_name> <file_name>
 	delete <bucket_name>
-]		
+]
 			`, os.Args[0])
 	}
 

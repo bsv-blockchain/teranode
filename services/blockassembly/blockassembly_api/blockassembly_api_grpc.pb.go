@@ -8,6 +8,7 @@ package blockassembly_api
 
 import (
 	context "context"
+
 	model "github.com/TAAL-GmbH/ubsv/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"

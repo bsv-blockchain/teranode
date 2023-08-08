@@ -17,4 +17,3 @@ kubectl get pods
 
 # Check the logs of the deployment
 kubectl logs -f ubsv-ubsv-0
-

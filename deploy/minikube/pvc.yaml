@@ -1,17 +1,4 @@
 apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: regtest-pv
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: default
-  hostPath:
-    path: /tmp/bitcoin # CHANGE TO POINT TO HOST DIRECTORY WHERE U WANT TO SAVE THE DATA
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: root-volume

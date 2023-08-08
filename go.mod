@@ -9,7 +9,6 @@ require (
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go/v6 v6.12.0
-	github.com/apple/foundationdb/bindings/go v0.0.0-20230621034922-cb03d918ac80
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.1.0
@@ -34,14 +33,14 @@ require (
 	github.com/prometheus/client_golang v1.14.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.8.2
+	github.com/stretchr/testify v1.8.4
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	go.mongodb.org/mongo-driver v1.12.0
 	go.opentelemetry.io/otel v1.14.0
 	go.opentelemetry.io/otel/exporters/jaeger v1.14.0
 	go.opentelemetry.io/otel/sdk v1.14.0
 	go.opentelemetry.io/otel/trace v1.14.0
-	golang.org/x/net v0.10.0
+	golang.org/x/net v0.14.0
 	golang.org/x/sync v0.3.0
 	golang.org/x/time v0.3.0
 	google.golang.org/api v0.114.0
@@ -62,6 +61,7 @@ require (
 	github.com/eapache/go-resiliency v1.3.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230111030713-bf00bc1b83b6 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
+	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/go-logr/logr v1.2.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/gofuzz v1.1.0 // indirect
@@ -93,16 +93,17 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	github.com/rs/xid v1.4.0 // indirect
-	github.com/sirupsen/logrus v1.9.0 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20181117223130-1be2e3e5546d // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.40.0 // indirect
 	go.opentelemetry.io/otel/metric v0.37.0 // indirect
-	golang.org/x/mod v0.9.0 // indirect
-	golang.org/x/term v0.10.0 // indirect
-	golang.org/x/tools v0.7.0 // indirect
+	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
+	golang.org/x/mod v0.12.0 // indirect
+	golang.org/x/term v0.11.0 // indirect
+	golang.org/x/tools v0.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	k8s.io/klog/v2 v2.30.0 // indirect
@@ -179,10 +180,10 @@ require (
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.uber.org/atomic v1.10.0 // indirect
-	golang.org/x/crypto v0.11.0 // indirect
+	golang.org/x/crypto v0.12.0 // indirect
 	golang.org/x/oauth2 v0.6.0 // indirect
-	golang.org/x/sys v0.10.0 // indirect
-	golang.org/x/text v0.11.0 // indirect
+	golang.org/x/sys v0.11.0 // indirect
+	golang.org/x/text v0.12.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20230323212658-478b75c54725 // indirect

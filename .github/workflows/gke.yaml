@@ -4,7 +4,28 @@ on:
     branches:
       - master
 jobs:
+  go-lint-and-test:
+    runs-on: ubuntu-latest
+    name: Go Lint and Test
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20.7'
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+      - name: Run Go tests
+        run: go test -race -count=1 $(go list ./... | grep -v playground | grep -v poc)
+
   build-docker-and-deploy:
+    name: Build Docker image and deploy to EKS
     runs-on: ubuntu-latest
 
     steps:
@@ -32,7 +53,7 @@ jobs:
           # Download kubectl
           sudo snap install kubectl --classic
           kubectl version --client
-          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1 
+          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1
           kubectl cluster-info
 
       # install kustomize for deployment
@@ -58,7 +79,7 @@ jobs:
       # Deploy the Docker image to the GKE cluster
       - name: Build k8s files
         run: |-
-          
+
           # Setting Image
           cd ./deploy/k8s/deployments
           echo "Setting image"
@@ -77,22 +98,21 @@ jobs:
               if [ "$file" == "kustomization.yaml" ]; then
                   continue
               fi
-          
+
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-          
+
               # Run kubectl commands
               kubectl rollout status -f "$file"
           done
-          
-          
+
+
           # Apply latest services configuration changes
           cd ../services
           for file in *.yaml; do     # Loop over all files in the directory
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
-          
+
               # Run kubectl commands
               kubectl get services -o wide -n "$FILE_NAME-service"
           done
-          

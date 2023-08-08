@@ -3,7 +3,7 @@
 start
 :Incoming subtree;
 if (Blessed?) then (yes)
-  
+
 else (no)
   While (more transactions)
     :load txn from metastore;

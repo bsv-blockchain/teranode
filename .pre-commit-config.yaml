@@ -1,8 +1,18 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
+    rev: v2.3.0
     hooks:
-      - id: check-merge-conflict
-      - id: trailing-whitespace
+      - id: check-yaml
       - id: end-of-file-fixer
-      - id: check-added-large-files
+      - id: trailing-whitespace
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.53.3 # Use the ref you want to point at
+    hooks:
+      - id: golangci-lint
+  - repo: local
+    hooks:
+      - id: go-test
+        name: Run go test
+        entry: bash -c 'go test -race -count=1 $(go list ./... | grep -v playground | grep -v poc)'
+        language: system
+        types: [ go ]
