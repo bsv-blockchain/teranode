@@ -197,9 +197,9 @@ type Utxo struct {
 	unknownFields protoimpl.UnknownFields
 
 	TxId     []byte `protobuf:"bytes,1,opt,name=txId,proto3" json:"txId,omitempty"`
-	Vout     uint32 `protobuf:"varint,2,opt,name=vout,proto3" json:"vout,omitempty"`
+	Vout     uint32 `protobuf:"varint,2,opt,name=vout,proto3"`
 	Script   []byte `protobuf:"bytes,3,opt,name=script,proto3" json:"script,omitempty"`
-	Satoshis uint64 `protobuf:"varint,4,opt,name=satoshis,proto3" json:"satoshis,omitempty"`
+	Satoshis uint64 `protobuf:"varint,4,opt,name=satoshis,proto3"`
 }
 
 func (x *Utxo) Reset() {

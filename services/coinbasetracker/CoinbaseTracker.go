@@ -16,6 +16,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"gorm.io/gorm"
 )
 
 type CoinbaseTracker struct {
@@ -23,11 +24,6 @@ type CoinbaseTracker struct {
 	blockchainClient blockchain.ClientI
 	store            base.DbManager
 	ch               chan bool
-}
-
-type utxoTuple struct {
-	txid string
-	vout uint32
 }
 
 func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI) *CoinbaseTracker {
@@ -44,7 +40,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		store_config = "file::memory:?cache=shared"
 	}
 
-	// synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
+	synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
 
 	ct := &CoinbaseTracker{
 		logger:           logger,
@@ -53,7 +49,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		ch:               make(chan bool),
 	}
 
-	// go ct.synchronize(synchronize_reserved)
+	go ct.synchronize(synchronize_reserved)
 
 	return ct
 }
@@ -210,7 +206,13 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	utxo := &model.UTXO{}
 	res := []*bt.UTXO{}
 
-	txids := []utxoTuple{}
+	utxoIds := []interface{}{}
+
+	// start transaction
+	dtx, err := ct.store.TxBegin()
+	if err != nil {
+		return nil, err
+	}
 
 	payload, err := ct.store.Read_All_Cond(utxo, cond)
 	if err != nil {
@@ -242,7 +244,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 			LockingScript: &script,
 			Satoshis:      utxo_candidates[0].Satoshis,
 		})
-		txids = append(txids, utxoTuple{txid: utxo_candidates[0].Txid, vout: utxo_candidates[0].Vout})
+		utxoIds = append(utxoIds, utxo_candidates[0].ID)
 	} else {
 		// we are at a point where we couldn't find a single transaction that
 		// satisfies the given amount; Check if we can find an ideal combination
@@ -267,7 +269,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 				utxo_candidates = append(utxo_candidates, u)
 			}
 			if len(payload) > 0 {
-				utxo_candidates := []*model.UTXO{}
+				utxo_candidates = []*model.UTXO{}
 				for _, i := range payload {
 					u, ok := i.(*model.UTXO)
 					if !ok {
@@ -289,7 +291,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 				for _, u := range utxo_candidates {
 					total += uint64(u.Satoshis)
 					script := bscript.Script([]byte(u.LockingScript))
-					txids = append(txids, utxoTuple{txid: u.Txid, vout: u.Vout})
+					utxoIds = append(utxoIds, u.ID)
 
 					res = append(res, &bt.UTXO{
 						TxID:          []byte(u.Txid),
@@ -307,19 +309,25 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		}
 	}
 	// after the best input candidates have been selected, mark them as reserved
-	err = ct.SetUtxoReserved(context.Background(), txids)
+	err = ct.SetUtxoReserved(context.Background(), utxoIds, dtx)
+	b := dtx.(*gorm.DB)
+	b.Commit()
+
 	return res, err
 }
 
 func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}) error {
-	return ct.store.UpdateBatch("utxos", "txid IN ?", txids, map[string]interface{}{"spent": true, "reserved": false})
+	if len(txids) > 1 {
+		return ct.store.UpdateBatch("utxos", "txid IN ?", txids, map[string]interface{}{"spent": true, "reserved": false})
+	}
+	return ct.store.UpdateBatch("utxos", "txid = ?", txids, map[string]interface{}{"spent": true, "reserved": false})
 }
 
-func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, txids []utxoTuple) error {
-	// start transaction
-	// TODO implement this
-	//return ct.store.UpdateBatch("utxos", "txid IN ? AND spent = false", txids, map[string]interface{}{"reserved": true})
-	return nil
+func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, utxoIds []interface{}, dbtx any) error {
+	if len(utxoIds) > 1 {
+		return ct.store.TxUpdateBatch(dbtx, "utxos", "ID IN ? AND spent = false", utxoIds, map[string]interface{}{"reserved": true})
+	}
+	return ct.store.TxUpdateBatch(dbtx, "utxos", "ID = ? AND spent = false", utxoIds, map[string]interface{}{"reserved": true})
 }
 
 func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {

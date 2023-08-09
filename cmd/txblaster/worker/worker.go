@@ -154,91 +154,33 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 
 	logger.Debugf("coinbaseAddr: %s", coinbaseAddr.AddressString)
-	resp, err := coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
-		Address: coinbaseAddr.AddressString,
-		Amount:  50,
-	})
-	if err != nil {
-		logger.Errorf("couldn't get utxos from coinbaseTracker: %v", err)
+	var resp *coinbasetracker_api.GetUtxoResponse
+	for i := 0; i < 10; i++ {
+		resp, err = coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
+			Address: coinbaseAddr.AddressString,
+			Amount:  50,
+		})
+		if err == nil {
+			break
+		}
+		t := time.NewTimer(time.Second * 1)
+		<-t.C
+		logger.Debugf("retrying GetUtxos %d time", i+1)
 
-		panic("couldn't get utxos from coinbaseTracker")
 	}
-	for _, utxo := range resp.Utxos {
-		logger.Debugf("received utxo %s", utxo.String())
+
+	if resp.Utxos != nil {
+
+		for _, utxo := range resp.Utxos {
+			logger.Debugf("received utxo %s", utxo.String())
+		}
 	}
-
-	// create new private key
-	// keySet, err := extra.New()
-	// if err != nil {
-	// 	prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-	// 	logger.Errorf("Failed to create new key: %v", err)
-	// 	return err
-	// }
-
-	// (ok)
-	// for _, seeder := range w.seederServers {
-	// 	if _, err := seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
-	// 		PrivateKey:           keySet.PrivateKey.Serialise(),
-	// 		NumberOfTransactions: w.numberOfTransactions,
-	// 		NumberOfOutputs:      uint32(w.numberOfOutputs),
-	// 		SatoshisPerOutput:    w.satoshisPerOutput,
-	// 	}); err != nil {
-	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-	// 		logger.Errorf("Failed to create spendable transaction: %v", err)
-	// 		return err
-	// 	}
-
-	// 	res, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
-	// 		PrivateKey: keySet.PrivateKey.Serialise(),
-	// 	})
-	// 	if err != nil {
-	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-	// 		logger.Errorf("Failed to create next spendable transaction: %v", err)
-	// 		return err
-	// 	}
-
-	// 	privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
-
-	// 	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-	// 	if err != nil {
-	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-	// 		logger.Errorf("Failed to create private key from pub key: %v", err)
-	// 		panic(err)
-	// 	}
-
-	// 	go func(numberOfOutputs uint32) {
-	// 		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-	// 		for i := uint32(0); i < numberOfOutputs; i++ {
-	// 			u := &bt.UTXO{
-	// 				TxID:          bt.ReverseBytes(res.Txid),
-	// 				Vout:          i,
-	// 				LockingScript: script,
-	// 				Satoshis:      res.SatoshisPerOutput,
-	// 			}
-
-	// 			w.utxoChan <- u
-	// 		}
-	// 	}(res.NumberOfOutputs)
-	// }
-
-	// get utxos from con service
-	// coinbaseTrackerClient := coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-
 	w.startTime = time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-			// case utxo := <-w.utxoChan:
-			// 	if w.rateLimiter != nil {
-			// 		_ = w.rateLimiter.Wait(ctx)
-			// 	}
-
-			// err := w.fireTransactions(ctx, utxo, keySet)
-			// if err != nil {
-			// 	return fmt.Errorf("ERROR in fire transactions: %v", err)
-			// }
 		}
 	}
 }

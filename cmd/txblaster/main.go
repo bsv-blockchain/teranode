@@ -32,8 +32,6 @@ import (
 
 var logger utils.Logger
 
-// var propagationServers []propagation_api.PropagationAPIClient
-// var seederServer seeder_api.SeederAPIClient
 var printProgress uint64
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -61,10 +59,6 @@ func init() {
 	if !found {
 		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
 	}
-	// coinbaseAddr, found = gocore.Config().Get("coinbase_wallet_address")
-	// if !found {
-	// 	log.Fatal(errors.New("coinbase_wallet_address not found in config"))
-	// }
 
 }
 
@@ -185,37 +179,6 @@ func main() {
 
 		defer closer.Close()
 	}
-
-	// (ok)
-	// get the utxos from the seeders
-
-	// if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets"); ok {
-	// 	seederGrpcAddresses = append(seederGrpcAddresses, strings.Split(addresses, "|")...)
-	// } else {
-	// 	if address, ok := gocore.Config().Get("seeder_grpcAddress"); ok {
-	// 		seederGrpcAddresses = append(seederGrpcAddresses, address)
-	// 	} else {
-	// 		panic("no seeder_grpcAddress setting found")
-	// 	}
-	// }
-
-	// seederServers := []seeder_api.SeederAPIClient{}
-	// for _, seederGrpcAddress := range seederGrpcAddresses {
-	// 	sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
-	// 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-	// 		MaxRetries:  3,
-	// 	})
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	seederServers = append(seederServers, seeder_api.NewSeederAPIClient(sConn))
-	// }
-
-	// if len(seederServers) == 0 {
-	// 	panic("No suitable seeder server connection found")
-	// }
-
-	// (ok)
 
 	propagationGrpcAddresses := []string{}
 	if addresses, ok := gocore.Config().Get("txblaster_propagation_grpcTargets"); ok {
