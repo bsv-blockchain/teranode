@@ -169,7 +169,7 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	}
 
-	if resp.Utxos != nil {
+	if resp != nil && resp.Utxos != nil {
 
 		for _, utxo := range resp.Utxos {
 			logger.Debugf("received utxo %s", utxo.String())
