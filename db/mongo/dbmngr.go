@@ -112,3 +112,7 @@ func (m *MongoManager) Update(model any) error {
 func (m *MongoManager) Delete(model any) error {
 	return nil
 }
+
+func (m *MongoManager) UpdateBatch(table string, cond string, values []interface{}, updates map[string]interface{}) error {
+	return nil
+}

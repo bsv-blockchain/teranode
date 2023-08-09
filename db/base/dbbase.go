@@ -20,6 +20,7 @@ type CRUD interface {
 	Read_All_Cond(any, []any) ([]any, error)
 	Update(any) error
 	Delete(any) error
+	UpdateBatch(string, string, []interface{}, map[string]interface{}) error
 }
 
 type DbManager interface {

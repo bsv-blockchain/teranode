@@ -132,3 +132,10 @@ func (m *SqliteManager) Delete(model any) error {
 	}
 	return errors.New("not a gorm model based data structure")
 }
+
+func (m *SqliteManager) UpdateBatch(table string, cond string, values []interface{}, toupdate map[string]interface{}) error {
+	//Table("users").Where("id IN ?", []int{10, 11}).Updates(map[string]interface{}{"name": "hello", "age": 18})
+	// UPDATE users SET name='hello', age=18 WHERE id IN (10, 11);
+	tx := m.db.Table(table).Where(cond, values...).Updates(toupdate)
+	return tx.Error
+}

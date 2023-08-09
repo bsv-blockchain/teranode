@@ -43,3 +43,7 @@ func (m *PostgresManager) Update(model any) error {
 func (m *PostgresManager) Delete(model any) error {
 	return nil
 }
+
+func (m *PostgresManager) UpdateBatch(table string, cond string, values []interface{}, updates map[string]interface{}) error {
+	return nil
+}

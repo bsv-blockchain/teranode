@@ -39,6 +39,8 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		store_config = "file::memory:?cache=shared"
 	}
 
+	synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
+
 	ct := &CoinbaseTracker{
 		logger:           logger,
 		blockchainClient: blockchainClient,
@@ -46,21 +48,31 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		ch:               make(chan bool),
 	}
 
-	// go ct.synchronize()
+	go ct.synchronize(synchronize_reserved)
 
 	return ct
 }
 
-func (ct *CoinbaseTracker) synchronize() {
-	timer := time.NewTimer(time.Millisecond * 100)
+func (ct *CoinbaseTracker) synchronize(timeout int) {
+	timer := time.NewTimer(time.Second * 10)
 	for {
 		select {
 		case <-ct.ch:
 			return
 		case <-timer.C:
-			ct.syncUp()
-			timer = time.NewTimer(time.Millisecond * 100)
+			ct.manageReserved(timeout)
+			timer = time.NewTimer(time.Second * 10)
 		}
+	}
+}
+
+func (ct *CoinbaseTracker) manageReserved(timeout int) {
+	// select all utxos where reserved is set and the time between
+	// UpdatedAt and now exceeds the timeout value
+	// If such utxos are found - unset reserved back to false
+	err := ct.ResetUtxoReserved(context.Background(), timeout)
+	if err != nil {
+		ct.logger.Errorf("failed to reset reserved utxos: %s", err.Error())
 	}
 }
 
@@ -189,10 +201,10 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	// Need to sort by the lowest to highest amount. The first lowest amount should be sufficient.
 	// If none exist, then grab lower amounts and build the best amount combination
 	// that satisfies the amount.
-	cond := []interface{}{"address = ? AND amount >= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
+	cond := []interface{}{"address = ? AND satoshis >= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
 	utxos := []model.UTXO{}
 	res := []*bt.UTXO{}
-
+	txids := []interface{}{}
 	payload, err := ct.store.Read_All_Cond(&utxos, cond)
 	if err != nil {
 		return nil, err
@@ -223,57 +235,92 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 			LockingScript: &script,
 			Satoshis:      utxo_candidates[0].Satoshis,
 		})
-		return res, nil
-	}
-	// we are at a point where we couldn't find a single transaction that
-	// satisfies the given amount; Check if we can find an ideal combination
-	// of utxo candidates that satisfy the given amount
-	cond = []interface{}{"address = ? AND amount <= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
-	utxos = []model.UTXO{}
-	res = []*bt.UTXO{}
+		txids = append(txids, utxo_candidates[0].Txid)
+	} else {
+		// we are at a point where we couldn't find a single transaction that
+		// satisfies the given amount; Check if we can find an ideal combination
+		// of utxo candidates that satisfy the given amount
+		cond = []interface{}{"address = ? AND satoshis <= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
+		utxos = []model.UTXO{}
+		res = []*bt.UTXO{}
 
-	payload, err = ct.store.Read_All_Cond(&utxos, cond)
-	if err != nil {
-		return nil, err
-	}
-	if len(payload) > 0 {
-		utxo_candidates := []*model.UTXO{}
-		for _, i := range payload {
-			u, ok := i.(*model.UTXO)
-			if !ok {
-				err := errors.New("received result is not a model.UTXO")
-				ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
-				panic(err.Error())
-			}
-			utxo_candidates = append(utxo_candidates, u)
+		payload, err = ct.store.Read_All_Cond(&utxos, cond)
+		if err != nil {
+			return nil, err
 		}
-		// let's do a reverse sort
-		sort.Slice(utxo_candidates, func(i, j int) bool {
-			return utxo_candidates[i].Satoshis > utxo_candidates[j].Satoshis
-		})
-
-		var total uint64 = 0
-		// traverse the utxo candidates from greatest amount down
-		// and keep adding tx until the total counter becomes equal to or greater
-		// than the desired amount.
-		for _, u := range utxo_candidates {
-			total += uint64(u.Satoshis)
-			script := bscript.Script([]byte(u.LockingScript))
-			res = append(res, &bt.UTXO{
-				TxID:          []byte(u.Txid),
-				Vout:          u.Vout,
-				LockingScript: &script,
-				Satoshis:      u.Satoshis,
+		if len(payload) > 0 {
+			utxo_candidates := []*model.UTXO{}
+			for _, i := range payload {
+				u, ok := i.(*model.UTXO)
+				if !ok {
+					err := errors.New("received result is not a model.UTXO")
+					ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
+					panic(err.Error())
+				}
+				utxo_candidates = append(utxo_candidates, u)
+			}
+			// let's do a reverse sort
+			sort.Slice(utxo_candidates, func(i, j int) bool {
+				return utxo_candidates[i].Satoshis > utxo_candidates[j].Satoshis
 			})
-			// sufficient funds have been accumulated - we want to return as few
-			// transactions as possible to preserve better transactional anonymity
-			if total >= amount {
-				break
+
+			var total uint64 = 0
+			// traverse the utxo candidates from greatest amount down
+			// and keep adding tx until the total counter becomes equal to or greater
+			// than the desired amount.
+			for _, u := range utxo_candidates {
+				total += uint64(u.Satoshis)
+				script := bscript.Script([]byte(u.LockingScript))
+				txids = append(txids, u.Txid)
+				res = append(res, &bt.UTXO{
+					TxID:          []byte(u.Txid),
+					Vout:          u.Vout,
+					LockingScript: &script,
+					Satoshis:      u.Satoshis,
+				})
+				// sufficient funds have been accumulated - we want to return as few
+				// transactions as possible to preserve better transactional anonymity
+				if total >= amount {
+					break
+				}
 			}
 		}
-		return res, nil
 	}
-	return nil, nil
+	// after the best input candidates have been selected, mark them as reserved
+	err = ct.SetUtxoReserved(context.Background(), txids)
+	return res, err
+}
+
+func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}) error {
+	return ct.store.UpdateBatch("utxos", "txid IN ?", txids, map[string]interface{}{"spent": true, "reserved": false})
+}
+
+func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, txids []interface{}) error {
+	return ct.store.UpdateBatch("utxos", "txid IN ? AND spent = false", txids, map[string]interface{}{"reserved": true})
+}
+
+func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {
+	dur := time.Duration(timeout) * time.Second
+	cond := []interface{}{"updated_at < ? AND spent = ? AND reserved = ?", time.Now().Add(-dur), false, true}
+	utxo := &model.UTXO{}
+	payload, err := ct.store.Read_All_Cond(&utxo, cond)
+	if err != nil {
+		return err
+	}
+	txids := []interface{}{}
+	for _, i := range payload {
+		u, ok := i.(*model.UTXO)
+		if !ok {
+			panic(errors.New("failed to convert to model.UTXO"))
+		}
+		txids = append(txids, u.Txid)
+	}
+	err = ct.UpdateUtxoReserved(context.Background(), txids)
+	return err
+}
+
+func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, txids []interface{}) error {
+	return ct.store.UpdateBatch("utxos", "txid IN ? AND spent = false", txids, map[string]interface{}{"reserved": false})
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
