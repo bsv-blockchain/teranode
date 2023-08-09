@@ -72,7 +72,7 @@ func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
 	return conn, nil
 }
 
-func StartKafkaGroupListener(logger utils.Logger, kafkaURL *url.URL, groupID string, workerCh chan []byte) error {
+func StartKafkaGroupListener(ctx context.Context, logger utils.Logger, kafkaURL *url.URL, groupID string, workerCh chan []byte) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
@@ -84,7 +84,7 @@ func StartKafkaGroupListener(logger utils.Logger, kafkaURL *url.URL, groupID str
 		workerCh: workerCh,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 	client, err := sarama.NewConsumerGroup(brokersUrl, groupID, config)
 	if err != nil {

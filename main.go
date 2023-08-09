@@ -27,7 +27,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/servicemanager"
@@ -47,8 +46,9 @@ func init() {
 }
 
 func main() {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log(progname, gocore.NewLogLevelFromString(logLevel))
+	logLevelStr, _ := gocore.Config().Get("logLevel")
+	logLevel := gocore.NewLogLevelFromString(logLevelStr)
+	logger := gocore.Log(progname, logLevel)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -287,149 +287,103 @@ func main() {
 		if txMetaStoreURL.Scheme != "memory" {
 			panic("txmeta grpc server only supports memory store")
 		}
-
-		txMetaLogger := gocore.Log("txsts", gocore.NewLogLevelFromString(logLevel))
-		txMetaStoreServer, err := txmeta.New(txMetaLogger, txMetaStoreURL)
-		if err != nil {
-			panic(err)
-		}
-
-		sm.AddService("TxMetaStore", txMetaStoreServer)
+		sm.AddService("TxMetaStore", txmeta.New(
+			gocore.Log("txsts", logLevel),
+			txMetaStoreURL,
+		))
 	}
 
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
-			baLogger := gocore.Log("bchn", gocore.NewLogLevelFromString(logLevel))
-			blockAssemblyService := blockassembly.New(context.TODO(), baLogger, txStore, subtreeStore)
-
-			sm.AddService("BlockAssembly", blockAssemblyService)
+			sm.AddService("BlockAssembly", blockassembly.New(
+				gocore.Log("bchn", logLevel),
+				txStore,
+				subtreeStore,
+			))
 		}
 	}
 
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcAddress"); found {
-			bvLogger := gocore.Log("bval", gocore.NewLogLevelFromString(logLevel))
-			blockValidationService, err := blockvalidation.New(bvLogger, utxoStore, subtreeStore, txMetaStore, validatorClient)
-			if err != nil {
-				logger.Errorf("blockvalidation errored: %v", err)
-				panic(err)
-			}
-
-			sm.AddService("Block Validation", blockValidationService)
+			sm.AddService("Block Validation", blockvalidation.New(
+				gocore.Log("bval", logLevel),
+				utxoStore,
+				subtreeStore,
+				txMetaStore,
+				validatorClient,
+			))
 		}
 	}
 
 	// validator
 	if startValidator {
-		if validatorAddress, found := gocore.Config().Get("validator_grpcAddress"); found {
-			logger.Infof("Starting Validator Server on: %s", validatorAddress)
-
-			validatorLogger := gocore.Log("valid", gocore.NewLogLevelFromString(logLevel))
-			validatorService := validator.NewServer(validatorLogger, utxoStore, txMetaStore)
-
-			sm.AddService("Validator", validatorService)
+		if _, found := gocore.Config().Get("validator_grpcAddress"); found {
+			sm.AddService("Validator", validator.NewServer(
+				gocore.Log("valid", logLevel),
+				utxoStore,
+				txMetaStore,
+			))
 		}
 	}
 
-	// utxostore
+	// utxo store server
 	if startUtxoStore && utxostoreURL != nil {
-		logger.Infof("Starting UTXOStore on: %s", utxostoreURL.Host)
-
-		var s utxostore.Interface
-		switch utxostoreURL.Path {
-		case "/splitbyhash":
-			logger.Infof("[UTXOStore] using splitbyhash memory store")
-			s = memory.NewSplitByHash(true)
-		case "/swiss":
-			logger.Infof("[UTXOStore] using swissmap memory store")
-			s = memory.NewSwissMap(true)
-		case "/xsyncmap":
-			logger.Infof("[UTXOStore] using xsyncmap memory store")
-			s = memory.NewXSyncMap(true)
-		default:
-			logger.Infof("[UTXOStore] using default memory store")
-			s = memory.New(true)
-		}
-
-		utxoLogger := gocore.Log("utxo", gocore.NewLogLevelFromString(logLevel))
-		utxoStoreServer, err := utxo.New(utxoLogger, s)
-		if err != nil {
-			logger.Errorf("utxo store failed: %v", err)
-			panic(err)
-		}
-
-		sm.AddService("UTXOStoreServer", utxoStoreServer)
+		sm.AddService("UTXOStoreServer", utxo.New(
+			gocore.Log("utxo", logLevel),
+			utxoStore,
+		))
 	}
 
 	// seeder
 	if startSeeder {
-		seederURL, found := gocore.Config().Get("seeder_grpcAddress")
+		_, found := gocore.Config().Get("seeder_grpcAddress")
 		if found {
-			logger.Infof("Starting Seeder on: %s", seederURL)
-
-			seederService := seeder.NewServer(gocore.Log("seed", gocore.NewLogLevelFromString(logLevel)))
-
-			sm.AddService("Seeder", seederService)
+			sm.AddService("Seeder", seeder.NewServer(
+				gocore.Log("seed", logLevel),
+			))
 		}
 	}
 
 	// miner
 	if startMiner {
-		minerServer := miner.NewMiner()
-
-		sm.AddService("miner", minerServer)
+		sm.AddService("miner", miner.NewMiner())
 	}
 
 	// blob server
 	if startBlobServer {
-		blobServer, err := blobserver.NewServer(utxoStore, txStore, subtreeStore)
-		if err != nil {
-			panic(err)
-		}
-
-		sm.AddService("BlobServer", blobServer)
+		sm.AddService("BlobServer", blobserver.NewServer(
+			gocore.Log("blob", logLevel),
+			utxoStore,
+			txStore,
+			subtreeStore,
+		))
 	}
 
 	// coinbase tracker server
 	if startCoinbaseTracker {
-		coinbaseTrackerLogger := gocore.Log("con", gocore.NewLogLevelFromString(logLevel))
-		coinbaseTrackerServer, err := coinbasetracker.New(coinbaseTrackerLogger)
-		if err != nil {
-			panic(err)
-		}
-
-		sm.AddService("CoinbaseTracker", coinbaseTrackerServer)
+		sm.AddService("CoinbaseTracker", coinbasetracker.New(
+			gocore.Log("con", logLevel),
+		))
 	}
 
 	// bootstrap server
 	if startBootstrapServer {
-		bootstrapServer := bootstrap.NewServer()
-
-		sm.AddService("BootstrapServer", bootstrapServer)
+		sm.AddService("BootstrapServer", bootstrap.NewServer(
+			gocore.Log("bootS", logLevel),
+		))
 	}
 
 	// propagation
 	if startPropagation {
-		// g.Go(func() error {
-		// 	logger.Infof("Starting Propagation")
-
-		// 	p2pLogger := gocore.Log("p2p", gocore.NewLogLevelFromString(logLevel))
-		// 	propagationServer = propagation.NewServer(p2pLogger, txStore, subtreeStore, validatorClient)
-
-		// 	return propagationServer.Start(ctx)
-		// })
-
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
 		if ok && propagationGrpcAddress != "" {
-			propagationGRPCServer, err := propagation.New(logger, txStore, validatorClient)
-			if err != nil {
-				logger.Errorf("propagation grpc server failed: %v", err)
-				panic(err)
-			}
-
-			sm.AddService("PropagationServer", propagationGRPCServer)
+			sm.AddService("PropagationServer", propagation.New(
+				logger,
+				txStore,
+				validatorClient,
+			))
 		}
 	}
 
@@ -439,7 +393,7 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err := sm.StartAllAndWait(context.Background()); err != nil {
+	if err = sm.StartAllAndWait(context.Background()); err != nil {
 		logger.Errorf("failed to start all services: %v", err)
 	}
 

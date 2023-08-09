@@ -43,21 +43,24 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) (*CoinbaseTrackerServer, error) {
-
-	blockchainClient, err := blockchain.NewClient()
-	if err != nil {
-		return nil, err
-	}
-
+func New(logger utils.Logger) *CoinbaseTrackerServer {
 	con := &CoinbaseTrackerServer{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		coinbaseTracker:  NewCoinbaseTracker(logger, blockchainClient),
-		testnet:          gocore.Config().GetBool("network", true),
+		logger:  logger,
+		testnet: gocore.Config().GetBool("network", true),
 	}
 
-	return con, nil
+	return con
+}
+
+func (u *CoinbaseTrackerServer) Init(_ context.Context) (err error) {
+	u.blockchainClient, err = blockchain.NewClient()
+	if err != nil {
+		return fmt.Errorf("error creating blockchain client: %s", err)
+	}
+
+	u.coinbaseTracker = NewCoinbaseTracker(u.logger, u.blockchainClient)
+
+	return nil
 }
 
 // Start function

@@ -10,7 +10,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -29,8 +28,9 @@ type HTTP struct {
 	e          *echo.Echo
 }
 
-func New(repository *repository.Repository) (*HTTP, error) {
-	logger := gocore.Log("b_http")
+func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) {
+	// TODO: change logger name
+	// logger := gocore.Log("b_http")
 
 	e := echo.New()
 	e.HideBanner = true

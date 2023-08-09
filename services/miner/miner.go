@@ -34,6 +34,10 @@ func NewMiner() *Miner {
 	}
 }
 
+func (m *Miner) Init(_ context.Context) error {
+	return nil
+}
+
 func (m *Miner) Start(ctx context.Context) error {
 	m.candidateTimer = time.NewTimer(2 * time.Second) // wait 2 seconds before starting
 

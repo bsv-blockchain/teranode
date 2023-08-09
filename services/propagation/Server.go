@@ -83,12 +83,16 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Client) (*PropagationServer, error) {
+func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Client) *PropagationServer {
 	return &PropagationServer{
 		logger:    logger,
 		txStore:   txStore,
 		validator: validatorClient,
-	}, nil
+	}
+}
+
+func (u *PropagationServer) Init(_ context.Context) (err error) {
+	return nil
 }
 
 // Start function

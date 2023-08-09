@@ -2,7 +2,7 @@ package blobserver
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/grpc_impl"
@@ -18,11 +18,14 @@ import (
 
 // Server type carries the logger within it
 type Server struct {
-	logger     utils.Logger
-	grpcAddr   string
-	httpAddr   string
-	grpcServer *grpc_impl.GRPC
-	httpServer *http_impl.HTTP
+	logger       utils.Logger
+	utxoStore    utxo.Interface
+	txStore      blob.Store
+	subtreeStore blob.Store
+	grpcAddr     string
+	httpAddr     string
+	grpcServer   *grpc_impl.GRPC
+	httpServer   *http_impl.HTTP
 }
 
 func Enabled() bool {
@@ -32,40 +35,46 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.Store) (*Server, error) {
-	grpcAddr, grpcOk := gocore.Config().Get("blobserver_grpcAddress")
-	httpAddr, httpOk := gocore.Config().Get("blobserver_httpAddress")
+func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, subtreeStore blob.Store) *Server {
+	s := &Server{
+		logger:       logger,
+		utxoStore:    utxoStore,
+		txStore:      txStore,
+		subtreeStore: subtreeStore,
+	}
+
+	return s
+}
+
+func (v *Server) Init(_ context.Context) (err error) {
+	var grpcOk, httpOk bool
+	v.grpcAddr, grpcOk = gocore.Config().Get("blobserver_grpcAddress")
+	v.httpAddr, httpOk = gocore.Config().Get("blobserver_httpAddress")
 
 	if !grpcOk && !httpOk {
-		return nil, errors.New("no blobserver_grpcAddress or blobserver_httpAddress setting found")
+		return fmt.Errorf("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(utxoStore, TxStore, SubtreeStore)
+	repo, err := repository.NewRepository(v.utxoStore, v.txStore, v.subtreeStore)
 	if err != nil {
-		panic(err)
-	}
-
-	s := &Server{
-		logger:   gocore.Log("blob"),
-		grpcAddr: grpcAddr,
-		httpAddr: httpAddr,
+		return fmt.Errorf("error creating repository: %s", err)
 	}
 
 	if grpcOk {
-		s.grpcServer, err = grpc_impl.New(repo)
+		v.grpcServer, err = grpc_impl.New(v.logger, repo)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("error creating grpc server: %s", err)
 		}
 	}
 
 	if httpOk {
-		s.httpServer, err = http_impl.New(repo)
+		v.httpServer, err = http_impl.New(v.logger, repo)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("error creating http server: %s", err)
 		}
 	}
 
-	return s, nil
+	return nil
 }
 
 // Start function

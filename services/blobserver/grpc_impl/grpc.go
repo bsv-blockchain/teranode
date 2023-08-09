@@ -58,9 +58,9 @@ func init() {
 	}
 }
 
-func New(repository *repository.Repository) (*GRPC, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("b_grpc", gocore.NewLogLevelFromString(logLevel))
+func New(logger utils.Logger, repository *repository.Repository) (*GRPC, error) {
+	// TODO: change logger name
+	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
 
 	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),

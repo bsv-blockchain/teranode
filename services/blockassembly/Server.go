@@ -94,53 +94,13 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeStore blob.Store) *BlockAssembly {
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-
-	utxoStore, err := utxo.NewStore(logger, utxostoreURL)
-	if err != nil {
-		panic(err)
-	}
-
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
-
-	// TODO abstract into a factory
-	var txMetaStore txmeta_store.Store
-	if txMetaStoreURL.Scheme == "memory" {
-		// the memory store is reached through a grpc client
-		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		txMetaStore, err = store.New(logger, txMetaStoreURL)
-		if err != nil {
-			panic(err)
-		}
-	}
-
+func New(logger utils.Logger, txStore blob.Store, subtreeStore blob.Store) *BlockAssembly {
 	blockchainClient, err := blockchain.NewClient()
 	if err != nil {
 		panic(err)
 	}
 
-	newSubtreeChan := make(chan *util.Subtree)
-	blockAssembler := NewBlockAssembler(ctx, logger, txMetaStore, utxoStore, txStore, subtreeStore, blockchainClient, newSubtreeChan)
-
 	ba := &BlockAssembly{
-		blockAssembler:   blockAssembler,
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		txStore:          txStore,
@@ -148,6 +108,52 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 		jobStore:         ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 	}
 
+	return ba
+}
+
+func (ba *BlockAssembly) Init(ctx context.Context) error {
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		return fmt.Errorf("failed to get utxostore setting [%w]", err)
+	}
+	if !found {
+		return fmt.Errorf("no utxostore setting found")
+	}
+
+	utxoStore, err := utxo.NewStore(ba.logger, utxostoreURL)
+	if err != nil {
+		return fmt.Errorf("failed to create utxo store [%w]", err)
+	}
+
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		return fmt.Errorf("failed to get txmeta_store setting [%w]", err)
+	}
+	if !found {
+		return fmt.Errorf("no txmeta_store setting found")
+	}
+
+	// TODO abstract into a factory
+	var txMetaStore txmeta_store.Store
+	if txMetaStoreURL.Scheme == "memory" {
+		// the memory store is reached through a grpc client
+		txMetaStore, err = txmeta.NewClient(ctx, ba.logger)
+		if err != nil {
+			return fmt.Errorf("failed to create txmeta store [%w]", err)
+		}
+	} else {
+		txMetaStore, err = store.New(ba.logger, txMetaStoreURL)
+		if err != nil {
+			return fmt.Errorf("failed to create txmeta store [%w]", err)
+		}
+	}
+
+	newSubtreeChan := make(chan *util.Subtree)
+
+	// init the block assembler for this server
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, txMetaStore, utxoStore, ba.txStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+
+	// start the new subtree listener in the background
 	go func() {
 		var subtreeBytes []byte
 		for {
@@ -156,7 +162,7 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
 
 			if subtreeBytes, err = subtree.Serialize(); err != nil {
-				logger.Errorf("Failed to serialize subtree [%s]", err)
+				ba.logger.Errorf("Failed to serialize subtree [%s]", err)
 				continue
 			}
 
@@ -165,22 +171,22 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 				subtreeBytes,
 				options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
 			); err != nil {
-				logger.Errorf("Failed to store subtree [%s]", err)
+				ba.logger.Errorf("Failed to store subtree [%s]", err)
 				continue
 			}
 
-			if err := ba.blockchainClient.SendNotification(ctx, &model.Notification{
+			if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
 				Type: model.NotificationType_Subtree,
 				Hash: subtree.RootHash(),
 			}); err != nil {
-				logger.Errorf("Failed to send subtree notification [%s]", err)
+				ba.logger.Errorf("Failed to send subtree notification [%s]", err)
 			}
 
-			logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
+			ba.logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}
 	}()
 
-	return ba
+	return nil
 }
 
 // Start function
@@ -204,7 +210,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 			for i := 0; i < workers; i++ {
 				go func() {
 					for txIDBytes := range workerCh {
-						if _, err = ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
+						if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
 							Txid: txIDBytes,
 						}); err != nil {
 							ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
@@ -223,12 +229,13 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 				defer func() { _ = clusterAdmin.Close() }()
 
 				topic := kafkaURL.Path[1:]
-				partitions, err := strconv.Atoi(kafkaURL.Query().Get("partitions"))
-				if err != nil {
+				var partitions int
+				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
 					log.Fatal("[BlockAssembly] unable to parse Kafka partitions: ", err)
 				}
-				replicationFactor, err := strconv.Atoi(kafkaURL.Query().Get("replication"))
-				if err != nil {
+
+				var replicationFactor int
+				if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
 					log.Fatal("[BlockAssembly] unable to parse Kafka replication factor: ", err)
 				}
 
@@ -237,7 +244,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 					ReplicationFactor: int16(replicationFactor),
 				}, false)
 
-				err = util.StartKafkaGroupListener(ba.logger, kafkaURL, "validators", workerCh)
+				err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "validators", workerCh)
 				if err != nil {
 					ba.logger.Errorf("[BlockAssembly] Kafka listener failed to start: %s", err)
 				}
@@ -272,6 +279,11 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	reflection.Register(ba.grpcServer)
 
 	ba.logger.Infof("[BlockAssembly] GRPC service listening on %s", address)
+
+	go func() {
+		<-ctx.Done()
+		ba.grpcServer.GracefulStop()
+	}()
 
 	if err = ba.grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("GRPC server failed [%w]", err)

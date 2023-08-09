@@ -78,32 +78,33 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
-
 	seederStore := memory.NewMemorySeederStore()
-
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-
-	// TODO online it seems the Seeder keeps connecting to aerospike
-	s, err := utxo.NewStore(logger, utxostoreURL)
-	if err != nil {
-		panic(err)
-	}
-
 	return &Server{
 		logger:      logger,
 		seederStore: seederStore,
-		utxoStore:   s,
 	}
 }
 
+func (v *Server) Init(_ context.Context) error {
+	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		return fmt.Errorf("could not get utxostore setting [%w]", err)
+	}
+	if !found {
+		return fmt.Errorf("no utxostore setting found")
+	}
+
+	// TODO online it seems the Seeder keeps connecting to aerospike
+	v.utxoStore, err = utxo.NewStore(v.logger, utxostoreURL)
+	if err != nil {
+		return fmt.Errorf("could not create utxo store [%w]", err)
+	}
+
+	return nil
+}
+
 // Start function
-func (v *Server) Start(ctx context.Context) error {
+func (v *Server) Start(_ context.Context) error {
 
 	address, ok := gocore.Config().Get("seeder_grpcAddress")
 	if !ok {

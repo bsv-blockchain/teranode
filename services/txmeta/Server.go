@@ -59,25 +59,26 @@ func init() {
 // Server type carries the logger within it
 type Server struct {
 	txmeta_api.UnsafeTxMetaAPIServer
-	logger     utils.Logger
-	grpcServer *grpc.Server
-	store      txmeta.Store
+	logger         utils.Logger
+	grpcServer     *grpc.Server
+	txMetaStoreURL *url.URL
+	store          txmeta.Store
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txMetaStoreURL *url.URL) (*Server, error) {
-	s, err := store.New(logger, txMetaStoreURL)
-	if err != nil {
-		return nil, err
-	}
-
+func New(logger utils.Logger, txMetaStoreURL *url.URL) *Server {
 	return &Server{
-		logger: logger,
-		store:  s,
-	}, nil
+		logger:         logger,
+		txMetaStoreURL: txMetaStoreURL,
+	}
 }
 
-func (u *Server) Init(ctx context.Context) error {
+func (u *Server) Init(_ context.Context) (err error) {
+	u.store, err = store.New(u.logger, u.txMetaStoreURL)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

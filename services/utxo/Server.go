@@ -97,7 +97,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, s utxostore.Interface, opts ...Options) (*UTXOStore, error) {
+func New(logger utils.Logger, s utxostore.Interface, opts ...Options) *UTXOStore {
 	if len(opts) > 0 {
 		for _, opt := range opts {
 			opt(s)
@@ -107,7 +107,11 @@ func New(logger utils.Logger, s utxostore.Interface, opts ...Options) (*UTXOStor
 	return &UTXOStore{
 		logger: logger,
 		store:  s,
-	}, nil
+	}
+}
+
+func (u *UTXOStore) Init(_ context.Context) error {
+	return nil
 }
 
 // Start function

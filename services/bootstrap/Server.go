@@ -41,14 +41,18 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer() *Server {
+func NewServer(logger utils.Logger) *Server {
 	return &Server{
-		logger:            gocore.Log("bootS"),
+		logger:            logger,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]void),
 		notifications:     make(chan *bootstrap_api.Notification, 100),
 	}
+}
+
+func (s *Server) Init(_ context.Context) (err error) {
+	return nil
 }
 
 // Start function

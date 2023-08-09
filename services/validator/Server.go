@@ -39,6 +39,8 @@ type Server struct {
 	validator_api.UnsafeValidatorAPIServer
 	validator   Interface
 	logger      utils.Logger
+	utxoStore   utxostore.Interface
+	txMetaStore txmetastore.Store
 	grpcServer  *grpc.Server
 	kafkaSignal chan os.Signal
 }
@@ -84,15 +86,20 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
-	validator, err := New(logger, utxoStore, txMetaStore)
+	return &Server{
+		logger:      logger,
+		utxoStore:   utxoStore,
+		txMetaStore: txMetaStore,
+	}
+}
+
+func (v *Server) Init(_ context.Context) (err error) {
+	v.validator, err = New(v.logger, v.utxoStore, v.txMetaStore)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("could not create validator [%w]", err)
 	}
 
-	return &Server{
-		logger:    logger,
-		validator: validator,
-	}
+	return nil
 }
 
 // Start function
@@ -141,12 +148,14 @@ func (v *Server) Start(ctx context.Context) error {
 				defer func() { _ = clusterAdmin.Close() }()
 
 				topic := kafkaURL.Path[1:]
-				partitions, err := strconv.Atoi(kafkaURL.Query().Get("partitions"))
-				if err != nil {
+
+				var partitions int
+				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
 					log.Fatal("[Validator] unable to parse Kafka partitions: ", err)
 				}
-				replicationFactor, err := strconv.Atoi(kafkaURL.Query().Get("replication"))
-				if err != nil {
+
+				var replicationFactor int
+				if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
 					log.Fatal("[Validator] unable to parse Kafka replication factor: ", err)
 				}
 
@@ -155,7 +164,7 @@ func (v *Server) Start(ctx context.Context) error {
 					ReplicationFactor: int16(replicationFactor),
 				}, false)
 
-				err = util.StartKafkaGroupListener(v.logger, kafkaURL, "validators", workerCh)
+				err = util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "validators", workerCh)
 				if err != nil {
 					v.logger.Errorf("[Validator] Kafka listener failed to start: %s", err)
 				}

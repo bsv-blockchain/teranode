@@ -60,6 +60,7 @@ type BlockValidationServer struct {
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
 	txMetaStore      txmeta_store.Store
+	validatorClient  *validator.Client
 
 	blockFoundCh        chan processBlockFound
 	blockValidation     *BlockValidation
@@ -74,35 +75,45 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txMetaStore txmeta_store.Store,
-	validatorClient *validator.Client) (*BlockValidationServer, error) {
-
-	blockchainClient, err := blockchain.NewClient()
-	if err != nil {
-		return nil, err
-	}
+	validatorClient *validator.Client) *BlockValidationServer {
 
 	bVal := &BlockValidationServer{
 		utxoStore:         utxoStore,
 		logger:            logger,
-		blockchainClient:  blockchainClient,
 		subtreeStore:      subtreeStore,
 		txMetaStore:       txMetaStore,
+		validatorClient:   validatorClient,
 		blockFoundCh:      make(chan processBlockFound, 100),
-		blockValidation:   NewBlockValidation(logger, blockchainClient, subtreeStore, txMetaStore, validatorClient),
 		processingSubtree: make(map[chainhash.Hash]bool),
 	}
 
+	return bVal
+}
+
+func (u *BlockValidationServer) Init(ctx context.Context) (err error) {
+	if u.blockchainClient, err = blockchain.NewClient(); err != nil {
+		return fmt.Errorf("failed to create blockchain client [%w]", err)
+	}
+
+	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txMetaStore, u.validatorClient)
+
 	// process blocks found from channel
 	go func() {
-		for b := range bVal.blockFoundCh {
-			err = bVal.processBlockFound(context.Background(), b.hash, b.baseURL)
-			if err != nil {
-				bVal.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case b := <-u.blockFoundCh:
+				{
+					if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
+						u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+					}
+				}
 			}
 		}
 	}()
 
-	return bVal, nil
+	return nil
 }
 
 // Start function

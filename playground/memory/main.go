@@ -32,7 +32,6 @@ func main() {
 		}
 
 		fmt.Printf("Mem used for uint256: %s\n", printAlloc())
-		uint256Map = nil
 	}()
 
 	runtime.GC()
@@ -64,8 +63,6 @@ func main() {
 				fmt.Printf("item %d not found in xsyncmap\n", i)
 			}
 		}
-
-		chainhashMap = nil
 	}()
 
 	runtime.GC()
@@ -93,8 +90,6 @@ func main() {
 				fmt.Printf("item %d not found in xsyncmap\n", i)
 			}
 		}
-
-		chainhashMap = nil
 	}()
 
 	runtime.GC()
@@ -123,8 +118,6 @@ func main() {
 				fmt.Printf("item %d not found in xsyncmap\n", i)
 			}
 		}
-
-		swissMap = nil
 	}()
 
 	runtime.GC()
@@ -153,8 +146,6 @@ func main() {
 				fmt.Printf("item %d not found in xsyncmap\n", i)
 			}
 		}
-
-		swissMap = nil
 	}()
 
 	runtime.GC()
@@ -190,8 +181,6 @@ func main() {
 				fmt.Printf("item %d not found in xsyncmap\n", i)
 			}
 		}
-
-		xsyncMap = nil
 	}()
 
 	runtime.GC()
@@ -215,7 +204,6 @@ func main() {
 		}
 
 		fmt.Printf("Mem used for byte1+byte32 map: %s\n", printAlloc())
-		byte32Map = nil
 	}()
 
 	runtime.GC()

@@ -594,7 +594,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	newSubtreeChan := make(chan *util.Subtree)
 	go func() {
 		for {
-			_ = <-newSubtreeChan
+			<-newSubtreeChan
 		}
 	}()
 
