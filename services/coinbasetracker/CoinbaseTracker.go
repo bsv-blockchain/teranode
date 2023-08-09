@@ -80,79 +80,79 @@ func (ct *CoinbaseTracker) manageReserved(timeout int) {
 	}
 }
 
-func (ct *CoinbaseTracker) syncUp() {
-	block_network, err := ct.GetBestBlockFromNetwork(context.Background())
-	if err != nil {
-		ct.logger.Errorf("failed to get best block from network: %s", err.Error())
-		return
-	}
-	block_db, err := ct.GetBestBlockFromDb(context.Background())
-	if err != nil {
-		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
-		return
-	}
-	if !block_db.Equal(block_network) {
-		err = ct.AddBlock(context.Background(), block_network)
-		if err != nil {
-			ct.logger.Errorf("failed to add block to the store: %s", err.Error())
-			return
-		}
-	}
-	ct.checkStoreForBlockGaps()
-}
+// func (ct *CoinbaseTracker) syncUp() {
+// 	block_network, err := ct.GetBestBlockFromNetwork(context.Background())
+// 	if err != nil {
+// 		ct.logger.Errorf("failed to get best block from network: %s", err.Error())
+// 		return
+// 	}
+// 	block_db, err := ct.GetBestBlockFromDb(context.Background())
+// 	if err != nil {
+// 		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
+// 		return
+// 	}
+// 	if !block_db.Equal(block_network) {
+// 		err = ct.AddBlock(context.Background(), block_network)
+// 		if err != nil {
+// 			ct.logger.Errorf("failed to add block to the store: %s", err.Error())
+// 			return
+// 		}
+// 	}
+// 	ct.checkStoreForBlockGaps()
+// }
 
-func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
-	// How do we detect the latest block?
-	// The latest block is not referenced by any other blocks
-	// and has the current max height
-	block_db, err := ct.GetBestBlockFromDb(context.Background())
-	if err != nil {
-		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
-		return
-	}
-	// At this point we should have the latest network block in the database
-	if IsGenesisBlock(block_db) {
-		// This is the genesis block - nothing else to do
-		return
-	}
-	// loop through until genesis block is reached, requesting missing blocks
-	// along the way
-	block_hash := block_db.PrevBlockHash
-	for {
-		cond := []interface{}{"blockhash = ? ", block_hash}
-		prev_block_i, err := ct.store.Read_Cond(&model.Block{}, cond)
-		if err != nil {
-			ct.logger.Errorf("failed to read block %s from database: %s", &block_hash, err.Error())
-		}
-		if prev_block_i == nil {
-			// missing block condition
-			block_network, err := ct.GetBlockFromNetwork(context.Background(), block_hash)
-			if err != nil {
-				ct.logger.Errorf("failed to get network block %s, %s", block_hash, err.Error())
-				break
-			}
-			block_db, err = NetworkBlockToStoreBlock(block_network)
-			if err != nil {
-				ct.logger.Errorf("failed to translate network block %s to store block, %s", block_hash, err.Error())
-				break
-			}
+// func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
+// 	// How do we detect the latest block?
+// 	// The latest block is not referenced by any other blocks
+// 	// and has the current max height
+// 	block_db, err := ct.GetBestBlockFromDb(context.Background())
+// 	if err != nil {
+// 		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
+// 		return
+// 	}
+// 	// At this point we should have the latest network block in the database
+// 	if IsGenesisBlock(block_db) {
+// 		// This is the genesis block - nothing else to do
+// 		return
+// 	}
+// 	// loop through until genesis block is reached, requesting missing blocks
+// 	// along the way
+// 	block_hash := block_db.PrevBlockHash
+// 	for {
+// 		cond := []interface{}{"blockhash = ? ", block_hash}
+// 		prev_block_i, err := ct.store.Read_Cond(&model.Block{}, cond)
+// 		if err != nil {
+// 			ct.logger.Errorf("failed to read block %s from database: %s", &block_hash, err.Error())
+// 		}
+// 		if prev_block_i == nil {
+// 			// missing block condition
+// 			block_network, err := ct.GetBlockFromNetwork(context.Background(), block_hash)
+// 			if err != nil {
+// 				ct.logger.Errorf("failed to get network block %s, %s", block_hash, err.Error())
+// 				break
+// 			}
+// 			block_db, err = NetworkBlockToStoreBlock(block_network)
+// 			if err != nil {
+// 				ct.logger.Errorf("failed to translate network block %s to store block, %s", block_hash, err.Error())
+// 				break
+// 			}
 
-			err = ct.AddBlock(context.Background(), block_db)
-			if err != nil {
-				ct.logger.Errorf("failed to add block %s to store, %s", block_hash, err.Error())
-				panic(err.Error())
-			}
-			block_hash = block_db.PrevBlockHash
-		} else {
-			prev_block := prev_block_i.(*model.Block)
-			// If the previous block is genesis block - all is good and nothing to do
-			if IsGenesisBlock(prev_block) {
-				return
-			}
-			block_hash = prev_block.PrevBlockHash
-		}
-	}
-}
+// 			err = ct.AddBlock(context.Background(), block_db)
+// 			if err != nil {
+// 				ct.logger.Errorf("failed to add block %s to store, %s", block_hash, err.Error())
+// 				panic(err.Error())
+// 			}
+// 			block_hash = block_db.PrevBlockHash
+// 		} else {
+// 			prev_block := prev_block_i.(*model.Block)
+// 			// If the previous block is genesis block - all is good and nothing to do
+// 			if IsGenesisBlock(prev_block) {
+// 				return
+// 			}
+// 			block_hash = prev_block.PrevBlockHash
+// 		}
+// 	}
+// }
 
 func (ct *CoinbaseTracker) Stop() error {
 	ct.ch <- true
@@ -210,10 +210,11 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	utxoIds := []interface{}{}
 
 	// start transaction
-	txopts := []*sql.TxOptions{&sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: false}}
+	txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
 	ct.lock.Lock()
 	defer ct.lock.Unlock()
 	dtx, err := ct.store.TxBegin(txopts...)
+
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +254,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 			Satoshis:      utxo_candidates[0].Satoshis,
 		})
 		utxoIds = append(utxoIds, utxo_candidates[0].ID)
+
 	} else {
 		// we are at a point where we couldn't find a single transaction that
 		// satisfies the given amount; Check if we can find an ideal combination
@@ -262,6 +264,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		res = []*bt.UTXO{}
 
 		payload, err = ct.store.TxSelectForUpdate(dtx, stmt, vals)
+
 		if err != nil {
 			return nil, err
 		}

@@ -60,7 +60,6 @@ func init() {
 	if !found {
 		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
 	}
-
 }
 
 func main() {
