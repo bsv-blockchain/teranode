@@ -176,6 +176,9 @@ func main() {
 
 	sm := servicemanager.NewServiceManager()
 
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
 	// blockchain service needs to start first !
 	if startBlockchain {
 		blockchainService, err := blockchain.New(logger)
@@ -203,7 +206,7 @@ func main() {
 		if !found {
 			panic("no utxostore setting found")
 		}
-		utxoStore, err = validator_utxostore.NewStore(logger, utxostoreURL)
+		utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxostoreURL)
 		if err != nil {
 			panic(err)
 		}
@@ -276,7 +279,7 @@ func main() {
 	var validatorClient *validator.Client
 
 	if startBlockValidation || startPropagation {
-		validatorClient, err = validator.NewClient(context.Background(), logger)
+		validatorClient, err = validator.NewClient(ctx, logger)
 		if err != nil {
 			logger.Fatalf("error creating validator client: %v", err)
 		}
@@ -348,7 +351,7 @@ func main() {
 
 	// miner
 	if startMiner {
-		sm.AddService("miner", miner.NewMiner())
+		sm.AddService("miner", miner.NewMiner(ctx))
 	}
 
 	// blob server
@@ -393,9 +396,12 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err = sm.StartAllAndWait(context.Background()); err != nil {
+	if err = sm.StartAllAndWait(ctx); err != nil {
 		logger.Errorf("failed to start all services: %v", err)
 	}
+
+	// cancel everything that is listening to the root context
+	cancelCtx()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

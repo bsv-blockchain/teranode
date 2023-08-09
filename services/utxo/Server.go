@@ -2,21 +2,18 @@ package utxo
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
 	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -86,9 +83,8 @@ func init() {
 // UTXOStore type carries the logger within it
 type UTXOStore struct {
 	utxostore_api.UnsafeUtxoStoreAPIServer
-	logger     utils.Logger
-	grpcServer *grpc.Server
-	store      utxostore.Interface
+	logger utils.Logger
+	store  utxostore.Interface
 }
 
 func Enabled() bool {
@@ -116,59 +112,17 @@ func (u *UTXOStore) Init(_ context.Context) error {
 
 // Start function
 func (u *UTXOStore) Start(ctx context.Context) error {
-
-	address, _, ok := gocore.Config().GetURL("utxostore")
-	if !ok {
-		return errors.New("no utxostore_grpcAddress setting found")
-	}
-
-	// // LEVEL 0 - no security / no encryption
-	// var opts []grpc.ServerOption
-	// _, prometheusOn := gocore.Config().Get("prometheusEndpoint")
-	// if prometheusOn {
-	// 	opts = append(opts,
-	// 		grpc.ChainStreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-	// 		grpc.ChainUnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
-	// 	)
-	// }
-
-	// u.grpcServer = grpc.NewServer(tracing.AddGRPCServerOptions(opts)...)
-	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address.Host)
-
-	lis, err := net.Listen("tcp", address.Host)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	utxostore_api.RegisterUtxoStoreAPIServer(u.grpcServer, u)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
-
-	u.logger.Infof("UTXOStore GRPC service listening on %s", address)
-
-	if err = u.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, u.logger, "utxo", func(server *grpc.Server) {
+		utxostore_api.RegisterUtxoStoreAPIServer(server, u)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (u *UTXOStore) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	u.grpcServer.GracefulStop()
-
+func (u *UTXOStore) Stop(_ context.Context) error {
 	return nil
 }
 

@@ -46,7 +46,7 @@ func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store
 	return s
 }
 
-func (v *Server) Init(_ context.Context) (err error) {
+func (v *Server) Init(ctx context.Context) (err error) {
 	var grpcOk, httpOk bool
 	v.grpcAddr, grpcOk = gocore.Config().Get("blobserver_grpcAddress")
 	v.httpAddr, httpOk = gocore.Config().Get("blobserver_httpAddress")
@@ -55,7 +55,7 @@ func (v *Server) Init(_ context.Context) (err error) {
 		return fmt.Errorf("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(v.utxoStore, v.txStore, v.subtreeStore)
+	repo, err := repository.NewRepository(ctx, v.utxoStore, v.txStore, v.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}
@@ -65,12 +65,22 @@ func (v *Server) Init(_ context.Context) (err error) {
 		if err != nil {
 			return fmt.Errorf("error creating grpc server: %s", err)
 		}
+
+		err = v.grpcServer.Init(ctx)
+		if err != nil {
+			return fmt.Errorf("error initializing grpc server: %s", err)
+		}
 	}
 
 	if httpOk {
 		v.httpServer, err = http_impl.New(v.logger, repo)
 		if err != nil {
 			return fmt.Errorf("error creating http server: %s", err)
+		}
+
+		err = v.httpServer.Init(ctx)
+		if err != nil {
+			return fmt.Errorf("error initializing http server: %s", err)
 		}
 	}
 
@@ -83,7 +93,7 @@ func (v *Server) Start(ctx context.Context) error {
 
 	if v.grpcServer != nil {
 		g.Go(func() error {
-			return v.grpcServer.Start(v.grpcAddr)
+			return v.grpcServer.Start(ctx, v.grpcAddr)
 		})
 
 		// We need to react to new nodes connecting to the network and we do this by subscribing to
@@ -103,7 +113,7 @@ func (v *Server) Start(ctx context.Context) error {
 					// Start a subscription to the new peer's blob server
 					g.Go(func() error {
 						v.logger.Infof("Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-						return NewClient("blobserver_bs", p.BlobServerGrpcAddress).Start(context.Background())
+						return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
 					})
 				}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
 
@@ -128,7 +138,7 @@ func (v *Server) Start(ctx context.Context) error {
 				b := blobServer
 				g.Go(func() error {
 					v.logger.Infof("Connecting to blob server at: %s", b)
-					return NewClient("blobserver_gc", b).Start(ctx)
+					return NewClient(ctx, "blobserver_gc", b).Start(ctx)
 				})
 			}
 		}

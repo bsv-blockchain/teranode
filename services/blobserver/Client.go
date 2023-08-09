@@ -20,14 +20,14 @@ type Client struct {
 	running          bool
 }
 
-func NewClient(source string, addr string) *Client {
+func NewClient(ctx context.Context, source string, addr string) *Client {
 	logLevel, _ := gocore.Config().Get("logLevel")
 
 	return &Client{
 		logger:           gocore.Log("blobC", gocore.NewLogLevelFromString(logLevel)),
 		address:          addr,
 		source:           source,
-		validationClient: blockvalidation.NewClient(),
+		validationClient: blockvalidation.NewClient(ctx),
 		running:          true,
 	}
 }
@@ -82,7 +82,7 @@ func (c *Client) Start(ctx context.Context) error {
 				case blobserver_api.Type_Subtree:
 					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
 
-					if err = c.validationClient.SubtreeFound(context.Background(), hash, resp.BaseUrl); err != nil {
+					if err = c.validationClient.SubtreeFound(ctx, hash, resp.BaseUrl); err != nil {
 						c.logger.Errorf("could not validate subtree", "err", err)
 						continue
 					}
@@ -90,7 +90,7 @@ func (c *Client) Start(ctx context.Context) error {
 				case blobserver_api.Type_Block:
 					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
 
-					if err = c.validationClient.BlockFound(context.Background(), hash, resp.BaseUrl); err != nil {
+					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl); err != nil {
 						c.logger.Errorf("could not validate block", "err", err)
 						continue
 					}

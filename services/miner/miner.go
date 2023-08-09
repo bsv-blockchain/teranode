@@ -26,11 +26,11 @@ const (
 	blockFoundInterval = 100
 )
 
-func NewMiner() *Miner {
+func NewMiner(ctx context.Context) *Miner {
 	logLevel, _ := gocore.Config().Get("logLevel")
 	return &Miner{
 		logger:              gocore.Log("miner", gocore.NewLogLevelFromString(logLevel)),
-		blockAssemblyClient: blockassembly.NewClient(),
+		blockAssemblyClient: blockassembly.NewClient(ctx),
 	}
 }
 
@@ -127,7 +127,7 @@ func (m *Miner) mine(ctx context.Context) error {
 
 	m.logger.Infof("submitting mining solution: %s", candidateId)
 	m.logger.Debugf(solution.Stringify())
-	err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), solution)
+	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
 		return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
 	}

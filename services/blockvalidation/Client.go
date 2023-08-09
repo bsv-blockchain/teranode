@@ -13,9 +13,7 @@ type Client struct {
 	apiClient blockvalidation_api.BlockValidationAPIClient
 }
 
-func NewClient() *Client {
-	ctx := context.Background()
-
+func NewClient(ctx context.Context) *Client {
 	blockValidationGrpcAddress, ok := gocore.Config().Get("blockvalidation_grpcAddress")
 	if !ok {
 		panic("no blockvalidation_grpcAddress setting found")

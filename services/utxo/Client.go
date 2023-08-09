@@ -26,8 +26,8 @@ func (s *Store) SetBlockHeight(height uint32) error {
 	return nil
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Get(context.Background(), &utxostore_api.GetRequest{
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	response, err := s.db.Get(ctx, &utxostore_api.GetRequest{
 		UxtoHash: hash[:],
 	})
 	if err != nil {

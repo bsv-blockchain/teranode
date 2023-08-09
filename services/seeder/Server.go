@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
-	"net"
 	"runtime/debug"
 	"time"
 
@@ -27,7 +25,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -39,7 +36,6 @@ type Server struct {
 	seederStore store.SeederStore
 	utxoStore   utxostore.Interface
 	logger      utils.Logger
-	grpcServer  *grpc.Server
 }
 
 var (
@@ -85,7 +81,7 @@ func NewServer(logger utils.Logger) *Server {
 	}
 }
 
-func (v *Server) Init(_ context.Context) error {
+func (v *Server) Init(ctx context.Context) error {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		return fmt.Errorf("could not get utxostore setting [%w]", err)
@@ -95,7 +91,7 @@ func (v *Server) Init(_ context.Context) error {
 	}
 
 	// TODO online it seems the Seeder keeps connecting to aerospike
-	v.utxoStore, err = utxo.NewStore(v.logger, utxostoreURL)
+	v.utxoStore, err = utxo.NewStore(ctx, v.logger, utxostoreURL)
 	if err != nil {
 		return fmt.Errorf("could not create utxo store [%w]", err)
 	}
@@ -104,49 +100,18 @@ func (v *Server) Init(_ context.Context) error {
 }
 
 // Start function
-func (v *Server) Start(_ context.Context) error {
-
-	address, ok := gocore.Config().Get("seeder_grpcAddress")
-	if !ok {
-		return errors.New("no seeder_grpcAddress setting found")
-	}
-
-	var err error
-	v.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	seeder_api.RegisterSeederAPIServer(v.grpcServer, v)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(v.grpcServer)
-
-	v.logger.Infof("Seeder GRPC service listening on %s", address)
-
-	if err = v.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+func (v *Server) Start(ctx context.Context) (err error) {
+	// this will block
+	if err = util.StartGRPCServer(ctx, v.logger, "seeder", func(server *grpc.Server) {
+		seeder_api.RegisterSeederAPIServer(server, v)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (v *Server) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	v.grpcServer.GracefulStop()
-
+func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
@@ -216,7 +181,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 			}
 		}
 
-		if err := v.seederStore.Push(context.Background(), &store.SpendableTransaction{
+		if err = v.seederStore.Push(ctx, &store.SpendableTransaction{
 			Txid:              txid,
 			NumberOfOutputs:   int32(req.NumberOfOutputs),
 			SatoshisPerOutput: int64(req.SatoshisPerOutput),

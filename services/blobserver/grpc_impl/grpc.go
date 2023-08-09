@@ -70,16 +70,10 @@ func New(logger utils.Logger, repository *repository.Repository) (*GRPC, error) 
 		return nil, fmt.Errorf("could not create GRPC server [%w]", err)
 	}
 
-	blockchainClient, err := blockchain.NewClient()
-	if err != nil {
-		return nil, fmt.Errorf("could not create blockchain client [%w]", err)
-	}
-
 	g := &GRPC{
 		logger:            logger,
 		repository:        repository,
 		grpcServer:        grpcServer,
-		blockchainClient:  blockchainClient,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]bool),
@@ -94,25 +88,40 @@ func New(logger utils.Logger, repository *repository.Repository) (*GRPC, error) 
 	return g, nil
 }
 
-func (g *GRPC) Start(addr string) error {
+func (g *GRPC) Init(ctx context.Context) (err error) {
+	g.blockchainClient, err = blockchain.NewClient(ctx)
+	if err != nil {
+		return fmt.Errorf("could not create blockchain client [%w]", err)
+	}
+
+	return nil
+}
+
+func (g *GRPC) Start(ctx context.Context, addr string) error {
 	// Subscribe to the blockchain service
-	blockchainSubscription, err := g.blockchainClient.Subscribe(context.Background(), "blobserver")
+	blockchainSubscription, err := g.blockchainClient.Subscribe(ctx, "blobserver")
 	if err != nil {
 		return err
 	}
 
 	go func() {
-		for notification := range blockchainSubscription {
-			if notification == nil {
-				continue
-			}
+		for {
+			select {
+			case <-ctx.Done():
+				g.logger.Infof("BlobServer GRPC service shutting down")
+				return
+			case notification := <-blockchainSubscription:
+				if notification == nil {
+					continue
+				}
 
-			g.logger.Debugf("Sending %s notification: %s to %d subscribers", blobserver_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
+				g.logger.Debugf("Sending %s notification: %s to %d subscribers", blobserver_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
 
-			g.notifications <- &blobserver_api.Notification{
-				Type:    blobserver_api.Type(notification.Type),
-				Hash:    notification.Hash[:],
-				BaseUrl: baseURL,
+				g.notifications <- &blobserver_api.Notification{
+					Type:    blobserver_api.Type(notification.Type),
+					Hash:    notification.Hash[:],
+					BaseUrl: baseURL,
+				}
 			}
 		}
 	}()
@@ -120,6 +129,8 @@ func (g *GRPC) Start(addr string) error {
 	go func() {
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case notification := <-g.notifications:
 				for sub := range g.subscribers {
 					go func(s subscriber) {

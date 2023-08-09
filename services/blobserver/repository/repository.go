@@ -18,8 +18,8 @@ type Repository struct {
 	BlockchainClient blockchain.ClientI
 }
 
-func NewRepository(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.Store) (*Repository, error) {
-	blockchainClient, err := blockchain.NewClient()
+func NewRepository(ctx context.Context, utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.Store) (*Repository, error) {
+	blockchainClient, err := blockchain.NewClient(ctx)
 	if err != nil {
 		return nil, err
 	}

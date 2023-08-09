@@ -2,22 +2,18 @@ package txmeta
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
 	"net/url"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/txmeta/store"
 	"github.com/TAAL-GmbH/ubsv/services/txmeta/txmeta_api"
 	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -60,7 +56,6 @@ func init() {
 type Server struct {
 	txmeta_api.UnsafeTxMetaAPIServer
 	logger         utils.Logger
-	grpcServer     *grpc.Server
 	txMetaStoreURL *url.URL
 	store          txmeta.Store
 }
@@ -84,47 +79,17 @@ func (u *Server) Init(_ context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-	address, _, ok := gocore.Config().GetURL("txmeta_store")
-	if !ok {
-		return errors.New("no txmeta_store setting found")
-	}
-
-	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address.Host)
-
-	lis, err := net.Listen("tcp", address.Host)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	txmeta_api.RegisterTxMetaAPIServer(u.grpcServer, u)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
-
-	u.logger.Infof("Tx Meta Store GRPC service listening on %s", address)
-
-	if err = u.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, u.logger, "txmeta", func(server *grpc.Server) {
+		txmeta_api.RegisterTxMetaAPIServer(server, u)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
 func (u *Server) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	u.grpcServer.GracefulStop()
-
 	return nil
 }
 

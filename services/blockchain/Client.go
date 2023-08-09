@@ -25,9 +25,7 @@ type BestBlockHeader struct {
 	Height uint32
 }
 
-func NewClient() (ClientI, error) {
-	ctx := context.Background()
-
+func NewClient(ctx context.Context) (ClientI, error) {
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
 		return nil, fmt.Errorf("no blockchain_grpcAddress setting found")
@@ -46,9 +44,7 @@ func NewClient() (ClientI, error) {
 	}, nil
 }
 
-func NewClientWithAddress(logger utils.Logger, address string) (ClientI, error) {
-	ctx := context.Background()
-
+func NewClientWithAddress(ctx context.Context, logger utils.Logger, address string) (ClientI, error) {
 	baConn, err := utils.GetGRPCClient(ctx, address, &utils.ConnectionOptions{
 		MaxRetries: 3,
 	})

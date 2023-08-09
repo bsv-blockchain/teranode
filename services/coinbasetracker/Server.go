@@ -52,8 +52,8 @@ func New(logger utils.Logger) *CoinbaseTrackerServer {
 	return con
 }
 
-func (u *CoinbaseTrackerServer) Init(_ context.Context) (err error) {
-	u.blockchainClient, err = blockchain.NewClient()
+func (u *CoinbaseTrackerServer) Init(ctx context.Context) (err error) {
+	u.blockchainClient, err = blockchain.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}

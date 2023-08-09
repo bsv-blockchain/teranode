@@ -15,9 +15,7 @@ type Client struct {
 	db blockassembly_api.BlockAssemblyAPIClient
 }
 
-func NewClient() *Client {
-	ctx := context.Background()
-
+func NewClient(ctx context.Context) *Client {
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		panic("no blockassembly_grpcAddress setting found")

@@ -44,7 +44,7 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 }
 
 func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, baseUrl string) error {
-	g, _ := errgroup.WithContext(context.Background())
+	g, _ := errgroup.WithContext(ctx)
 
 	for _, subtreeHash := range block.Subtrees {
 		st := subtreeHash

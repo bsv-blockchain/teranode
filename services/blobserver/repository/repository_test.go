@@ -42,7 +42,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(utxoStore, txStore, subtreeStore)
+	repo, err := repository.NewRepository(context.Background(), utxoStore, txStore, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -94,7 +94,7 @@ func TestSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(utxoStore, txStore, subtreeStore)
+	repo, err := repository.NewRepository(context.Background(), utxoStore, txStore, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the subtree node bytes from the repository

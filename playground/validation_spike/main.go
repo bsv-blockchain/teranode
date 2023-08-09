@@ -89,7 +89,7 @@ func main() {
 
 	ns := &NullStore{}
 
-	v, _ := validator.New(p2p.TestLogger{}, ns, nil)
+	v, _ := validator.New(context.Background(), p2p.TestLogger{}, ns, nil)
 
 	start := time.Now()
 

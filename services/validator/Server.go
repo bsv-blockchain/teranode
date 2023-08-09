@@ -3,11 +3,9 @@ package validator
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -28,7 +26,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,7 +38,6 @@ type Server struct {
 	logger      utils.Logger
 	utxoStore   utxostore.Interface
 	txMetaStore txmetastore.Store
-	grpcServer  *grpc.Server
 	kafkaSignal chan os.Signal
 }
 
@@ -93,8 +89,8 @@ func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore t
 	}
 }
 
-func (v *Server) Init(_ context.Context) (err error) {
-	v.validator, err = New(v.logger, v.utxoStore, v.txMetaStore)
+func (v *Server) Init(ctx context.Context) (err error) {
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore)
 	if err != nil {
 		return fmt.Errorf("could not create validator [%w]", err)
 	}
@@ -123,7 +119,7 @@ func (v *Server) Start(ctx context.Context) error {
 				go func() {
 					var response *validator_api.ValidateTransactionResponse
 					for txBytes := range workerCh {
-						response, err = v.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{
+						response, err = v.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 							TransactionData: txBytes,
 						})
 						if err != nil {
@@ -172,47 +168,17 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	address, ok := gocore.Config().Get("validator_grpcAddress")
-	if !ok {
-		return errors.New("no validator_grpcAddress setting found")
-	}
-
-	var err error
-	v.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	validator_api.RegisterValidatorAPIServer(v.grpcServer, v)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(v.grpcServer)
-
-	v.logger.Infof("Validator GRPC service listening on %s", address)
-
-	if err = v.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
+		validator_api.RegisterValidatorAPIServer(server, v)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (v *Server) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	v.grpcServer.GracefulStop()
-
+func (v *Server) Stop(_ context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}

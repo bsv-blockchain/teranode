@@ -32,8 +32,8 @@ type Validator struct {
 	saveInParallel  bool
 }
 
-func New(logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
-	ba := blockassembly.NewClient()
+func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
+	ba := blockassembly.NewClient(ctx)
 
 	validator := &Validator{
 		logger:         logger,

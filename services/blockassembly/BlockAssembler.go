@@ -55,7 +55,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		txStore:           txStore,
 		subtreeStore:      subtreeStore,
 		blockchainClient:  blockchainClient,
-		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(logger, subtreeStore, newSubtreeChan),
+		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, newSubtreeChan),
 		miningCandidateCh: make(chan chan *miningCandidateResponse),
 		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
 	}
@@ -119,7 +119,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 			case notification := <-blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
-					header, height, err = b.blockchainClient.GetBestBlockHeader(context.Background())
+					header, height, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 						continue
@@ -135,12 +135,12 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 							continue
 						}
 					} else {
-						if block, err = b.blockchainClient.GetBlock(context.Background(), header.Hash()); err != nil {
+						if block, err = b.blockchainClient.GetBlock(ctx, header.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
 							continue
 						}
 
-						err = b.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+						err = b.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
 							continue
@@ -197,7 +197,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 						b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 					}
 
-					err = b.setCurrentChain()
+					err = b.setCurrentChain(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
 					}
@@ -237,8 +237,8 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
-func (b *BlockAssembler) setCurrentChain() (err error) {
-	b.currentChain, err = b.blockchainClient.GetBlockHeaders(context.Background(), b.bestBlockHeader.Hash(), 100)
+func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
+	b.currentChain, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Hash(), 100)
 	if err != nil {
 		return fmt.Errorf("error getting block headers from blockchain: %v", err)
 	}
@@ -295,7 +295,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 
 	// Add all the utxo hashes to the utxostore
 	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err := b.utxoStore.Store(context.Background(), hash, txMetadata.LockTime); err != nil {
+		if resp, err := b.utxoStore.Store(ctx, hash, txMetadata.LockTime); err != nil {
 			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
 		}
 	}

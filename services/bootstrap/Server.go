@@ -2,16 +2,13 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
 	"time"
 
 	bootstrap_api "github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -28,7 +25,6 @@ type subscriber struct {
 type Server struct {
 	bootstrap_api.UnimplementedBootstrapAPIServer
 	logger            utils.Logger
-	grpcServer        *grpc.Server
 	newSubscriptions  chan subscriber
 	deadSubscriptions chan subscriber
 	subscribers       map[subscriber]void
@@ -56,32 +52,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 }
 
 // Start function
-func (s *Server) Start(ctx context.Context) error {
-	address, ok := gocore.Config().Get("bootstrap_grpcAddress")
-	if !ok {
-		return errors.New("no bootstrap_grpcAddress setting found")
-	}
-
-	var err error
-	s.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		MaxMessageSize: 10_000,
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	bootstrap_api.RegisterBootstrapAPIServer(s.grpcServer, s)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(s.grpcServer)
-
+func (s *Server) Start(ctx context.Context) (err error) {
 	ticker := time.NewTicker(10 * time.Second)
 
 	go func() {
@@ -187,21 +158,17 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 
-	s.logger.Infof("Bootstrap GRPC service listening on %s", address)
-
-	if err = s.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err = util.StartGRPCServer(ctx, s.logger, "bootstrap", func(server *grpc.Server) {
+		bootstrap_api.RegisterBootstrapAPIServer(server, s)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (s *Server) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	s.grpcServer.GracefulStop()
-
+func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 

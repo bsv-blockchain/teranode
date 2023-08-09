@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
@@ -72,7 +73,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 
 	waitCh := make(chan struct{})
 	defer close(waitCh)
@@ -141,7 +142,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		defer close(waitCh)
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
-		stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -173,7 +174,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		defer close(waitCh)
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-		stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -240,7 +241,7 @@ func TestMoveUpBlock(t *testing.T) {
 
 	subtreeStore, _ := null.New()
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, subtreeStore, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -315,7 +316,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -389,7 +390,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -463,7 +464,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -540,7 +541,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	subtreeProcessor := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	subtreeProcessor := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0)
@@ -598,7 +599,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, newSubtreeChan)
 
 	txHashes := make([]*chainhash.Hash, 100_000)
 	for i := 0; i < 100_000; i++ {

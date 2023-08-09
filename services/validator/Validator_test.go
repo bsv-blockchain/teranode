@@ -58,7 +58,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(p2p.TestLogger{}, ns, memory.New())
+	v, err := validator.New(context.Background(), p2p.TestLogger{}, ns, memory.New())
 	if err != nil {
 		panic(err)
 	}

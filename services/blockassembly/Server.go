@@ -2,10 +2,8 @@ package blockassembly
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -31,7 +29,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -81,7 +78,6 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         utils.Logger
 
-	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	txStore          blob.Store
 	subtreeStore     blob.Store
@@ -95,23 +91,22 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStore blob.Store, subtreeStore blob.Store) *BlockAssembly {
-	blockchainClient, err := blockchain.NewClient()
-	if err != nil {
-		panic(err)
-	}
-
 	ba := &BlockAssembly{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		txStore:          txStore,
-		subtreeStore:     subtreeStore,
-		jobStore:         ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		logger:       logger,
+		txStore:      txStore,
+		subtreeStore: subtreeStore,
+		jobStore:     ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 	}
 
 	return ba
 }
 
-func (ba *BlockAssembly) Init(ctx context.Context) error {
+func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
+	ba.blockchainClient, err = blockchain.NewClient(ctx)
+	if err != nil {
+		panic(err)
+	}
+
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		return fmt.Errorf("failed to get utxostore setting [%w]", err)
@@ -120,7 +115,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) error {
 		return fmt.Errorf("no utxostore setting found")
 	}
 
-	utxoStore, err := utxo.NewStore(ba.logger, utxostoreURL)
+	utxoStore, err := utxo.NewStore(ctx, ba.logger, utxostoreURL)
 	if err != nil {
 		return fmt.Errorf("failed to create utxo store [%w]", err)
 	}
@@ -157,32 +152,37 @@ func (ba *BlockAssembly) Init(ctx context.Context) error {
 	go func() {
 		var subtreeBytes []byte
 		for {
-			subtree := <-newSubtreeChan
-			// merkleRoot := stp.currentSubtree.ReplaceRootNode(*coinbaseHash)
-			// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
+			select {
+			case <-ctx.Done():
+				ba.logger.Infof("Stopping subtree listener")
+				return
+			case subtree := <-newSubtreeChan:
+				// merkleRoot := stp.currentSubtree.ReplaceRootNode(*coinbaseHash)
+				// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
 
-			if subtreeBytes, err = subtree.Serialize(); err != nil {
-				ba.logger.Errorf("Failed to serialize subtree [%s]", err)
-				continue
+				if subtreeBytes, err = subtree.Serialize(); err != nil {
+					ba.logger.Errorf("Failed to serialize subtree [%s]", err)
+					continue
+				}
+
+				if err = ba.subtreeStore.Set(ctx,
+					subtree.RootHash()[:],
+					subtreeBytes,
+					options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
+				); err != nil {
+					ba.logger.Errorf("Failed to store subtree [%s]", err)
+					continue
+				}
+
+				if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
+					Type: model.NotificationType_Subtree,
+					Hash: subtree.RootHash(),
+				}); err != nil {
+					ba.logger.Errorf("Failed to send subtree notification [%s]", err)
+				}
+
+				ba.logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 			}
-
-			if err = ba.subtreeStore.Set(ctx,
-				subtree.RootHash()[:],
-				subtreeBytes,
-				options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
-			); err != nil {
-				ba.logger.Errorf("Failed to store subtree [%s]", err)
-				continue
-			}
-
-			if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
-				Type: model.NotificationType_Subtree,
-				Hash: subtree.RootHash(),
-			}); err != nil {
-				ba.logger.Errorf("Failed to send subtree notification [%s]", err)
-			}
-
-			ba.logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 		}
 	}()
 
@@ -190,7 +190,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) error {
 }
 
 // Start function
-func (ba *BlockAssembly) Start(ctx context.Context) error {
+func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
 	kafkaBrokers, ok := gocore.Config().Get("blockassembly_kafkaBrokers")
 	if ok {
@@ -252,52 +252,17 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 		}
 	}
 
-	address, ok := gocore.Config().Get("blockassembly_grpcAddress")
-	if !ok {
-		return errors.New("no blockassembly_grpcAddress setting found")
-	}
-
-	var err error
-	ba.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	blockassembly_api.RegisterBlockAssemblyAPIServer(ba.grpcServer, ba)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(ba.grpcServer)
-
-	ba.logger.Infof("[BlockAssembly] GRPC service listening on %s", address)
-
-	go func() {
-		<-ctx.Done()
-		ba.grpcServer.GracefulStop()
-	}()
-
-	if err = ba.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
+		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (ba *BlockAssembly) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	ba.grpcServer.GracefulStop()
-
+func (ba *BlockAssembly) Stop(_ context.Context) error {
 	return nil
 }
 

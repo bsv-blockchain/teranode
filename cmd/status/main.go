@@ -50,7 +50,7 @@ func main() {
 
 	miners := make(map[string]blockchain.ClientI)
 	for _, minerAddress := range minerList {
-		client, err := blockchain.NewClientWithAddress(logger, minerAddress)
+		client, err := blockchain.NewClientWithAddress(context.Background(), logger, minerAddress)
 		if err != nil {
 			logger.Fatalf("error connecting to minerAddress %s: %s", minerAddress, err)
 		}

@@ -2,9 +2,7 @@ package blockvalidation
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
@@ -15,13 +13,13 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmeta_store "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -55,7 +53,6 @@ type processBlockFound struct {
 type BlockValidationServer struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger           utils.Logger
-	grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
@@ -91,7 +88,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 }
 
 func (u *BlockValidationServer) Init(ctx context.Context) (err error) {
-	if u.blockchainClient, err = blockchain.NewClient(); err != nil {
+	if u.blockchainClient, err = blockchain.NewClient(ctx); err != nil {
 		return fmt.Errorf("failed to create blockchain client [%w]", err)
 	}
 
@@ -118,48 +115,17 @@ func (u *BlockValidationServer) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *BlockValidationServer) Start(ctx context.Context) error {
-
-	address, ok := gocore.Config().Get("blockvalidation_grpcAddress")
-	if !ok {
-		return errors.New("no blockvalidation_grpcAddress setting found")
-	}
-
-	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	blockvalidation_api.RegisterBlockValidationAPIServer(u.grpcServer, u)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
-
-	u.logger.Infof("BlockchainValidation GRPC service listening on %s", address)
-
-	if err = u.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
+		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (u *BlockValidationServer) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	u.grpcServer.GracefulStop()
-
+func (u *BlockValidationServer) Stop(_ context.Context) error {
 	return nil
 }
 
@@ -242,7 +208,7 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 	}
 
 	// validate the block
-	err = u.blockValidation.BlockFound(context.Background(), block, baseUrl)
+	err = u.blockValidation.BlockFound(ctx, block, baseUrl)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -294,7 +260,7 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 			u.processingSubtreeMu.Unlock()
 		}()
 
-		ok = u.blockValidation.validateSubtree(context.Background(), subtreeHash, req.GetBaseUrl())
+		ok = u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
 		if !ok {
 			u.logger.Errorf("invalid subtree found [%s]", subtreeHash.String())
 			return

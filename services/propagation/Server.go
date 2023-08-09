@@ -3,7 +3,6 @@ package propagation
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,7 +24,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -71,10 +69,9 @@ func init() {
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
-	logger     utils.Logger
-	grpcServer *grpc.Server
-	txStore    blob.Store
-	validator  validator.Interface
+	logger    utils.Logger
+	txStore   blob.Store
+	validator validator.Interface
 }
 
 func Enabled() bool {
@@ -96,41 +93,15 @@ func (u *PropagationServer) Init(_ context.Context) (err error) {
 }
 
 // Start function
-func (u *PropagationServer) Start(ctx context.Context) error {
+func (u *PropagationServer) Start(ctx context.Context) (err error) {
 
 	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
 	if ok {
-		err := u.StartUDP6Listeners(context.Background(), ipv6Addresses)
+		err = u.StartUDP6Listeners(ctx, ipv6Addresses)
 		if err != nil {
 			return fmt.Errorf("error starting ipv6 listeners: %v", err)
 		}
 	}
-
-	address, ok := gocore.Config().Get("propagation_grpcAddress") //, "localhost:8001")
-	if !ok {
-		return errors.New("no propagation_grpcAddress setting found")
-	}
-
-	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	propagation_api.RegisterPropagationAPIServer(u.grpcServer, u)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
 
 	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
 	if ok {
@@ -139,15 +110,17 @@ func (u *PropagationServer) Start(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
 		}
-		err = u.StartHTTPServer(context.Background(), serverURL)
+		err = u.StartHTTPServer(ctx, serverURL)
 		if err != nil {
 			return fmt.Errorf("HTTP server failed [%w]", err)
 		}
 	}
 
-	u.logger.Infof("Propagation GRPC service listening on %s", address)
-	if err = u.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err = util.StartGRPCServer(ctx, u.logger, "propagation", func(server *grpc.Server) {
+		propagation_api.RegisterPropagationAPIServer(server, u)
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -258,12 +231,7 @@ func (u *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.
 	return nil
 }
 
-func (u *PropagationServer) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	u.grpcServer.GracefulStop()
-
+func (u *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 

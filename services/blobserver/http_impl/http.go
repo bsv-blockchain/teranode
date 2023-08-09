@@ -185,6 +185,10 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	}, nil
 }
 
+func (h *HTTP) Init(_ context.Context) error {
+	return nil
+}
+
 func (h *HTTP) Start(addr string) error {
 	h.logger.Infof("BlobServer HTTP service listening on %s", addr)
 

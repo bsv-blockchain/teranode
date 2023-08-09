@@ -2,14 +2,13 @@ package blockchain
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/TAAL-GmbH/ubsv/stores/blockchain"
+	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -17,7 +16,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -47,7 +45,6 @@ type Blockchain struct {
 	addBlockChan      chan *blockchain_api.AddBlockRequest
 	store             blockchain_store.Store
 	logger            utils.Logger
-	grpcServer        *grpc.Server
 	newSubscriptions  chan subscriber
 	deadSubscriptions chan subscriber
 	subscribers       map[subscriber]bool
@@ -93,22 +90,6 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-	address, ok := gocore.Config().Get("blockchain_grpcAddress")
-	if !ok {
-		return errors.New("no blockchain_grpcAddress setting found")
-	}
-
-	var err error
-	b.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
 	go func() {
 		for {
 			select {
@@ -135,42 +116,17 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		}
 	}()
 
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	blockchain_api.RegisterBlockchainAPIServer(b.grpcServer, b)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(b.grpcServer)
-
-	b.logger.Infof("Blockchain GRPC service listening on %s", address)
-
-	if err = b.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
+		blockchain_api.RegisterBlockchainAPIServer(server, b)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (b *Blockchain) Stop(ctx context.Context) error {
-	_, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// (ok) gRPC clients may still hold open connections to the Blockchain
-	// gRPC server. The list of services: GRPC, Blob/Repository, Blockassembly,
-	// Blockvalidation; Clients should be terminated gracefully before the
-	// server can gracefully shutdown as well. Need better client handling
-	// logic. Will be addressed during refactoring. For now, allow the node
-	// to shut down without waiting for the clients' connections to terminate
-	// gracefully. Keep the default value as false to encourage the original
-	// behaviour.
-	if gocore.Config().GetBool("blockchain_grpcForceShutdown", false) {
-		b.grpcServer.Stop()
-	} else {
-		b.grpcServer.GracefulStop()
-	}
-
+func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
