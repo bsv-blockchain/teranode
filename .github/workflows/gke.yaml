@@ -19,10 +19,10 @@ jobs:
         run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
       - name: Run golangci-lint
-        run: golangci-lint run ./...
+        run: make lint
 
       - name: Run Go tests
-        run: go test -race -count=1 $(go list ./... | grep -v playground | grep -v poc)
+        run: make longtests
 
   build-docker:
     name: Build Docker image
@@ -62,7 +62,7 @@ jobs:
   eks-deploy:
     name: Deploy to EKS
     runs-on: ubuntu-latest
-    needs: build-docker, go-lint-and-test
+    needs: [build-docker, go-lint-and-test]
     steps:
       # Set up AWS CLI
       - name: Configure AWS credentials
