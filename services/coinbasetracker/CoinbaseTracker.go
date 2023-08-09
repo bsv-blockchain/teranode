@@ -213,7 +213,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		return nil, err
 	}
 
-	payload, err := ct.store.Read_All_Cond(utxo, cond)
+	payload, err := ct.store.TxRead_All_Cond(utxo, dtx, cond)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		utxo = &model.UTXO{}
 		res = []*bt.UTXO{}
 
-		payload, err = ct.store.Read_All_Cond(utxo, cond)
+		payload, err = ct.store.TxRead_All_Cond(utxo, dtx, cond)
 		if err != nil {
 			return nil, err
 		}
@@ -350,33 +350,30 @@ func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, tx any, utxoIds 
 
 func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {
 	dur := time.Duration(timeout) * time.Second
-	cond := []interface{}{"updated_at < ? AND spent = ? AND reserved = ?", time.Now().Add(-dur), false, true}
-	utxo := &model.UTXO{}
 	tx, _ := ct.store.TxBegin()
-	payload, err := ct.store.TxRead_All_Cond(tx, &utxo, cond)
+	err := ct.UpdateUtxoReserved(context.Background(), tx, dur)
 	if err != nil {
-		return err
-	}
-	txids := []interface{}{}
-	for _, i := range payload {
-		u, ok := i.(*model.UTXO)
-		if !ok {
-			panic(errors.New("failed to convert to model.UTXO"))
+		ct.logger.Errorf("failed to update reserved: %s", err.Error())
+		err = ct.store.TxRollback(tx)
+		if err != nil {
+			ct.logger.Errorf("failed to rollback: %s", err.Error())
 		}
-		txids = append(txids, u.Txid)
+	} else {
+		err = ct.store.TxCommit(tx)
+		if err != nil {
+			ct.logger.Errorf("failed to commit: %s", err.Error())
+			err = ct.store.TxRollback(tx)
+			if err != nil {
+				ct.logger.Errorf("failed to rollback a failed commit: %s", err.Error())
+			}
+		}
 	}
-	err = ct.UpdateUtxoReserved(context.Background(), tx, txids)
 	return err
 }
 
-func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, txids []interface{}) error {
-	var stmt string
-	if len(txids) > 1 {
-		stmt = "txid IN ? AND spent = false"
-	} else {
-		stmt = "txid = ? AND spent = false"
-	}
-	return ct.store.TxUpdateBatch(tx, "utxos", stmt, txids, map[string]interface{}{"reserved": false})
+func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, dur time.Duration) error {
+	vals := []interface{}{time.Now().Add(-dur), false, true}
+	return ct.store.TxUpdateBatch(tx, "utxos", "updated_at < ? AND spent = ? AND reserved = ?", vals, map[string]interface{}{"reserved": false})
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
