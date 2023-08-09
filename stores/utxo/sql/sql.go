@@ -233,7 +233,6 @@ func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash
 	`
 	result, err := s.db.ExecContext(ctx, q, hash[:], s.blockHeight, time.Now().Unix())
 	if err != nil {
-		// TODO handle the case where the utxo is already spent
 		return nil, err
 	}
 	affected, err := result.RowsAffected()

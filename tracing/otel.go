@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"os"
 
 	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
@@ -14,7 +15,6 @@ import (
 
 func InitOtelTracer() func() {
 	// set the tracer provider
-	// TODO get from config
 	tracerURL, err, found := gocore.Config().GetURL("tracing_collector_url")
 	if err != nil {
 		panic(err)
@@ -42,10 +42,15 @@ func InitOtelTracer() func() {
 			}
 		}
 
-		// TODO get from K8s
-		service := "ubsv"
-		environment := "dev"
-		pod := "pod-1"
+		service := os.Getenv("SERVICE_NAME")
+		if service == "" {
+			service = "ubsv"
+		}
+		environment := gocore.Config().GetContext()
+		pod := os.Getenv("HOSTNAME")
+		if pod == "" {
+			pod = "unknown"
+		}
 
 		// setup a jaeger trace provider
 		tp := tracesdk.NewTracerProvider(

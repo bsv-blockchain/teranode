@@ -225,8 +225,21 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	return nil
 }
 
-func (s *Store) Delete(_ context.Context, _ *chainhash.Hash) error {
-	//TODO implement me
+func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
+	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+
+	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	if err != nil {
+		return err
+	}
+
+	_, err = s.client.Delete(policy, key)
+	if err != nil {
+		return err
+	}
+
 	prometheusTxMetaDelete.Inc()
-	panic("implement me")
+
+	return nil
 }

@@ -136,8 +136,6 @@ func createPostgresSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create block_transactions_map table - [%+v]", err)
 	}
 
-	// TODO check for the genesis block and add it if missing
-
 	return nil
 }
 
