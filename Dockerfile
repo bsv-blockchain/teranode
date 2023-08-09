@@ -13,11 +13,12 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-# Build the Go libraries of the project
-RUN make build
-
 # Install Delve debugger
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+# Build the Go libraries of the project
+RUN make build -j 3
+
 
 
 FROM --platform=linux/amd64 ubuntu:latest
