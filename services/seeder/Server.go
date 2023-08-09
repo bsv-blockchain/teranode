@@ -103,7 +103,7 @@ func NewServer(logger utils.Logger) *Server {
 }
 
 // Start function
-func (v *Server) Start() error {
+func (v *Server) Start(ctx context.Context) error {
 
 	address, ok := gocore.Config().Get("seeder_grpcAddress")
 	if !ok {
@@ -140,11 +140,13 @@ func (v *Server) Start() error {
 	return nil
 }
 
-func (v *Server) Stop(ctx context.Context) {
+func (v *Server) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	v.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.HealthResponse, error) {
@@ -195,8 +197,7 @@ func (v *Server) CreateSpendableTransactions(ctx context.Context, req *seeder_ap
 				return nil, status.Error(codes.Internal, err.Error())
 			}
 
-			ctx := context.Background()
-			g, ctx := errgroup.WithContext(ctx)
+			g, _ := errgroup.WithContext(ctx)
 
 			g.Go(func() error {
 				if _, err := v.utxoStore.Store(ctx, hash, 0); err != nil {

@@ -160,8 +160,6 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 				continue
 			}
 
-			ctx := context.Background()
-
 			if err = ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
 				subtreeBytes,
@@ -186,7 +184,7 @@ func New(ctx context.Context, logger utils.Logger, txStore blob.Store, subtreeSt
 }
 
 // Start function
-func (ba *BlockAssembly) Start() error {
+func (ba *BlockAssembly) Start(ctx context.Context) error {
 
 	kafkaBrokers, ok := gocore.Config().Get("blockassembly_kafkaBrokers")
 	if ok {
@@ -282,11 +280,13 @@ func (ba *BlockAssembly) Start() error {
 	return nil
 }
 
-func (ba *BlockAssembly) Stop(ctx context.Context) {
+func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	ba.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassembly_api.HealthResponse, error) {

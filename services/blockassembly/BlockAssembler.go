@@ -88,7 +88,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 	// this will be used to reset the subtree processor when a new block is mined
 	var blockchainSubscriptionCh chan *model.Notification
 	go func() {
-		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context.Background(), "BlockAssembler")
+		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 		if err != nil {
 			logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
@@ -323,11 +323,12 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 }
 
 func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
-	b.logger.Debugf("[BlockAssembler] getting mining candidate for header: %s", b.bestBlockHeader.Hash())
 
 	if b.bestBlockHeader == nil {
 		return nil, nil, fmt.Errorf("best block header is not available")
 	}
+
+	b.logger.Debugf("[BlockAssembler] getting mining candidate for header: %s", b.bestBlockHeader.Hash())
 
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()

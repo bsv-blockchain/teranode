@@ -111,7 +111,7 @@ func New(logger utils.Logger, s utxostore.Interface, opts ...Options) (*UTXOStor
 }
 
 // Start function
-func (u *UTXOStore) Start() error {
+func (u *UTXOStore) Start(ctx context.Context) error {
 
 	address, _, ok := gocore.Config().GetURL("utxostore")
 	if !ok {
@@ -159,11 +159,13 @@ func (u *UTXOStore) Start() error {
 	return nil
 }
 
-func (u *UTXOStore) Stop(ctx context.Context) {
+func (u *UTXOStore) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	u.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {

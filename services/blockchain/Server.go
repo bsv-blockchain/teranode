@@ -87,8 +87,12 @@ func New(logger utils.Logger) (*Blockchain, error) {
 	}, nil
 }
 
+func (b *Blockchain) Init(ctx context.Context) error {
+	return nil
+}
+
 // Start function
-func (b *Blockchain) Start() error {
+func (b *Blockchain) Start(ctx context.Context) error {
 	address, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
 		return errors.New("no blockchain_grpcAddress setting found")
@@ -150,7 +154,7 @@ func (b *Blockchain) Start() error {
 	return nil
 }
 
-func (b *Blockchain) Stop(ctx context.Context) {
+func (b *Blockchain) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// (ok) gRPC clients may still hold open connections to the Blockchain
@@ -166,6 +170,8 @@ func (b *Blockchain) Stop(ctx context.Context) {
 	} else {
 		b.grpcServer.GracefulStop()
 	}
+
+	return nil
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {

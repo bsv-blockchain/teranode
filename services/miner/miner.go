@@ -70,9 +70,11 @@ func (m *Miner) Start(ctx context.Context) error {
 	}
 }
 
-func (m *Miner) Stop(ctx context.Context) {
+func (m *Miner) Stop(ctx context.Context) error {
 	m.logger.Infof("Stopping miner")
 	m.candidateTimer.Stop()
+
+	return nil
 }
 
 func (m *Miner) mine(ctx context.Context) error {

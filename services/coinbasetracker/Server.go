@@ -61,7 +61,7 @@ func New(logger utils.Logger) (*CoinbaseTrackerServer, error) {
 }
 
 // Start function
-func (u *CoinbaseTrackerServer) Start() error {
+func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 
 	address, ok := gocore.Config().Get("coinbasetracker_grpcAddress")
 	if !ok {
@@ -100,7 +100,6 @@ func (u *CoinbaseTrackerServer) Start() error {
 		return errors.New("no blobserver_grpcAddress setting found")
 	}
 
-	ctx := context.Background()
 	conn, err := utils.GetGRPCClient(ctx, blobserverAddr, &utils.ConnectionOptions{})
 	if err != nil {
 		return err
@@ -259,11 +258,13 @@ func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock 
 	}
 }
 
-func (u *CoinbaseTrackerServer) Stop(ctx context.Context) {
+func (u *CoinbaseTrackerServer) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 	_ = u.coinbaseTracker.Stop()
 	u.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*coinbasetracker_api.HealthResponse, error) {

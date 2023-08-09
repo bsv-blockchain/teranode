@@ -192,11 +192,13 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop(ctx context.Context) {
+func (s *Server) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	s.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.HealthResponse, error) {

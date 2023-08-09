@@ -46,6 +46,11 @@ func (c *Client) Start(ctx context.Context) error {
 	var hash *chainhash.Hash
 
 	go func() {
+		<-ctx.Done()
+		c.running = false
+	}()
+
+	go func() {
 
 		for c.running {
 			c.logger.Infof("starting new subscription to blobserver: %v", c.address)

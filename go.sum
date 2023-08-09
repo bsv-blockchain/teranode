@@ -510,8 +510,8 @@ github.com/ordishs/go-bitcoin v1.0.83 h1:4utDM40GMqPGt0hs7SOOsuivAGvwcGwOqkfqWHk
 github.com/ordishs/go-bitcoin v1.0.83/go.mod h1:O3lqD8unDlwLXTmQTT4F5x/Gl3xgP4IgMQDFxTmi9V4=
 github.com/ordishs/go-bt/v2 v2.2.4 h1:jbaT03z+ti4A4RwSrHOgBfbWbcuGfUnm/nXWSDxVx5U=
 github.com/ordishs/go-bt/v2 v2.2.4/go.mod h1:YC71+kRox9h0uCEFZ6OR5+mZG/8ARvoxVp4ZekqWy7s=
-github.com/ordishs/go-utils v1.0.48 h1:nbQTyBHIsij08LMOXvuHsHtmXcOuSmg5lcRuwRLLHsU=
-github.com/ordishs/go-utils v1.0.48/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
+github.com/ordishs/go-utils v1.0.49 h1:YhpI0kzycQqC6Rq9IKJWy4lgVDg7o2HaVu60BHEKhwI=
+github.com/ordishs/go-utils v1.0.49/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
 github.com/ordishs/gocore v1.0.38 h1:PjxWUHa5oO5PP1y+Y6eFD3eIdYq8WudE13rJB6n2bMs=
 github.com/ordishs/gocore v1.0.38/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
 github.com/ordishs/verifysignature v1.0.7 h1:fNECSYHBCGit65WilWgapdzJCJPh1p/qcCZcPCs32jY=

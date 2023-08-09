@@ -40,7 +40,7 @@ func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.S
 		return nil, errors.New("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	repository, err := repository.NewRepository(utxoStore, TxStore, SubtreeStore)
+	repo, err := repository.NewRepository(utxoStore, TxStore, SubtreeStore)
 	if err != nil {
 		panic(err)
 	}
@@ -52,14 +52,14 @@ func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.S
 	}
 
 	if grpcOk {
-		s.grpcServer, err = grpc_impl.New(repository)
+		s.grpcServer, err = grpc_impl.New(repo)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if httpOk {
-		s.httpServer, err = http_impl.New(repository)
+		s.httpServer, err = http_impl.New(repo)
 		if err != nil {
 			return nil, err
 		}
@@ -69,8 +69,8 @@ func NewServer(utxoStore utxo.Interface, TxStore blob.Store, SubtreeStore blob.S
 }
 
 // Start function
-func (v *Server) Start() error {
-	g, ctx := errgroup.WithContext(context.Background())
+func (v *Server) Start(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 
 	if v.grpcServer != nil {
 		g.Go(func() error {
@@ -139,7 +139,7 @@ func (v *Server) Start() error {
 	return nil
 }
 
-func (v *Server) Stop(ctx context.Context) {
+func (v *Server) Stop(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -154,4 +154,6 @@ func (v *Server) Stop(ctx context.Context) {
 			v.logger.Errorf("error stopping http server", "error", err)
 		}
 	}
+
+	return nil
 }

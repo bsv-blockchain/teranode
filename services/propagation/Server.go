@@ -92,7 +92,7 @@ func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Cli
 }
 
 // Start function
-func (u *PropagationServer) Start() error {
+func (u *PropagationServer) Start(ctx context.Context) error {
 
 	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
 	if ok {
@@ -254,11 +254,13 @@ func (u *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.
 	return nil
 }
 
-func (u *PropagationServer) Stop(ctx context.Context) {
+func (u *PropagationServer) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	u.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (u *PropagationServer) Health(_ context.Context, _ *emptypb.Empty) (*propagation_api.HealthResponse, error) {

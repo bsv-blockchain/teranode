@@ -15,8 +15,9 @@ import (
 )
 
 type Client struct {
-	client blockchain_api.BlockchainAPIClient
-	logger utils.Logger
+	client  blockchain_api.BlockchainAPIClient
+	logger  utils.Logger
+	running bool
 }
 
 type BestBlockHeader struct {
@@ -39,8 +40,9 @@ func NewClient() (ClientI, error) {
 	}
 
 	return &Client{
-		client: blockchain_api.NewBlockchainAPIClient(baConn),
-		logger: gocore.Log("blkcC"),
+		client:  blockchain_api.NewBlockchainAPIClient(baConn),
+		logger:  gocore.Log("blkcC"),
+		running: true,
 	}, nil
 }
 
@@ -176,9 +178,14 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	ch := make(chan *model.Notification)
 
 	go func() {
+		<-ctx.Done()
+		c.running = false
+	}()
+
+	go func() {
 		defer close(ch)
 
-		for {
+		for c.running {
 			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
@@ -187,7 +194,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 				continue
 			}
 
-			for {
+			for c.running {
 				resp, err := stream.Recv()
 				if err != nil {
 					time.Sleep(1 * time.Second)

@@ -106,7 +106,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 }
 
 // Start function
-func (u *BlockValidationServer) Start() error {
+func (u *BlockValidationServer) Start(ctx context.Context) error {
 
 	address, ok := gocore.Config().Get("blockvalidation_grpcAddress")
 	if !ok {
@@ -143,11 +143,13 @@ func (u *BlockValidationServer) Start() error {
 	return nil
 }
 
-func (u *BlockValidationServer) Stop(ctx context.Context) {
+func (u *BlockValidationServer) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	u.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (u *BlockValidationServer) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {

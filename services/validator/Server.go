@@ -96,7 +96,7 @@ func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore t
 }
 
 // Start function
-func (v *Server) Start() error {
+func (v *Server) Start(ctx context.Context) error {
 
 	kafkaBrokers, ok := gocore.Config().Get("validator_kafkaBrokers")
 	if ok {
@@ -198,7 +198,7 @@ func (v *Server) Start() error {
 	return nil
 }
 
-func (v *Server) Stop(ctx context.Context) {
+func (v *Server) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -207,6 +207,8 @@ func (v *Server) Stop(ctx context.Context) {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
+
+	return nil
 }
 
 func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.HealthResponse, error) {

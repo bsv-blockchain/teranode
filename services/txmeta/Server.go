@@ -77,8 +77,12 @@ func New(logger utils.Logger, txMetaStoreURL *url.URL) (*Server, error) {
 	}, nil
 }
 
+func (u *Server) Init(ctx context.Context) error {
+	return nil
+}
+
 // Start function
-func (u *Server) Start() error {
+func (u *Server) Start(ctx context.Context) error {
 	address, _, ok := gocore.Config().GetURL("txmeta_store")
 	if !ok {
 		return errors.New("no txmeta_store setting found")
@@ -114,11 +118,13 @@ func (u *Server) Start() error {
 	return nil
 }
 
-func (u *Server) Stop(ctx context.Context) {
+func (u *Server) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	u.grpcServer.GracefulStop()
+
+	return nil
 }
 
 func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
