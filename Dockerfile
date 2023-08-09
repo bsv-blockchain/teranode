@@ -39,7 +39,7 @@ COPY --from=0 /app/certs .
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
 COPY --from=0 /app/status.run .
-COPY --from=0 /root/go/bin/dlv .
+COPY --from=0 /go/bin/dlv .
 COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
