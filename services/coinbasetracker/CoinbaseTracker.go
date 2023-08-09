@@ -16,7 +16,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"gorm.io/gorm"
 )
 
 type CoinbaseTracker struct {
@@ -309,32 +308,52 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		}
 	}
 	// after the best input candidates have been selected, mark them as reserved
-	err = ct.SetUtxoReserved(context.Background(), utxoIds, dtx)
-	b := dtx.(*gorm.DB)
-	b.Commit()
-
+	err = ct.SetUtxoReserved(context.Background(), dtx, utxoIds)
+	if err != nil {
+		ct.logger.Errorf("error marking utxo as reserved: %s", err.Error())
+		err = ct.store.TxRollback(dtx)
+		if err != nil {
+			ct.logger.Errorf("error in rolling back marking utxo as reserved: %s", err.Error())
+		}
+	} else {
+		err = ct.store.TxCommit(dtx)
+		if err != nil {
+			ct.logger.Errorf("error in committing transaction: %s", err.Error())
+			err = ct.store.TxRollback(dtx)
+			if err != nil {
+				ct.logger.Errorf("error in rolling back failed commit: %s", err.Error())
+			}
+		}
+	}
 	return res, err
 }
 
 func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}) error {
+	var stmt string
 	if len(txids) > 1 {
-		return ct.store.UpdateBatch("utxos", "txid IN ?", txids, map[string]interface{}{"spent": true, "reserved": false})
+		stmt = "ID IN ?"
+	} else {
+		stmt = "ID = ?"
 	}
-	return ct.store.UpdateBatch("utxos", "txid = ?", txids, map[string]interface{}{"spent": true, "reserved": false})
+	return ct.store.UpdateBatch("utxos", stmt, txids, map[string]interface{}{"spent": true, "reserved": false})
 }
 
-func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, utxoIds []interface{}, dbtx any) error {
+func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, tx any, utxoIds []interface{}) error {
+	var stmt string
 	if len(utxoIds) > 1 {
-		return ct.store.TxUpdateBatch(dbtx, "utxos", "ID IN ? AND spent = false", utxoIds, map[string]interface{}{"reserved": true})
+		stmt = "ID IN ? AND spent = false"
+	} else {
+		stmt = "ID = ? AND spent = false"
 	}
-	return ct.store.TxUpdateBatch(dbtx, "utxos", "ID = ? AND spent = false", utxoIds, map[string]interface{}{"reserved": true})
+	return ct.store.TxUpdateBatch(tx, "utxos", stmt, utxoIds, map[string]interface{}{"reserved": true})
 }
 
 func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {
 	dur := time.Duration(timeout) * time.Second
 	cond := []interface{}{"updated_at < ? AND spent = ? AND reserved = ?", time.Now().Add(-dur), false, true}
 	utxo := &model.UTXO{}
-	payload, err := ct.store.Read_All_Cond(&utxo, cond)
+	tx, _ := ct.store.TxBegin()
+	payload, err := ct.store.TxRead_All_Cond(tx, &utxo, cond)
 	if err != nil {
 		return err
 	}
@@ -346,12 +365,18 @@ func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) e
 		}
 		txids = append(txids, u.Txid)
 	}
-	err = ct.UpdateUtxoReserved(context.Background(), txids)
+	err = ct.UpdateUtxoReserved(context.Background(), tx, txids)
 	return err
 }
 
-func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, txids []interface{}) error {
-	return ct.store.UpdateBatch("utxos", "txid IN ? AND spent = false", txids, map[string]interface{}{"reserved": false})
+func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, txids []interface{}) error {
+	var stmt string
+	if len(txids) > 1 {
+		stmt = "txid IN ? AND spent = false"
+	} else {
+		stmt = "txid = ? AND spent = false"
+	}
+	return ct.store.TxUpdateBatch(tx, "utxos", stmt, txids, map[string]interface{}{"reserved": false})
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
