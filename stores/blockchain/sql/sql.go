@@ -26,8 +26,7 @@ func init() {
 }
 
 func New(storeUrl *url.URL) (*SQL, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("bcsql", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("bcsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

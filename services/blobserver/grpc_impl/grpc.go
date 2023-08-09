@@ -58,7 +58,7 @@ func init() {
 	}
 }
 
-func New(logger utils.Logger, repository *repository.Repository) (*GRPC, error) {
+func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {
 	// TODO: change logger name
 	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
 
@@ -72,7 +72,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*GRPC, error) 
 
 	g := &GRPC{
 		logger:            logger,
-		repository:        repository,
+		repository:        repo,
 		grpcServer:        grpcServer,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),

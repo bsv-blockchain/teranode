@@ -27,9 +27,8 @@ const (
 )
 
 func NewMiner(ctx context.Context) *Miner {
-	logLevel, _ := gocore.Config().Get("logLevel")
 	return &Miner{
-		logger:              gocore.Log("miner", gocore.NewLogLevelFromString(logLevel)),
+		logger:              gocore.Log("miner"),
 		blockAssemblyClient: blockassembly.NewClient(ctx),
 	}
 }

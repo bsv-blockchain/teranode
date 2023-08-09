@@ -23,8 +23,7 @@ type Minio struct {
 }
 
 func New(minioURL *url.URL) (*Minio, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("minio", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("minio")
 
 	useSSL := minioURL.Scheme == "minios"
 	secretAccessKey, _ := minioURL.User.Password()

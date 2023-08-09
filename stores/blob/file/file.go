@@ -19,8 +19,7 @@ type File struct {
 }
 
 func New(dir string) (*File, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("file", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("file")
 
 	// create directory if not exists
 	if err := os.MkdirAll(dir, 0755); err != nil {

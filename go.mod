@@ -27,7 +27,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.83
 	github.com/ordishs/go-utils v1.0.49
-	github.com/ordishs/gocore v1.0.38
+	github.com/ordishs/gocore v1.0.39
 	github.com/ordishs/verifysignature v1.0.7
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.16.0

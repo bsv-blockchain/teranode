@@ -17,8 +17,7 @@ const (
 )
 
 var (
-	logLevel, _ = gocore.Config().Get("logLevel")
-	logger      = gocore.Log("k8sresolver", gocore.NewLogLevelFromString(logLevel))
+	logger = gocore.Log("k8sresolver")
 )
 
 func init() {
@@ -27,9 +26,9 @@ func init() {
 }
 
 // NewBuilder creates a k8sBuilder which is used to factory K8S service resolvers.
-func NewBuilder(logger utils.Logger) resolver.Builder {
+func NewBuilder(l utils.Logger) resolver.Builder {
 	return &k8sBuilder{
-		logger: logger,
+		logger: l,
 	}
 }
 

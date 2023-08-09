@@ -51,7 +51,7 @@ var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
-	logger = gocore.Log("work", gocore.NewLogLevelFromString("debug"))
+	logger = gocore.Log("work", gocore.NewLogLevelFromString("DEBUG"))
 }
 
 func main() {
@@ -231,7 +231,7 @@ func main() {
 	}
 
 	if len(propagationServers) == 0 {
-		panic("No suitable propagation server connnection found")
+		panic("No suitable propagation server connection found")
 	}
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
@@ -247,7 +247,7 @@ func main() {
 	var rateLimiter *rate.Limiter
 
 	if *rateLimit > 1 {
-		rateLimitDuration := (time.Duration(*workers) * time.Second) / (time.Duration(*rateLimit))
+		rateLimitDuration := time.Duration(*workers) * time.Second / time.Duration(*rateLimit)
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 
 		logger.Infof("Starting %d workers with rate limit of %d tx/s (%s)", *workers, *rateLimit, rateLimitDuration)

@@ -27,8 +27,7 @@ type S3 struct {
 }
 
 func New(s3URL *url.URL) (*S3, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("s3", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("s3")
 
 	// connect to aws s3 server
 	sess, err := session.NewSession(&aws.Config{
@@ -51,7 +50,7 @@ func New(s3URL *url.URL) (*S3, error) {
 		return nil, err
 	}
 
-	s3 := &S3{
+	s := &S3{
 		client:     client,
 		uploader:   uploader,
 		downloader: downloader,
@@ -59,7 +58,7 @@ func New(s3URL *url.URL) (*S3, error) {
 		logger:     logger,
 	}
 
-	return s3, nil
+	return s, nil
 }
 
 func (g *S3) generateKey(key []byte) *string {
@@ -95,9 +94,10 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	}
 
 	// Expires
-	options := options.NewSetOptions(opts...)
-	if options.TTL > 0 {
-		expires := time.Now().Add(options.TTL)
+
+	o := options.NewSetOptions(opts...)
+	if o.TTL > 0 {
+		expires := time.Now().Add(o.TTL)
 		uploadInput.Expires = &expires
 	}
 

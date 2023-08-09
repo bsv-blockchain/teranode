@@ -25,9 +25,9 @@ func main() {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
-	debugLevel := gocore.NewLogLevelFromString("info")
+	debugLevel := gocore.NewLogLevelFromString("INFO")
 	if *debug {
-		debugLevel = gocore.NewLogLevelFromString("debug")
+		debugLevel = gocore.NewLogLevelFromString("DEBUG")
 	}
 	var logger = gocore.Log("chainintegrity", debugLevel)
 

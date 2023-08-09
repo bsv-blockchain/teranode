@@ -28,8 +28,7 @@ type KinesisS3 struct {
 }
 
 func New(s3URL *url.URL) (*KinesisS3, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("kinesisS3", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("kinesisS3")
 
 	region := s3URL.Query().Get("region")
 
@@ -56,7 +55,7 @@ func New(s3URL *url.URL) (*KinesisS3, error) {
 		return nil, err
 	}
 
-	s3 := &KinesisS3{
+	s := &KinesisS3{
 		client:         client,
 		firehoseClient: firehoseClient,
 		uploader:       uploader,
@@ -65,7 +64,7 @@ func New(s3URL *url.URL) (*KinesisS3, error) {
 		logger:         logger,
 	}
 
-	return s3, nil
+	return s, nil
 }
 
 func (g *KinesisS3) generateKey(key []byte) *string {

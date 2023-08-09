@@ -46,9 +46,7 @@ func init() {
 }
 
 func main() {
-	logLevelStr, _ := gocore.Config().Get("logLevel")
-	logLevel := gocore.NewLogLevelFromString(logLevelStr)
-	logger := gocore.Log(progname, logLevel)
+	logger := gocore.Log(progname)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -291,7 +289,7 @@ func main() {
 			panic("txmeta grpc server only supports memory store")
 		}
 		sm.AddService("TxMetaStore", txmeta.New(
-			gocore.Log("txsts", logLevel),
+			gocore.Log("txsts"),
 			txMetaStoreURL,
 		))
 	}
@@ -300,7 +298,7 @@ func main() {
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
 			sm.AddService("BlockAssembly", blockassembly.New(
-				gocore.Log("bchn", logLevel),
+				gocore.Log("bchn"),
 				txStore,
 				subtreeStore,
 			))
@@ -311,7 +309,7 @@ func main() {
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcAddress"); found {
 			sm.AddService("Block Validation", blockvalidation.New(
-				gocore.Log("bval", logLevel),
+				gocore.Log("bval"),
 				utxoStore,
 				subtreeStore,
 				txMetaStore,
@@ -324,7 +322,7 @@ func main() {
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcAddress"); found {
 			sm.AddService("Validator", validator.NewServer(
-				gocore.Log("valid", logLevel),
+				gocore.Log("valid"),
 				utxoStore,
 				txMetaStore,
 			))
@@ -334,7 +332,7 @@ func main() {
 	// utxo store server
 	if startUtxoStore && utxostoreURL != nil {
 		sm.AddService("UTXOStoreServer", utxo.New(
-			gocore.Log("utxo", logLevel),
+			gocore.Log("utxo"),
 			utxoStore,
 		))
 	}
@@ -344,7 +342,7 @@ func main() {
 		_, found := gocore.Config().Get("seeder_grpcAddress")
 		if found {
 			sm.AddService("Seeder", seeder.NewServer(
-				gocore.Log("seed", logLevel),
+				gocore.Log("seed"),
 			))
 		}
 	}
@@ -357,7 +355,7 @@ func main() {
 	// blob server
 	if startBlobServer {
 		sm.AddService("BlobServer", blobserver.NewServer(
-			gocore.Log("blob", logLevel),
+			gocore.Log("blob"),
 			utxoStore,
 			txStore,
 			subtreeStore,
@@ -367,14 +365,14 @@ func main() {
 	// coinbase tracker server
 	if startCoinbaseTracker {
 		sm.AddService("CoinbaseTracker", coinbasetracker.New(
-			gocore.Log("con", logLevel),
+			gocore.Log("con"),
 		))
 	}
 
 	// bootstrap server
 	if startBootstrapServer {
 		sm.AddService("BootstrapServer", bootstrap.NewServer(
-			gocore.Log("bootS", logLevel),
+			gocore.Log("bootS"),
 		))
 	}
 

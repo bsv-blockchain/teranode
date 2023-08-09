@@ -21,8 +21,7 @@ type GCS struct {
 }
 
 func New(bucketName string) (*GCS, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("gcs", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("gcs")
 
 	client, err := storage.NewClient(context.Background(), option.WithCredentialsFile("./keyfile.json"))
 	if err != nil {

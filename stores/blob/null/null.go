@@ -16,8 +16,7 @@ type Null struct {
 }
 
 func New() (*Null, error) {
-	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log("null", gocore.NewLogLevelFromString(logLevel))
+	logger := gocore.Log("null")
 
 	return &Null{
 		logger: logger,
