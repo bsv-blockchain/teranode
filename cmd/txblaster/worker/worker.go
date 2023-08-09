@@ -10,13 +10,16 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
+
+	"github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
-	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/tracing"
 	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -82,7 +85,7 @@ type Worker struct {
 	numberOfOutputs      int
 	numberOfTransactions uint32
 	satoshisPerOutput    uint64
-	seederServers        []seeder_api.SeederAPIClient
+	privateKey           *bec.PrivateKey
 	rateLimiter          *rate.Limiter
 	propagationServers   []propagation_api.PropagationAPIClient
 	kafkaProducer        sarama.SyncProducer
@@ -97,7 +100,7 @@ func NewWorker(
 	numberOfOutputs int,
 	numberOfTransactions uint32,
 	satoshisPerOutput uint64,
-	seederServers []seeder_api.SeederAPIClient,
+	coinbasePrivKey string,
 	rateLimiter *rate.Limiter,
 	propagationServers []propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
@@ -108,14 +111,17 @@ func NewWorker(
 	logIdsCh chan string,
 ) *Worker {
 
-	//logger.Debugf("Received transaction with txid %x and %d outputs", res.Txid, res.NumberOfOutputs)
+	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	if err != nil {
+		panic("can't decode coinbase priv key")
+	}
 
 	return &Worker{
 		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
 		numberOfOutputs:      numberOfOutputs,
 		numberOfTransactions: numberOfTransactions,
 		satoshisPerOutput:    satoshisPerOutput,
-		seederServers:        seederServers,
+		privateKey:           privateKey.PrivKey,
 		rateLimiter:          rateLimiter,
 		propagationServers:   propagationServers,
 		kafkaProducer:        kafkaProducer,
@@ -128,59 +134,95 @@ func NewWorker(
 }
 
 func (w *Worker) Start(ctx context.Context) error {
-	// create new private key
-	keySet, err := extra.New()
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create new key: %v", err)
-		return err
+
+	coinbaseTrackerAddr, ok := gocore.Config().Get("coinbasetracker_grpcAddress")
+	if !ok {
+		panic("no coinbasetracker_grpcAddress setting found")
 	}
+
+	// ctx := context.Background()
+	conn, err := utils.GetGRPCClient(ctx, coinbaseTrackerAddr, &utils.ConnectionOptions{})
+	if err != nil {
+		logger.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
+		panic("error creating connection for coinbaseTracker")
+	}
+	coinbaseTrackerClient := coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
+	coinbaseAddr, err := bscript.NewAddressFromPublicKey(w.privateKey.PubKey(), true)
+
+	if err != nil {
+		panic(err)
+	}
+
+	logger.Debugf("coinbaseAddr: %s", coinbaseAddr.AddressString)
+	resp, err := coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
+		Address: coinbaseAddr.AddressString,
+		Amount:  50,
+	})
+	if err != nil {
+		logger.Errorf("couldn't get utxos from coinbaseTracker: %v", err)
+
+		panic("couldn't get utxos from coinbaseTracker")
+	}
+	for _, utxo := range resp.Utxos {
+		logger.Debugf("received utxo %s", utxo.String())
+	}
+
+	// create new private key
+	// keySet, err := extra.New()
+	// if err != nil {
+	// 	prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+	// 	logger.Errorf("Failed to create new key: %v", err)
+	// 	return err
+	// }
 
 	// (ok)
-	for _, seeder := range w.seederServers {
-		if _, err := seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
-			PrivateKey:           keySet.PrivateKey.Serialise(),
-			NumberOfTransactions: w.numberOfTransactions,
-			NumberOfOutputs:      uint32(w.numberOfOutputs),
-			SatoshisPerOutput:    w.satoshisPerOutput,
-		}); err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			logger.Errorf("Failed to create spendable transaction: %v", err)
-			return err
-		}
+	// for _, seeder := range w.seederServers {
+	// 	if _, err := seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
+	// 		PrivateKey:           keySet.PrivateKey.Serialise(),
+	// 		NumberOfTransactions: w.numberOfTransactions,
+	// 		NumberOfOutputs:      uint32(w.numberOfOutputs),
+	// 		SatoshisPerOutput:    w.satoshisPerOutput,
+	// 	}); err != nil {
+	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+	// 		logger.Errorf("Failed to create spendable transaction: %v", err)
+	// 		return err
+	// 	}
 
-		res, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
-			PrivateKey: keySet.PrivateKey.Serialise(),
-		})
-		if err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			logger.Errorf("Failed to create next spendable transaction: %v", err)
-			return err
-		}
+	// 	res, err := seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
+	// 		PrivateKey: keySet.PrivateKey.Serialise(),
+	// 	})
+	// 	if err != nil {
+	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+	// 		logger.Errorf("Failed to create next spendable transaction: %v", err)
+	// 		return err
+	// 	}
 
-		privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
+	// 	privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
 
-		script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-		if err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			logger.Errorf("Failed to create private key from pub key: %v", err)
-			panic(err)
-		}
+	// 	script, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+	// 	if err != nil {
+	// 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+	// 		logger.Errorf("Failed to create private key from pub key: %v", err)
+	// 		panic(err)
+	// 	}
 
-		go func(numberOfOutputs uint32) {
-			logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-			for i := uint32(0); i < numberOfOutputs; i++ {
-				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(res.Txid),
-					Vout:          i,
-					LockingScript: script,
-					Satoshis:      res.SatoshisPerOutput,
-				}
+	// 	go func(numberOfOutputs uint32) {
+	// 		logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+	// 		for i := uint32(0); i < numberOfOutputs; i++ {
+	// 			u := &bt.UTXO{
+	// 				TxID:          bt.ReverseBytes(res.Txid),
+	// 				Vout:          i,
+	// 				LockingScript: script,
+	// 				Satoshis:      res.SatoshisPerOutput,
+	// 			}
 
-				w.utxoChan <- u
-			}
-		}(res.NumberOfOutputs)
-	}
+	// 			w.utxoChan <- u
+	// 		}
+	// 	}(res.NumberOfOutputs)
+	// }
+
+	// get utxos from con service
+	// coinbaseTrackerClient := coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
 
 	w.startTime = time.Now()
 
@@ -188,15 +230,15 @@ func (w *Worker) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case utxo := <-w.utxoChan:
-			if w.rateLimiter != nil {
-				_ = w.rateLimiter.Wait(ctx)
-			}
+			// case utxo := <-w.utxoChan:
+			// 	if w.rateLimiter != nil {
+			// 		_ = w.rateLimiter.Wait(ctx)
+			// 	}
 
-			err := w.fireTransactions(ctx, utxo, keySet)
-			if err != nil {
-				return fmt.Errorf("ERROR in fire transactions: %v", err)
-			}
+			// err := w.fireTransactions(ctx, utxo, keySet)
+			// if err != nil {
+			// 	return fmt.Errorf("ERROR in fire transactions: %v", err)
+			// }
 		}
 	}
 }
