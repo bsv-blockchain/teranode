@@ -588,6 +588,33 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 
 }
 
+func BenchmarkBlockAssembler_AddTx(b *testing.B) {
+	_ = os.Setenv("initial_merkle_items_per_subtree", "1024")
+
+	newSubtreeChan := make(chan *util.Subtree)
+	go func() {
+		for {
+			_ = <-newSubtreeChan
+		}
+	}()
+
+	stp := NewSubtreeProcessor(p2p.TestLogger{}, nil, newSubtreeChan)
+
+	txHashes := make([]*chainhash.Hash, 100_000)
+	for i := 0; i < 100_000; i++ {
+		txid := make([]byte, 32)
+		_, _ = rand.Read(txid)
+		hash, _ := chainhash.NewHash(txid)
+		txHashes[i] = hash
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < 100_000; i++ {
+		stp.Add(*txHashes[i], 1, nil)
+	}
+}
+
 // generateTxID generates a random 32-byte hexadecimal string.
 func generateTxID() (string, error) {
 	b := make([]byte, 32)

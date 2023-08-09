@@ -36,6 +36,15 @@ type baTestItems struct {
 	blockchainClient blockchain.ClientI
 }
 
+func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
+	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       &bt.Tx{},
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	})
+}
+
 var (
 	tx0, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
 	tx1, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -264,16 +273,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 	})
 }
 
-func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
-	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       &bt.Tx{},
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	})
-}
-
-func setupBlockAssemblyTest(t *testing.T) *baTestItems {
+func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items := baTestItems{}
 
 	items.utxoStore = utxostore.New(false) // utxo memory store
