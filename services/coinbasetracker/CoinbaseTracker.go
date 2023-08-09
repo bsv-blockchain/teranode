@@ -2,9 +2,11 @@ package coinbasetracker
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/db"
@@ -23,6 +25,7 @@ type CoinbaseTracker struct {
 	blockchainClient blockchain.ClientI
 	store            base.DbManager
 	ch               chan bool
+	lock             sync.Mutex
 }
 
 func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI) *CoinbaseTracker {
@@ -46,6 +49,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		blockchainClient: blockchainClient,
 		store:            db.Create(store, store_config),
 		ch:               make(chan bool),
+		lock:             sync.Mutex{},
 	}
 
 	go ct.synchronize(synchronize_reserved)
@@ -201,20 +205,26 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	// Need to sort by the lowest to highest amount. The first lowest amount should be sufficient.
 	// If none exist, then grab lower amounts and build the best amount combination
 	// that satisfies the amount.
-	cond := []interface{}{"address = ? AND satoshis >= ? AND spent = false AND reserved = false", address, strconv.FormatInt(int64(amount), 10)}
-	utxo := &model.UTXO{}
 	res := []*bt.UTXO{}
 
 	utxoIds := []interface{}{}
 
 	// start transaction
-	dtx, err := ct.store.TxBegin()
+	txopts := []*sql.TxOptions{&sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: false}}
+	ct.lock.Lock()
+	defer ct.lock.Unlock()
+	dtx, err := ct.store.TxBegin(txopts...)
 	if err != nil {
 		return nil, err
 	}
 
-	payload, err := ct.store.TxRead_All_Cond(dtx, utxo, cond)
+	// payload, err := ct.store.TxRead_All_Cond(dtx, utxo, cond)
+	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND spent = false AND reserved = false"
+	vals := []interface{}{address, strconv.FormatInt(int64(amount), 10)}
+
+	payload, err := ct.store.TxSelectForUpdate(dtx, stmt, vals)
 	if err != nil {
+		ct.logger.Errorf("Tx Select for update: %s", err.Error())
 		return nil, err
 	}
 	// Check if we have utxo amounts that cover the amount
@@ -235,7 +245,6 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		})
 
 		// return the first utxo that satisfies the given amount
-
 		script := bscript.Script([]byte(utxo_candidates[0].LockingScript))
 		res = append(res, &bt.UTXO{
 			TxID:          []byte(utxo_candidates[0].Txid),
@@ -248,11 +257,11 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		// we are at a point where we couldn't find a single transaction that
 		// satisfies the given amount; Check if we can find an ideal combination
 		// of utxo candidates that satisfy the given amount
-		cond = []interface{}{"address = ? AND satoshis <= ? AND spent = false AND reserved = false", address, strconv.FormatInt(int64(amount), 10)}
-		utxo = &model.UTXO{}
+		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis <= ? AND spent = false AND reserved = false"
+		vals = []interface{}{address, strconv.FormatInt(int64(amount), 10)}
 		res = []*bt.UTXO{}
 
-		payload, err = ct.store.TxRead_All_Cond(dtx, utxo, cond)
+		payload, err = ct.store.TxSelectForUpdate(dtx, stmt, vals)
 		if err != nil {
 			return nil, err
 		}

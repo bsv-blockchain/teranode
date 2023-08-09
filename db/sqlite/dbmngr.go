@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -140,8 +141,8 @@ func (m *SqliteManager) UpdateBatch(table string, cond string, values []interfac
 	return tx.Error
 }
 
-func (m *SqliteManager) TxBegin() (any, error) {
-	return m.db.Begin(), nil
+func (m *SqliteManager) TxBegin(opts ...*sql.TxOptions) (any, error) {
+	return m.db.Begin(opts...), nil
 }
 
 func (m *SqliteManager) TxCommit(i any) error {
@@ -211,11 +212,38 @@ func (m *SqliteManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
 	return result.Statement.Dest, result.Error
 }
 
+func (m *SqliteManager) TxSelectForUpdate(i any, stmt string, vals []interface{}) ([]any, error) {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return nil, errors.New("not a gorm database object")
+	}
+	rows, err := tx.Raw(stmt, vals...).Rows()
+	if err != nil {
+		m.logger.Errorf("failed to select tx: %v", err)
+		return nil, err
+	}
+	payload := []any{}
+	// ID: uint CreatedAt: time.Time UpdatedAt: time.Time DeletedAt: DeleteAt (gorm.io/gorm)
+	// Txid: string Vout uint32 LockingScript: string Satoshis uint64 Address: string Spent bool Reserved bool
+	utxo := &model.UTXO{}
+	for rows.Next() {
+		err = rows.Scan(&utxo.ID, &utxo.Txid, &utxo.Vout, &utxo.LockingScript, &utxo.Satoshis)
+		if err != nil {
+			m.logger.Errorf("failed to scan: %v", err)
+			return nil, err
+		}
+		payload = append(payload, utxo)
+	}
+	return payload, nil
+}
+
 func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
 	tx, ok := i.(*gorm.DB)
 	if !ok {
 		return nil, errors.New("not a gorm database object")
 	}
+
+	// SELECT FOR UPDATE... -> Rows-> rows.Next()
 	batch_size := 100
 	payload := []any{}
 	result := tx.Where(cond[0], cond[1:]...).

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"errors"
 
 	u "github.com/ordishs/go-utils"
@@ -48,7 +49,7 @@ func (m *PostgresManager) UpdateBatch(table string, cond string, values []interf
 	return nil
 }
 
-func (m *PostgresManager) TxBegin() (any, error) {
+func (m *PostgresManager) TxBegin(opts ...*sql.TxOptions) (any, error) {
 	return nil, nil
 }
 
@@ -86,4 +87,8 @@ func (m *PostgresManager) TxDelete(i any, model any) error {
 
 func (m *PostgresManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
+}
+
+func (m *PostgresManager) TxSelectForUpdate(i any, stmt string, vals []interface{}) ([]any, error) {
+	return nil, nil
 }

@@ -1,5 +1,7 @@
 package base
 
+import "database/sql"
+
 type DbManagerBase interface {
 	Connect(db_config string) error
 	Disconnect() error
@@ -22,7 +24,7 @@ type CRUD interface {
 	Delete(any) error
 	UpdateBatch(string, string, []interface{}, map[string]interface{}) error
 
-	TxBegin() (any, error)
+	TxBegin(opts ...*sql.TxOptions) (any, error)
 	TxRollback(any) error
 	TxCommit(any) error
 	TxCreate(any, any) error
@@ -32,6 +34,7 @@ type CRUD interface {
 	TxUpdate(any, any) error
 	TxDelete(any, any) error
 	TxUpdateBatch(any, string, string, []interface{}, map[string]interface{}) error
+	TxSelectForUpdate(any, string, []interface{}) ([]any, error)
 }
 
 type DbManager interface {

@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -117,7 +118,7 @@ func (m *MongoManager) UpdateBatch(table string, cond string, values []interface
 	return nil
 }
 
-func (m *MongoManager) TxBegin() (any, error) {
+func (m *MongoManager) TxBegin(opts ...*sql.TxOptions) (any, error) {
 	return nil, nil
 }
 
@@ -155,4 +156,8 @@ func (m *MongoManager) TxDelete(i any, model any) error {
 
 func (m *MongoManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
+}
+
+func (m *MongoManager) TxSelectForUpdate(i any, stmt string, vals []interface{}) ([]any, error) {
+	return nil, nil
 }
