@@ -15,100 +15,185 @@ import (
 
 type subBytes map[[32]byte]*[32]byte
 
+var (
+	nItems = uint64(1024 * 1024)
+)
+
 func main() {
 	runtime.GC()
 	fmt.Printf("Started with memory: %s\n", printAlloc())
 
 	func() {
-		uint256Map := make(map[uint256.Int]*uint256.Int, 1_000_000)
-		for i := uint64(0); i < 1_000_000; i++ {
+		uint256Map := make(map[uint256.Int]*uint256.Int, nItems)
+		for i := uint64(0); i < nItems; i++ {
 			ii := uint256.NewInt(i)
-			iii := uint256.NewInt(i + 2_000_000)
+			iii := uint256.NewInt(i + nItems*2)
 			uint256Map[*ii] = iii
 		}
 
 		fmt.Printf("Mem used for uint256: %s\n", printAlloc())
+		uint256Map = nil
 	}()
 
 	runtime.GC()
 
 	bs := make([]byte, 32)
+	var ii chainhash.Hash
+	var iii chainhash.Hash
 
 	func() {
-		chainhashMap := make(map[chainhash.Hash]*chainhash.Hash, 1_000_000)
-		for i := uint64(0); i < 1_000_000; i++ {
+		chainhashMap := make(map[chainhash.Hash]*chainhash.Hash, nItems)
+		for i := uint64(0); i < nItems; i++ {
 			binary.LittleEndian.PutUint64(bs, i)
-			ii := chainhash.HashH(bs)
-			binary.LittleEndian.PutUint64(bs, i+2_000_000)
-			iii := chainhash.HashH(bs)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
 			chainhashMap[ii] = &iii
 		}
 
 		fmt.Printf("Mem used for chainhashMap: %s\n", printAlloc())
+
+		// check map
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			item, ok := chainhashMap[ii]
+			if !ok || !item.Equal(iii) {
+				fmt.Printf("item %d not found in xsyncmap\n", i)
+			}
+		}
+
+		chainhashMap = nil
 	}()
 
 	runtime.GC()
 
 	func() {
-		chainhashMap := make(map[chainhash.Hash]chainhash.Hash, 1_000_000)
-		for i := uint64(0); i < 1_000_000; i++ {
+		chainhashMap := make(map[chainhash.Hash]chainhash.Hash, nItems)
+		for i := uint64(0); i < nItems; i++ {
 			binary.LittleEndian.PutUint64(bs, i)
-			ii := chainhash.HashH(bs)
-			binary.LittleEndian.PutUint64(bs, i+2_000_000)
-			chainhashMap[ii] = chainhash.HashH(bs)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			chainhashMap[ii] = iii
 		}
 
 		fmt.Printf("Mem used for chainhashMap values: %s\n", printAlloc())
+
+		// check map
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			item, ok := chainhashMap[ii]
+			if !ok || !item.Equal(iii) {
+				fmt.Printf("item %d not found in xsyncmap\n", i)
+			}
+		}
+
+		chainhashMap = nil
 	}()
 
 	runtime.GC()
 
-	swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](1_000_000)
-	for i := uint64(0); i < 1_000_000; i++ {
-		binary.LittleEndian.PutUint64(bs, i)
-		ii := chainhash.HashH(bs)
-		binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		iii := chainhash.HashH(bs)
+	func() {
+		swissMap := swiss.NewMap[chainhash.Hash, *chainhash.Hash](uint32(nItems))
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
 
-		swissMap.Put(ii, &iii)
-	}
+			swissMap.Put(ii, &iii)
+		}
 
-	fmt.Printf("Mem used for swissMap items: %s\n", printAlloc())
-	swissMap = nil
+		fmt.Printf("Mem used for swissMap items: %s\n", printAlloc())
+
+		// check map
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			item, ok := swissMap.Get(ii)
+			if !ok || !item.Equal(iii) {
+				fmt.Printf("item %d not found in xsyncmap\n", i)
+			}
+		}
+
+		swissMap = nil
+	}()
+
 	runtime.GC()
 
-	xsyncMap := xsync.NewTypedMapOfPresized[chainhash.Hash, *chainhash.Hash](func(seed maphash.Seed, hash chainhash.Hash) uint64 {
-		var h maphash.Hash
-		h.SetSeed(seed)
-		_ = binary.Write(&h, binary.LittleEndian, hash[:16])
-		hh := h.Sum64()
-		h.Reset()
-		_ = binary.Write(&h, binary.LittleEndian, hash[16:32])
-		return 31*hh + h.Sum64()
-	}, 1_000_000)
-	for i := uint64(0); i < 1_000_000; i++ {
-		binary.LittleEndian.PutUint64(bs, i)
-		ii := chainhash.HashH(bs)
-		binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		iii := chainhash.HashH(bs)
-		xsyncMap.Store(ii, &iii)
-	}
+	func() {
+		swissMap := swiss.NewMap[chainhash.Hash, chainhash.Hash](uint32(nItems))
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
 
-	fmt.Printf("Mem used for xsyncMap items: %s\n", printAlloc())
-
-	// check map
-	for i := uint64(0); i < 1_000_000; i++ {
-		binary.LittleEndian.PutUint64(bs, i)
-		ii := chainhash.HashH(bs)
-		binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		iii := chainhash.HashH(bs)
-		item, ok := xsyncMap.Load(ii)
-		if !ok || *item != iii {
-			fmt.Printf("item %d not found in xsyncmap\n", i)
+			swissMap.Put(ii, iii)
 		}
-	}
 
-	xsyncMap = nil
+		fmt.Printf("Mem used for swissMap *items: %s\n", printAlloc())
+
+		// check map
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			item, ok := swissMap.Get(ii)
+			if !ok || !item.Equal(iii) {
+				fmt.Printf("item %d not found in xsyncmap\n", i)
+			}
+		}
+
+		swissMap = nil
+	}()
+
+	runtime.GC()
+
+	func() {
+		xsyncMap := xsync.NewTypedMapOfPresized[chainhash.Hash, *chainhash.Hash](func(seed maphash.Seed, hash chainhash.Hash) uint64 {
+			var h maphash.Hash
+			h.SetSeed(seed)
+			_ = binary.Write(&h, binary.LittleEndian, hash[:16])
+			hh := h.Sum64()
+			h.Reset()
+			_ = binary.Write(&h, binary.LittleEndian, hash[16:32])
+			return 31*hh + h.Sum64()
+		}, int(nItems))
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			xsyncMap.Store(ii, &iii)
+		}
+
+		fmt.Printf("Mem used for xsyncMap items: %s\n", printAlloc())
+
+		// check map
+		for i := uint64(0); i < nItems; i++ {
+			binary.LittleEndian.PutUint64(bs, i)
+			ii = chainhash.HashH(bs)
+			binary.LittleEndian.PutUint64(bs, i+nItems*2)
+			iii = chainhash.HashH(bs)
+			item, ok := xsyncMap.Load(ii)
+			if !ok || *item != iii {
+				fmt.Printf("item %d not found in xsyncmap\n", i)
+			}
+		}
+
+		xsyncMap = nil
+	}()
+
 	runtime.GC()
 
 	key := make([]byte, 32)
@@ -120,22 +205,25 @@ func main() {
 			byte32Map[[1]byte(key[:1])] = make(subBytes)
 		}
 
-		for i := uint64(0); i < 1_000_000; i++ {
+		var bytes [1]byte
+		var bytes32 [32]byte
+		for i := uint64(0); i < nItems; i++ {
 			binary.BigEndian.PutUint64(key, i)
-			bytes := [1]byte(key[:1])
-			bytes32 := [32]byte(key[:32])
+			bytes = [1]byte(key[:1])
+			bytes32 = [32]byte(key[:32])
 			byte32Map[bytes][bytes32] = &bytes32
 		}
 
 		fmt.Printf("Mem used for byte1+byte32 map: %s\n", printAlloc())
+		byte32Map = nil
 	}()
 
 	runtime.GC()
 
 	func() {
-		keySlice := make([]string, 1_000_000)
+		keySlice := make([]string, nItems)
 
-		for i := uint64(0); i < 1_000_000; i++ {
+		for i := uint64(0); i < nItems; i++ {
 			// convert int to byte array
 			binary.LittleEndian.PutUint64(key, i)
 			keySlice[i] = utils.ReverseAndHexEncodeHash([32]byte(key[:32]))
@@ -146,9 +234,9 @@ func main() {
 
 	runtime.GC()
 
-	keySliceBytes := make([][32]byte, 1_000_000)
+	keySliceBytes := make([][32]byte, nItems)
 
-	for i := uint64(0); i < 1_000_000; i++ {
+	for i := uint64(0); i < nItems; i++ {
 		// convert int to byte array
 		binary.LittleEndian.PutUint64(key, i)
 		keySliceBytes[i] = [32]byte(key[:32])
