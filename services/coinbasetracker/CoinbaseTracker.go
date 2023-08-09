@@ -39,7 +39,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		store_config = "file::memory:?cache=shared"
 	}
 
-	synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
+	// synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
 
 	ct := &CoinbaseTracker{
 		logger:           logger,
@@ -48,7 +48,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		ch:               make(chan bool),
 	}
 
-	go ct.synchronize(synchronize_reserved)
+	// go ct.synchronize(synchronize_reserved)
 
 	return ct
 }
