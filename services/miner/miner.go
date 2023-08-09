@@ -40,16 +40,16 @@ func (m *Miner) Init(_ context.Context) error {
 func (m *Miner) Start(ctx context.Context) error {
 	m.candidateTimer = time.NewTimer(2 * time.Second) // wait 2 seconds before starting
 
-	m.logger.Infof("Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
+	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc
 
-	_, cancel = context.WithCancel(ctx)
+	_, cancel = context.WithCancel(context.Background())
 	for {
 		select {
 		case <-ctx.Done():
-			m.logger.Infof("Stopping miner as ctx is done")
+			m.logger.Infof("[Miner] Stopping miner as ctx is done")
 			cancel()
 			return nil // context cancelled
 		case <-m.candidateTimer.C:
@@ -57,7 +57,7 @@ func (m *Miner) Start(ctx context.Context) error {
 
 			// cancel the previous mining context and start a new one
 			cancel()
-			miningCtx, cancel = context.WithCancel(ctx)
+			miningCtx, cancel = context.WithCancel(context.Background())
 
 			// start mining in a new goroutine, so we can cancel it if we need to
 			go func(ctx context.Context) {
@@ -74,7 +74,7 @@ func (m *Miner) Start(ctx context.Context) error {
 }
 
 func (m *Miner) Stop(ctx context.Context) error {
-	m.logger.Infof("Stopping miner")
+	m.logger.Infof("[Miner] Stopping miner")
 	m.candidateTimer.Stop()
 
 	return nil
@@ -105,7 +105,7 @@ func (m *Miner) mine(ctx context.Context) error {
 	if waitSeconds > 0 {
 		randWait := rand.Intn(waitSeconds)
 
-		m.logger.Warnf("Found block on job %s, waiting %ds before submitting", candidateId, randWait)
+		m.logger.Warnf("[Miner] Found block on job %s, waiting %ds before submitting", candidateId, randWait)
 
 	MineWait:
 		for {
@@ -121,10 +121,10 @@ func (m *Miner) mine(ctx context.Context) error {
 			}
 		}
 	} else {
-		m.logger.Warnf("Found block on job %s, submitting", candidateId)
+		m.logger.Warnf("[Miner] Found block on job %s, submitting", candidateId)
 	}
 
-	m.logger.Infof("submitting mining solution: %s", candidateId)
+	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
 	m.logger.Debugf(solution.Stringify())
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {

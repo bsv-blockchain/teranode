@@ -37,12 +37,13 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh chan chan *miningCandidateResponse
-	bestBlockHeader   *model.BlockHeader
-	bestBlockHeight   uint32
-	currentChain      []*model.BlockHeader
-	currentChainMap   map[chainhash.Hash]uint32
-	currentChainMapMu sync.RWMutex
+	miningCandidateCh        chan chan *miningCandidateResponse
+	bestBlockHeader          *model.BlockHeader
+	bestBlockHeight          uint32
+	currentChain             []*model.BlockHeader
+	currentChainMap          map[chainhash.Hash]uint32
+	currentChainMapMu        sync.RWMutex
+	blockchainSubscriptionCh chan *model.Notification
 }
 
 func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmetastore.Store, utxoStore utxostore.Interface,
@@ -60,37 +61,18 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
 	}
 
-	var err error
-	b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			logger.Warnf("[BlockAssembler] no state found in blockchain db")
-		} else {
-			logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
-		}
-	} else {
-		logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Hash())
-		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
-	}
+	return b
+}
 
-	// we did not get any state back from the blockchain db, so we get the current best block header
-	if b.bestBlockHeader == nil || b.bestBlockHeight == 0 {
-		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
-		} else {
-			logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Hash())
-			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
-		}
-	}
+func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
+	var err error
 
 	// start a subscription for the best block header
 	// this will be used to reset the subtree processor when a new block is mined
-	var blockchainSubscriptionCh chan *model.Notification
 	go func() {
-		blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
+		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 		if err != nil {
-			logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
+			b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
 		}
 
@@ -105,7 +87,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		for {
 			select {
 			case <-ctx.Done():
-				logger.Infof("Stopping blockassembler as ctx is done")
+				b.logger.Infof("Stopping blockassembler as ctx is done")
 				return
 
 			case responseCh := <-b.miningCandidateCh:
@@ -116,7 +98,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 					err:             err,
 				}
 
-			case notification := <-blockchainSubscriptionCh:
+			case notification := <-b.blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
 					header, height, err = b.blockchainClient.GetBestBlockHeader(ctx)
@@ -205,8 +187,35 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 			}
 		}
 	}()
+}
 
-	return b
+func (b *BlockAssembler) Start(ctx context.Context) (err error) {
+	b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			b.logger.Warnf("[BlockAssembler] no state found in blockchain db")
+		} else {
+			b.logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
+		}
+	} else {
+		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Hash())
+		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
+	}
+
+	// we did not get any state back from the blockchain db, so we get the current best block header
+	if b.bestBlockHeader == nil || b.bestBlockHeight == 0 {
+		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+		} else {
+			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Hash())
+			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
+		}
+	}
+
+	b.startChannelListeners(ctx)
+
+	return nil
 }
 
 func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint32, error) {

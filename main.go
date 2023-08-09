@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,14 +52,22 @@ func main() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	err := sentry.Init(sentry.ClientOptions{
-		Dsn: "https://dcad1ec4c60a4a2e80a7f8599e86ec4b@o4505013263466496.ingest.sentry.io/4505013264449536",
-		// Set TracesSampleRate to 1.0 to capture 100% of transactions for performance monitoring.
-		// We recommend adjusting this value in production,
-		TracesSampleRate: 1.0,
-	})
-	if err != nil {
-		logger.Fatalf("sentry.Init: %s", err)
+	// sentry
+	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
+		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
+		if err != nil {
+			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
+		}
+
+		if err = sentry.Init(sentry.ClientOptions{
+			Dsn: sentryDns,
+			// Set TracesSampleRate to 1.0 to capture 100% of transactions for performance monitoring.
+			// We recommend adjusting this value in production,
+			TracesSampleRate: tracesSampleRate,
+		}); err != nil {
+			logger.Fatalf("sentry.Init: %s", err)
+		}
 	}
 
 	startBlockchain := shouldStart("Blockchain")
@@ -192,11 +201,10 @@ func main() {
 	//
 	var utxostoreURL *url.URL
 	var utxoStore utxostore.Interface
+	var err error
+	var found bool
 
 	if startBlockValidation || startValidator || startUtxoStore {
-		var err error
-		var found bool
-
 		utxostoreURL, err, found = gocore.Config().GetURL("utxostore")
 		if err != nil {
 			panic(err)
@@ -212,9 +220,9 @@ func main() {
 
 	var txStore blob.Store
 
+	var txStoreUrl *url.URL
 	if startBlockAssembly || startBlobServer || startPropagation {
-		var err error
-		txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+		txStoreUrl, err, found = gocore.Config().GetURL("txstore")
 		if err != nil {
 			panic(err)
 		}
@@ -231,9 +239,6 @@ func main() {
 	var txMetaStore txmetastore.Store
 
 	if startTxMetaStore || startBlockValidation || startValidator {
-		var err error
-		var found bool
-
 		txMetaStoreURL, err, found = gocore.Config().GetURL("txmeta_store")
 		if err != nil {
 			panic(err)
@@ -257,9 +262,9 @@ func main() {
 	}
 
 	var subtreeStore blob.Store
-
+	var subtreeStoreUrl *url.URL
 	if startBlockAssembly || startBlockValidation || startBlobServer {
-		subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+		subtreeStoreUrl, err, found = gocore.Config().GetURL("subtreestore")
 		if err != nil {
 			panic(err)
 		}
@@ -296,7 +301,7 @@ func main() {
 
 	// blockAssembly
 	if startBlockAssembly {
-		if _, found := gocore.Config().Get("blockassembly_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockassembly_grpcAddress"); found {
 			sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bchn"),
 				txStore,
@@ -307,7 +312,7 @@ func main() {
 
 	// blockValidation
 	if startBlockValidation {
-		if _, found := gocore.Config().Get("blockvalidation_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockvalidation_grpcAddress"); found {
 			sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
 				utxoStore,
@@ -320,7 +325,7 @@ func main() {
 
 	// validator
 	if startValidator {
-		if _, found := gocore.Config().Get("validator_grpcAddress"); found {
+		if _, found = gocore.Config().Get("validator_grpcAddress"); found {
 			sm.AddService("Validator", validator.NewServer(
 				gocore.Log("valid"),
 				utxoStore,
@@ -339,7 +344,7 @@ func main() {
 
 	// seeder
 	if startSeeder {
-		_, found := gocore.Config().Get("seeder_grpcAddress")
+		_, found = gocore.Config().Get("seeder_grpcAddress")
 		if found {
 			sm.AddService("Seeder", seeder.NewServer(
 				gocore.Log("seed"),
