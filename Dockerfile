@@ -13,15 +13,8 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-# Build the Go library
-#RUN go build -tags aerospike,foundationdb,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
-RUN go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
-
-# Build TX Blaster
-RUN go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
-
-# Build node status
-RUN go build -o status.run ./cmd/status/
+# Build the Go libraries of the project
+RUN make build
 
 # Install Delve debugger
 RUN go install github.com/go-delve/delve/cmd/dlv@latest

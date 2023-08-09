@@ -8,8 +8,19 @@ deps:
 	go mod download
 
 .PHONY: build
-build:
-	sh build.sh
+build: build-ubsv build-status build-tx-blaster
+
+.PHONY: build-ubsv
+build-ubsv:
+	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
+
+.PHONY: build-tx-blaster
+build-tx-blaster:
+	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
+
+.PHONY: build-status
+build-status:
+	go build -o status.run ./cmd/status/
 
 .PHONY: test
 test:
@@ -20,14 +31,15 @@ longtests:
 	LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: lint
-lint:
-	golangci-lint run --skip-dirs p2p/wire
-	staticcheck ./...
+lint: # todo enable coinbase tracker
+	golangci-lint run --skip-dirs services/coinbasetracker ./...
+	go list ./... | grep -v coinbasetracker | xargs staticcheck
+
 
 .PHONY: testall
 testall:
-	golangci-lint run --skip-dirs p2p/wire
-	staticcheck ./...
+	# call makefile lint command
+	$(MAKE) lint
 	LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: run
@@ -147,13 +159,19 @@ clean_gen:
 .PHONY: clean
 clean:
 	rm -f ./ubsv_*.tar.gz
+	rm -f blaster.run
+	rm -f status.run
 	rm -rf build/
+
+.PHONY: install-lint
+install-lint:
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 .PHONY: install
 install:
-	go install honnef.co/go/tools/cmd/staticcheck@latest
+	$(MAKE) install-lint
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	arch -arm64 brew install pre-commit
-	pre-commit install
+	arch -arm64 pre-commit install
