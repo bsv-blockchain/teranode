@@ -139,3 +139,101 @@ func (m *SqliteManager) UpdateBatch(table string, cond string, values []interfac
 	tx := m.db.Table(table).Where(cond, values...).Updates(toupdate)
 	return tx.Error
 }
+
+func (m *SqliteManager) TxBegin() (any, error) {
+	return m.db.Begin(), nil
+}
+
+func (m *SqliteManager) TxCommit(i any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	tx.Commit()
+	return nil
+}
+
+func (m *SqliteManager) TxRollback(i any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	tx.Rollback()
+	return nil
+}
+
+func (m *SqliteManager) TxUpdate(i any, model any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	result := tx.Save(model)
+	return result.Error
+}
+
+func (m *SqliteManager) TxDelete(i any, model any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	gm, ok := model.(*gorm.Model)
+	if ok && gm != nil {
+		result := tx.Delete(model, gm.ID)
+		return result.Error
+	}
+	return errors.New("not a gorm model based data structure")
+}
+
+func (m *SqliteManager) TxCreate(i any, model any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	result := tx.Create(model)
+	return result.Error
+}
+
+func (m *SqliteManager) TxRead(i any, model any) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	result := tx.Last(model)
+	return result.Error
+}
+
+func (m *SqliteManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return nil, errors.New("not a gorm database object")
+	}
+	result := tx.Where(cond[0], cond[1:]...).Find(model)
+	return result.Statement.Dest, result.Error
+}
+
+func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return nil, errors.New("not a gorm database object")
+	}
+	batch_size := 100
+	payload := []any{}
+	result := tx.Where(cond[0], cond[1:]...).
+		FindInBatches(model, batch_size,
+			func(tx *gorm.DB, batch int) error {
+				payload = append(payload, tx.Statement.Dest)
+				return nil
+			},
+		)
+
+	return payload, result.Error
+}
+
+func (m *SqliteManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, toupdate map[string]interface{}) error {
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		return errors.New("not a gorm database object")
+	}
+	txr := tx.Table(table).Where(cond, values...).Updates(toupdate)
+	return txr.Error
+}

@@ -47,3 +47,43 @@ func (m *PostgresManager) Delete(model any) error {
 func (m *PostgresManager) UpdateBatch(table string, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
 }
+
+func (m *PostgresManager) TxBegin() (any, error) {
+	return nil, nil
+}
+
+func (m *PostgresManager) TxCommit(any) error {
+	return nil
+}
+
+func (m *PostgresManager) TxRollback(any) error {
+	return nil
+}
+
+func (m *PostgresManager) TxCreate(i any, model any) error {
+	panic(errors.New("PostgresManager - Postgres not implemented"))
+}
+
+func (m *PostgresManager) TxRead(i any, model any) error {
+	return nil
+}
+
+func (m *PostgresManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
+	return nil, nil
+}
+
+func (m *PostgresManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
+	return nil, nil
+}
+
+func (m *PostgresManager) TxUpdate(i any, model any) error {
+	return nil
+}
+
+func (m *PostgresManager) TxDelete(i any, model any) error {
+	return nil
+}
+
+func (m *PostgresManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
+	return nil
+}

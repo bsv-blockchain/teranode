@@ -116,3 +116,43 @@ func (m *MongoManager) Delete(model any) error {
 func (m *MongoManager) UpdateBatch(table string, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
 }
+
+func (m *MongoManager) TxBegin() (any, error) {
+	return nil, nil
+}
+
+func (m *MongoManager) TxCommit(any) error {
+	return nil
+}
+
+func (m *MongoManager) TxRollback(any) error {
+	return nil
+}
+
+func (m *MongoManager) TxCreate(i any, model any) error {
+	panic(errors.New("PostgresManager - Postgres not implemented"))
+}
+
+func (m *MongoManager) TxRead(i any, model any) error {
+	return nil
+}
+
+func (m *MongoManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
+	return nil, nil
+}
+
+func (m *MongoManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
+	return nil, nil
+}
+
+func (m *MongoManager) TxUpdate(i any, model any) error {
+	return nil
+}
+
+func (m *MongoManager) TxDelete(i any, model any) error {
+	return nil
+}
+
+func (m *MongoManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
+	return nil
+}

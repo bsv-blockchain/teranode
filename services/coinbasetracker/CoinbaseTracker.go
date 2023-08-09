@@ -202,10 +202,10 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	// If none exist, then grab lower amounts and build the best amount combination
 	// that satisfies the amount.
 	cond := []interface{}{"address = ? AND satoshis >= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
-	utxos := []model.UTXO{}
+	utxo := &model.UTXO{}
 	res := []*bt.UTXO{}
 	txids := []interface{}{}
-	payload, err := ct.store.Read_All_Cond(&utxos, cond)
+	payload, err := ct.store.Read_All_Cond(&utxo, cond)
 	if err != nil {
 		return nil, err
 	}
@@ -241,10 +241,10 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		// satisfies the given amount; Check if we can find an ideal combination
 		// of utxo candidates that satisfy the given amount
 		cond = []interface{}{"address = ? AND satoshis <= ? AND spent = ?", address, strconv.FormatInt(int64(amount), 10), false}
-		utxos = []model.UTXO{}
+		utxo = &model.UTXO{}
 		res = []*bt.UTXO{}
 
-		payload, err = ct.store.Read_All_Cond(&utxos, cond)
+		payload, err = ct.store.Read_All_Cond(&utxo, cond)
 		if err != nil {
 			return nil, err
 		}

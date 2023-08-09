@@ -21,6 +21,17 @@ type CRUD interface {
 	Update(any) error
 	Delete(any) error
 	UpdateBatch(string, string, []interface{}, map[string]interface{}) error
+
+	TxBegin() (any, error)
+	TxRollback(any) error
+	TxCommit(any) error
+	TxCreate(any, any) error
+	TxRead(any, any) error
+	TxRead_Cond(any, any, []any) (any, error)
+	TxRead_All_Cond(any, any, []any) ([]any, error)
+	TxUpdate(any, any) error
+	TxDelete(any, any) error
+	TxUpdateBatch(any, string, string, []interface{}, map[string]interface{}) error
 }
 
 type DbManager interface {
