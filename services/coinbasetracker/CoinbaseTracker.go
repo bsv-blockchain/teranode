@@ -259,7 +259,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		// we are at a point where we couldn't find a single transaction that
 		// satisfies the given amount; Check if we can find an ideal combination
 		// of utxo candidates that satisfy the given amount
-		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis <= ? AND spent = false AND reserved = false"
+		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis > 0 AND satoshis < ? AND spent = false AND reserved = false"
 		vals = []interface{}{address, strconv.FormatInt(int64(amount), 10)}
 		res = []*bt.UTXO{}
 
