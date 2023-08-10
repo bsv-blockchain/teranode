@@ -17,7 +17,10 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Build the Go libraries of the project
-RUN make build -j 3
+# todo change to make build
+RUN go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
+RUN go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
+RUN go build -o status.run ./cmd/status/
 
 
 
