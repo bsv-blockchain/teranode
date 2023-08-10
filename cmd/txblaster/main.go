@@ -21,7 +21,6 @@ import (
 	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/worker"
 	_ "github.com/TAAL-GmbH/ubsv/k8sresolver"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
-	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
 	"github.com/TAAL-GmbH/ubsv/util"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
@@ -33,8 +32,6 @@ import (
 
 var logger utils.Logger
 
-// var propagationServers []propagation_api.PropagationAPIClient
-// var seederServer seeder_api.SeederAPIClient
 var printProgress uint64
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -47,11 +44,22 @@ var kafkaProducer sarama.SyncProducer
 var kafkaTopic string
 var ipv6MulticastConn *net.UDPConn
 
+var coinbasePrivKey string
+
+// var coinbaseAddr string
+
 var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
+
 	logger = gocore.Log("work", gocore.NewLogLevelFromString("DEBUG"))
+
+	var found bool
+	coinbasePrivKey, found = gocore.Config().Get("coinbase_wallet_privkey")
+	if !found {
+		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
+	}
 }
 
 func main() {
@@ -152,7 +160,7 @@ func main() {
 		if profileAddress != nil && *profileAddress != "" {
 			profilerAddr, startProfiler = *profileAddress, true
 		} else {
-			profilerAddr, startProfiler = gocore.Config().Get("profilerAddr")
+			profilerAddr, startProfiler = gocore.Config().Get("tx_blaster_profilerAddr", ":9191")
 		}
 
 		if startProfiler {
@@ -171,41 +179,6 @@ func main() {
 
 		defer closer.Close()
 	}
-
-	go func() {
-		profilerAddr, _ := gocore.Config().Get("tx_blaster_profilerAddr", ":9091")
-		_ = http.ListenAndServe(profilerAddr, nil)
-	}()
-
-	// (ok)
-	seederGrpcAddresses := []string{}
-	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets"); ok {
-		seederGrpcAddresses = append(seederGrpcAddresses, strings.Split(addresses, "|")...)
-	} else {
-		if address, ok := gocore.Config().Get("seeder_grpcAddress"); ok {
-			seederGrpcAddresses = append(seederGrpcAddresses, address)
-		} else {
-			panic("no seeder_grpcAddress setting found")
-		}
-	}
-
-	seederServers := []seeder_api.SeederAPIClient{}
-	for _, seederGrpcAddress := range seederGrpcAddresses {
-		sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			MaxRetries:  3,
-		})
-		if err != nil {
-			panic(err)
-		}
-		seederServers = append(seederServers, seeder_api.NewSeederAPIClient(sConn))
-	}
-
-	if len(seederServers) == 0 {
-		panic("No suitable seeder server connection found")
-	}
-
-	// (ok)
 
 	propagationGrpcAddresses := []string{}
 	if addresses, ok := gocore.Config().Get("txblaster_propagation_grpcTargets"); ok {
@@ -247,6 +220,7 @@ func main() {
 	var rateLimiter *rate.Limiter
 
 	if *rateLimit > 1 {
+
 		rateLimitDuration := time.Duration(*workers) * time.Second / time.Duration(*rateLimit)
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 
@@ -275,7 +249,7 @@ func main() {
 			numberOfOutputs,
 			uint32(numberOfTransactions),
 			satoshisPerOutput,
-			seederServers,
+			coinbasePrivKey,
 			rateLimiter,
 			propagationServers,
 			kafkaProducer,

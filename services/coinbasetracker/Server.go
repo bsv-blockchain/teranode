@@ -17,8 +17,6 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -277,17 +275,9 @@ func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*co
 	}, nil
 }
 
-func (u *CoinbaseTrackerServer) GetUtxoxs(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
-	pubkey, err := bec.ParsePubKey(req.Publickey, bec.S256())
-	if err != nil {
-		return nil, err
-	}
-	addr, err := bscript.NewAddressFromPublicKey(pubkey, !u.testnet)
-	if err != nil {
-		return nil, err
-	}
+func (u *CoinbaseTrackerServer) GetUtxos(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
 
-	utxos, err := u.coinbaseTracker.GetUtxos(ctx, addr.AddressString, req.Amount)
+	utxos, err := u.coinbaseTracker.GetUtxos(ctx, req.Address, req.Amount)
 	if err != nil {
 		return nil, err
 	}

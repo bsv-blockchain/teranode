@@ -8,7 +8,7 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
 	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
-	"github.com/TAAL-GmbH/ubsv/services/seeder/seeder_api"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"golang.org/x/time/rate"
 )
@@ -20,7 +20,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 		numberOfOutputs      int
 		numberOfTransactions uint32
 		satoshisPerOutput    uint64
-		seederServers        []seeder_api.SeederAPIClient
+		privateKey           *bec.PrivateKey
 		rateLimiter          *rate.Limiter
 		propagationServers   []propagation_api.PropagationAPIClient
 		kafkaProducer        sarama.SyncProducer
@@ -48,7 +48,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 				numberOfOutputs:      tt.fields.numberOfOutputs,
 				numberOfTransactions: tt.fields.numberOfTransactions,
 				satoshisPerOutput:    tt.fields.satoshisPerOutput,
-				seederServers:        tt.fields.seederServers,
+				privateKey:           tt.fields.privateKey,
 				rateLimiter:          tt.fields.rateLimiter,
 				propagationServers:   tt.fields.propagationServers,
 				kafkaProducer:        tt.fields.kafkaProducer,

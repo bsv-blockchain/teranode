@@ -71,7 +71,21 @@ end
 group Blast
 TxBlaster -> CON: GetUTXOs (pubkey, amount)
 CON -> Store: Get UTXOs
+note right
+  <b>Note</b>:
+  Respnse to GetUTXOs should include various combinations of UTXOs that satisfy
+  the condition to be equal or greater than the amount, by returning various combinations
+  of UTXOs from the smallest number of inputs with the highest amount of Satoshis to
+  exact amount of satoshis with the highest number of inputs to satisfy the amount.
+end note
 Store -> CON: Return UTXOs
+note right
+  <b>Note</b>: Return combinations:
+  Lowest number of inputs with the highest amount of satoshis to the highest number of
+  inputs with the exact or higher amount of satoshis.
+  The logic solves the combination problem of finding the optimal number of inputs to
+  satisfy the condition to be equal or greater than the amount of satoshis.
+end note
 CON -> TxBlaster: Return UTXOs
 
 TxBlaster -> TxBlaster: Create Transaction
