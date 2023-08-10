@@ -208,8 +208,8 @@ func main() {
 	}
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
+	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)
 	numberOfTransactions := uint32(1)
-	satoshisPerOutput := uint64(1000)
 
 	logger.Infof("Each worker with ask seeder to create %d transaction(s) with %d outputs of %d satoshis each",
 		numberOfTransactions,
@@ -248,7 +248,7 @@ func main() {
 		w := worker.NewWorker(
 			numberOfOutputs,
 			uint32(numberOfTransactions),
-			satoshisPerOutput,
+			uint64(satoshisPerOutput),
 			coinbasePrivKey,
 			rateLimiter,
 			propagationServers,

@@ -80,20 +80,22 @@ type Ipv6MulticastMsg struct {
 }
 
 type Worker struct {
-	utxoChan             chan *bt.UTXO
-	startTime            time.Time
-	numberOfOutputs      int
-	numberOfTransactions uint32
-	satoshisPerOutput    uint64
-	privateKey           *bec.PrivateKey
-	rateLimiter          *rate.Limiter
-	propagationServers   []propagation_api.PropagationAPIClient
-	kafkaProducer        sarama.SyncProducer
-	kafkaTopic           string
-	ipv6MulticastConn    *net.UDPConn
-	ipv6MulticastChan    chan Ipv6MulticastMsg
-	printProgress        uint64
-	logIdsCh             chan string
+	utxoChan              chan *bt.UTXO
+	startTime             time.Time
+	numberOfOutputs       int
+	numberOfTransactions  uint32
+	satoshisPerOutput     uint64
+	privateKey            *bec.PrivateKey
+	address               string
+	rateLimiter           *rate.Limiter
+	propagationServers    []propagation_api.PropagationAPIClient
+	kafkaProducer         sarama.SyncProducer
+	kafkaTopic            string
+	ipv6MulticastConn     *net.UDPConn
+	ipv6MulticastChan     chan Ipv6MulticastMsg
+	printProgress         uint64
+	logIdsCh              chan string
+	coinbaseTrackerClient coinbasetracker_api.CoinbasetrackerAPIClient
 }
 
 func NewWorker(
@@ -115,6 +117,11 @@ func NewWorker(
 	if err != nil {
 		panic("can't decode coinbase priv key")
 	}
+	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+
+	if err != nil {
+		panic(err)
+	}
 
 	return &Worker{
 		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
@@ -122,6 +129,7 @@ func NewWorker(
 		numberOfTransactions: numberOfTransactions,
 		satoshisPerOutput:    satoshisPerOutput,
 		privateKey:           privateKey.PrivKey,
+		address:              coinbaseAddr.AddressString,
 		rateLimiter:          rateLimiter,
 		propagationServers:   propagationServers,
 		kafkaProducer:        kafkaProducer,
@@ -135,30 +143,160 @@ func NewWorker(
 
 func (w *Worker) Start(ctx context.Context) error {
 
+	keysetScript, err := bscript.NewP2PKHFromPubKeyEC(w.privateKey.PubKey())
+	if err != nil {
+		return err
+	}
+	keySet := &extra.KeySet{
+		PrivateKey: w.privateKey,
+		PublicKey:  w.privateKey.PubKey(),
+		Script:     keysetScript,
+	}
+
 	coinbaseTrackerAddr, ok := gocore.Config().Get("coinbasetracker_grpcAddress")
 	if !ok {
 		panic("no coinbasetracker_grpcAddress setting found")
 	}
 
-	// ctx := context.Background()
 	conn, err := utils.GetGRPCClient(ctx, coinbaseTrackerAddr, &utils.ConnectionOptions{})
 	if err != nil {
 		logger.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
 		panic("error creating connection for coinbaseTracker")
 	}
-	coinbaseTrackerClient := coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-	coinbaseAddr, err := bscript.NewAddressFromPublicKey(w.privateKey.PubKey(), true)
+	w.coinbaseTrackerClient = coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
+	logger.Debugf("coinbaseAddr: %s", w.address)
 
+	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
+		panic("error getting Utxos from coinbaseTracker")
+	}
+	logger.Debugf("received utxos %+v", utxos)
+
+	script, err := bscript.NewP2PKHFromPubKeyBytes(w.privateKey.PubKey().SerialiseCompressed())
+	if err != nil {
+		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
+		logger.Errorf("Failed to create private key from pub key: %v", err)
 		panic(err)
 	}
 
-	logger.Debugf("coinbaseAddr: %s", coinbaseAddr.AddressString)
+	var totalSatoshis uint64
+	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
+	for _, utxo := range utxos {
+		if utxo.Satoshis == 0 {
+			continue
+		}
+		if utxo.Satoshis > w.satoshisPerOutput {
+			//  if utxo amount  > satoshisPerOutput divide it into multiple outputs
+			// 1. we get 500000000 satoshis from coinbase
+			// 2. numberOfOutputs is 100. This number should override the satoshisPerOuptut
+			// 3. we divide 500000000 / 100 = 5000000
+			// if numberOfOutputs is 10
+			// and satoshisPerOuptut is 10
+			// and we have 15 satoshis in the utxo
+			// we want 1 output of 10 and change of 5
+
+			actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
+			go func(numberOfOutputs int, txId []byte) {
+
+				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+				for i := 0; i < numberOfOutputs; i++ {
+
+					u := &bt.UTXO{
+						TxID:          bt.ReverseBytes(txId),
+						Vout:          uint32(i),
+						LockingScript: script,
+						Satoshis:      w.satoshisPerOutput,
+					}
+
+					w.utxoChan <- u
+				}
+				if change > 0 {
+					u := &bt.UTXO{
+						TxID:          bt.ReverseBytes(txId),
+						Vout:          uint32(numberOfOutputs),
+						LockingScript: script,
+						Satoshis:      change,
+					}
+
+					w.utxoChan <- u
+				}
+
+			}(int(actualOutputs), utxo.TxId)
+
+			// 4. we send 100 outputs of 5000000 satoshis each
+		} else if utxo.Satoshis == w.satoshisPerOutput {
+			// if utxo amount == satoshisPerOutput send it directly
+			go func(numberOfOutputs int, txId []byte) {
+				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+				for i := 0; i < numberOfOutputs; i++ {
+
+					u := &bt.UTXO{
+						TxID:          bt.ReverseBytes(txId),
+						Vout:          uint32(i),
+						LockingScript: script,
+						Satoshis:      w.satoshisPerOutput,
+					}
+
+					w.utxoChan <- u
+				}
+			}(w.numberOfOutputs, utxo.TxId)
+
+		} else if utxo.Satoshis < w.satoshisPerOutput {
+			// if utxo amout < satoshisPerOutput add it to the next utxo
+			totalSatoshis += utxo.Satoshis
+			inputUtxos = append(inputUtxos, utxo)
+			// TODO: implememt this case
+			_ = inputUtxos
+			continue
+		}
+
+	}
+
+	w.startTime = time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case utxo := <-w.utxoChan:
+			if w.rateLimiter != nil {
+				_ = w.rateLimiter.Wait(ctx)
+			}
+
+			err := w.fireTransactions(ctx, utxo, keySet)
+			if err != nil {
+				return fmt.Errorf("ERROR in fire transactions: %v", err)
+			}
+
+		}
+	}
+}
+
+func (w *Worker) calculateOutputs(utxoSats uint64) (uint64, uint64) {
+
+	// Calculate maximum satoshis required
+	maxSatoshisRequired := uint64(w.numberOfOutputs) * w.satoshisPerOutput
+
+	var actualOutputs, change uint64
+
+	if utxoSats < maxSatoshisRequired {
+		actualOutputs = utxoSats / w.satoshisPerOutput
+		change = utxoSats % w.satoshisPerOutput
+	} else {
+		actualOutputs = uint64(w.numberOfOutputs)
+		change = utxoSats - maxSatoshisRequired
+	}
+	return actualOutputs, change
+}
+
+func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) ([]*coinbasetracker_api.Utxo, error) {
+	ctx := context.Background()
 	var resp *coinbasetracker_api.GetUtxoResponse
+	var err error
 	for i := 0; i < 10; i++ {
-		resp, err = coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
-			Address: coinbaseAddr.AddressString,
-			Amount:  50,
+		resp, err = w.coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
+			Address: w.address,
+			Amount:  amount,
 		})
 		if err == nil {
 			break
@@ -166,23 +304,16 @@ func (w *Worker) Start(ctx context.Context) error {
 		t := time.NewTimer(time.Second * 1)
 		<-t.C
 		logger.Debugf("retrying GetUtxos %d time", i+1)
-
 	}
 
-	if resp != nil && resp.Utxos != nil {
-
-		for _, utxo := range resp.Utxos {
-			logger.Debugf("received utxo %s", utxo.String())
-		}
+	if resp == nil || resp.Utxos == nil {
+		return nil, fmt.Errorf("no utxos received from coinbasetracker")
 	}
-	w.startTime = time.Now()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	utxos := make([]*coinbasetracker_api.Utxo, 0)
+	utxos = append(utxos, resp.Utxos...)
+
+	return utxos, nil
 }
 
 func (w *Worker) fireTransactions(ctx context.Context, u *bt.UTXO, keySet *extra.KeySet) error {

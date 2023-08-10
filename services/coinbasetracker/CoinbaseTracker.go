@@ -3,6 +3,7 @@ package coinbasetracker
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"sort"
 	"strconv"
@@ -247,8 +248,9 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 
 		// return the first utxo that satisfies the given amount
 		script := bscript.Script([]byte(utxo_candidates[0].LockingScript))
+		txId, _ := hex.DecodeString(utxo_candidates[0].Txid)
 		res = append(res, &bt.UTXO{
-			TxID:          []byte(utxo_candidates[0].Txid),
+			TxID:          txId,
 			Vout:          utxo_candidates[0].Vout,
 			LockingScript: &script,
 			Satoshis:      utxo_candidates[0].Satoshis,
@@ -389,5 +391,8 @@ func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, dur t
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
+	// send to node
+	// set utxos as spent
+
 	return nil
 }
