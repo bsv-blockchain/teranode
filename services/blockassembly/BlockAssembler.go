@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,7 +192,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
+		if strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
 			b.logger.Warnf("[BlockAssembler] no state found in blockchain db")
 		} else {
 			b.logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
@@ -211,6 +212,10 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Hash())
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
 		}
+	}
+
+	if err = b.SetState(ctx); err != nil {
+		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
 
 	b.startChannelListeners(ctx)

@@ -192,6 +192,10 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 // Start function
 func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
+	if err = ba.blockAssembler.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start block assembler [%w]", err)
+	}
+
 	kafkaBrokers, ok := gocore.Config().Get("blockassembly_kafkaBrokers")
 	if ok {
 		ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s", kafkaBrokers)
