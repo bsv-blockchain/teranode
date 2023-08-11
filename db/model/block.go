@@ -7,7 +7,7 @@ import (
 type Block struct {
 	gorm.Model
 	Height        uint64
-	BlockHash     string
+	BlockHash     string `gorm:"unique"`
 	PrevBlockHash string
 }
 
