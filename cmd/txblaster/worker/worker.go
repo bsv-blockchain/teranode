@@ -168,6 +168,8 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
+		logger.Errorf("error getting utxos from coinbase %+v", err)
+
 		panic("error getting Utxos from coinbaseTracker")
 	}
 	logger.Debugf("received utxos %+v", utxos)

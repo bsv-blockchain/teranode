@@ -177,6 +177,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 							u.logger.Errorf("could not add block to db %+v", err)
 							break
 						}
+						u.logger.Debugf("Added BLOCK with height: %s | hash: %s", newBlockHeight, newBlock.Hash().String())
 						// add coinbase utxos
 						u.saveCoinbaseUtxos(ctx, newBlock)
 
@@ -222,6 +223,8 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 								u.logger.Errorf("could not add block to db %+v", err)
 								break
 							}
+							u.logger.Debugf("Added catchup BLOCK with height: %s | hash: %s", newBlockHeight, newBlock.Hash().String())
+
 							// add coinbase utxos
 							u.saveCoinbaseUtxos(ctx, block)
 						}
@@ -246,6 +249,7 @@ func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock 
 			break
 		}
 		err = u.coinbaseTracker.AddUtxo(ctx, &model.UTXO{
+			BlockHash:     newBlock.Hash().String(),
 			Txid:          newBlock.CoinbaseTx.TxID(),
 			Vout:          uint32(i),
 			LockingScript: o.LockingScript.String(),

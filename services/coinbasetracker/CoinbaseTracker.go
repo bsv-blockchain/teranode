@@ -127,20 +127,7 @@ func (ct *CoinbaseTracker) AddBlock(ctx context.Context, block *model.Block) err
 
 func (ct *CoinbaseTracker) unlockSpendable(ctx context.Context) error {
 	const stmt = `
-			WITH RECURSIVE ChainBlocks AS (
-				SELECT block_id, block_hash, previous_block_hash, height
-				FROM blocks
-				WHERE block_id = (SELECT MAX(height) - 100 FROM blocks)
-				UNION ALL
-				SELECT b.block_id, b.block_hash, b.previous_block_hash, b.height
-				FROM blocks b
-				JOIN ChainBlocks cb ON b.block_hash = cb.previous_block_hash
-			)
-
-			UPDATE blocks
-			SET status = '1'
-			WHERE status = '0' AND height <= (SELECT MAX(height) - 100 FROM blocks)
-			AND block_id IN (SELECT block_id FROM ChainBlocks);
+			WITH RECURSIVE ChainBlocks AS (	SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1'	WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) 	AND status = '0';  
 	`
 	var err error
 	i := ct.store.GetDB()

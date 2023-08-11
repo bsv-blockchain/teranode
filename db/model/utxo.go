@@ -15,6 +15,7 @@ const (
 
 type UTXO struct {
 	gorm.Model
+	BlockHash     string
 	Txid          string
 	Vout          uint32
 	LockingScript string
