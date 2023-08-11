@@ -15,7 +15,7 @@ const (
 
 type UTXO struct {
 	gorm.Model
-	BlockHash     string
+	BlockHash     string `gorm:"unique"`
 	Txid          string
 	Vout          uint32
 	LockingScript string

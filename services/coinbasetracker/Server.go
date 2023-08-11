@@ -17,6 +17,7 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
+	sqlerr "github.com/mattn/go-sqlite3"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -174,7 +175,12 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 							PrevBlockHash: newBlock.Header.HashPrevBlock.String(),
 						})
 						if err != nil {
-							u.logger.Errorf("could not add block to db %+v", err)
+							e, ok := err.(sqlerr.Error)
+							if ok && e.ExtendedCode == 1555 {
+								u.logger.Warnf("unique contraint on add block: %d\n", e.Error())
+							} else {
+								u.logger.Errorf("could not add block to db %+v", err)
+							}
 							break
 						}
 						u.logger.Debugf("Added BLOCK with height: %s | hash: %s", newBlockHeight, newBlock.Hash().String())
@@ -220,7 +226,12 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 								PrevBlockHash: block.Header.HashPrevBlock.String(),
 							})
 							if err != nil {
-								u.logger.Errorf("could not add block to db %+v", err)
+								e, ok := err.(sqlerr.Error)
+								if ok && e.ExtendedCode == 1555 {
+									u.logger.Warnf("unique contraint on add block: %d\n", e.Error())
+								} else {
+									u.logger.Errorf("could not add block to db %+v", err)
+								}
 								break
 							}
 							u.logger.Debugf("Added catchup BLOCK with height: %s | hash: %s", newBlockHeight, newBlock.Hash().String())
