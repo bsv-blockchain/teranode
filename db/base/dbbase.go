@@ -5,6 +5,7 @@ import "database/sql"
 type DbManagerBase interface {
 	Connect(db_config string) error
 	Disconnect() error
+	GetDB() any
 }
 
 type DbFactory interface {

@@ -24,7 +24,7 @@ func equalUtxos(a, b model.UTXO) bool {
 		a.LockingScript == b.LockingScript &&
 		a.Satoshis == b.Satoshis &&
 		a.Address == b.Address &&
-		a.Spent == b.Spent
+		a.Status == b.Status
 }
 
 func TestConnect(t *testing.T) {
@@ -269,7 +269,7 @@ func TestAddUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m)
@@ -323,7 +323,7 @@ func TestAddReadUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)
@@ -375,7 +375,7 @@ func TestModelUtxo(t *testing.T) {
 		LockingScript: script1.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr1.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	pk2, _ := bec.NewPrivateKey(bec.S256())
@@ -396,7 +396,7 @@ func TestModelUtxo(t *testing.T) {
 		LockingScript: script2.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr2.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	if m1.Equal(m2) {
@@ -460,7 +460,7 @@ func TestAddReadCondUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)
@@ -532,7 +532,7 @@ func TestAddReadCond1Utxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)

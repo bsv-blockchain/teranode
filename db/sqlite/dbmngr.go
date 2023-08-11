@@ -18,6 +18,9 @@ type SqliteManager struct {
 	logger u.Logger
 }
 
+func (m *SqliteManager) GetDB() any {
+	return m.db
+}
 func (m *SqliteManager) Connect(db_config string) error {
 	m.logger.Debugf("Connecting to sqlite: %s", db_config)
 	var dsn string

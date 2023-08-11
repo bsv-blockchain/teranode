@@ -11,6 +11,10 @@ type PostgresManager struct {
 	logger u.Logger
 }
 
+func (m *PostgresManager) GetDB() any {
+	return nil
+}
+
 func (m *PostgresManager) Connect(db_config string) error {
 	m.logger.Debugf("Connect")
 	return nil

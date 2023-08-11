@@ -80,6 +80,10 @@ func (m *MongoManager) Connect(db_config string) error {
 	return nil
 }
 
+func (m *MongoManager) GetDB() any {
+	return m.dbclient
+}
+
 func (m *MongoManager) Disconnect() error {
 	if m != nil && m.dbclient != nil {
 		if err := m.dbclient.Disconnect(context.Background()); err != nil {

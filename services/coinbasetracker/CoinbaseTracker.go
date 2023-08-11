@@ -19,6 +19,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"gorm.io/gorm"
 )
 
 type CoinbaseTracker struct {
@@ -81,80 +82,6 @@ func (ct *CoinbaseTracker) manageReserved(timeout int) {
 	}
 }
 
-// func (ct *CoinbaseTracker) syncUp() {
-// 	block_network, err := ct.GetBestBlockFromNetwork(context.Background())
-// 	if err != nil {
-// 		ct.logger.Errorf("failed to get best block from network: %s", err.Error())
-// 		return
-// 	}
-// 	block_db, err := ct.GetBestBlockFromDb(context.Background())
-// 	if err != nil {
-// 		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
-// 		return
-// 	}
-// 	if !block_db.Equal(block_network) {
-// 		err = ct.AddBlock(context.Background(), block_network)
-// 		if err != nil {
-// 			ct.logger.Errorf("failed to add block to the store: %s", err.Error())
-// 			return
-// 		}
-// 	}
-// 	ct.checkStoreForBlockGaps()
-// }
-
-// func (ct *CoinbaseTracker) checkStoreForBlockGaps() {
-// 	// How do we detect the latest block?
-// 	// The latest block is not referenced by any other blocks
-// 	// and has the current max height
-// 	block_db, err := ct.GetBestBlockFromDb(context.Background())
-// 	if err != nil {
-// 		ct.logger.Errorf("failed to get best block from database: %s", err.Error())
-// 		return
-// 	}
-// 	// At this point we should have the latest network block in the database
-// 	if IsGenesisBlock(block_db) {
-// 		// This is the genesis block - nothing else to do
-// 		return
-// 	}
-// 	// loop through until genesis block is reached, requesting missing blocks
-// 	// along the way
-// 	block_hash := block_db.PrevBlockHash
-// 	for {
-// 		cond := []interface{}{"blockhash = ? ", block_hash}
-// 		prev_block_i, err := ct.store.Read_Cond(&model.Block{}, cond)
-// 		if err != nil {
-// 			ct.logger.Errorf("failed to read block %s from database: %s", &block_hash, err.Error())
-// 		}
-// 		if prev_block_i == nil {
-// 			// missing block condition
-// 			block_network, err := ct.GetBlockFromNetwork(context.Background(), block_hash)
-// 			if err != nil {
-// 				ct.logger.Errorf("failed to get network block %s, %s", block_hash, err.Error())
-// 				break
-// 			}
-// 			block_db, err = NetworkBlockToStoreBlock(block_network)
-// 			if err != nil {
-// 				ct.logger.Errorf("failed to translate network block %s to store block, %s", block_hash, err.Error())
-// 				break
-// 			}
-
-// 			err = ct.AddBlock(context.Background(), block_db)
-// 			if err != nil {
-// 				ct.logger.Errorf("failed to add block %s to store, %s", block_hash, err.Error())
-// 				panic(err.Error())
-// 			}
-// 			block_hash = block_db.PrevBlockHash
-// 		} else {
-// 			prev_block := prev_block_i.(*model.Block)
-// 			// If the previous block is genesis block - all is good and nothing to do
-// 			if IsGenesisBlock(prev_block) {
-// 				return
-// 			}
-// 			block_hash = prev_block.PrevBlockHash
-// 		}
-// 	}
-// }
-
 func (ct *CoinbaseTracker) Stop() error {
 	ct.ch <- true
 	close(ct.ch)
@@ -186,7 +113,45 @@ func (u *CoinbaseTracker) GetBlockFromNetwork(ctx context.Context, hash string) 
 
 // AddBlock will add a block to the database
 func (ct *CoinbaseTracker) AddBlock(ctx context.Context, block *model.Block) error {
-	return ct.store.Create(block)
+	err := ct.store.Create(block)
+	if err != nil {
+		ct.logger.Errorf("Error adding block: %s", err.Error())
+		return err
+	}
+	err = ct.unlockSpendable(ctx)
+	if err != nil {
+		ct.logger.Errorf("Error in AddBlock to unlock spendables: %s", err.Error())
+	}
+	return err
+}
+
+func (ct *CoinbaseTracker) unlockSpendable(ctx context.Context) error {
+	const stmt = `
+			WITH RECURSIVE ChainBlocks AS (
+				SELECT block_id, block_hash, previous_block_hash, height
+				FROM blocks
+				WHERE block_id = (SELECT MAX(height) - 100 FROM blocks)
+				UNION ALL
+				SELECT b.block_id, b.block_hash, b.previous_block_hash, b.height
+				FROM blocks b
+				JOIN ChainBlocks cb ON b.block_hash = cb.previous_block_hash
+			)
+
+			UPDATE blocks
+			SET status = '1'
+			WHERE status = '0' AND height <= (SELECT MAX(height) - 100 FROM blocks)
+			AND block_id IN (SELECT block_id FROM ChainBlocks);
+	`
+	var err error
+	i := ct.store.GetDB()
+	dbe, ok := i.(*gorm.DB)
+	if !ok {
+		err = errors.New("db is not a gorm database object")
+		ct.logger.Errorf("%s", err.Error())
+		return err
+	}
+	tx := dbe.Exec(stmt)
+	return tx.Error
 }
 
 // AddUtxo will add a utxo to the database
@@ -221,7 +186,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	}
 
 	// payload, err := ct.store.TxRead_All_Cond(dtx, utxo, cond)
-	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND spent = false AND reserved = false"
+	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND status = 1"
 	vals := []interface{}{address, strconv.FormatInt(int64(amount), 10)}
 
 	payload, err := ct.store.TxSelectForUpdate(dtx, stmt, vals)
@@ -261,7 +226,7 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		// we are at a point where we couldn't find a single transaction that
 		// satisfies the given amount; Check if we can find an ideal combination
 		// of utxo candidates that satisfy the given amount
-		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis > 0 AND satoshis < ? AND spent = false AND reserved = false"
+		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis > 0 AND satoshis < ? AND status = 1"
 		vals = []interface{}{address, strconv.FormatInt(int64(amount), 10)}
 		res = []*bt.UTXO{}
 
@@ -355,11 +320,11 @@ func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}
 func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, tx any, utxoIds []interface{}) error {
 	var stmt string
 	if len(utxoIds) > 1 {
-		stmt = "ID IN ? AND spent = false"
+		stmt = "ID IN ? AND status = 2"
 	} else {
-		stmt = "ID = ? AND spent = false"
+		stmt = "ID = ? AND spent = 2"
 	}
-	return ct.store.TxUpdateBatch(tx, "utxos", stmt, utxoIds, map[string]interface{}{"reserved": true})
+	return ct.store.TxUpdateBatch(tx, "utxos", stmt, utxoIds, map[string]interface{}{"status": model.StatusReserved})
 }
 
 func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {
@@ -387,7 +352,7 @@ func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) e
 
 func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, dur time.Duration) error {
 	vals := []interface{}{time.Now().Add(-dur), false, true}
-	return ct.store.TxUpdateBatch(tx, "utxos", "updated_at < ? AND spent = ? AND reserved = ?", vals, map[string]interface{}{"reserved": false})
+	return ct.store.TxUpdateBatch(tx, "utxos", "updated_at < ? AND status = 2", vals, map[string]interface{}{"status": model.StatusSpendable})
 }
 
 func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
