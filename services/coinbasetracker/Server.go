@@ -160,6 +160,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 					// get the best block from the db.
 					// if the block is not the best block, then we need to fill in the gaps
 					bestBlock, err = u.coinbaseTracker.GetBestBlockFromDb(ctx)
+					u.logger.Debugf("best block from network hash: %s has %d tx", newBlock.Hash().String(), newBlock.TransactionCount)
 					if err != nil {
 						u.logger.Infof("No best block in db %+v", err)
 						// add the block to the db
@@ -220,6 +221,8 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 								u.logger.Errorf("could not extract block height", err)
 								break
 							}
+							u.logger.Debugf("catchup> best block from network hash: %s has %d tx", block.Hash().String(), block.TransactionCount)
+
 							err = u.coinbaseTracker.AddBlock(ctx, &model.Block{
 								Height:        uint64(height),
 								BlockHash:     block.Hash().String(),

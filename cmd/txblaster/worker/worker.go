@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -169,7 +170,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
 		logger.Errorf("error getting utxos from coinbase %+v", err)
-
+		// TODO: don't panic! just retry
 		panic("error getting Utxos from coinbaseTracker")
 	}
 	logger.Debugf("received utxos %+v", utxos)
@@ -184,6 +185,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	var totalSatoshis uint64
 	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
 	for _, utxo := range utxos {
+		logger.Debugf("utxo  txid: %s", hex.EncodeToString(utxo.TxId))
 		if utxo.Satoshis == 0 {
 			continue
 		}
@@ -368,6 +370,8 @@ func (w *Worker) fireTransactions(ctx context.Context, u *bt.UTXO, keySet *extra
 	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
+	// logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
 	w.utxoChan <- &bt.UTXO{
 		TxID:          tx.TxIDBytes(),

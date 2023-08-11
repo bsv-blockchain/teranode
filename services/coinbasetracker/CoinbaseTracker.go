@@ -2,7 +2,6 @@ package coinbasetracker
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -44,7 +43,7 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		store_config = "file::memory:?cache=shared"
 	}
 
-	synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
+	// synchronize_reserved, _ := gocore.Config().GetInt("coinbasetracker_timeout_reserved", 3600)
 
 	ct := &CoinbaseTracker{
 		logger:           logger,
@@ -54,33 +53,33 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		lock:             sync.Mutex{},
 	}
 
-	go ct.synchronize(synchronize_reserved)
+	// go ct.synchronize(synchronize_reserved)
 
 	return ct
 }
 
-func (ct *CoinbaseTracker) synchronize(timeout int) {
-	timer := time.NewTimer(time.Second * 10)
-	for {
-		select {
-		case <-ct.ch:
-			return
-		case <-timer.C:
-			ct.manageReserved(timeout)
-			timer = time.NewTimer(time.Second * 10)
-		}
-	}
-}
+// func (ct *CoinbaseTracker) synchronize(timeout int) {
+// 	timer := time.NewTimer(time.Second * 10)
+// 	for {
+// 		select {
+// 		case <-ct.ch:
+// 			return
+// 		case <-timer.C:
+// 			ct.manageReserved(timeout)
+// 			timer = time.NewTimer(time.Second * 10)
+// 		}
+// 	}
+// }
 
-func (ct *CoinbaseTracker) manageReserved(timeout int) {
-	// select all utxos where reserved is set and the time between
-	// UpdatedAt and now exceeds the timeout value
-	// If such utxos are found - unset reserved back to false
-	err := ct.ResetUtxoReserved(context.Background(), timeout)
-	if err != nil {
-		ct.logger.Errorf("failed to reset reserved utxos: %s", err.Error())
-	}
-}
+// func (ct *CoinbaseTracker) manageReserved(timeout int) {
+// 	// select all utxos where reserved is set and the time between
+// 	// UpdatedAt and now exceeds the timeout value
+// 	// If such utxos are found - unset reserved back to false
+// 	err := ct.ResetUtxoReserved(context.Background(), timeout)
+// 	if err != nil {
+// 		ct.logger.Errorf("failed to reset reserved utxos: %s", err.Error())
+// 	}
+// }
 
 func (ct *CoinbaseTracker) Stop() error {
 	ct.ch <- true
@@ -163,14 +162,16 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	utxoIds := []interface{}{}
 
 	// start transaction
-	txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
+	// txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
 	ct.lock.Lock()
 	defer ct.lock.Unlock()
-	dtx, err := ct.store.TxBegin(txopts...)
+	dtx, err := ct.store.TxBegin()
 
 	if err != nil {
 		return nil, err
 	}
+
+	defer ct.store.TxCommit(dtx)
 
 	// payload, err := ct.store.TxRead_All_Cond(dtx, utxo, cond)
 	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND status = 1"
@@ -199,7 +200,8 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		})
 
 		// return the first utxo that satisfies the given amount
-		script := bscript.Script([]byte(utxo_candidates[0].LockingScript))
+		s, _ := hex.DecodeString(utxo_candidates[0].LockingScript)
+		script := bscript.Script(s)
 		txId, _ := hex.DecodeString(utxo_candidates[0].Txid)
 		res = append(res, &bt.UTXO{
 			TxID:          txId,
@@ -255,7 +257,9 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 				// than the desired amount.
 				for _, u := range utxo_candidates {
 					total += uint64(u.Satoshis)
-					script := bscript.Script([]byte(u.LockingScript))
+					s, _ := hex.DecodeString(u.LockingScript)
+
+					script := bscript.Script(s)
 					utxoIds = append(utxoIds, u.ID)
 
 					res = append(res, &bt.UTXO{
@@ -281,15 +285,15 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 		if err != nil {
 			ct.logger.Errorf("error in rolling back marking utxo as reserved: %s", err.Error())
 		}
-	} else {
-		err = ct.store.TxCommit(dtx)
-		if err != nil {
-			ct.logger.Errorf("error in committing transaction: %s", err.Error())
-			err = ct.store.TxRollback(dtx)
-			if err != nil {
-				ct.logger.Errorf("error in rolling back failed commit: %s", err.Error())
-			}
-		}
+		// } else {
+		// 	err = ct.store.TxCommit(dtx)
+		// 	if err != nil {
+		// 		ct.logger.Errorf("error in committing transaction: %s", err.Error())
+		// 		err = ct.store.TxRollback(dtx)
+		// 		if err != nil {
+		// 			ct.logger.Errorf("error in rolling back failed commit: %s", err.Error())
+		// 		}
+		// 	}
 	}
 	return res, err
 }
@@ -297,9 +301,9 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}) error {
 	var stmt string
 	if len(txids) > 1 {
-		stmt = "ID IN ?"
+		stmt = "ID IN ? and status = 2"
 	} else {
-		stmt = "ID = ?"
+		stmt = "ID = ? and status = 2"
 	}
 	return ct.store.UpdateBatch("utxos", stmt, txids, map[string]interface{}{"spent": true, "reserved": false})
 }
@@ -307,9 +311,9 @@ func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}
 func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, tx any, utxoIds []interface{}) error {
 	var stmt string
 	if len(utxoIds) > 1 {
-		stmt = "ID IN ? AND status = 2"
+		stmt = "ID IN ? AND status = 1"
 	} else {
-		stmt = "ID = ? AND spent = 2"
+		stmt = "ID = ? AND status = 1"
 	}
 	return ct.store.TxUpdateBatch(tx, "utxos", stmt, utxoIds, map[string]interface{}{"status": model.StatusReserved})
 }
