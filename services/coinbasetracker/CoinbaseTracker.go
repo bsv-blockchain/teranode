@@ -2,8 +2,10 @@ package coinbasetracker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -12,13 +14,15 @@ import (
 	"github.com/TAAL-GmbH/ubsv/db"
 	"github.com/TAAL-GmbH/ubsv/db/base"
 	"github.com/TAAL-GmbH/ubsv/db/model"
-	networkModel "github.com/TAAL-GmbH/ubsv/model"
+	sqlerr "github.com/mattn/go-sqlite3"
+	"gorm.io/gorm"
+
+	// networkModel "github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"gorm.io/gorm"
 )
 
 type CoinbaseTracker struct {
@@ -87,64 +91,6 @@ func (ct *CoinbaseTracker) Stop() error {
 	return nil
 }
 
-func (ct *CoinbaseTracker) GetBestBlockFromDb(ctx context.Context) (*model.Block, error) {
-	m := &model.Block{}
-	err := ct.store.Read(m) // TODO: change logic to retrieve truly best block
-	return m, err
-}
-func (u *CoinbaseTracker) GetBestBlockFromNetwork(ctx context.Context) (*model.Block, error) {
-	return nil, nil
-}
-func (u *CoinbaseTracker) GetBlockFromNetwork(ctx context.Context, hash string) (*networkModel.Block, error) {
-	// get block from network
-	// unmarshal block
-	// 	b, err := networkModel.NewBlockFromBytes()
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	coinbaseTx := b.CoinbaseTx
-	// for _, utxo := range coinbaseTx.Outputs{
-	// 	// store coinbase
-	// }
-
-	return nil, nil
-}
-
-// AddBlock will add a block to the database
-func (ct *CoinbaseTracker) AddBlock(ctx context.Context, block *model.Block) error {
-	err := ct.store.Create(block)
-	if err != nil {
-		ct.logger.Errorf("Error adding block: %s", err.Error())
-		return err
-	}
-	err = ct.unlockSpendable(ctx)
-	if err != nil {
-		ct.logger.Errorf("Error in AddBlock to unlock spendables: %s", err.Error())
-	}
-	return err
-}
-
-func (ct *CoinbaseTracker) unlockSpendable(ctx context.Context) error {
-	const stmt = `
-			WITH RECURSIVE ChainBlocks AS (	SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1'	WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) 	AND status = '0';  
-	`
-	var err error
-	i := ct.store.GetDB()
-	dbe, ok := i.(*gorm.DB)
-	if !ok {
-		err = errors.New("db is not a gorm database object")
-		ct.logger.Errorf("%s", err.Error())
-		return err
-	}
-	tx := dbe.Exec(stmt)
-	return tx.Error
-}
-
-// AddUtxo will add a utxo to the database
-func (ct *CoinbaseTracker) AddUtxo(ctx context.Context, utxo *model.UTXO) error {
-	return ct.store.Create(utxo)
-}
-
 func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount uint64) ([]*bt.UTXO, error) {
 	// DevNote: Get a combination of UTXOs that satisfy the amount from the lowest
 	// number of inputs that are equal or greater than the desired amount
@@ -162,18 +108,17 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 	utxoIds := []interface{}{}
 
 	// start transaction
-	// txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
+	txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
 	ct.lock.Lock()
 	defer ct.lock.Unlock()
-	dtx, err := ct.store.TxBegin()
-
+	dtx, err := ct.store.TxBegin(txopts...)
 	if err != nil {
+		ct.logger.Errorf("error starting transaction: %s", err.Error())
 		return nil, err
 	}
 
 	defer ct.store.TxCommit(dtx)
 
-	// payload, err := ct.store.TxRead_All_Cond(dtx, utxo, cond)
 	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND status = 1"
 	vals := []interface{}{address, strconv.FormatInt(int64(amount), 10)}
 
@@ -277,23 +222,18 @@ func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount 
 			}
 		}
 	}
-	// after the best input candidates have been selected, mark them as reserved
-	err = ct.SetUtxoReserved(context.Background(), dtx, utxoIds)
-	if err != nil {
-		ct.logger.Errorf("error marking utxo as reserved: %s", err.Error())
-		err = ct.store.TxRollback(dtx)
+	if len(utxoIds) > 0 {
+		// after the best input candidates have been selected, mark them as reserved
+		err = ct.SetUtxoReserved(context.Background(), dtx, utxoIds)
 		if err != nil {
-			ct.logger.Errorf("error in rolling back marking utxo as reserved: %s", err.Error())
+			ct.logger.Errorf("error marking utxo as reserved: %s", err.Error())
+			err = ct.store.TxRollback(dtx)
+			if err != nil {
+				ct.logger.Errorf("error in rolling back marking utxo as reserved: %s", err.Error())
+			}
 		}
-		// } else {
-		// 	err = ct.store.TxCommit(dtx)
-		// 	if err != nil {
-		// 		ct.logger.Errorf("error in committing transaction: %s", err.Error())
-		// 		err = ct.store.TxRollback(dtx)
-		// 		if err != nil {
-		// 			ct.logger.Errorf("error in rolling back failed commit: %s", err.Error())
-		// 		}
-		// 	}
+	} else {
+		ct.logger.Errorf("[\U0001F6AB] no utxos found for address %s and satoshis %d", address, amount)
 	}
 	return res, err
 }
@@ -308,35 +248,37 @@ func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}
 	return ct.store.UpdateBatch("utxos", stmt, txids, map[string]interface{}{"spent": true, "reserved": false})
 }
 
-func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, tx any, utxoIds []interface{}) error {
+func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, i any, utxoIds []interface{}) error {
 	var stmt string
 	if len(utxoIds) > 1 {
 		stmt = "ID IN ? AND status = 1"
 	} else {
 		stmt = "ID = ? AND status = 1"
 	}
-	return ct.store.TxUpdateBatch(tx, "utxos", stmt, utxoIds, map[string]interface{}{"status": model.StatusReserved})
-}
-
-func (ct *CoinbaseTracker) ResetUtxoReserved(ctx context.Context, timeout int) error {
-	dur := time.Duration(timeout) * time.Second
-	tx, _ := ct.store.TxBegin()
-	err := ct.UpdateUtxoReserved(context.Background(), tx, dur)
-	if err != nil {
-		ct.logger.Errorf("failed to update reserved: %s", err.Error())
-		err = ct.store.TxRollback(tx)
+	tx, ok := i.(*gorm.DB)
+	if !ok {
+		panic("could not cast to gorm.DB")
+	}
+	var err error
+	retries := 0
+	savepoint := fmt.Sprintf("set-utxo-reserved-%s", time.Now().String())
+	tx = tx.SavePoint(savepoint)
+	for retries < 10 {
+		err = ct.store.TxUpdateBatch(tx, &model.UTXO{}, stmt, utxoIds, map[string]interface{}{"status": model.StatusReserved})
 		if err != nil {
-			ct.logger.Errorf("failed to rollback: %s", err.Error())
-		}
-	} else {
-		err = ct.store.TxCommit(tx)
-		if err != nil {
-			ct.logger.Errorf("failed to commit: %s", err.Error())
-			err = ct.store.TxRollback(tx)
-			if err != nil {
-				ct.logger.Errorf("failed to rollback a failed commit: %s", err.Error())
+			e, ok := err.(sqlerr.Error)
+			if ok {
+				ct.logger.Errorf("%s : code %d", e.Error(), e.ExtendedCode)
+			} else {
+				if tx != nil {
+					tx.RollbackTo(savepoint)
+				}
 			}
+			time.Sleep(250 * time.Millisecond)
+			retries++
+			continue
 		}
+		break
 	}
 	return err
 }

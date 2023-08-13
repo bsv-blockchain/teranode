@@ -89,7 +89,7 @@ func (m *PostgresManager) TxDelete(i any, model any) error {
 	return nil
 }
 
-func (m *PostgresManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
+func (m *PostgresManager) TxUpdateBatch(i any, model any, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
 }
 

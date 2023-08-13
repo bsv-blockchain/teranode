@@ -149,6 +149,9 @@ func (m *SqliteManager) TxBegin(opts ...*sql.TxOptions) (any, error) {
 }
 
 func (m *SqliteManager) TxCommit(i any) error {
+	if i == nil {
+		return nil
+	}
 	tx, ok := i.(*gorm.DB)
 	if !ok {
 		return errors.New("not a gorm database object")
@@ -158,27 +161,48 @@ func (m *SqliteManager) TxCommit(i any) error {
 }
 
 func (m *SqliteManager) TxRollback(i any) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+	if i == nil {
+		return nil
+	}
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
 	tx.Rollback()
 	return nil
 }
 
 func (m *SqliteManager) TxUpdate(i any, model any) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
 	result := tx.Save(model)
 	return result.Error
 }
 
 func (m *SqliteManager) TxDelete(i any, model any) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
 	gm, ok := model.(*gorm.Model)
 	if ok && gm != nil {
@@ -189,42 +213,67 @@ func (m *SqliteManager) TxDelete(i any, model any) error {
 }
 
 func (m *SqliteManager) TxCreate(i any, model any) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
 	result := tx.Create(model)
 	return result.Error
 }
 
 func (m *SqliteManager) TxRead(i any, model any) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
 	result := tx.Last(model)
 	return result.Error
 }
 
 func (m *SqliteManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return nil, errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return nil, errors.New("not a gorm database object")
+		}
 	}
 	result := tx.Where(cond[0], cond[1:]...).Find(model)
 	return result.Statement.Dest, result.Error
 }
 
 func (m *SqliteManager) TxSelectForUpdate(i any, stmt string, vals []interface{}) ([]any, error) {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return nil, errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return nil, errors.New("not a gorm database object")
+		}
 	}
 	rows, err := tx.Raw(stmt, vals...).Rows()
 	if err != nil {
 		m.logger.Errorf("failed to select tx: %v", err)
 		return nil, err
 	}
+	defer rows.Close()
 	payload := []any{}
 	// ID: uint CreatedAt: time.Time UpdatedAt: time.Time DeletedAt: DeleteAt (gorm.io/gorm)
 	// Txid: string Vout uint32 LockingScript: string Satoshis uint64 Address: string Spent bool Reserved bool
@@ -237,13 +286,20 @@ func (m *SqliteManager) TxSelectForUpdate(i any, stmt string, vals []interface{}
 		}
 		payload = append(payload, utxo)
 	}
+
 	return payload, nil
 }
 
 func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return nil, errors.New("not a gorm database object")
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return nil, errors.New("not a gorm database object")
+		}
 	}
 
 	// SELECT FOR UPDATE... -> Rows-> rows.Next()
@@ -260,11 +316,17 @@ func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, er
 	return payload, result.Error
 }
 
-func (m *SqliteManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, toupdate map[string]interface{}) error {
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		return errors.New("not a gorm database object")
+func (m *SqliteManager) TxUpdateBatch(i any, model any, cond string, values []interface{}, toupdate map[string]interface{}) error {
+	var tx *gorm.DB
+	var ok bool
+	if i == nil {
+		tx = m.db
+	} else {
+		tx, ok = i.(*gorm.DB)
+		if !ok {
+			return errors.New("not a gorm database object")
+		}
 	}
-	txr := tx.Table(table).Where(cond, values...).Updates(toupdate)
+	txr := tx.Model(model).Where(cond, values...).Updates(toupdate)
 	return txr.Error
 }

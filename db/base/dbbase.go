@@ -34,7 +34,7 @@ type CRUD interface {
 	TxRead_All_Cond(any, any, []any) ([]any, error)
 	TxUpdate(any, any) error
 	TxDelete(any, any) error
-	TxUpdateBatch(any, string, string, []interface{}, map[string]interface{}) error
+	TxUpdateBatch(any, any, string, []interface{}, map[string]interface{}) error
 	TxSelectForUpdate(any, string, []interface{}) ([]any, error)
 }
 

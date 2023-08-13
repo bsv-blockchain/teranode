@@ -135,6 +135,7 @@ func TestAddUniqueBlock(t *testing.T) {
 		e, ok := err.(sqlerr.Error)
 		if ok {
 			fmt.Printf("expected sql error: %d\n", e.ExtendedCode)
+			fmt.Printf("expcected error: %s\n", e.Error())
 		}
 	} else {
 		t.Fatal("Expected a fail instead of pass")

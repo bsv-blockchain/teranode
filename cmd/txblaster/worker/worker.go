@@ -169,11 +169,10 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
-		logger.Errorf("error getting utxos from coinbase %+v", err)
+		logger.Errorf("error getting utxos from coinbase %s", err.Error())
 		// TODO: don't panic! just retry
 		panic("error getting Utxos from coinbaseTracker")
 	}
-	logger.Debugf("received utxos %+v", utxos)
 
 	script, err := bscript.NewP2PKHFromPubKeyBytes(w.privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
@@ -184,8 +183,14 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	var totalSatoshis uint64
 	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
-	for _, utxo := range utxos {
-		logger.Debugf("utxo  txid: %s", hex.EncodeToString(utxo.TxId))
+	for i, utxo := range utxos {
+		logger.Debugf("<utxo:%d> txid: %s vout: %d satoshis: %d script: %s",
+			i,
+			hex.EncodeToString(utxo.TxId),
+			utxo.Vout,
+			utxo.Satoshis,
+			hex.EncodeToString(utxo.Script),
+		)
 		if utxo.Satoshis == 0 {
 			continue
 		}
