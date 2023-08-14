@@ -5,7 +5,7 @@ go 1.20
 replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.4
 
 require (
-	cloud.google.com/go/storage v1.30.1
+	cloud.google.com/go/storage v1.31.0
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go/v6 v6.12.0
