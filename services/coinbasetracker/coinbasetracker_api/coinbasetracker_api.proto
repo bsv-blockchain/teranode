@@ -10,7 +10,7 @@ import "google/protobuf/empty.proto";
 service CoinbasetrackerAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc GetUtxos (GetUtxoRequest) returns (GetUtxoResponse) {}
+  rpc GetUtxo (GetUtxoRequest) returns (Utxo) {}
   rpc SubmitTransaction (SubmitTransactionRequest) returns (google.protobuf.Empty) {}
 }
 
@@ -24,12 +24,6 @@ message HealthResponse {
 // swagger:model GetUtxoRequest
 message GetUtxoRequest {
   string address = 1;
-  uint64 amount = 2;
-}
-
-// swagger:model GetUtxoResponse
-message GetUtxoResponse {
-  repeated Utxo utxos = 1;
 }
 
 message Utxo {

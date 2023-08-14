@@ -9,16 +9,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TAAL-GmbH/ubsv/db"
+	"github.com/TAAL-GmbH/ubsv/db/base"
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	networkModel "github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
 	"github.com/TAAL-GmbH/ubsv/util"
+
+	//"golang.org/x/time/rate"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/go-utils/lockfree"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -34,6 +39,11 @@ type CoinbaseTrackerServer struct {
 	coinbaseTracker  *CoinbaseTracker
 	testnet          bool
 	running          bool
+}
+
+type BlockUtxo struct {
+	block *model.Block
+	utxos []*model.UTXO
 }
 
 func Enabled() bool {
@@ -85,6 +95,47 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 	var resp *blobserver_api.Notification
 	var hash *chainhash.Hash
 
+	// DevNote: subscription and grpc routines each should use its own
+	// unique db connection. The subscription routine must not
+	// call the grpc connection via the tracker instance.
+	qu := lockfree.NewQueue[*BlockUtxo]()
+
+	go func(q *lockfree.Queue[*BlockUtxo]) {
+		store, ok := gocore.Config().Get("coinbasetracker_store")
+		if !ok {
+			u.logger.Warnf("coinbasetracker_store is not set. Using sqlite.")
+			store = "sqlite"
+		}
+
+		store_config, ok := gocore.Config().Get("coinbasetracker_store_config")
+		if !ok {
+			u.logger.Warnf("coinbasetracker_store_config is not set. Using sqlite in-mem.")
+			store_config = "file::memory:?cache=shared"
+		}
+		dbm := db.Create(store, store_config)
+		blockutxos := []*BlockUtxo{}
+
+		for {
+			t := time.NewTimer(250 * time.Millisecond)
+			<-t.C
+			for {
+				bu, _ := q.DequeueAsType()
+				if bu == nil {
+					break
+				}
+				blockutxos = append(blockutxos, bu)
+			}
+			if len(blockutxos) == 0 {
+				continue
+			}
+			err := addBlockUtxos(dbm, u.logger, blockutxos)
+			if err != nil {
+				u.logger.Errorf("failed to add blocks: %s", err.Error())
+			}
+			blockutxos = []*BlockUtxo{}
+		}
+	}(qu)
+
 	go func() {
 		<-ctx.Done()
 		u.logger.Infof("[CoinbaseTracker] context done, closing client")
@@ -96,7 +147,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 	}()
 
 	u.running = true
-	go func() {
+	go func(q *lockfree.Queue[*BlockUtxo]) {
 		for u.running {
 			u.logger.Infof("starting new subscription to blobserver: %v", blobserverAddr)
 			stream, err = blobServerClient.Subscribe(ctx, &blobserver_api.SubscribeRequest{
@@ -110,7 +161,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 
 			var b []byte
 			var newBlock *networkModel.Block
-			var bestBlock *model.Block
+			//var bestBlockDB *model.Block
 			var newBlockHeight uint32
 			for u.running {
 				resp, err = stream.Recv()
@@ -129,7 +180,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 						u.logger.Errorf("could not create hash from bytes", "err", err)
 						continue
 					}
-					u.logger.Debugf("Received BLOCK notification: %s", hash.String())
+					u.logger.Debugf("\U0001F532 Received BLOCK notification: %s", hash.String())
 					// get the block
 					b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
 					if err != nil {
@@ -138,82 +189,133 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 					newBlock, err = networkModel.NewBlockFromBytes(b)
 					if err != nil {
 						u.logger.Errorf("could not get block from network %+v", err)
-						break
+						continue
 					}
-					// get the best block from the db.
-					// if the block is not the best block, then we need to fill in the gaps
-					bestBlock, err = u.coinbaseTracker.GetBestBlockFromDb(ctx)
-					if err != nil {
-						u.logger.Infof("No best block in db %+v", err)
+
+					if err == nil {
 						// add the block to the db
 						newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
 						if err != nil {
 							u.logger.Errorf("could not extract block height", err)
-							break
+							continue
+						}
+						blockutxo := &BlockUtxo{
+							block: &model.Block{
+								Height:        uint64(newBlockHeight),
+								BlockHash:     newBlock.Hash().String(),
+								PrevBlockHash: newBlock.Header.HashPrevBlock.String(),
+							},
 						}
 
-						err = u.coinbaseTracker.AddBlock(ctx, &model.Block{
-							Height:        uint64(newBlockHeight),
-							BlockHash:     newBlock.Hash().String(),
-							PrevBlockHash: newBlock.Header.HashPrevBlock.String(),
-						})
-						if err != nil {
-							u.logger.Errorf("could not add block to db %+v", err)
-							break
+						for i, o := range newBlock.CoinbaseTx.Outputs {
+							addr, err := o.LockingScript.Addresses()
+							if err != nil {
+								u.logger.Errorf("could not get address from script %s", err.Error())
+								panic("could not get address from script")
+							}
+							blockutxo.utxos = append(blockutxo.utxos,
+								&model.UTXO{
+									BlockHash:     newBlock.Hash().String(),
+									Txid:          newBlock.CoinbaseTx.TxID(),
+									Vout:          uint32(i),
+									LockingScript: o.LockingScript.String(),
+									Satoshis:      o.Satoshis,
+									Address:       addr[0],
+								},
+							)
 						}
-						// add coinbase utxos
-						u.saveCoinbaseUtxos(ctx, newBlock)
-
-						break
+						q.Enqueue(blockutxo)
+						continue
 					}
 
 					// if the block is not the best block, then we need to fill in the gaps
-					if newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
-						newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
-						if err != nil {
-							u.logger.Errorf("could not extract block height", err)
-							break
-						}
-						missingBlocks := make([]*networkModel.Block, 0, newBlockHeight-uint32(bestBlock.Height))
-						missingBlocks = append(missingBlocks, newBlock)
-						// get the previous block until the previous block hash is equal to the bestBlock hash
-						for newBlock.Header.HashPrevBlock.String() != bestBlock.BlockHash {
-							b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
-							if err != nil {
-								continue
-							}
-							newBlock, err = networkModel.NewBlockFromBytes(b)
-							if err != nil {
-								u.logger.Errorf("could not get block from network %+v", err)
-								break
-							}
-							missingBlocks = append(missingBlocks, newBlock)
-						}
-						// add the blocks to the db
-						var height uint32
-						for _, block := range missingBlocks {
-							height, err = block.ExtractCoinbaseHeight()
-							if err != nil {
-								u.logger.Errorf("could not extract block height", err)
-								break
-							}
-							err = u.coinbaseTracker.AddBlock(ctx, &model.Block{
-								Height:        uint64(height),
-								BlockHash:     block.Hash().String(),
-								PrevBlockHash: block.Header.HashPrevBlock.String(),
-							})
-							if err != nil {
-								u.logger.Errorf("could not add block to db %+v", err)
-								break
-							}
-							// add coinbase utxos
-							u.saveCoinbaseUtxos(ctx, block)
-						}
-					}
+					// if newBlock.Header.HashPrevBlock.String() != bestBlockDB.BlockHash {
+					// 	newBlockHeight, err = newBlock.ExtractCoinbaseHeight()
+					// 	if err != nil {
+					// 		u.logger.Errorf("could not extract block height", err)
+					// 		break
+					// 	}
+					// 	missingBlocks := make([]*networkModel.Block, 0, newBlockHeight-uint32(bestBlockDB.Height))
+					// 	missingBlocks = append(missingBlocks, newBlock)
+					// 	// get the previous block until the previous block hash is equal to the bestBlock hash
+					// 	genesisHash := chainhash.Hash{}
+					// 	for newBlock.Header.HashPrevBlock.String() != bestBlockDB.BlockHash {
+					// 		if newBlock.Header.HashPrevBlock.String() == genesisHash.String() {
+					// 			//reached genesis block
+					// 			break
+					// 		}
+					// 		b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
+					// 		if err != nil {
+					// 			continue
+					// 		}
+					// 		newBlock, err = networkModel.NewBlockFromBytes(b)
+					// 		if err != nil {
+					// 			u.logger.Errorf("could not get block from network %+v", err)
+					// 			break
+					// 		}
+					// 		missingBlocks = append(missingBlocks, newBlock)
+					// 	}
+					// 	// add the blocks to the db
+					// 	var height uint32
+					// 	// make this operaton a lower priority by rate limiting it to 250ms
+					// 	limiter := rate.NewLimiter(rate.Every(1*time.Second/4), 5)
+					// 	for _, block := range missingBlocks {
+					// 		height, err = block.ExtractCoinbaseHeight()
+					// 		if err != nil {
+					// 			u.logger.Errorf("could not extract block height", err)
+					// 			break
+					// 		}
+					// 		u.logger.Debugf("catchup> best block from network hash: %s has %d tx", block.Hash().String(), block.TransactionCount)
+					// 		limiter.Wait(context.Background())
+					// 		err = AddBlock(dbm, u.logger,
+					// 			&model.Block{
+					// 				Height:        uint64(height),
+					// 				BlockHash:     block.Hash().String(),
+					// 				PrevBlockHash: block.Header.HashPrevBlock.String(),
+					// 			})
+					// 		if err != nil {
+					// 			e, ok := err.(sqlerr.Error)
+					// 			if ok {
+					// 				switch e.ExtendedCode {
+					// 				case 1555:
+					// 					u.logger.Warnf("unique contraint on add block with hash %s: %s - code %d\n",
+					// 						block.Hash().String(),
+					// 						e.Error(),
+					// 						e.ExtendedCode,
+					// 					)
+					// 				case 2067:
+					// 					u.logger.Warnf("unique contraint on add block with hash %s: %s - code %d\n",
+					// 						block.Hash().String(),
+					// 						e.Error(),
+					// 						e.ExtendedCode,
+					// 					)
+					// 				case 5:
+					// 					u.logger.Errorf("failed to add block with hash %s: %s - code %d\n",
+					// 						block.Hash().String(),
+					// 						e.Error(),
+					// 						e.ExtendedCode,
+					// 					)
+					// 				default:
+					// 					u.logger.Errorf("failed to add block with hash %s: %s - code %d\n",
+					// 						block.Hash().String(),
+					// 						e.Error(),
+					// 						e.ExtendedCode,
+					// 					)
+					// 				}
+					// 			} else {
+					// 				u.logger.Errorf("could not add block to db %+v", err)
+					// 			}
+					// 			break
+					// 		}
+					// 		u.logger.Debugf("Added catchup BLOCK with height: %d | hash: %s", newBlockHeight, newBlock.Hash().String())
+					// 		// add coinbase utxos
+					// 		SaveCoinbaseUtxos(dbm, u.logger, block)
+					// 	}
+					// }
 				}
 			}
 		}
-	}()
+	}(qu)
 
 	// this will block
 	if err = util.StartGRPCServer(ctx, u.logger, "coinbasetracker", func(server *grpc.Server) {
@@ -223,27 +325,6 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock *networkModel.Block) {
-	for i, o := range newBlock.CoinbaseTx.Outputs {
-		addr, err := o.LockingScript.Addresses()
-		if err != nil {
-			u.logger.Errorf("could not get address from script %+v", err)
-			break
-		}
-		err = u.coinbaseTracker.AddUtxo(ctx, &model.UTXO{
-			Txid:          newBlock.CoinbaseTx.TxID(),
-			Vout:          uint32(i),
-			LockingScript: o.LockingScript.String(),
-			Satoshis:      o.Satoshis,
-			Address:       addr[0],
-		})
-		if err != nil {
-			u.logger.Errorf("could not add utxo to db %+v", err)
-			break
-		}
-	}
 }
 
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) error {
@@ -262,25 +343,19 @@ func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*co
 	}, nil
 }
 
-func (u *CoinbaseTrackerServer) GetUtxos(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
+func (u *CoinbaseTrackerServer) GetUtxo(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.Utxo, error) {
 
-	utxos, err := u.coinbaseTracker.GetUtxos(ctx, req.Address, req.Amount)
+	utxo, err := u.coinbaseTracker.GetUtxo(ctx, req.Address)
 	if err != nil {
 		return nil, err
 	}
 
-	respUtxos := make([]*coinbasetracker_api.Utxo, len(utxos))
-	for i, utxo := range utxos {
-		respUtxos[i] = &coinbasetracker_api.Utxo{
-			TxId:     utxo.TxID,
-			Vout:     utxo.Vout,
-			Script:   *utxo.LockingScript,
-			Satoshis: utxo.Satoshis,
-		}
-	}
-	resp := &coinbasetracker_api.GetUtxoResponse{}
-	resp.Utxos = respUtxos
-	return resp, nil
+	return &coinbasetracker_api.Utxo{
+		TxId:     utxo.TxID,
+		Vout:     utxo.Vout,
+		Script:   *utxo.LockingScript,
+		Satoshis: utxo.Satoshis,
+	}, nil
 }
 
 func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.SubmitTransactionRequest) (*emptypb.Empty, error) {
@@ -315,4 +390,18 @@ func doHTTPRequest(ctx context.Context, url string) ([]byte, error) {
 	}
 
 	return blockBytes, nil
+}
+
+func addBlockUtxos(dbm base.DbManager, log utils.Logger, blockutxos []*BlockUtxo) error {
+	blocks := []*model.Block{}
+	utxos := []*model.UTXO{}
+	for _, bu := range blockutxos {
+		blocks = append(blocks, bu.block)
+		utxos = append(utxos, bu.utxos...)
+	}
+	err := AddBlockUtxos(dbm, log, blocks, utxos)
+	if err != nil {
+		log.Errorf("error adding blocks and utxos: %s", err.Error())
+	}
+	return err
 }

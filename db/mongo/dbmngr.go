@@ -80,6 +80,10 @@ func (m *MongoManager) Connect(db_config string) error {
 	return nil
 }
 
+func (m *MongoManager) GetDB() any {
+	return m.dbclient
+}
+
 func (m *MongoManager) Disconnect() error {
 	if m != nil && m.dbclient != nil {
 		if err := m.dbclient.Disconnect(context.Background()); err != nil {
@@ -154,7 +158,7 @@ func (m *MongoManager) TxDelete(i any, model any) error {
 	return nil
 }
 
-func (m *MongoManager) TxUpdateBatch(i any, table string, cond string, values []interface{}, updates map[string]interface{}) error {
+func (m *MongoManager) TxUpdateBatch(i any, model any, cond string, values []interface{}, updates map[string]interface{}) error {
 	return nil
 }
 

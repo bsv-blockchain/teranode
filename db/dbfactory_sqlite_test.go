@@ -11,6 +11,7 @@ import (
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	sqlerr "github.com/mattn/go-sqlite3"
 	"github.com/ordishs/gocore"
 )
 
@@ -24,7 +25,7 @@ func equalUtxos(a, b model.UTXO) bool {
 		a.LockingScript == b.LockingScript &&
 		a.Satoshis == b.Satoshis &&
 		a.Address == b.Address &&
-		a.Spent == b.Spent
+		a.Status == b.Status
 }
 
 func TestConnect(t *testing.T) {
@@ -85,6 +86,60 @@ func TestAddBlock(t *testing.T) {
 	err := mgr.Create(m)
 	if err != nil {
 		t.Fatalf("Create failed: %s", err.Error())
+	}
+
+	err = mgr.Disconnect()
+	if err != nil {
+		t.Fatalf("Cannot disconnect sqlite database instance %s | %s: %s", store, store_config, err)
+	}
+}
+
+func TestAddUniqueBlock(t *testing.T) {
+	store, ok := gocore.Config().Get("coinbasetracker_store")
+	if !ok {
+		fmt.Println("coinbasetracker_store is not set. Using sqlite.")
+		store = "sqlite"
+	}
+
+	store_config, ok := gocore.Config().Get("coinbasetracker_store_config")
+	if !ok {
+		fmt.Println("coinbasetracker_store_config is not set. Using sqlite in-mem.")
+		store_config = "file::memory:?cache=shared"
+	}
+
+	mgr := Create(store, store_config)
+	if mgr == nil {
+		t.Fatalf("Cannot create sqlite database instance with %s | %s", store, store_config)
+	}
+
+	tn1bin := make([]byte, 32)
+	_, _ = rand.Read(tn1bin)
+	hash1, _ := chainhash.NewHash(tn1bin)
+	tn2bin := make([]byte, 32)
+	_, _ = rand.Read(tn2bin)
+	hash2, _ := chainhash.NewHash(tn2bin)
+
+	m := &model.Block{
+		Height:        uint64(mrand.Uint32()) + 1,
+		BlockHash:     hash2.String(),
+		PrevBlockHash: hash1.String(),
+	}
+
+	err := mgr.Create(m)
+	if err != nil {
+		t.Fatalf("Create failed: %s", err.Error())
+	}
+
+	err = mgr.Create(m)
+	if err != nil {
+		e, ok := err.(sqlerr.Error)
+		if ok {
+			fmt.Printf("expected sql error: %d\n", e.ExtendedCode)
+			fmt.Printf("expcected error: %s\n", e.Error())
+		}
+	} else {
+		t.Fatal("Expected a fail instead of pass")
+
 	}
 
 	err = mgr.Disconnect()
@@ -269,7 +324,7 @@ func TestAddUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m)
@@ -323,7 +378,7 @@ func TestAddReadUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)
@@ -375,7 +430,7 @@ func TestModelUtxo(t *testing.T) {
 		LockingScript: script1.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr1.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	pk2, _ := bec.NewPrivateKey(bec.S256())
@@ -396,7 +451,7 @@ func TestModelUtxo(t *testing.T) {
 		LockingScript: script2.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr2.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	if m1.Equal(m2) {
@@ -460,7 +515,7 @@ func TestAddReadCondUtxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)
@@ -532,7 +587,7 @@ func TestAddReadCond1Utxo(t *testing.T) {
 		LockingScript: script.String(),
 		Satoshis:      uint64(mrand.Uint32()) + 1,
 		Address:       addr.AddressString,
-		Spent:         mrand.Int31n(2) > 0,
+		Status:        model.UtxoStatus(mrand.Intn(4)),
 	}
 
 	err = mgr.Create(m1)

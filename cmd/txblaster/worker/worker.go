@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -145,7 +147,11 @@ func NewWorker(
 	}, nil
 }
 
-func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
+
+func (w *Worker) Start(ctx context.Context) error {
+	b := make([]byte, 64)
+	crand.Read(b)
+	id := binary.BigEndian.Uint64(b) ^ uint64(time.Now().Nanosecond())
 
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
@@ -201,13 +207,12 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		return nil, fmt.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
 	}
 	w.coinbaseTrackerClient = coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-	w.logger.Debugf("coinbaseAddr: %s", w.address)
+	w.logger.Debugf("[%d] coinbaseAddr: %s", id, w.address)
 
-	utxos, err := w.getUtxosFromCoinbaseTracker(50)
+	utxo, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
 		return nil, fmt.Errorf("error getting Utxos from coinbaseTracker: %v", err)
 	}
-	w.logger.Debugf("received utxos %+v", utxos)
 
 	script, err := bscript.NewP2PKHFromPubKeyBytes(w.privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
@@ -215,76 +220,68 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		return nil, fmt.Errorf("failed to create private key from pub key: %v", err)
 	}
 
-	var totalSatoshis uint64
-	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
-	for _, utxo := range utxos {
-		if utxo.Satoshis == 0 {
-			continue
-		}
-		if utxo.Satoshis > w.satoshisPerOutput {
-			//  if utxo amount  > satoshisPerOutput divide it into multiple outputs
-			// 1. we get 500000000 satoshis from coinbase
-			// 2. numberOfOutputs is 100. This number should override the satoshisPerOuptut
-			// 3. we divide 500000000 / 100 = 5000000
-			// if numberOfOutputs is 10
-			// and satoshisPerOuptut is 10
-			// and we have 15 satoshis in the utxo
-			// we want 1 output of 10 and change of 5
+	//	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
+	w.logger.Debugf("txid: %s vout: %d satoshis: %d script: %s",
+		hex.EncodeToString(utxo.TxId),
+		utxo.Vout,
+		utxo.Satoshis,
+		hex.EncodeToString(utxo.Script))
 
-			actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
-			go func(numberOfOutputs int, txId []byte) {
+	if utxo.Satoshis > w.satoshisPerOutput {
+		//  if utxo amount  > satoshisPerOutput divide it into multiple outputs
+		// 1. we get 500000000 satoshis from coinbase
+		// 2. numberOfOutputs is 100. This number should override the satoshisPerOuptut
+		// 3. we divide 500000000 / 100 = 5000000
+		// if numberOfOutputs is 10
+		// and satoshisPerOuptut is 10
+		// and we have 15 satoshis in the utxo
+		// we want 1 output of 10 and change of 5
 
-				w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-				for i := 0; i < numberOfOutputs; i++ {
+		actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
+		go func(numberOfOutputs int, txId []byte) {
 
-					u := &bt.UTXO{
-						TxID:          bt.ReverseBytes(txId),
-						Vout:          uint32(i),
-						LockingScript: script,
-						Satoshis:      w.satoshisPerOutput,
-					}
+			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
+			for idx := 0; idx < numberOfOutputs; idx++ {
 
-					w.utxoChan <- u
-				}
-				if change > 0 {
-					u := &bt.UTXO{
-						TxID:          bt.ReverseBytes(txId),
-						Vout:          uint32(numberOfOutputs),
-						LockingScript: script,
-						Satoshis:      change,
-					}
-
-					w.utxoChan <- u
+				u := &bt.UTXO{
+					TxID:          bt.ReverseBytes(txId),
+					Vout:          uint32(idx),
+					LockingScript: script,
+					Satoshis:      w.satoshisPerOutput,
 				}
 
-			}(int(actualOutputs), utxo.TxId)
-
-			// 4. we send 100 outputs of 5000000 satoshis each
-		} else if utxo.Satoshis == w.satoshisPerOutput {
-			// if utxo amount == satoshisPerOutput send it directly
-			go func(numberOfOutputs int, txId []byte) {
-				w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-				for i := 0; i < numberOfOutputs; i++ {
-
-					u := &bt.UTXO{
-						TxID:          bt.ReverseBytes(txId),
-						Vout:          uint32(i),
-						LockingScript: script,
-						Satoshis:      w.satoshisPerOutput,
-					}
-
-					w.utxoChan <- u
+				w.utxoChan <- u
+			}
+			if change > 0 {
+				u := &bt.UTXO{
+					TxID:          bt.ReverseBytes(txId),
+					Vout:          uint32(numberOfOutputs),
+					LockingScript: script,
+					Satoshis:      change,
 				}
-			}(w.numberOfOutputs, utxo.TxId)
 
-		} else if utxo.Satoshis < w.satoshisPerOutput {
-			// if utxo amout < satoshisPerOutput add it to the next utxo
-			totalSatoshis += utxo.Satoshis
-			inputUtxos = append(inputUtxos, utxo)
-			// TODO: implememt this case
-			_ = inputUtxos
-			continue
-		}
+				w.utxoChan <- u
+			}
+
+		}(int(actualOutputs), utxo.TxId)
+
+		// 4. we send 100 outputs of 5000000 satoshis each
+	} else if utxo.Satoshis == w.satoshisPerOutput {
+		// if utxo amount == satoshisPerOutput send it directly
+		go func(numberOfOutputs int, txId []byte) {
+			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
+			for i := 0; i < numberOfOutputs; i++ {
+
+				u := &bt.UTXO{
+					TxID:          bt.ReverseBytes(txId),
+					Vout:          uint32(i),
+					LockingScript: script,
+					Satoshis:      w.satoshisPerOutput,
+				}
+
+				w.utxoChan <- u
+			}
+		}(w.numberOfOutputs, utxo.TxId)
 
 	}
 	return keySet, nil
@@ -391,14 +388,13 @@ func (w *Worker) calculateOutputs(utxoSats uint64) (uint64, uint64) {
 	return actualOutputs, change
 }
 
-func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) ([]*coinbasetracker_api.Utxo, error) {
+func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) (*coinbasetracker_api.Utxo, error) {
 	ctx := context.Background()
-	var resp *coinbasetracker_api.GetUtxoResponse
+	var resp *coinbasetracker_api.Utxo
 	var err error
 	for i := 0; i < 10; i++ {
-		resp, err = w.coinbaseTrackerClient.GetUtxos(ctx, &coinbasetracker_api.GetUtxoRequest{
+		resp, err = w.coinbaseTrackerClient.GetUtxo(ctx, &coinbasetracker_api.GetUtxoRequest{
 			Address: w.address,
-			Amount:  amount,
 		})
 		if err == nil {
 			break
@@ -408,14 +404,11 @@ func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) ([]*coinbasetracker_
 		w.logger.Debugf("retrying GetUtxos %d time", i+1)
 	}
 
-	if resp == nil || resp.Utxos == nil {
+	if resp == nil {
 		return nil, fmt.Errorf("no utxos received from coinbasetracker")
 	}
 
-	utxos := make([]*coinbasetracker_api.Utxo, 0)
-	utxos = append(utxos, resp.Utxos...)
-
-	return utxos, nil
+	return resp, nil
 }
 
 func (w *Worker) fireTransactions(ctx context.Context, u *bt.UTXO, keySet *extra.KeySet) error {
@@ -468,6 +461,8 @@ func (w *Worker) fireTransactions(ctx context.Context, u *bt.UTXO, keySet *extra
 	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
+	// logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
 	w.utxoChan <- &bt.UTXO{
 		TxID:          tx.TxIDBytes(),
