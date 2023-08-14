@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -13,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -53,7 +53,8 @@ var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 func init() {
 	gocore.SetInfo(progname, version, commit)
 
-	logger = gocore.Log("work", gocore.NewLogLevelFromString("DEBUG"))
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger = gocore.Log("txblast", gocore.NewLogLevelFromString(logLevelStr))
 
 	var found bool
 	coinbasePrivKey, found = gocore.Config().Get("coinbase_wallet_privkey")
@@ -245,22 +246,29 @@ func main() {
 	}
 
 	for i := 0; i < *workers; i++ {
-		w := worker.NewWorker(
-			numberOfOutputs,
-			uint32(numberOfTransactions),
-			uint64(satoshisPerOutput),
-			coinbasePrivKey,
-			rateLimiter,
-			propagationServers,
-			kafkaProducer,
-			kafkaTopic,
-			ipv6MulticastConn,
-			ipv6MulticastChan,
-			printProgress,
-			logIdsFile,
-		)
-
+		i := i
 		g.Go(func() error {
+			logLevelStr, _ := gocore.Config().Get("logLevel", "INFO")
+			workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
+			w, err := worker.NewWorker(
+				workerLogger,
+				numberOfOutputs,
+				numberOfTransactions,
+				uint64(satoshisPerOutput),
+				coinbasePrivKey,
+				rateLimiter,
+				propagationServers,
+				kafkaProducer,
+				kafkaTopic,
+				ipv6MulticastConn,
+				ipv6MulticastChan,
+				printProgress,
+				logIdsFile,
+			)
+			if err != nil {
+				return err
+			}
+
 			// (ok) return w.Start(ctx)
 			return w.Start(context.Background())
 		})
@@ -273,7 +281,6 @@ func main() {
 	}))
 
 	if err := g.Wait(); err != nil {
-		log.Fatalf("Error occurred in tx blaster: %v\n%s", err, debug.Stack())
-		panic(err)
+		logger.Errorf("error occurred in tx blaster: %v", err)
 	}
 }

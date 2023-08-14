@@ -32,7 +32,6 @@ var (
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
 	prometheusTransactionErrors     *prometheus.CounterVec
-	logger                          = gocore.Log("worker", gocore.NewLogLevelFromString("DEBUG"))
 )
 
 func init() {
@@ -80,6 +79,7 @@ type Ipv6MulticastMsg struct {
 }
 
 type Worker struct {
+	logger                utils.Logger
 	utxoChan              chan *bt.UTXO
 	startTime             time.Time
 	numberOfOutputs       int
@@ -99,6 +99,7 @@ type Worker struct {
 }
 
 func NewWorker(
+	logger utils.Logger,
 	numberOfOutputs int,
 	numberOfTransactions uint32,
 	satoshisPerOutput uint64,
@@ -111,19 +112,20 @@ func NewWorker(
 	ipv6MulticastChan chan Ipv6MulticastMsg,
 	printProgress uint64,
 	logIdsCh chan string,
-) *Worker {
+) (*Worker, error) {
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
-		panic("can't decode coinbase priv key")
+		return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
 	}
-	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
 
+	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
 	return &Worker{
+		logger:               logger,
 		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
 		numberOfOutputs:      numberOfOutputs,
 		numberOfTransactions: numberOfTransactions,
@@ -138,7 +140,7 @@ func NewWorker(
 		ipv6MulticastChan:    ipv6MulticastChan,
 		printProgress:        printProgress,
 		logIdsCh:             logIdsCh,
-	}
+	}, nil
 }
 
 func (w *Worker) Start(ctx context.Context) error {
@@ -155,28 +157,26 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	coinbaseTrackerAddr, ok := gocore.Config().Get("coinbasetracker_grpcAddress")
 	if !ok {
-		panic("no coinbasetracker_grpcAddress setting found")
+		return fmt.Errorf("no coinbasetracker_grpcAddress setting found")
 	}
 
 	conn, err := utils.GetGRPCClient(ctx, coinbaseTrackerAddr, &utils.ConnectionOptions{})
 	if err != nil {
-		logger.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
-		panic("error creating connection for coinbaseTracker")
+		return fmt.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
 	}
 	w.coinbaseTrackerClient = coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-	logger.Debugf("coinbaseAddr: %s", w.address)
+	w.logger.Debugf("coinbaseAddr: %s", w.address)
 
 	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
-		panic("error getting Utxos from coinbaseTracker")
+		return fmt.Errorf("error getting Utxos from coinbaseTracker: %v", err)
 	}
-	logger.Debugf("received utxos %+v", utxos)
+	w.logger.Debugf("received utxos %+v", utxos)
 
 	script, err := bscript.NewP2PKHFromPubKeyBytes(w.privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		logger.Errorf("Failed to create private key from pub key: %v", err)
-		panic(err)
+		return fmt.Errorf("failed to create private key from pub key: %v", err)
 	}
 
 	var totalSatoshis uint64
@@ -198,7 +198,7 @@ func (w *Worker) Start(ctx context.Context) error {
 			actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
 			go func(numberOfOutputs int, txId []byte) {
 
-				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+				w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 				for i := 0; i < numberOfOutputs; i++ {
 
 					u := &bt.UTXO{
@@ -227,7 +227,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		} else if utxo.Satoshis == w.satoshisPerOutput {
 			// if utxo amount == satoshisPerOutput send it directly
 			go func(numberOfOutputs int, txId []byte) {
-				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+				w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 				for i := 0; i < numberOfOutputs; i++ {
 
 					u := &bt.UTXO{
@@ -303,7 +303,7 @@ func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) ([]*coinbasetracker_
 		}
 		t := time.NewTimer(time.Second * 1)
 		<-t.C
-		logger.Debugf("retrying GetUtxos %d time", i+1)
+		w.logger.Debugf("retrying GetUtxos %d time", i+1)
 	}
 
 	if resp == nil || resp.Utxos == nil {
