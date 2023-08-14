@@ -141,7 +141,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/fgprof v0.9.3 // indirect
 	github.com/getkin/kin-openapi v0.103.0 // indirect
-	github.com/getsentry/sentry-go v0.20.0
+	github.com/getsentry/sentry-go v0.23.0
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
 	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
