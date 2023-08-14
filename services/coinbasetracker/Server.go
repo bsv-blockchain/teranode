@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	networkModel "github.com/TAAL-GmbH/ubsv/model"
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
+	"github.com/TAAL-GmbH/ubsv/util"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -33,6 +33,7 @@ type CoinbaseTrackerServer struct {
 	blockchainClient blockchain.ClientI
 	coinbaseTracker  *CoinbaseTracker
 	testnet          bool
+	running          bool
 }
 
 func Enabled() bool {
@@ -63,35 +64,6 @@ func (u *CoinbaseTrackerServer) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
-
-	address, ok := gocore.Config().Get("coinbasetracker_grpcAddress")
-	if !ok {
-		return errors.New("no coinbasetracker_grpcAddress setting found")
-	}
-
-	var err error
-	u.grpcServer, err = utils.GetGRPCServer(&utils.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
-	gocore.SetAddress(address)
-
-	lis, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
-	}
-
-	coinbasetracker_api.RegisterCoinbasetrackerAPIServer(u.grpcServer, u)
-
-	// Register reflection service on gRPC server.
-	reflection.Register(u.grpcServer)
-
-	u.logger.Infof("coinbaseTracker GRPC service listening on %s", address)
-
 	// get best block from node
 	// get best block from db
 	// if different fill in the gaps
@@ -114,8 +86,18 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 	var hash *chainhash.Hash
 
 	go func() {
+		<-ctx.Done()
+		u.logger.Infof("[CoinbaseTracker] context done, closing client")
+		u.running = false
+		err = conn.Close()
+		if err != nil {
+			u.logger.Errorf("[CoinbaseTracker] failed to close connection", err)
+		}
+	}()
 
-		for {
+	u.running = true
+	go func() {
+		for u.running {
 			u.logger.Infof("starting new subscription to blobserver: %v", blobserverAddr)
 			stream, err = blobServerClient.Subscribe(ctx, &blobserver_api.SubscribeRequest{
 				Source: "coinbaseTracker",
@@ -130,10 +112,12 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 			var newBlock *networkModel.Block
 			var bestBlock *model.Block
 			var newBlockHeight uint32
-			for {
+			for u.running {
 				resp, err = stream.Recv()
 				if err != nil {
-					u.logger.Errorf("could not receive from blobserver: %v", err)
+					if !strings.Contains(err.Error(), context.Canceled.Error()) {
+						u.logger.Errorf("could not receive from blobserver: %v", err)
+					}
 					_ = stream.CloseSend()
 					time.Sleep(10 * time.Second)
 					break
@@ -231,8 +215,11 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 		}
 	}()
 
-	if err = u.grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("GRPC server failed [%w]", err)
+	// this will block
+	if err = util.StartGRPCServer(ctx, u.logger, "coinbasetracker", func(server *grpc.Server) {
+		coinbasetracker_api.RegisterCoinbasetrackerAPIServer(server, u)
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -262,8 +249,8 @@ func (u *CoinbaseTrackerServer) saveCoinbaseUtxos(ctx context.Context, newBlock 
 func (u *CoinbaseTrackerServer) Stop(ctx context.Context) error {
 	_, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	_ = u.coinbaseTracker.Stop()
-	u.grpcServer.GracefulStop()
 
 	return nil
 }
