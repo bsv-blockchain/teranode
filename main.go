@@ -28,9 +28,9 @@ import (
 	"github.com/TAAL-GmbH/ubsv/stores/blob"
 	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
 	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/TAAL-GmbH/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/servicemanager"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
