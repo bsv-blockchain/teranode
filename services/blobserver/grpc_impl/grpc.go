@@ -184,7 +184,15 @@ func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_ap
 		done:         ch,
 	}
 
-	<-ch
-
-	return nil
+	for {
+		select {
+		case <-sub.Context().Done():
+			// Client disconnected.
+			g.logger.Infof("[BlobServer] GRPC client disconnected: %s", req.Source)
+			return nil
+		case <-ch:
+			// Subscription ended.
+			return nil
+		}
+	}
 }
