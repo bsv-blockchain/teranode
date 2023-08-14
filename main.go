@@ -181,10 +181,7 @@ func main() {
 		defer closer.Close()
 	}
 
-	sm := servicemanager.NewServiceManager()
-
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
+	sm, ctx := servicemanager.NewServiceManager()
 
 	// blockchain service needs to start first !
 	if startBlockchain {
@@ -212,7 +209,7 @@ func main() {
 		if !found {
 			panic("no utxostore setting found")
 		}
-		utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxostoreURL)
+		utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxostoreURL, "main")
 		if err != nil {
 			panic(err)
 		}
@@ -399,12 +396,9 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err = sm.StartAllAndWait(ctx); err != nil {
+	if err = sm.StartAllAndWait(); err != nil {
 		logger.Errorf("failed to start all services: %v", err)
 	}
-
-	// cancel everything that is listening to the root context
-	cancelCtx()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
@@ -414,21 +408,14 @@ func main() {
 	//
 
 	if txStore != nil {
+		logger.Debugf("closing tx store")
 		_ = txStore.Close(shutdownCtx)
 	}
 
 	if subtreeStore != nil {
+		logger.Debugf("closing subtree store")
 		_ = subtreeStore.Close(shutdownCtx)
 	}
-
-	logger.Info("\U0001f6d1 All services stopped.")
-	// wait for clean shutdown for 5 seconds, otherwise force exit
-	go func() {
-		// Wait for 5 seconds and then force exit...
-		<-time.NewTimer(time.Second * 5).C
-		os.Exit(3)
-	}()
-
 }
 
 func shouldStart(app string) bool {

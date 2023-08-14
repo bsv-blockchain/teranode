@@ -91,7 +91,7 @@ func (v *Server) Init(ctx context.Context) error {
 	}
 
 	// TODO online it seems the Seeder keeps connecting to aerospike
-	v.utxoStore, err = utxo.NewStore(ctx, v.logger, utxostoreURL)
+	v.utxoStore, err = utxo.NewStore(ctx, v.logger, utxostoreURL, "Seeder")
 	if err != nil {
 		return fmt.Errorf("could not create utxo store [%w]", err)
 	}

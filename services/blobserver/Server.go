@@ -146,7 +146,7 @@ func (v *Server) Start(ctx context.Context) error {
 
 	if v.httpServer != nil {
 		g.Go(func() error {
-			return v.httpServer.Start(v.httpAddr)
+			return v.httpServer.Start(ctx, v.httpAddr)
 		})
 
 	}
