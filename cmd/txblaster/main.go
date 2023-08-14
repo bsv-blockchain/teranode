@@ -73,6 +73,7 @@ func main() {
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
+	seeder := flag.Bool("seeder", false, "Whether to use the seeder")
 	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
 	ipv6Interface := flag.String("ipv6Interface", "en0", "IPv6 multicast interface - if applicable")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
@@ -269,8 +270,7 @@ func main() {
 				return err
 			}
 
-			// (ok) return w.Start(ctx)
-			return w.Start(context.Background())
+			return w.Start(ctx, *seeder)
 		})
 	}
 
