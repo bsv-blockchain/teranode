@@ -40,23 +40,6 @@ func (m *SqliteManager) Connect(db_config string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get absolute path for sqlite DB: %+v", err)
 		}
-
-		// uhdir, err := os.UserHomeDir()
-		// if err != nil {
-		// 	m.logger.Errorf("cannot find user home directory: %s", err.Error())
-		// 	return err
-		// }
-		// data_path := filepath.Join(uhdir, "data")
-		// if _, err := os.Stat(data_path); os.IsNotExist(err) {
-		// 	if err := os.Mkdir(data_path, 0755); os.IsExist(err) {
-		// 		dsn = filepath.Join(data_path, db_config)
-		// 	} else {
-		// 		m.logger.Errorf("cannot create data directory: %s", err.Error())
-		// 		dsn = db_config
-		// 	}
-		// } else {
-		// 	dsn = filepath.Join(data_path, db_config)
-		// }
 	}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -108,26 +91,26 @@ func (m *SqliteManager) Disconnect() error {
 	return nil
 }
 
-func (m *SqliteManager) Create(model any) error {
-	result := m.db.Create(model)
+func (m *SqliteManager) Create(ml any) error {
+	result := m.db.Create(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) Read(model any) error {
-	result := m.db.Last(model)
+func (m *SqliteManager) Read(ml any) error {
+	result := m.db.Last(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) Read_Cond(model any, cond []any) (any, error) {
-	result := m.db.Where(cond[0], cond[1:]...).Find(model)
+func (m *SqliteManager) Read_Cond(ml any, cond []any) (any, error) {
+	result := m.db.Where(cond[0], cond[1:]...).Find(ml)
 	return result.Statement.Dest, result.Error
 }
 
-func (m *SqliteManager) Read_All_Cond(model any, cond []any) ([]any, error) {
+func (m *SqliteManager) Read_All_Cond(ml any, cond []any) ([]any, error) {
 	batch_size := 100
 	payload := []any{}
 	result := m.db.Where(cond[0], cond[1:]...).
-		FindInBatches(model, batch_size,
+		FindInBatches(ml, batch_size,
 			func(tx *gorm.DB, batch int) error {
 				payload = append(payload, tx.Statement.Dest)
 				return nil
@@ -137,15 +120,15 @@ func (m *SqliteManager) Read_All_Cond(model any, cond []any) ([]any, error) {
 	return payload, result.Error
 }
 
-func (m *SqliteManager) Update(model any) error {
-	result := m.db.Save(model)
+func (m *SqliteManager) Update(ml any) error {
+	result := m.db.Save(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) Delete(model any) error {
-	gm, ok := model.(*gorm.Model)
+func (m *SqliteManager) Delete(ml any) error {
+	gm, ok := ml.(*gorm.Model)
 	if ok && gm != nil {
-		result := m.db.Delete(model, gm.ID)
+		result := m.db.Delete(ml, gm.ID)
 		return result.Error
 	}
 	return errors.New("not a gorm model based data structure")
@@ -192,7 +175,7 @@ func (m *SqliteManager) TxRollback(i any) error {
 	return nil
 }
 
-func (m *SqliteManager) TxUpdate(i any, model any) error {
+func (m *SqliteManager) TxUpdate(i any, ml any) error {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -203,11 +186,11 @@ func (m *SqliteManager) TxUpdate(i any, model any) error {
 			return errors.New("not a gorm database object")
 		}
 	}
-	result := tx.Save(model)
+	result := tx.Save(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) TxDelete(i any, model any) error {
+func (m *SqliteManager) TxDelete(i any, ml any) error {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -218,15 +201,15 @@ func (m *SqliteManager) TxDelete(i any, model any) error {
 			return errors.New("not a gorm database object")
 		}
 	}
-	gm, ok := model.(*gorm.Model)
+	gm, ok := ml.(*gorm.Model)
 	if ok && gm != nil {
-		result := tx.Delete(model, gm.ID)
+		result := tx.Delete(ml, gm.ID)
 		return result.Error
 	}
 	return errors.New("not a gorm model based data structure")
 }
 
-func (m *SqliteManager) TxCreate(i any, model any) error {
+func (m *SqliteManager) TxCreate(i any, ml any) error {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -237,11 +220,11 @@ func (m *SqliteManager) TxCreate(i any, model any) error {
 			return errors.New("not a gorm database object")
 		}
 	}
-	result := tx.Create(model)
+	result := tx.Create(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) TxRead(i any, model any) error {
+func (m *SqliteManager) TxRead(i any, ml any) error {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -252,11 +235,11 @@ func (m *SqliteManager) TxRead(i any, model any) error {
 			return errors.New("not a gorm database object")
 		}
 	}
-	result := tx.Last(model)
+	result := tx.Last(ml)
 	return result.Error
 }
 
-func (m *SqliteManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
+func (m *SqliteManager) TxRead_Cond(i any, ml any, cond []any) (any, error) {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -267,7 +250,7 @@ func (m *SqliteManager) TxRead_Cond(i any, model any, cond []any) (any, error) {
 			return nil, errors.New("not a gorm database object")
 		}
 	}
-	result := tx.Where(cond[0], cond[1:]...).Find(model)
+	result := tx.Where(cond[0], cond[1:]...).Find(ml)
 	return result.Statement.Dest, result.Error
 }
 
@@ -304,7 +287,7 @@ func (m *SqliteManager) TxSelectForUpdate(i any, stmt string, vals []interface{}
 	return payload, nil
 }
 
-func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, error) {
+func (m *SqliteManager) TxRead_All_Cond(i any, ml any, cond []any) ([]any, error) {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -316,11 +299,10 @@ func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, er
 		}
 	}
 
-	// SELECT FOR UPDATE... -> Rows-> rows.Next()
 	batch_size := 100
 	payload := []any{}
 	result := tx.Where(cond[0], cond[1:]...).
-		FindInBatches(model, batch_size,
+		FindInBatches(ml, batch_size,
 			func(tx *gorm.DB, batch int) error {
 				payload = append(payload, tx.Statement.Dest)
 				return nil
@@ -330,7 +312,7 @@ func (m *SqliteManager) TxRead_All_Cond(i any, model any, cond []any) ([]any, er
 	return payload, result.Error
 }
 
-func (m *SqliteManager) TxUpdateBatch(i any, model any, cond string, values []interface{}, toupdate map[string]interface{}) error {
+func (m *SqliteManager) TxUpdateBatch(i any, ml any, cond string, values []interface{}, toupdate map[string]interface{}) error {
 	var tx *gorm.DB
 	var ok bool
 	if i == nil {
@@ -341,6 +323,6 @@ func (m *SqliteManager) TxUpdateBatch(i any, model any, cond string, values []in
 			return errors.New("not a gorm database object")
 		}
 	}
-	txr := tx.Model(model).Where(cond, values...).Updates(toupdate)
+	txr := tx.Model(ml).Where(cond, values...).Updates(toupdate)
 	return txr.Error
 }

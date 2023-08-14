@@ -9,43 +9,38 @@ import (
 
 	"github.com/TAAL-GmbH/ubsv/db/base"
 	"github.com/TAAL-GmbH/ubsv/db/model"
-	networkModel "github.com/TAAL-GmbH/ubsv/model"
 	sqlerr "github.com/mattn/go-sqlite3"
 	"github.com/ordishs/go-utils"
 	"gorm.io/gorm"
 )
 
-func unlockSpendable(dbm base.DbManager, log utils.Logger) error {
-	const stmt = "WITH RECURSIVE ChainBlocks AS (SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1' WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) AND status = '0'"
-	var err error
-	i := dbm.GetDB()
-	tx, ok := i.(*gorm.DB)
-	if !ok {
-		err = errors.New("db is not a gorm database object")
-		log.Errorf("%s", err.Error())
-		return err
-	}
+const DB_OP_RETRIES = 10
+const DB_OP_WAIT = 250
 
-	const stmt2 = "UPDATE utxos SET status = '1' WHERE ID IN (SELECT ID FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) AND status = '0')"
+func unlockSpendable(dbm base.DbManager, log utils.Logger) error {
+	//const stmt = "WITH RECURSIVE ChainBlocks AS (SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1' WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) AND status = '0'"
+	var err error
+	tx, _ := dbm.GetDB().(*gorm.DB)
+	const stmt = "UPDATE utxos SET status = '1' WHERE ID IN (SELECT ID FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) AND status = '0')"
 
 	retries := 0
-	for retries < 200 {
-		tx = tx.Exec(stmt2, nil)
+	for retries < DB_OP_RETRIES {
+		tx = tx.Exec(stmt, nil)
 		if err == nil {
 			break
 		}
 		e, ok := err.(sqlerr.Error)
 		if ok {
 			if e.ExtendedCode == 5 {
-				log.Warnf("%s - code %d: Retrying...", e.Error(), e.ExtendedCode)
+				log.Warnf("[unlock spendable] db locked: %s - code %d: Retrying...", e.Error(), e.ExtendedCode)
 			} else {
 				log.Errorf("%s - code %d: Retrying...", e.Error(), e.ExtendedCode)
 			}
 		} else {
-			log.Errorf("unlocking spendable utxos: %s", tx.Error.Error())
+			log.Errorf("[unlock spendable] unlocking spendable utxos: %s", tx.Error.Error())
 		}
 		retries++
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(DB_OP_WAIT * time.Millisecond)
 	}
 	return tx.Error
 }
@@ -54,7 +49,7 @@ func AddBlocks(dbm base.DbManager, log utils.Logger, blocks []*model.Block) erro
 	retries := 0
 	var err error
 	var tx *gorm.DB
-	for retries < 100 {
+	for retries < DB_OP_RETRIES {
 		i, _ := dbm.TxBegin()
 		tx, _ = i.(*gorm.DB)
 
@@ -71,12 +66,12 @@ func AddBlocks(dbm base.DbManager, log utils.Logger, blocks []*model.Block) erro
 				}
 				if e.ExtendedCode == 5 {
 					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
-					time.Sleep(250 * time.Millisecond)
 				}
 			} else {
 				tx.Rollback()
 				log.Errorf("Error adding block: %s", err.Error())
 			}
+			time.Sleep(DB_OP_WAIT * time.Millisecond)
 			continue
 		}
 		break
@@ -92,7 +87,7 @@ func AddBlock(dbm base.DbManager, log utils.Logger, block *model.Block) error {
 	retries := 0
 	var err error
 	var tx *gorm.DB
-	for retries < 100 {
+	for retries < DB_OP_RETRIES {
 		i, _ := dbm.TxBegin()
 		tx, _ = i.(*gorm.DB)
 
@@ -109,7 +104,7 @@ func AddBlock(dbm base.DbManager, log utils.Logger, block *model.Block) error {
 				}
 				if e.ExtendedCode == 5 {
 					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
-					time.Sleep(250 * time.Millisecond)
+					time.Sleep(DB_OP_WAIT * time.Millisecond)
 				}
 			} else {
 				tx.Rollback()
@@ -178,7 +173,7 @@ func AddUtxo(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
 
 func GetBestBlockFromDb(dbm base.DbManager, log utils.Logger) (*model.Block, error) {
 	m := &model.Block{}
-	stmt := "select ID, height, block_hash, prev_block_hash from blocks where height = (select max(height) from blocks)"
+	stmt := "SELECT ID, height, block_hash, prev_block_hash FROM blocks WHERE height = (SELECT max(height) FROM blocks)"
 	db, ok := dbm.GetDB().(*gorm.DB)
 	if !ok {
 		panic("not a gorm.DB object")
@@ -207,29 +202,6 @@ func GetBestBlockFromDb(dbm base.DbManager, log utils.Logger) (*model.Block, err
 	return m, err
 }
 
-func SaveCoinbaseUtxos(dbm base.DbManager, log utils.Logger, newBlock *networkModel.Block) {
-	for i, o := range newBlock.CoinbaseTx.Outputs {
-		addr, err := o.LockingScript.Addresses()
-		if err != nil {
-			log.Errorf("could not get address from script %s", err.Error())
-			break
-		}
-		err = AddUtxo(dbm, log,
-			&model.UTXO{
-				BlockHash:     newBlock.Hash().String(),
-				Txid:          newBlock.CoinbaseTx.TxID(),
-				Vout:          uint32(i),
-				LockingScript: o.LockingScript.String(),
-				Satoshis:      o.Satoshis,
-				Address:       addr[0],
-			})
-		if err != nil {
-			log.Errorf("could not add utxo to db %+v", err)
-			break
-		}
-	}
-}
-
 func AddBlockUtxos(dbm base.DbManager, log utils.Logger, blocks []*model.Block, utxos []*model.UTXO) error {
 	retries := 0
 	var err error
@@ -238,26 +210,25 @@ func AddBlockUtxos(dbm base.DbManager, log utils.Logger, blocks []*model.Block, 
 	tx, _ = i.(*gorm.DB)
 	sp1 := fmt.Sprintf("add_blocks_%d", time.Now().Nanosecond())
 	tx = tx.SavePoint(sp1)
-	for retries < 100 {
+	for retries < DB_OP_RETRIES {
 		tx = tx.Create(blocks)
 		if tx.Error != nil {
 			retries++
 			e, ok := tx.Error.(sqlerr.Error)
 			if ok {
 				tx.RollbackTo(sp1)
-				switch e.ExtendedCode {
-				case 1555:
-					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+				if e.ExtendedCode == 1555 {
+					log.Warnf("duplicate block is being inserted. %s - code %d", e.Error(), e.ExtendedCode)
 					return err
 				}
 				if e.ExtendedCode == 5 {
 					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
-					time.Sleep(250 * time.Millisecond)
 				}
 			} else {
 				tx.RollbackTo(sp1)
 				log.Errorf("Error adding block: %s", err.Error())
 			}
+			time.Sleep(DB_OP_WAIT * time.Millisecond)
 			continue
 		}
 		break

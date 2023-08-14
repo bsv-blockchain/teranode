@@ -94,8 +94,6 @@ func (ct *CoinbaseTracker) GetUtxo(ctx context.Context, address string) (*bt.UTX
 	ct.lock.Lock()
 	defer ct.lock.Unlock()
 
-	// Note: just one result should be sufficient
-	// TODO: modify sql statement to get just one row
 	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND status = '1' LIMIT 1"
 	vals := []interface{}{address}
 	payload, err := ct.store.TxSelectForUpdate(nil, stmt, vals)
@@ -148,7 +146,7 @@ func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}
 func (ct *CoinbaseTracker) SetUtxoReserved(ctx context.Context, i any, utxoIds []interface{}) error {
 	var stmt string
 	if len(utxoIds) > 1 {
-		stmt = "ID IN ? AND status = 1"
+		stmt = "ID IN (?) AND status = 1"
 	} else {
 		stmt = "ID = ? AND status = 1"
 	}

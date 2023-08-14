@@ -115,8 +115,10 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 		dbm := db.Create(store, store_config)
 		blockutxos := []*BlockUtxo{}
 
+		queue_wait, _ := gocore.Config().GetInt("coinbasetracker_queue_wait", 100)
+		
 		for {
-			t := time.NewTimer(250 * time.Millisecond)
+			t := time.NewTimer(time.Duration(queue_wait) * time.Millisecond)
 			<-t.C
 			for {
 				bu, _ := q.DequeueAsType()
