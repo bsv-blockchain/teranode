@@ -1,7 +1,7 @@
 SHELL=/bin/bash
 
 .PHONY: all
-all: deps lint build test
+all: deps install lint build test
 
 .PHONY: deps
 deps:
@@ -30,21 +30,13 @@ test:
 longtests:
 	LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
-.PHONY: lint
-lint: # todo enable coinbase tracker
-	golangci-lint run --skip-dirs services/coinbasetracker ./...
-	go list ./... | grep -v coinbasetracker | xargs staticcheck
-
 
 .PHONY: testall
 testall:
 	# call makefile lint command
 	$(MAKE) lint
-	LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+	$(MAKE) longtests
 
-.PHONY: run
-run:
-	sh run.sh
 
 .PHONY: gen
 gen:
@@ -162,16 +154,22 @@ clean:
 	rm -f blaster.run
 	rm -f status.run
 	rm -rf build/
+	rm -rf services/coinbasetracker/testblocks.db
 
 .PHONY: install-lint
 install-lint:
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
+.PHONY: lint
+lint: # todo enable coinbase tracker
+	golangci-lint run --skip-dirs services/coinbasetracker ./...
+	go list ./... | grep -v coinbasetracker | xargs staticcheck
+
 .PHONY: install
 install:
 	$(MAKE) install-lint
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-	arch -arm64 brew install pre-commit
-	arch -arm64 pre-commit install
+	pip install pre-commit
+	pre-commit install
