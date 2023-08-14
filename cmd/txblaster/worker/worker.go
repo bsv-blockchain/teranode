@@ -147,20 +147,19 @@ func NewWorker(
 	}, nil
 }
 
-
-func (w *Worker) Start(ctx context.Context) error {
+func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
 	b := make([]byte, 64)
 	crand.Read(b)
 	id := binary.BigEndian.Uint64(b) ^ uint64(time.Now().Nanosecond())
 
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
-		keySet, err = w.startWithSeeder(ctx)
+		keySet, err = w.startWithSeeder(ctx, id)
 		if err != nil {
 			return err
 		}
 	} else {
-		keySet, err = w.startWithCoinbaseTracker(ctx)
+		keySet, err = w.startWithCoinbaseTracker(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -186,7 +185,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, error) {
+func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extra.KeySet, error) {
 	keysetScript, err := bscript.NewP2PKHFromPubKeyEC(w.privateKey.PubKey())
 	if err != nil {
 		return nil, err
@@ -287,7 +286,7 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 	return keySet, nil
 }
 
-func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
+func (w *Worker) startWithSeeder(ctx context.Context, id uint64) (*extra.KeySet, error) {
 
 	seederGrpcAddresses := make([]string, 0)
 	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets", ":8083"); ok {
