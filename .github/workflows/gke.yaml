@@ -19,11 +19,11 @@ jobs:
       - name: List Files
         run: ls -al
 
-      - name: Install golangci-lint
-        run: make install-lint
+      - name: Install deps and lint deps
+        run: make deps && make install-lint
 
       - name: Run golangci-lint
-        run: GO111MODULE=off make lint
+        run: make lint
 
       - name: Run Go tests
         run: make longtests
