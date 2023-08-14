@@ -17,7 +17,7 @@ const (
 )
 
 var (
-	logger = gocore.Log("k8sresolver")
+	logger = gocore.Log("k8sres")
 )
 
 func init() {
