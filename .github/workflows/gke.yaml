@@ -20,10 +20,10 @@ jobs:
         run: ls -al
 
       - name: Install deps and lint deps
-        run: make deps && make install-lint
+        run: make install-lint
 
       - name: Run golangci-lint
-        run: make lint
+        run: GO111MODULE=off make lint
 
       - name: Run Go tests
         run: make longtests
