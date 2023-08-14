@@ -154,11 +154,13 @@ func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
 
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
+		w.logger.Infof("[%d] \U00002699  worker is running with SEEDER", id)
 		keySet, err = w.startWithSeeder(ctx, id)
 		if err != nil {
 			return err
 		}
 	} else {
+		w.logger.Infof("[%d] \U00002699  worker is running with TRACKER", id)
 		keySet, err = w.startWithCoinbaseTracker(ctx, id)
 		if err != nil {
 			return err
@@ -280,6 +282,7 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extr
 
 				w.utxoChan <- u
 			}
+			w.logger.Infof("[%d] Done sending %d outputs to txChan", id, numberOfOutputs)
 		}(w.numberOfOutputs, utxo.TxId)
 
 	}
@@ -363,7 +366,7 @@ func (w *Worker) startWithSeeder(ctx context.Context, id uint64) (*extra.KeySet,
 
 				w.utxoChan <- u
 			}
-			w.logger.Infof("Done sending %d outputs to txChan", numberOfOutputs)
+			w.logger.Infof("[%d] Done sending %d outputs to txChan", id, numberOfOutputs)
 		}(res.NumberOfOutputs)
 	}
 
