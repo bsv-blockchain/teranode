@@ -115,7 +115,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("no utxostore setting found")
 	}
 
-	utxoStore, err := utxo.NewStore(ctx, ba.logger, utxostoreURL)
+	utxoStore, err := utxo.NewStore(ctx, ba.logger, utxostoreURL, "BlockAssembly")
 	if err != nil {
 		return fmt.Errorf("failed to create utxo store [%w]", err)
 	}
