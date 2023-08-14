@@ -14,12 +14,16 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.20.7'
+          cache-dependency-path: go-cache/go.sum
 
-      - name: Install golangci-lint
+      - name: List Files
+        run: ls -al
+
+      - name: Install deps and lint deps
         run: make install-lint
 
       - name: Run golangci-lint
-        run: make lint
+        run: GO111MODULE=off make lint
 
       - name: Run Go tests
         run: make longtests

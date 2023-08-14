@@ -42,14 +42,16 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan      chan *blockchain_api.AddBlockRequest
-	store             blockchain_store.Store
-	logger            utils.Logger
-	newSubscriptions  chan subscriber
-	deadSubscriptions chan subscriber
-	subscribers       map[subscriber]bool
-	notifications     chan *blockchain_api.Notification
-	newBlock          chan struct{}
+	addBlockChan        chan *blockchain_api.AddBlockRequest
+	store               blockchain_store.Store
+	logger              utils.Logger
+	newSubscriptions    chan subscriber
+	deadSubscriptions   chan subscriber
+	subscribers         map[subscriber]bool
+	notifications       chan *blockchain_api.Notification
+	newBlock            chan struct{}
+	subscriptionCtx     context.Context
+	cancelSubscriptions context.CancelFunc
 }
 
 func Enabled() bool {
@@ -72,15 +74,19 @@ func New(logger utils.Logger) (*Blockchain, error) {
 		return nil, err
 	}
 
+	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
+
 	return &Blockchain{
-		store:             s,
-		logger:            logger,
-		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:  make(chan subscriber, 10),
-		deadSubscriptions: make(chan subscriber, 10),
-		subscribers:       make(map[subscriber]bool),
-		notifications:     make(chan *blockchain_api.Notification, 100),
-		newBlock:          make(chan struct{}, 10),
+		store:               s,
+		logger:              logger,
+		addBlockChan:        make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions:    make(chan subscriber, 10),
+		deadSubscriptions:   make(chan subscriber, 10),
+		subscribers:         make(map[subscriber]bool),
+		notifications:       make(chan *blockchain_api.Notification, 100),
+		newBlock:            make(chan struct{}, 10),
+		subscriptionCtx:     subscriptionCtx,
+		cancelSubscriptions: cancelSubscriptions,
 	}, nil
 }
 
@@ -93,6 +99,9 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	go func() {
 		for {
 			select {
+			case <-ctx.Done():
+				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
+				return
 			case notification := <-b.notifications:
 				b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
 				for sub := range b.subscribers {
@@ -127,6 +136,8 @@ func (b *Blockchain) Start(ctx context.Context) error {
 }
 
 func (b *Blockchain) Stop(_ context.Context) error {
+	b.cancelSubscriptions()
+
 	return nil
 }
 
@@ -263,9 +274,17 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		source:       req.Source,
 	}
 
-	<-ch
-
-	return nil
+	for {
+		select {
+		case <-sub.Context().Done():
+			// Client disconnected.
+			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
+			return nil
+		case <-ch:
+			// Subscription ended.
+			return nil
+		}
+	}
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {

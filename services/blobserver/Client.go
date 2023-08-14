@@ -2,6 +2,7 @@ package blobserver
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
@@ -45,7 +46,12 @@ func (c *Client) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		c.logger.Infof("[BlobServer] context done, closing client")
 		c.running = false
+		err = conn.Close()
+		if err != nil {
+			c.logger.Errorf("[BlobServer] failed to close connection", err)
+		}
 	}()
 
 	go func() {
@@ -64,7 +70,9 @@ func (c *Client) Start(ctx context.Context) error {
 			for c.running {
 				resp, err = stream.Recv()
 				if err != nil {
-					c.logger.Errorf("could not receive from blobserver: %v", err)
+					if !strings.Contains(err.Error(), context.Canceled.Error()) {
+						c.logger.Errorf("[BlobServer] could not receive: %v", err)
+					}
 					_ = stream.CloseSend()
 					time.Sleep(10 * time.Second)
 					break

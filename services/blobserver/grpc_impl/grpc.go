@@ -108,7 +108,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 		for {
 			select {
 			case <-ctx.Done():
-				g.logger.Infof("BlobServer GRPC service shutting down")
+				g.logger.Infof("[BlobServer] GRPC service shutting down")
 				return
 			case notification := <-blockchainSubscription:
 				if notification == nil {
@@ -159,10 +159,17 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 
 	g.logger.Infof("BlobServer GRPC service listening on %s", addr)
 
+	go func() {
+		<-ctx.Done()
+		g.logger.Infof("[BlobServer] GRPC (impl) service shutting down")
+		g.grpcServer.GracefulStop()
+	}()
+
 	return g.grpcServer.Serve(lis)
 }
 
 func (g *GRPC) Stop(ctx context.Context) error {
+	g.logger.Infof("[BlobServer] GRPC (impl) service shutting down")
 	g.grpcServer.GracefulStop()
 	return nil
 }
@@ -184,7 +191,15 @@ func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_ap
 		done:         ch,
 	}
 
-	<-ch
-
-	return nil
+	for {
+		select {
+		case <-sub.Context().Done():
+			// Client disconnected.
+			g.logger.Infof("[BlobServer] GRPC client disconnected: %s", req.Source)
+			return nil
+		case <-ch:
+			// Subscription ended.
+			return nil
+		}
+	}
 }

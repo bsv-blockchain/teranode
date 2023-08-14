@@ -18,26 +18,27 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Build the Go libraries of the project
 # todo change to make build
-RUN go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
-RUN go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
-RUN go build -o status.run ./cmd/status/
+RUN make build -j3
 
 
 
-FROM --platform=linux/amd64 ubuntu:latest
+FROM --platform=linux/amd64 debian:latest
 
-RUN apt update && apt install -y vim htop curl wget lsof iputils-ping net-tools dnsutils postgresql telnet
+RUN apt update && \
+    apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=0 /app/ubsv.run .
+COPY --from=0 /go/bin/dlv .
+COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
+
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs .
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
 COPY --from=0 /app/status.run .
-COPY --from=0 /go/bin/dlv .
-COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
+COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
   ln -s libsecp256k1.so.0.0.0 libsecp256k1.so

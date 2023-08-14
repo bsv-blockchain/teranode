@@ -2,6 +2,7 @@ package http_impl
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -189,10 +190,24 @@ func (h *HTTP) Init(_ context.Context) error {
 	return nil
 }
 
-func (h *HTTP) Start(addr string) error {
+func (h *HTTP) Start(ctx context.Context, addr string) error {
 	h.logger.Infof("BlobServer HTTP service listening on %s", addr)
 
-	return h.e.Start(addr)
+	go func() {
+		<-ctx.Done()
+		h.logger.Infof("[BlobServer] HTTP (impl) service shutting down")
+		err := h.e.Shutdown(ctx)
+		if err != nil {
+			h.logger.Errorf("[BlobServer] HTTP (impl) service shutdown error: %s", err)
+		}
+	}()
+
+	err := h.e.Start(addr)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	return nil
 }
 
 func (h *HTTP) Stop(ctx context.Context) error {

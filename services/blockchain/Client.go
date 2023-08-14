@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/TAAL-GmbH/ubsv/model"
@@ -11,6 +12,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -18,6 +20,7 @@ type Client struct {
 	client  blockchain_api.BlockchainAPIClient
 	logger  utils.Logger
 	running bool
+	conn    *grpc.ClientConn
 }
 
 type BestBlockHeader struct {
@@ -41,6 +44,7 @@ func NewClient(ctx context.Context) (ClientI, error) {
 		client:  blockchain_api.NewBlockchainAPIClient(baConn),
 		logger:  gocore.Log("blkcC"),
 		running: true,
+		conn:    baConn,
 	}, nil
 }
 
@@ -175,7 +179,12 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 
 	go func() {
 		<-ctx.Done()
+		c.logger.Infof("[Blockchain] context done, closing subscription: %s", source)
 		c.running = false
+		err := c.conn.Close()
+		if err != nil {
+			c.logger.Errorf("[Blockchain] failed to close connection", err)
+		}
 	}()
 
 	go func() {
@@ -193,13 +202,16 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 			for c.running {
 				resp, err := stream.Recv()
 				if err != nil {
+					if !strings.Contains(err.Error(), context.Canceled.Error()) {
+						c.logger.Errorf("[Blockchain] failed to receive notification: %v", err)
+					}
 					time.Sleep(1 * time.Second)
 					break
 				}
 
 				hash, err := chainhash.NewHash(resp.Hash)
 				if err != nil {
-					c.logger.Errorf("failed to parse hash", err)
+					c.logger.Errorf("[Blockchain] failed to parse hash", err)
 					continue
 				}
 

@@ -112,7 +112,7 @@ func (v *Server) Start(ctx context.Context) error {
 				bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
 					// Start a subscription to the new peer's blob server
 					g.Go(func() error {
-						v.logger.Infof("Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
 						return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
 					})
 				}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
@@ -137,7 +137,7 @@ func (v *Server) Start(ctx context.Context) error {
 			for _, blobServer := range blobServers {
 				b := blobServer
 				g.Go(func() error {
-					v.logger.Infof("Connecting to blob server at: %s", b)
+					v.logger.Infof("[BlobServer] Connecting to blob server at: %s", b)
 					return NewClient(ctx, "blobserver_gc", b).Start(ctx)
 				})
 			}
@@ -146,7 +146,7 @@ func (v *Server) Start(ctx context.Context) error {
 
 	if v.httpServer != nil {
 		g.Go(func() error {
-			return v.httpServer.Start(v.httpAddr)
+			return v.httpServer.Start(ctx, v.httpAddr)
 		})
 
 	}
@@ -163,14 +163,16 @@ func (v *Server) Stop(ctx context.Context) error {
 	defer cancel()
 
 	if v.grpcServer != nil {
+		v.logger.Infof("[BlobServer] Stopping grpc server")
 		if err := v.grpcServer.Stop(ctx); err != nil {
-			v.logger.Errorf("error stopping grpc server", "error", err)
+			v.logger.Errorf("[BlobServer] error stopping grpc server", "error", err)
 		}
 	}
 
 	if v.httpServer != nil {
+		v.logger.Infof("[BlobServer] Stopping http server")
 		if err := v.httpServer.Stop(ctx); err != nil {
-			v.logger.Errorf("error stopping http server", "error", err)
+			v.logger.Errorf("[BlobServer] error stopping http server", "error", err)
 		}
 	}
 
