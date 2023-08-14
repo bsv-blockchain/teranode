@@ -23,7 +23,7 @@ jobs:
         run: make install-lint
 
       - name: Run golangci-lint
-        run: make lint
+        run: GO111MODULE=off make lint
 
       - name: Run Go tests
         run: make longtests
