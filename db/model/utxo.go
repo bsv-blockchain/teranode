@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+
 	"gorm.io/gorm"
 )
 
@@ -22,6 +24,11 @@ type UTXO struct {
 	Satoshis      uint64
 	Address       string
 	Status        UtxoStatus
+}
+
+func (u *UTXO) String() string {
+	return fmt.Sprintf("Txid:%s, Vout:%d, Satoshis:%d, Address:%s, Status:%d",
+		u.Txid, u.Vout, u.Satoshis, u.Address, u.Status)
 }
 
 func (tx *UTXO) Equal(other *UTXO) bool {

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+
 	"gorm.io/gorm"
 )
 
@@ -18,4 +20,8 @@ func (b *Block) Equal(other *Block) bool {
 	return b.Height == other.Height &&
 		b.BlockHash == other.BlockHash &&
 		b.PrevBlockHash == other.PrevBlockHash
+}
+
+func (b *Block) String() string {
+	return fmt.Sprintf("Height:%d, BlockHash:%s, PrevBlockHash:%s", b.Height, b.BlockHash, b.PrevBlockHash)
 }

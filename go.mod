@@ -21,6 +21,7 @@ require (
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt/v2 v2.2.2
 	github.com/libsv/go-p2p v0.1.3
+	github.com/mattn/go-sqlite3 v1.14.17
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/neo4j/neo4j-go-driver/v4 v4.4.7
 	github.com/olekukonko/tablewriter v0.0.5
@@ -40,6 +41,7 @@ require (
 	go.opentelemetry.io/otel/exporters/jaeger v1.14.0
 	go.opentelemetry.io/otel/sdk v1.14.0
 	go.opentelemetry.io/otel/trace v1.16.0
+	golang.design/x/lockfree v0.0.1
 	golang.org/x/net v0.14.0
 	golang.org/x/sync v0.3.0
 	golang.org/x/time v0.3.0
@@ -57,6 +59,7 @@ require (
 require (
 	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	github.com/bitcoinsv/bsvlog v0.0.0-20181216181007-cb81b076bf2e // indirect
+	github.com/changkun/lockfree v0.0.1 // indirect
 	github.com/dolthub/maphash v0.0.0-20221220182448-74e1e1ea1577 // indirect
 	github.com/eapache/go-resiliency v1.3.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230111030713-bf00bc1b83b6 // indirect
@@ -82,7 +85,6 @@ require (
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.4 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
-	github.com/mattn/go-sqlite3 v1.14.17 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

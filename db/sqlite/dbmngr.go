@@ -3,12 +3,15 @@ package sqlite
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/TAAL-GmbH/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -24,25 +27,36 @@ func (m *SqliteManager) GetDB() any {
 func (m *SqliteManager) Connect(db_config string) error {
 	m.logger.Debugf("Connecting to sqlite: %s", db_config)
 	var dsn string
+	var err error
 	if strings.Contains(db_config, ":memory:") {
 		dsn = db_config
 	} else {
-		uhdir, err := os.UserHomeDir()
+		folder, _ := gocore.Config().Get("dataFolder", "data")
+		if err = os.MkdirAll(folder, 0755); err != nil {
+			return fmt.Errorf("failed to create data folder %s: %+v", folder, err)
+		}
+
+		dsn, err = filepath.Abs(path.Join(folder, db_config))
 		if err != nil {
-			m.logger.Errorf("cannot find user home directory: %s", err.Error())
-			return err
+			return fmt.Errorf("failed to get absolute path for sqlite DB: %+v", err)
 		}
-		data_path := filepath.Join(uhdir, "data")
-		if _, err := os.Stat(data_path); os.IsNotExist(err) {
-			if err := os.Mkdir(data_path, 0755); os.IsExist(err) {
-				dsn = filepath.Join(data_path, db_config)
-			} else {
-				m.logger.Errorf("cannot create data directory: %s", err.Error())
-				dsn = db_config
-			}
-		} else {
-			dsn = filepath.Join(data_path, db_config)
-		}
+
+		// uhdir, err := os.UserHomeDir()
+		// if err != nil {
+		// 	m.logger.Errorf("cannot find user home directory: %s", err.Error())
+		// 	return err
+		// }
+		// data_path := filepath.Join(uhdir, "data")
+		// if _, err := os.Stat(data_path); os.IsNotExist(err) {
+		// 	if err := os.Mkdir(data_path, 0755); os.IsExist(err) {
+		// 		dsn = filepath.Join(data_path, db_config)
+		// 	} else {
+		// 		m.logger.Errorf("cannot create data directory: %s", err.Error())
+		// 		dsn = db_config
+		// 	}
+		// } else {
+		// 	dsn = filepath.Join(data_path, db_config)
+		// }
 	}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -143,7 +144,9 @@ func NewWorker(
 }
 
 func (w *Worker) Start(ctx context.Context) error {
-
+	b := make([]byte, 64)
+	crand.Read(b)
+	id := binary.BigEndian.Uint64(b) ^ uint64(time.Now().Nanosecond())
 	keysetScript, err := bscript.NewP2PKHFromPubKeyEC(w.privateKey.PubKey())
 	if err != nil {
 		return err
@@ -165,7 +168,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		panic("error creating connection for coinbaseTracker")
 	}
 	w.coinbaseTrackerClient = coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-	logger.Debugf("coinbaseAddr: %s", w.address)
+	logger.Debugf("[%d] coinbaseAddr: %s", id, w.address)
 
 	utxos, err := w.getUtxosFromCoinbaseTracker(50)
 	if err != nil {
@@ -184,7 +187,8 @@ func (w *Worker) Start(ctx context.Context) error {
 	var totalSatoshis uint64
 	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
 	for i, utxo := range utxos {
-		logger.Debugf("<utxo:%d> txid: %s vout: %d satoshis: %d script: %s",
+		logger.Debugf("[%d] <utxo:%d> txid: %s vout: %d satoshis: %d script: %s",
+			id,
 			i,
 			hex.EncodeToString(utxo.TxId),
 			utxo.Vout,
@@ -207,12 +211,12 @@ func (w *Worker) Start(ctx context.Context) error {
 			actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
 			go func(numberOfOutputs int, txId []byte) {
 
-				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-				for i := 0; i < numberOfOutputs; i++ {
+				logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
+				for idx := 0; idx < numberOfOutputs; idx++ {
 
 					u := &bt.UTXO{
 						TxID:          bt.ReverseBytes(txId),
-						Vout:          uint32(i),
+						Vout:          uint32(idx),
 						LockingScript: script,
 						Satoshis:      w.satoshisPerOutput,
 					}
@@ -236,7 +240,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		} else if utxo.Satoshis == w.satoshisPerOutput {
 			// if utxo amount == satoshisPerOutput send it directly
 			go func(numberOfOutputs int, txId []byte) {
-				logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+				logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
 				for i := 0; i < numberOfOutputs; i++ {
 
 					u := &bt.UTXO{
@@ -276,7 +280,6 @@ func (w *Worker) Start(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("ERROR in fire transactions: %v", err)
 			}
-
 		}
 	}
 }

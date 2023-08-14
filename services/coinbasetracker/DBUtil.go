@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/TAAL-GmbH/ubsv/db/base"
 	"github.com/TAAL-GmbH/ubsv/db/model"
@@ -14,34 +16,114 @@ import (
 )
 
 func unlockSpendable(dbm base.DbManager, log utils.Logger) error {
-	const stmt = `
-			WITH RECURSIVE ChainBlocks AS (	SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1'	WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) 	AND status = '0';  
-	`
+	const stmt = "WITH RECURSIVE ChainBlocks AS (SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1' WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) AND status = '0'"
 	var err error
 	i := dbm.GetDB()
-	dbe, ok := i.(*gorm.DB)
+	tx, ok := i.(*gorm.DB)
 	if !ok {
 		err = errors.New("db is not a gorm database object")
 		log.Errorf("%s", err.Error())
 		return err
 	}
-	tx := dbe.Exec(stmt)
-	if tx.Error != nil {
-		log.Errorf("%s", tx.Error)
+
+	const stmt2 = "UPDATE utxos SET status = '1' WHERE ID IN (SELECT ID FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) AND status = '0')"
+
+	retries := 0
+	for retries < 200 {
+		tx = tx.Exec(stmt2, nil)
+		if err == nil {
+			break
+		}
+		e, ok := err.(sqlerr.Error)
+		if ok {
+			if e.ExtendedCode == 5 {
+				log.Warnf("%s - code %d: Retrying...", e.Error(), e.ExtendedCode)
+			} else {
+				log.Errorf("%s - code %d: Retrying...", e.Error(), e.ExtendedCode)
+			}
+		} else {
+			log.Errorf("unlocking spendable utxos: %s", tx.Error.Error())
+		}
+		retries++
+		time.Sleep(250 * time.Millisecond)
 	}
 	return tx.Error
 }
 
-func AddBlock(dbm base.DbManager, log utils.Logger, block *model.Block) error {
-	err := dbm.Create(block)
+func AddBlocks(dbm base.DbManager, log utils.Logger, blocks []*model.Block) error {
+	retries := 0
+	var err error
+	var tx *gorm.DB
+	for retries < 100 {
+		i, _ := dbm.TxBegin()
+		tx, _ = i.(*gorm.DB)
+
+		tx = tx.Create(blocks)
+		if tx.Error != nil {
+			retries++
+			e, ok := tx.Error.(sqlerr.Error)
+			if ok {
+				tx.Rollback()
+				switch e.ExtendedCode {
+				case 1555:
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					return err
+				}
+				if e.ExtendedCode == 5 {
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					time.Sleep(250 * time.Millisecond)
+				}
+			} else {
+				tx.Rollback()
+				log.Errorf("Error adding block: %s", err.Error())
+			}
+			continue
+		}
+		break
+	}
 	if err != nil {
-		log.Errorf("Error adding block: %s", err.Error())
+		tx.Rollback()
 		return err
 	}
-	err = unlockSpendable(dbm, log)
-	if err != nil {
-		log.Errorf("Error in AddBlock to unlock spendables: %s", err.Error())
+	tx.Commit()
+	return err
+}
+func AddBlock(dbm base.DbManager, log utils.Logger, block *model.Block) error {
+	retries := 0
+	var err error
+	var tx *gorm.DB
+	for retries < 100 {
+		i, _ := dbm.TxBegin()
+		tx, _ = i.(*gorm.DB)
+
+		tx = tx.Create(block)
+		if tx.Error != nil {
+			retries++
+			e, ok := tx.Error.(sqlerr.Error)
+			if ok {
+				tx.Rollback()
+				switch e.ExtendedCode {
+				case 1555:
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					return err
+				}
+				if e.ExtendedCode == 5 {
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					time.Sleep(250 * time.Millisecond)
+				}
+			} else {
+				tx.Rollback()
+				log.Errorf("Error adding block: %s", err.Error())
+			}
+			continue
+		}
+		break
 	}
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	tx.Commit()
 	return err
 }
 func AddUtxo(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
@@ -53,12 +135,11 @@ func AddUtxo(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
 		panic("could not cast to gorm.DB")
 	}
 	defer tx.Commit()
-	var res *gorm.DB
 	retries := 0
 	for retries < 10 {
-		res = tx.Create(utxo)
-		if res.Error != nil {
-			e, ok := res.Error.(sqlerr.Error)
+		tx = tx.Create(utxo)
+		if tx.Error != nil {
+			e, ok := tx.Error.(sqlerr.Error)
 			if ok {
 				if e.ExtendedCode == 1555 {
 					// constraint violation condition - block is already in the store
@@ -66,7 +147,7 @@ func AddUtxo(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
 					break
 				}
 			} else {
-				log.Errorf("error creating a utxo record %s: %s", hex.EncodeToString([]byte(utxo.Txid)), res.Error.Error())
+				log.Errorf("error creating a utxo record %s: %s", hex.EncodeToString([]byte(utxo.Txid)), tx.Error.Error())
 			}
 			temp := &model.UTXO{}
 			tx = tx.Model(&model.UTXO{}).Where("block_hash = ?", []interface{}{utxo.BlockHash}).Find(temp)
@@ -75,18 +156,54 @@ func AddUtxo(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
 					break
 				}
 			}
-			res.Rollback()
+			tx.Rollback()
+			time.Sleep(100 * time.Millisecond)
+		} else {
+			break
 		}
 	}
-	return res.Error
+
+	if tx.Error != nil {
+		tx.Rollback()
+	} else {
+		tx.Commit()
+		err := unlockSpendable(dbm, log)
+		if err != nil {
+			log.Errorf("Error in AddBlock to unlock spendables: %s", err.Error())
+		}
+	}
+
+	return tx.Error
 }
 
 func GetBestBlockFromDb(dbm base.DbManager, log utils.Logger) (*model.Block, error) {
 	m := &model.Block{}
-	err := dbm.Read(m) // TODO: change logic to retrieve truly best block
-	if err != nil {
-		log.Errorf(err.Error())
+	stmt := "select ID, height, block_hash, prev_block_hash from blocks where height = (select max(height) from blocks)"
+	db, ok := dbm.GetDB().(*gorm.DB)
+	if !ok {
+		panic("not a gorm.DB object")
 	}
+	rows, err := db.Raw(stmt, nil).Rows()
+	if err != nil {
+		e, ok := err.(sqlerr.Error)
+		if ok {
+			log.Errorf("error getting best block: %s - code %d", e.Error(), e.ExtendedCode)
+		} else {
+			log.Errorf("error getting best block: %s", e.Error())
+		}
+		return nil, err
+	}
+
+	if rows.Next() {
+		err = rows.Scan(&m.ID, &m.Height, &m.BlockHash, &m.PrevBlockHash)
+		if err != nil {
+			log.Errorf("failed to scan: %v", err)
+			return nil, err
+		}
+	} else {
+		return nil, errors.New("no blocks found")
+	}
+
 	return m, err
 }
 
@@ -111,4 +228,88 @@ func SaveCoinbaseUtxos(dbm base.DbManager, log utils.Logger, newBlock *networkMo
 			break
 		}
 	}
+}
+
+func AddBlockUtxos(dbm base.DbManager, log utils.Logger, blocks []*model.Block, utxos []*model.UTXO) error {
+	retries := 0
+	var err error
+	var tx *gorm.DB
+	i, _ := dbm.TxBegin()
+	tx, _ = i.(*gorm.DB)
+	sp1 := fmt.Sprintf("add_blocks_%d", time.Now().Nanosecond())
+	tx = tx.SavePoint(sp1)
+	for retries < 100 {
+		tx = tx.Create(blocks)
+		if tx.Error != nil {
+			retries++
+			e, ok := tx.Error.(sqlerr.Error)
+			if ok {
+				tx.RollbackTo(sp1)
+				switch e.ExtendedCode {
+				case 1555:
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					return err
+				}
+				if e.ExtendedCode == 5 {
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					time.Sleep(250 * time.Millisecond)
+				}
+			} else {
+				tx.RollbackTo(sp1)
+				log.Errorf("Error adding block: %s", err.Error())
+			}
+			continue
+		}
+		break
+	}
+	if err != nil {
+		log.Errorf("Error adding block: %s", err.Error())
+		tx.Rollback()
+		return err
+	}
+	tx.Commit()
+
+	i, _ = dbm.TxBegin()
+	tx, _ = i.(*gorm.DB)
+
+	sp2 := fmt.Sprintf("add_utxos_%d", time.Now().Nanosecond())
+	tx = tx.SavePoint(sp2)
+	for retries < 100 {
+		tx = tx.Create(utxos)
+		if tx.Error != nil {
+			retries++
+			e, ok := tx.Error.(sqlerr.Error)
+			if ok {
+				tx.RollbackTo(sp2)
+				switch e.ExtendedCode {
+				case 1555:
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					return err
+				}
+				if e.ExtendedCode == 5 {
+					log.Warnf("error adding block. %s - code %d", e.Error(), e.ExtendedCode)
+					time.Sleep(250 * time.Millisecond)
+				}
+			} else {
+				tx.RollbackTo(sp2)
+				log.Errorf("Error adding block: %s", err.Error())
+			}
+			continue
+		}
+		break
+	}
+	if err != nil {
+		log.Errorf("Error adding utxos: %s", err.Error())
+		tx.Rollback()
+		return err
+	}
+
+	tx.Commit()
+
+	err = unlockSpendable(dbm, log)
+	if err != nil {
+		log.Errorf("failed to unlock spendable: %s", err.Error())
+	}
+
+	return err
 }
