@@ -420,25 +420,19 @@ func (u *CoinbaseTrackerServer) Health(_ context.Context, _ *emptypb.Empty) (*co
 	}, nil
 }
 
-func (u *CoinbaseTrackerServer) GetUtxos(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.GetUtxoResponse, error) {
+func (u *CoinbaseTrackerServer) GetUtxo(ctx context.Context, req *coinbasetracker_api.GetUtxoRequest) (*coinbasetracker_api.Utxo, error) {
 
-	utxos, err := u.coinbaseTracker.GetUtxos(ctx, req.Address, req.Amount)
+	utxo, err := u.coinbaseTracker.GetUtxo(ctx, req.Address)
 	if err != nil {
 		return nil, err
 	}
 
-	respUtxos := make([]*coinbasetracker_api.Utxo, len(utxos))
-	for i, utxo := range utxos {
-		respUtxos[i] = &coinbasetracker_api.Utxo{
-			TxId:     utxo.TxID,
-			Vout:     utxo.Vout,
-			Script:   *utxo.LockingScript,
-			Satoshis: utxo.Satoshis,
-		}
-	}
-	resp := &coinbasetracker_api.GetUtxoResponse{}
-	resp.Utxos = respUtxos
-	return resp, nil
+	return &coinbasetracker_api.Utxo{
+		TxId:     utxo.TxID,
+		Vout:     utxo.Vout,
+		Script:   *utxo.LockingScript,
+		Satoshis: utxo.Satoshis,
+	}, nil
 }
 
 func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.SubmitTransactionRequest) (*emptypb.Empty, error) {

@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -91,163 +89,50 @@ func (ct *CoinbaseTracker) Stop() error {
 	return nil
 }
 
-func (ct *CoinbaseTracker) GetUtxos(ctx context.Context, address string, amount uint64) ([]*bt.UTXO, error) {
-	// DevNote: Get a combination of UTXOs that satisfy the amount from the lowest
-	// number of inputs that are equal or greater than the desired amount
-	// or a higher number of inputs that are equal or greater than the desired amount.
-	// This is an itterative process where we continue looking for UTXOs that can satisfy the amount
-	// the amount.
-
-	// DevNote: This is our first stab at the problem: find a single UTXO that is equal or
-	// larger than the desired amount.
-	// Need to sort by the lowest to highest amount. The first lowest amount should be sufficient.
-	// If none exist, then grab lower amounts and build the best amount combination
-	// that satisfies the amount.
-	res := []*bt.UTXO{}
-
-	utxoIds := []interface{}{}
-
+func (ct *CoinbaseTracker) GetUtxo(ctx context.Context, address string) (*bt.UTXO, error) {
 	// start transaction
 	ct.lock.Lock()
 	defer ct.lock.Unlock()
 
 	// Note: just one result should be sufficient
 	// TODO: modify sql statement to get just one row
-	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis >= ? AND status = '1'"
-	vals := []interface{}{address, strconv.FormatInt(int64(amount), 10)}
-	var tx *gorm.DB = nil
+	stmt := "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND status = '1' LIMIT 1"
+	vals := []interface{}{address}
 	payload, err := ct.store.TxSelectForUpdate(nil, stmt, vals)
 	if err != nil {
 		ct.logger.Errorf("Tx Select for update: %s", err.Error())
 		return nil, err
 	}
+	if len(payload) != 1 {
+		ct.logger.Errorf("[\U0001F6AB] no utxos found for address %s", address)
+		return nil, errors.New("did not find any utxos")
+	}
 	// Check if we have utxo amounts that cover the amount
-	if len(payload) > 0 {
-		utxo_candidates := []*model.UTXO{}
-		for idx, i := range payload {
-			u, ok := i.(*model.UTXO)
-			if !ok {
-				err := errors.New("received result is not a model.UTXO")
-				ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
-				panic(err.Error())
-			}
-			ct.logger.Debugf("[\U0001FA99] utxo candidate <%d>: [%s]", idx, u.String())
-			utxo_candidates = append(utxo_candidates, u)
-		}
+	utxo_candidates := []*model.UTXO{}
+	u, _ := payload[0].(*model.UTXO)
+	utxo_candidates = append(utxo_candidates, u)
 
-		sort.Slice(utxo_candidates, func(i, j int) bool {
-			return utxo_candidates[i].Satoshis < utxo_candidates[j].Satoshis
-		})
+	// return the first utxo that satisfies the given amount
+	s, _ := hex.DecodeString(utxo_candidates[0].LockingScript)
+	script := bscript.Script(s)
+	txId, _ := hex.DecodeString(utxo_candidates[0].Txid)
 
-		// return the first utxo that satisfies the given amount
-		s, _ := hex.DecodeString(utxo_candidates[0].LockingScript)
-		script := bscript.Script(s)
-		txId, _ := hex.DecodeString(utxo_candidates[0].Txid)
-		res = append(res, &bt.UTXO{
-			TxID:          txId,
-			Vout:          utxo_candidates[0].Vout,
-			LockingScript: &script,
-			Satoshis:      utxo_candidates[0].Satoshis,
-		})
-		utxoIds = append(utxoIds, utxo_candidates[0].ID)
+	stmt = "ID = ?"
+	i := ct.store.GetDB()
+	tx, _ := i.(*gorm.DB)
+	t1 := time.Now()
+	utxoIds := []interface{}{utxo_candidates[0].ID}
 
-	} else {
-		// we are at a point where we couldn't find a single transaction that
-		// satisfies the given amount; Check if we can find an ideal combination
-		// of utxo candidates that satisfy the given amount
-		stmt = "SELECT ID, txid, vout, locking_script, satoshis FROM utxos WHERE address = ? AND satoshis > 0 AND satoshis < ? AND status = '1'"
-
-		vals = []interface{}{address, strconv.FormatInt(int64(amount), 10)}
-
-		res = []*bt.UTXO{}
-
-		payload, err = ct.store.TxSelectForUpdate(nil, stmt, vals)
-		if err != nil {
-			e, ok := err.(sqlerr.Error)
-			if ok {
-				ct.logger.Errorf("\U0000274C failed to select spendable transactions: %s - code %d",
-					e.Error(), e.ExtendedCode,
-				)
-			} else {
-				ct.logger.Errorf("\U0000274C failed to select spendable transactions: %s", e.Error())
-			}
-			return nil, err
-		}
-
-		if len(payload) > 0 {
-			utxo_candidates := []*model.UTXO{}
-			for idx, i := range payload {
-				u, ok := i.(*model.UTXO)
-				if !ok {
-					err := errors.New("received result is not a model.UTXO")
-					ct.logger.Errorf("Cannot process one of the UTXO results: %s", err.Error())
-					panic(err.Error())
-				}
-				ct.logger.Debugf("[\U0001FA99] utxo candidate <%d>: [%s]", idx, u.String())
-				utxo_candidates = append(utxo_candidates, u)
-			}
-			// let's do a reverse sort
-			sort.Slice(utxo_candidates, func(i, j int) bool {
-				return utxo_candidates[i].Satoshis > utxo_candidates[j].Satoshis
-			})
-
-			var total uint64 = 0
-			// traverse the utxo candidates from greatest amount down
-			// and keep adding tx until the total counter becomes equal to or greater
-			// than the desired amount.
-			for _, u := range utxo_candidates {
-				total += uint64(u.Satoshis)
-				s, _ := hex.DecodeString(u.LockingScript)
-
-				script := bscript.Script(s)
-				utxoIds = append(utxoIds, u.ID)
-
-				res = append(res, &bt.UTXO{
-					TxID:          []byte(u.Txid),
-					Vout:          u.Vout,
-					LockingScript: &script,
-					Satoshis:      u.Satoshis,
-				})
-				// sufficient funds have been accumulated - we want to return as few
-				// transactions as possible to preserve better transactional anonymity
-				if total >= amount {
-					break
-				}
-			}
-		}
+	tx = tx.Model(&model.UTXO{}).Where(stmt, utxoIds...).Updates(map[string]interface{}{"status": 2})
+	if tx.Error == nil {
+		ct.logger.Warnf("reserve utoxs took %d seconds", time.Since(t1).Seconds())
 	}
-	if len(utxoIds) > 0 {
-		// after the best input candidates have been selected, mark them as reserved
-		if len(utxoIds) > 1 {
-			stmt = "ID IN (?) AND status = '1'"
-		} else {
-			stmt = "ID = ? AND status = '1'"
-		}
-		// txopts := []*sql.TxOptions{{Isolation: sql.LevelSerializable, ReadOnly: false}}
-		// i, err := ct.store.TxBegin(txopts...)
-		// if err != nil {
-		// 	ct.logger.Errorf("error starting transaction: %s", err.Error())
-		// 	return nil, err
-		// }
-		i := ct.store.GetDB()
-		tx, _ = i.(*gorm.DB)
-		retries := 0
-		t1 := time.Now()
-		for {
-			tx = tx.Model(&model.UTXO{}).Where(stmt, utxoIds...).Updates(map[string]interface{}{"status": 2})
-			if tx.Error == nil {
-				if retries > 0 {
-					ct.logger.Warnf("reserve utoxs took %d retries and %d seconds", retries, time.Since(t1).Seconds())
-				}
-				break
-			}
-			retries++
-			time.Sleep(250 * time.Millisecond)
-		}
-	} else {
-		ct.logger.Errorf("[\U0001F6AB] no utxos found for address %s and satoshis %d", address, amount)
-	}
-	return res, err
+	return &bt.UTXO{
+		TxID:          txId,
+		Vout:          utxo_candidates[0].Vout,
+		LockingScript: &script,
+		Satoshis:      utxo_candidates[0].Satoshis,
+	}, err
 }
 
 func (ct *CoinbaseTracker) SetUtxoSpent(ctx context.Context, txids []interface{}) error {
