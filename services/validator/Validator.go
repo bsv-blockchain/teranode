@@ -152,7 +152,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 			break
 		}
 		if utxoResponse.Status != int(utxostore_api.Status_OK) {
-			err = fmt.Errorf("utxo %d of %s is not spendable", idx, input.PreviousTxIDStr())
+			err = fmt.Errorf("utxo %d of %s is not spendable: %s", idx, input.PreviousTxIDStr(), utxostore_api.Status(utxoResponse.Status))
 			utxoSpan.RecordError(err)
 			break
 		}

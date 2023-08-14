@@ -227,10 +227,11 @@ func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash
 	q := `
 		UPDATE utxos
 		SET tx_id = $1
-		WHERE (lock_time <= $2 OR (lock_time >= 500000000 AND lock_time <= $3))
+		WHERE hash = $2
+		  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
 		  AND tx_id IS NULL
 	`
-	result, err := s.db.ExecContext(ctx, q, hash[:], s.blockHeight, time.Now().Unix())
+	result, err := s.db.ExecContext(ctx, q, txID[:], hash[:], s.blockHeight, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +240,9 @@ func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash
 		return nil, err
 	}
 
+	var utxo *utxostore.UTXOResponse
 	if affected == 0 {
-		utxo, err := s.Get(ctx, hash)
+		utxo, err = s.Get(ctx, hash)
 		if err != nil {
 			return nil, err
 		}
