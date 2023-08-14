@@ -66,6 +66,9 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
+		testItems.blockAssembler.startChannelListeners(ctx)
+		testItems.blockAssembler.bestBlockHeader = model.GenesisBlockHeader
+
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {

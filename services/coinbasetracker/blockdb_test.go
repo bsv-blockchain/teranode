@@ -9,7 +9,9 @@ import (
 
 func TestBlockDb(t *testing.T) {
 	// Initialize database
-	db, err := sql.Open("sqlite3", "./testblocks.db")
+	// any reason this needs to be a real file ?
+	//db, err := sql.Open("sqlite3", "./testblocks.db")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
 	if err != nil {
 		log.Fatalf("Failed to connect to the database: %v", err)
 	}
