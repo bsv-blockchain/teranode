@@ -55,8 +55,8 @@ func TestWorker_fireTransactions(t *testing.T) {
 				kafkaTopic:           tt.fields.kafkaTopic,
 				printProgress:        tt.fields.printProgress,
 			}
-			if err := w.fireTransactions(tt.args.ctx, tt.args.u, tt.args.keySet); (err != nil) != tt.wantErr {
-				t.Errorf("Worker.fireTransactions() error = %v, wantErr %v", err, tt.wantErr)
+			if err := w.fireTransaction(tt.args.ctx, tt.args.u, tt.args.keySet); (err != nil) != tt.wantErr {
+				t.Errorf("Worker.fireTransaction() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

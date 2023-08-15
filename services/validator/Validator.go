@@ -212,6 +212,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// we should probably recover and add it to a retry queue
 
 	// register transaction in tx status store
+	// v.logger.Debugf("registering tx %s in tx status store", txIDChainHash)
 	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes, tx.LockTime); err != nil {
 		v.logger.Errorf("error sending tx to tx meta store: %v", err)
 	}

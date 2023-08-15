@@ -13,6 +13,14 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type SQLEngine string
+
+const (
+	Postgres     SQLEngine = "postgres"
+	Sqlite       SQLEngine = "sqlite"
+	SqliteMemory SQLEngine = "sqlitememory"
+)
+
 func InitSQLDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
@@ -65,7 +73,8 @@ func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 			return nil, fmt.Errorf("failed to create data folder %s: %+v", folder, err)
 		}
 
-		filename, err = filepath.Abs(path.Join(folder, "utxo.db"))
+		dbName := storeUrl.Path[1:]
+		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get absolute path for sqlite DB: %+v", err)
 		}

@@ -1,4 +1,4 @@
-package coinbasetracker
+package coinbase
 
 import (
 	"context"

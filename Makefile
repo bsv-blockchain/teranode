@@ -134,6 +134,14 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/coinbasetracker/coinbasetracker_api/coinbasetracker_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/coinbase/coinbase_api/coinbase_api.proto
+
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/blockassembly/blockassembly_api/*.pb.go

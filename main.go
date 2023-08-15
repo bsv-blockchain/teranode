@@ -16,6 +16,7 @@ import (
 	"github.com/TAAL-GmbH/ubsv/services/blockchain"
 	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
 	"github.com/TAAL-GmbH/ubsv/services/bootstrap"
+	"github.com/TAAL-GmbH/ubsv/services/coinbase"
 	"github.com/TAAL-GmbH/ubsv/services/coinbasetracker"
 	"github.com/TAAL-GmbH/ubsv/services/miner"
 	"github.com/TAAL-GmbH/ubsv/services/propagation"
@@ -80,6 +81,7 @@ func main() {
 	startSeeder := shouldStart("Seeder")
 	startMiner := shouldStart("Miner")
 	startBlobServer := shouldStart("BlobServer")
+	startCoinbase := shouldStart("Coinbase")
 	startCoinbaseTracker := shouldStart("CoinbaseTracker")
 	startBootstrapServer := shouldStart("BootstrapServer")
 	help := shouldStart("help")
@@ -96,6 +98,7 @@ func main() {
 			!startMiner &&
 			!startBootstrapServer &&
 			!startBlobServer &&
+			!startCoinbase &&
 			!startCoinbaseTracker) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
@@ -129,6 +132,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -blobserver=<1|0>")
 		fmt.Println("          whether to start the blob server")
+		fmt.Println("")
+		fmt.Println("    -coinbase=<1|0>")
+		fmt.Println("          whether to start the coinbase server")
 		fmt.Println("")
 		fmt.Println("    -coinbasetracker=<1|0>")
 		fmt.Println("          whether to start the coinbase tracker server")
@@ -365,9 +371,16 @@ func main() {
 	}
 
 	// coinbase tracker server
+	if startCoinbase {
+		sm.AddService("Coinbase", coinbase.New(
+			gocore.Log("coinB"),
+		))
+	}
+
+	// coinbase tracker server
 	if startCoinbaseTracker {
 		sm.AddService("CoinbaseTracker", coinbasetracker.New(
-			gocore.Log("con"),
+			gocore.Log("coinT"),
 		))
 	}
 

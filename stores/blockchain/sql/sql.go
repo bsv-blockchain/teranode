@@ -18,7 +18,7 @@ import (
 
 type SQL struct {
 	db     *sql.DB
-	engine string
+	engine util.SQLEngine
 }
 
 func init() {
@@ -33,13 +33,13 @@ func New(storeUrl *url.URL) (*SQL, error) {
 		return nil, fmt.Errorf("failed to init sql db: %+v", err)
 	}
 
-	switch storeUrl.Scheme {
-	case "postgres":
+	switch util.SQLEngine(storeUrl.Scheme) {
+	case util.Postgres:
 		if err = createPostgresSchema(db); err != nil {
 			return nil, fmt.Errorf("failed to create postgres schema: %+v", err)
 		}
 
-	case "sqlite", "sqlitememory":
+	case util.Sqlite, util.SqliteMemory:
 		if err = createSqliteSchema(db); err != nil {
 			return nil, fmt.Errorf("failed to create sqlite schema: %+v", err)
 		}
@@ -50,7 +50,7 @@ func New(storeUrl *url.URL) (*SQL, error) {
 
 	s := &SQL{
 		db:     db,
-		engine: storeUrl.Scheme,
+		engine: util.SQLEngine(storeUrl.Scheme),
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -59,6 +59,14 @@ func New(storeUrl *url.URL) (*SQL, error) {
 	}
 
 	return s, nil
+}
+
+func (s *SQL) GetDB() *sql.DB {
+	return s.db
+}
+
+func (s *SQL) GetDBEngine() util.SQLEngine {
+	return s.engine
 }
 
 func (s *SQL) Close() error {
@@ -95,7 +103,8 @@ func createPostgresSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
         ,subtrees       BYTEA NOT NULL
         ,coinbase_tx    BYTEA NOT NULL
-        ,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+   	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
+    	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -105,6 +114,11 @@ func createPostgresSchema(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`
@@ -168,6 +182,7 @@ func createSqliteSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
 		,subtrees       BLOB NOT NULL
         ,coinbase_tx    BLOB NOT NULL
+	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -178,6 +193,11 @@ func createSqliteSchema(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
 
 	return nil
@@ -211,9 +231,9 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 		}
 
 		// turn off foreign key checks when inserting the genesis block
-		if s.engine == "sqlite" || s.engine == "sqlitememory" {
+		if s.engine == util.Sqlite || s.engine == util.SqliteMemory {
 			_, _ = s.db.Exec("PRAGMA foreign_keys = OFF")
-		} else if s.engine == "postgres" {
+		} else if s.engine == util.Postgres {
 			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
 
@@ -225,9 +245,9 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 		logger.Infof("genesis block inserted")
 
 		// turn foreign key checks back on
-		if s.engine == "sqlite" || s.engine == "sqlitememory" {
+		if s.engine == util.Sqlite || s.engine == util.SqliteMemory {
 			_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
-		} else if s.engine == "postgres" {
+		} else if s.engine == util.Postgres {
 			_, _ = s.db.Exec("SET session_replication_role = 'origin'")
 		}
 	}

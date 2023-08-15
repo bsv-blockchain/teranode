@@ -179,7 +179,7 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 		return nil
 	}
 
-	blockBytes, err := u.blockValidation.doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
 		return fmt.Errorf("failed to get block %s from peer [%w]", hash.String(), err)
 	}

@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -185,7 +183,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 					}
 					u.logger.Debugf("\U0001F532 Received BLOCK notification: %s", hash.String())
 					// get the block
-					b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
+					b, err = util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, hash.String()))
 					if err != nil {
 						continue
 					}
@@ -247,7 +245,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 					// 			//reached genesis block
 					// 			break
 					// 		}
-					// 		b, err = doHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
+					// 		b, err = util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", resp.BaseUrl, newBlock.Header.HashPrevBlock.String()))
 					// 		if err != nil {
 					// 			continue
 					// 		}
@@ -361,14 +359,11 @@ func (u *CoinbaseTrackerServer) GetUtxo(ctx context.Context, req *coinbasetracke
 	}, nil
 }
 
-func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.Utxo) (*emptypb.Empty, error) {
-
+func (u *CoinbaseTrackerServer) MarkUtxoSpent(ctx context.Context, req *coinbasetracker_api.MarkUtxoSpentRequest) (*emptypb.Empty, error) {
 	err := u.coinbaseTracker.SubmitTransaction(ctx,
 		&model.UTXO{
-			Txid:          hex.EncodeToString(req.TxId),
-			Vout:          req.Vout,
-			LockingScript: hex.EncodeToString(req.Script),
-			Satoshis:      req.Satoshis,
+			Txid: hex.EncodeToString(req.TxId),
+			Vout: req.Vout,
 		},
 	)
 	if err != nil {
@@ -376,30 +371,6 @@ func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coin
 	}
 
 	return &emptypb.Empty{}, nil
-}
-func doHTTPRequest(ctx context.Context, url string) ([]byte, error) {
-	httpClient := &http.Client{}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
-	}
-
-	blockBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read http response body [%s]", err.Error())
-	}
-
-	return blockBytes, nil
 }
 
 func addBlockUtxos(dbm base.DbManager, log utils.Logger, blockutxos []*BlockUtxo) error {

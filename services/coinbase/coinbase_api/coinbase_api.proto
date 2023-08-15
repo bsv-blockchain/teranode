@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-option go_package = ".;coinbasetracker_api";
+option go_package = ".;coinbase_api";
 
-package coinbasetracker_api;
+package coinbase_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-service CoinbasetrackerAPI {
+service coinbaseAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetUtxo (GetUtxoRequest) returns (Utxo) {}
@@ -26,6 +26,7 @@ message GetUtxoRequest {
   string address = 1;
 }
 
+// swagger:model Utxo
 message Utxo {
   bytes txId = 1;
   uint32 vout = 2;

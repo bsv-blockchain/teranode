@@ -26,6 +26,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 	var err error
 	var previousBlockId uint64
 	var previousChainWork []byte
+	var orphaned bool
 	var previousHeight uint64
 	var height uint64
 
@@ -45,7 +46,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		,subtree_count
 		,subtrees
         ,coinbase_tx
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14)
+        ,orphaned
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
 		RETURNING id
 	`
 
@@ -55,6 +57,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		previousBlockId = 0
 		previousChainWork = make([]byte, 32)
 		previousHeight = 0
+		orphaned = false
 		height = 0
 
 		// genesis block has a different insert statement, because it has no parent
@@ -75,7 +78,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			,subtree_count
 			,subtrees
 			,coinbase_tx
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14)
+			,orphaned
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
 			RETURNING id
 		`
 	} else {
@@ -83,6 +87,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			SELECT
 			 b.id
 			,b.chain_work
+			,b.orphaned
 			,b.height
 			FROM blocks b
 			WHERE b.hash = $1
@@ -90,6 +95,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		if err = s.db.QueryRowContext(ctx, qq, block.Header.HashPrevBlock[:]).Scan(
 			&previousBlockId,
 			&previousChainWork,
+			&orphaned,
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -98,6 +104,23 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			return err
 		}
 		height = previousHeight + 1
+
+		// check whether there is another block with the same height that is not orphaned
+		var activeBlockId uint64
+		qq = `
+			SELECT
+			 b.id
+			FROM blocks b
+			WHERE b.height = $1
+			  AND b.orphaned = FALSE
+		`
+		_ = s.db.QueryRowContext(ctx, qq, height).Scan(&activeBlockId)
+		if activeBlockId != 0 {
+			// this block is an orphan
+			orphaned = true
+		}
+
+		// TODO handle longer orphan chains
 
 		// Check that the coinbase transaction includes the correct block height for all
 		// blocks that are version 2 or higher.
@@ -158,6 +181,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		len(block.Subtrees),
 		subtreeBytes,
 		block.CoinbaseTx.Bytes(),
+		orphaned,
 	)
 	if err != nil {
 		return err
