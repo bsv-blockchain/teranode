@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	crand "crypto/rand"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -149,7 +149,6 @@ func NewWorker(
 }
 
 func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
-
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
 		w.logger.Infof(" \U00002699  worker is running with SEEDER")
@@ -228,10 +227,10 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 	if utxo.Satoshis > w.satoshisPerOutput {
 		//  if utxo amount  > satoshisPerOutput divide it into multiple outputs
 		// 1. we get 500000000 satoshis from coinbase
-		// 2. numberOfOutputs is 100. This number should override the satoshisPerOuptut
+		// 2. numberOfOutputs is 100. This number should override the satoshisPerOutput
 		// 3. we divide 500000000 / 100 = 5000000
 		// if numberOfOutputs is 10
-		// and satoshisPerOuptut is 10
+		// and satoshisPerOutput is 10
 		// and we have 15 satoshis in the utxo
 		// we want 1 output of 10 and change of 5
 

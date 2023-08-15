@@ -27,7 +27,6 @@ type CoinbaseTracker struct {
 	logger           utils.Logger
 	blockchainClient blockchain.ClientI
 	store            base.DbManager
-	ch               chan bool
 	lock             sync.Mutex
 }
 
@@ -51,7 +50,6 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		store:            db.Create(store, store_config),
-		ch:               make(chan bool),
 		lock:             sync.Mutex{},
 	}
 
@@ -84,8 +82,6 @@ func NewCoinbaseTracker(logger utils.Logger, blockchainClient blockchain.ClientI
 // }
 
 func (ct *CoinbaseTracker) Stop() error {
-	ct.ch <- true
-	close(ct.ch)
 	return nil
 }
 
