@@ -247,7 +247,7 @@ func main() {
 	}
 
 	for i := 0; i < *workers; i++ {
-
+		i := i
 		g.Go(func() error {
 			logLevelStr, _ := gocore.Config().Get("logLevel", "INFO")
 			workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
