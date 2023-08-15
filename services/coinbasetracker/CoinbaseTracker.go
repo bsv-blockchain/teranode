@@ -111,11 +111,11 @@ func (ct *CoinbaseTracker) GetUtxo(ctx context.Context, address string) (*bt.UTX
 	script := bscript.Script(s)
 	txId, _ := hex.DecodeString(utxo_candidates[0].Txid)
 
-	stmt = "ID = ?"
+	stmt = "txid = ? AND vout = ? AND satoshis = ?"
 	i := ct.store.GetDB()
 	tx, _ := i.(*gorm.DB)
 	t1 := time.Now()
-	utxoIds := []interface{}{utxo_candidates[0].ID}
+	utxoIds := []interface{}{utxo_candidates[0].Txid, utxo_candidates[0].Vout, utxo_candidates[0].Satoshis}
 
 	tx = tx.Model(&model.UTXO{}).Where(stmt, utxoIds...).Updates(map[string]interface{}{"status": 2})
 	if tx.Error == nil {
@@ -183,9 +183,12 @@ func (ct *CoinbaseTracker) UpdateUtxoReserved(ctx context.Context, tx any, dur t
 	return ct.store.TxUpdateBatch(tx, "utxos", "updated_at < ? AND status = 2", vals, map[string]interface{}{"status": model.StatusSpendable})
 }
 
-func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, transaction []byte) error {
+func (ct *CoinbaseTracker) SubmitTransaction(ctx context.Context, utxo *model.UTXO) error {
 	// send to node
 	// set utxos as spent
-
+	err := LockSpent(ct.store, ct.logger, utxo)
+	if err != nil {
+		ct.logger.Errorf("failed to lock spent: %s", err.Error())
+	}
 	return nil
 }

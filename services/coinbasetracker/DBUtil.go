@@ -45,6 +45,34 @@ func unlockSpendable(dbm base.DbManager, log utils.Logger) error {
 	return tx.Error
 }
 
+func LockSpent(dbm base.DbManager, log utils.Logger, utxo *model.UTXO) error {
+	//const stmt = "WITH RECURSIVE ChainBlocks AS (SELECT block_hash, prev_block_hash, height FROM blocks WHERE height <= (SELECT MAX(height) - 100 FROM blocks) UNION ALL SELECT b.block_hash, b.prev_block_hash, b.height FROM blocks b JOIN ChainBlocks cb ON b.block_hash = cb.prev_block_hash) UPDATE utxos SET status = '1' WHERE block_hash IN (SELECT block_hash FROM ChainBlocks) AND status = '0'"
+	var err error
+	tx, _ := dbm.GetDB().(*gorm.DB)
+	const stmt = "UPDATE utxos SET status = '3' WHERE txid = ? AND vout = ? AND satoshis = ? AND status = '2'"
+	vals := []interface{}{string(utxo.Txid), utxo.Vout, utxo.Satoshis}
+	retries := 0
+	for retries < DB_OP_RETRIES {
+		tx = tx.Exec(stmt, vals...)
+		if err == nil {
+			break
+		}
+		e, ok := err.(sqlerr.Error)
+		if ok {
+			if e.ExtendedCode == 5 {
+				log.Warnf("[lock spent] db locked: %s - code %d: Retrying...", e.Error(), e.ExtendedCode)
+			} else {
+				log.Errorf("%s - code %d: Retrying...", e.Error(), e.ExtendedCode)
+			}
+		} else {
+			log.Errorf("[lock spent] locking spent utxo: %s", tx.Error.Error())
+		}
+		retries++
+		time.Sleep(DB_OP_WAIT * time.Millisecond)
+	}
+	return tx.Error
+}
+
 func AddBlocks(dbm base.DbManager, log utils.Logger, blocks []*model.Block) error {
 	retries := 0
 	var err error

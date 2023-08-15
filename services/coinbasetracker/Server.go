@@ -2,6 +2,7 @@ package coinbasetracker
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -116,7 +117,7 @@ func (u *CoinbaseTrackerServer) Start(ctx context.Context) error {
 		blockutxos := []*BlockUtxo{}
 
 		queue_wait, _ := gocore.Config().GetInt("coinbasetracker_queue_wait", 100)
-		
+
 		for {
 			t := time.NewTimer(time.Duration(queue_wait) * time.Millisecond)
 			<-t.C
@@ -360,14 +361,21 @@ func (u *CoinbaseTrackerServer) GetUtxo(ctx context.Context, req *coinbasetracke
 	}, nil
 }
 
-func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.SubmitTransactionRequest) (*emptypb.Empty, error) {
+func (u *CoinbaseTrackerServer) SubmitTransaction(ctx context.Context, req *coinbasetracker_api.Utxo) (*emptypb.Empty, error) {
 
-	err := u.coinbaseTracker.SubmitTransaction(ctx, req.Tx)
+	err := u.coinbaseTracker.SubmitTransaction(ctx,
+		&model.UTXO{
+			Txid:          hex.EncodeToString(req.TxId),
+			Vout:          req.Vout,
+			LockingScript: hex.EncodeToString(req.Script),
+			Satoshis:      req.Satoshis,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	return nil, nil
+	return &emptypb.Empty{}, nil
 }
 func doHTTPRequest(ctx context.Context, url string) ([]byte, error) {
 	httpClient := &http.Client{}

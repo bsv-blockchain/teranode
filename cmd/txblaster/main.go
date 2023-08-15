@@ -213,7 +213,7 @@ func main() {
 	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)
 	numberOfTransactions := uint32(1)
 
-	logger.Infof("Each worker with ask seeder to create %d transaction(s) with %d outputs of %d satoshis each",
+	logger.Infof("Each worker will ask tracker/seeder to create %d transaction(s) with %d outputs of %d satoshis each",
 		numberOfTransactions,
 		numberOfOutputs,
 		satoshisPerOutput,
@@ -272,6 +272,7 @@ func main() {
 
 			return w.Start(ctx, *seeder)
 		})
+
 	}
 
 	// start http health check server

@@ -32,7 +32,7 @@ type CoinbasetrackerAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	GetUtxo(ctx context.Context, in *GetUtxoRequest, opts ...grpc.CallOption) (*Utxo, error)
-	SubmitTransaction(ctx context.Context, in *SubmitTransactionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	SubmitTransaction(ctx context.Context, in *Utxo, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type coinbasetrackerAPIClient struct {
@@ -61,7 +61,7 @@ func (c *coinbasetrackerAPIClient) GetUtxo(ctx context.Context, in *GetUtxoReque
 	return out, nil
 }
 
-func (c *coinbasetrackerAPIClient) SubmitTransaction(ctx context.Context, in *SubmitTransactionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *coinbasetrackerAPIClient) SubmitTransaction(ctx context.Context, in *Utxo, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, CoinbasetrackerAPI_SubmitTransaction_FullMethodName, in, out, opts...)
 	if err != nil {
@@ -77,7 +77,7 @@ type CoinbasetrackerAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	GetUtxo(context.Context, *GetUtxoRequest) (*Utxo, error)
-	SubmitTransaction(context.Context, *SubmitTransactionRequest) (*emptypb.Empty, error)
+	SubmitTransaction(context.Context, *Utxo) (*emptypb.Empty, error)
 	mustEmbedUnimplementedCoinbasetrackerAPIServer()
 }
 
@@ -91,7 +91,7 @@ func (UnimplementedCoinbasetrackerAPIServer) Health(context.Context, *emptypb.Em
 func (UnimplementedCoinbasetrackerAPIServer) GetUtxo(context.Context, *GetUtxoRequest) (*Utxo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUtxo not implemented")
 }
-func (UnimplementedCoinbasetrackerAPIServer) SubmitTransaction(context.Context, *SubmitTransactionRequest) (*emptypb.Empty, error) {
+func (UnimplementedCoinbasetrackerAPIServer) SubmitTransaction(context.Context, *Utxo) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitTransaction not implemented")
 }
 func (UnimplementedCoinbasetrackerAPIServer) mustEmbedUnimplementedCoinbasetrackerAPIServer() {}
@@ -144,7 +144,7 @@ func _CoinbasetrackerAPI_GetUtxo_Handler(srv interface{}, ctx context.Context, d
 }
 
 func _CoinbasetrackerAPI_SubmitTransaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SubmitTransactionRequest)
+	in := new(Utxo)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func _CoinbasetrackerAPI_SubmitTransaction_Handler(srv interface{}, ctx context.
 		FullMethod: CoinbasetrackerAPI_SubmitTransaction_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoinbasetrackerAPIServer).SubmitTransaction(ctx, req.(*SubmitTransactionRequest))
+		return srv.(CoinbasetrackerAPIServer).SubmitTransaction(ctx, req.(*Utxo))
 	}
 	return interceptor(ctx, in, info, handler)
 }

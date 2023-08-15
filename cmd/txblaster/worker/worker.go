@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -148,20 +149,16 @@ func NewWorker(
 }
 
 func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
-	b := make([]byte, 64)
-	_, _ = rand.Read(b)
-	id := binary.BigEndian.Uint64(b) ^ uint64(time.Now().Nanosecond())
-
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
-		w.logger.Infof("[%d] \U00002699  worker is running with SEEDER", id)
-		keySet, err = w.startWithSeeder(ctx, id)
+		w.logger.Infof(" \U00002699  worker is running with SEEDER")
+		keySet, err = w.startWithSeeder(ctx)
 		if err != nil {
 			return err
 		}
 	} else {
-		w.logger.Infof("[%d] \U00002699  worker is running with TRACKER", id)
-		keySet, err = w.startWithCoinbaseTracker(ctx, id)
+		w.logger.Infof(" \U00002699  worker is running with TRACKER")
+		keySet, err = w.startWithCoinbaseTracker(ctx)
 		if err != nil {
 			return err
 		}
@@ -182,12 +179,11 @@ func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
 			if err != nil {
 				return fmt.Errorf("ERROR in fire transactions: %v", err)
 			}
-
 		}
 	}
 }
 
-func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extra.KeySet, error) {
+func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, error) {
 	keysetScript, err := bscript.NewP2PKHFromPubKeyEC(w.privateKey.PubKey())
 	if err != nil {
 		return nil, err
@@ -208,25 +204,25 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extr
 		return nil, fmt.Errorf("error creating connection for coinbaseTracker %+v: %v", coinbaseTrackerAddr, err)
 	}
 	w.coinbaseTrackerClient = coinbasetracker_api.NewCoinbasetrackerAPIClient(conn)
-	w.logger.Debugf("[%d] coinbaseAddr: %s", id, w.address)
-
-	utxo, err := w.getUtxosFromCoinbaseTracker(50)
+	w.logger.Debugf("coinbaseAddr: %s", w.address)
+	coinbaseTracker_max_satoshis, _ := gocore.Config().GetInt("coinbasetracker_max_satoshis", 100)
+	rn, _ := crand.Int(crand.Reader, big.NewInt(int64(coinbaseTracker_max_satoshis)))
+	w.logger.Infof("Requesting utxo from tracker with satoshis:%d", rn)
+	utxo, err := w.getUtxosFromCoinbaseTracker(rn.Uint64() + 1)
 	if err != nil {
-		return nil, fmt.Errorf("error getting Utxos from coinbaseTracker: %v", err)
+		return nil, fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
 	}
+	w.logger.Debugf(" \U0001fa99  Got utxo from tracker txid:%s vout:%d satoshis:%d script: %s",
+		hex.EncodeToString(utxo.TxId),
+		utxo.Vout,
+		utxo.Satoshis,
+		hex.EncodeToString(utxo.Script))
 
 	script, err := bscript.NewP2PKHFromPubKeyBytes(w.privateKey.PubKey().SerialiseCompressed())
 	if err != nil {
 		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
 		return nil, fmt.Errorf("failed to create private key from pub key: %v", err)
 	}
-
-	//	inputUtxos := make([]*coinbasetracker_api.Utxo, 0)
-	w.logger.Debugf("txid: %s vout: %d satoshis: %d script: %s",
-		hex.EncodeToString(utxo.TxId),
-		utxo.Vout,
-		utxo.Satoshis,
-		hex.EncodeToString(utxo.Script))
 
 	if utxo.Satoshis > w.satoshisPerOutput {
 		//  if utxo amount  > satoshisPerOutput divide it into multiple outputs
@@ -239,57 +235,82 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extr
 		// we want 1 output of 10 and change of 5
 
 		actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
-		go func(numberOfOutputs int, txId []byte) {
 
-			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
+		// tell the tracker that this utxo must be marked as spent
+		if w.coinbaseTrackerClient != nil {
+			if _, err = w.coinbaseTrackerClient.SubmitTransaction(
+				context.Background(),
+				&coinbasetracker_api.Utxo{
+					TxId:     utxo.TxId,
+					Vout:     utxo.Vout,
+					Script:   utxo.Script,
+					Satoshis: utxo.Satoshis,
+				},
+			); err != nil {
+				w.logger.Errorf("error submitting tx to tracker: %s", err.Error())
+			}
+		}
+
+		go func(numberOfOutputs int) {
+
+			w.logger.Infof("Sending %d outputs with satoshis:%d + change:%d to tx chan...",
+				numberOfOutputs,
+				w.satoshisPerOutput,
+				change)
+
 			for idx := 0; idx < numberOfOutputs; idx++ {
 
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          bt.ReverseBytes(utxo.TxId),
 					Vout:          uint32(idx),
 					LockingScript: script,
 					Satoshis:      w.satoshisPerOutput,
 				}
 
 				w.utxoChan <- u
+
 			}
 			if change > 0 {
+
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          bt.ReverseBytes(utxo.TxId),
 					Vout:          uint32(numberOfOutputs),
 					LockingScript: script,
 					Satoshis:      change,
 				}
 
 				w.utxoChan <- u
-			}
 
-		}(int(actualOutputs), utxo.TxId)
+			}
+			w.logger.Infof(" \u2705 Done sending %d outputs with satoshis:%d + change:%d to tx chan",
+				w.numberOfOutputs,
+				w.satoshisPerOutput,
+				change)
+
+		}(int(actualOutputs))
 
 		// 4. we send 100 outputs of 5000000 satoshis each
 	} else if utxo.Satoshis == w.satoshisPerOutput {
 		// if utxo amount == satoshisPerOutput send it directly
-		go func(numberOfOutputs int, txId []byte) {
-			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
-			for i := 0; i < numberOfOutputs; i++ {
-
-				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
-					Vout:          uint32(i),
-					LockingScript: script,
-					Satoshis:      w.satoshisPerOutput,
-				}
-
-				w.utxoChan <- u
+		go func() {
+			w.logger.Infof("Sending 1 output with satoshis:%d to tx chan", w.satoshisPerOutput)
+			u := &bt.UTXO{
+				TxID:          bt.ReverseBytes(utxo.TxId),
+				Vout:          0,
+				LockingScript: script,
+				Satoshis:      w.satoshisPerOutput,
 			}
-			w.logger.Infof("[%d] Done sending %d outputs to txChan", id, numberOfOutputs)
-		}(w.numberOfOutputs, utxo.TxId)
+
+			w.utxoChan <- u
+
+			w.logger.Infof(" \u2705 Done sending 1 outputs with satoshis:%d to tx chan", w.satoshisPerOutput)
+		}()
 
 	}
 	return keySet, nil
 }
 
-func (w *Worker) startWithSeeder(ctx context.Context, id uint64) (*extra.KeySet, error) {
+func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
 
 	seederGrpcAddresses := make([]string, 0)
 	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets", ":8083"); ok {
@@ -366,7 +387,7 @@ func (w *Worker) startWithSeeder(ctx context.Context, id uint64) (*extra.KeySet,
 
 				w.utxoChan <- u
 			}
-			w.logger.Infof("[%d] Done sending %d outputs to txChan", id, numberOfOutputs)
+			w.logger.Infof("Done sending %d outputs to txChan", numberOfOutputs)
 		}(res.NumberOfOutputs)
 	}
 
