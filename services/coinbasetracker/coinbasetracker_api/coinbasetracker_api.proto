@@ -11,7 +11,7 @@ service CoinbasetrackerAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetUtxo (GetUtxoRequest) returns (Utxo) {}
-  rpc SubmitTransaction (SubmitTransactionRequest) returns (google.protobuf.Empty) {}
+  rpc SubmitTransaction (Utxo) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse

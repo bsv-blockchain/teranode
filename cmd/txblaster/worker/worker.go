@@ -182,7 +182,6 @@ func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
 			if err != nil {
 				return fmt.Errorf("ERROR in fire transactions: %v", err)
 			}
-
 		}
 	}
 }
@@ -239,51 +238,80 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context, id uint64) (*extr
 		// we want 1 output of 10 and change of 5
 
 		actualOutputs, change := w.calculateOutputs(utxo.Satoshis)
-		go func(numberOfOutputs int, txId []byte) {
+		go func(numberOfOutputs int, client *coinbasetracker_api.CoinbasetrackerAPIClient, utxo *coinbasetracker_api.Utxo) {
 
 			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
 			for idx := 0; idx < numberOfOutputs; idx++ {
 
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          bt.ReverseBytes(utxo.TxId),
 					Vout:          uint32(idx),
 					LockingScript: script,
 					Satoshis:      w.satoshisPerOutput,
 				}
 
 				w.utxoChan <- u
+				if client != nil {
+					if _, err = (*client).SubmitTransaction(
+						context.Background(),
+						&coinbasetracker_api.Utxo{
+							TxId:     utxo.TxId,
+							Vout:     utxo.Vout,
+							Script:   utxo.Script,
+							Satoshis: utxo.Satoshis,
+						},
+					); err != nil {
+						w.logger.Errorf("error submitting tx to tracker: %s", err.Error())
+					}
+				}
 			}
 			if change > 0 {
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          bt.ReverseBytes(utxo.TxId),
 					Vout:          uint32(numberOfOutputs),
 					LockingScript: script,
 					Satoshis:      change,
 				}
 
 				w.utxoChan <- u
+
+				// tracker does not have the change tx - no need to sumbit tx as spent
+
 			}
 
-		}(int(actualOutputs), utxo.TxId)
+		}(int(actualOutputs), &w.coinbaseTrackerClient, utxo)
 
 		// 4. we send 100 outputs of 5000000 satoshis each
 	} else if utxo.Satoshis == w.satoshisPerOutput {
 		// if utxo amount == satoshisPerOutput send it directly
-		go func(numberOfOutputs int, txId []byte) {
+		go func(numberOfOutputs int, client *coinbasetracker_api.CoinbasetrackerAPIClient, utxo *coinbasetracker_api.Utxo) {
 			w.logger.Infof("[%d] Starting to send %d outputs to txChan", id, numberOfOutputs)
 			for i := 0; i < numberOfOutputs; i++ {
 
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          bt.ReverseBytes(utxo.TxId),
 					Vout:          uint32(i),
 					LockingScript: script,
 					Satoshis:      w.satoshisPerOutput,
 				}
 
 				w.utxoChan <- u
+				if client != nil {
+					if _, err = (*client).SubmitTransaction(
+						context.Background(),
+						&coinbasetracker_api.Utxo{
+							TxId:     utxo.TxId,
+							Vout:     utxo.Vout,
+							Script:   utxo.Script,
+							Satoshis: utxo.Satoshis,
+						},
+					); err != nil {
+						w.logger.Errorf("error submitting tx to tracker: %s", err.Error())
+					}
+				}
 			}
 			w.logger.Infof("[%d] Done sending %d outputs to txChan", id, numberOfOutputs)
-		}(w.numberOfOutputs, utxo.TxId)
+		}(w.numberOfOutputs, &w.coinbaseTrackerClient, utxo)
 
 	}
 	return keySet, nil
