@@ -32,8 +32,8 @@ import (
 // CoinbaseTrackerServer type carries the logger within it
 type CoinbaseTrackerServer struct {
 	coinbasetracker_api.UnimplementedCoinbasetrackerAPIServer
-	logger           utils.Logger
-	grpcServer       *grpc.Server
+	logger utils.Logger
+	// grpcServer       *grpc.Server
 	blockchainClient blockchain.ClientI
 	coinbaseTracker  *CoinbaseTracker
 	testnet          bool
