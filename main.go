@@ -191,7 +191,7 @@ func main() {
 
 	// blockchain service needs to start first !
 	if startBlockchain {
-		blockchainService, err := blockchain.New(logger)
+		blockchainService, err := blockchain.New(gocore.Log("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -306,7 +306,7 @@ func main() {
 	if startBlockAssembly {
 		if _, found = gocore.Config().Get("blockassembly_grpcAddress"); found {
 			sm.AddService("BlockAssembly", blockassembly.New(
-				gocore.Log("bchn"),
+				gocore.Log("bass"),
 				txStore,
 				subtreeStore,
 			))
@@ -396,7 +396,7 @@ func main() {
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
 		if ok && propagationGrpcAddress != "" {
 			sm.AddService("PropagationServer", propagation.New(
-				logger,
+				gocore.Log("prop"),
 				txStore,
 				validatorClient,
 			))
