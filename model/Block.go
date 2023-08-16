@@ -243,9 +243,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 
 	for _, subtree := range b.subtreeSlices {
 		for _, subtreeNode := range subtree.Nodes {
+			if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
+				continue
+			}
+
 			txMeta, err := txMetaStore.Get(ctx, subtreeNode.Hash)
 			if err != nil {
-				return err
+				return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
 			}
 
 			if txMeta == nil {
