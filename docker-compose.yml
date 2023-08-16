@@ -1,9 +1,61 @@
 version: '3.8'
 
 services:
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=really_strong_password_change_me
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - ./deploy/docker-compose/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  coinbase:
+    container_name: coinbase
+    image: taal/ubsv:latest
+    networks:
+      - ubsv-network
+    depends_on:
+      - postgres
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      logLevel: "DEBUG"
+      blobserver_grpcAddress: "ubsv-2:8091"
+      coinbase_grpcAddress: ":8093"
+      coinbase_store: "postgres://coinbase:coinbase@postgres:5432/coinbase"
+  tx-blaster:
+    container_name: tx-blaster
+    image: taal/ubsv:latest
+    depends_on:
+      - postgres
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      logLevel: "DEBUG"
+      txblaster_propagation_grpcTargets: "ubsv-1:8084|ubsv-2:8084|ubsv-3:8084"
+      coinbase_grpcAddress: "coinbase:8093"
+      tx_blaster_profilerAddr: ":9092"
+      coinbaseSimpleTracker: "true"
+      number_of_outputs: "5000"
+    # pass arguments to the command
+    command: [ "./blaster.run", "-workers=1" ]
   ubsv-1:
     container_name: ubsv-1
     image: taal/ubsv:latest
+    depends_on:
+      - postgres
     build:
       context: .
       dockerfile: Dockerfile
@@ -22,16 +74,22 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-1:8090"
       blobserver_remoteAddress: "ubsv-1:8091"
+      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
+      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      startTxMetaStore: "false"
     expose:
-      - 8081-8091
+      - 8081-8093
     ports:
-      - "18081-18088:8081-8088"
-      - "18090-18091:8090-8091"
+      - "18081-18089:8081-8089"
+      - "18090-18093:8090-8093"
     networks:
       - ubsv-network
   ubsv-2:
     container_name: ubsv-2
     image: taal/ubsv:latest
+    depends_on:
+      - postgres
     build:
       context: .
       dockerfile: Dockerfile
@@ -50,16 +108,23 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-2:8090"
       blobserver_remoteAddress: "ubsv-2:8091"
+      utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
+      txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      startTxMetaStore: "false"
+
     expose:
-      - 8081-8091
+      - 8081-8093
     ports:
-      - "28081-28088:8081-8088"
-      - "28090-28091:8090-8091"
+      - "28081-28089:8081-8089"
+      - "28090-28093:8090-8093"
     networks:
       - ubsv-network
   ubsv-3:
     container_name: ubsv-3
     image: taal/ubsv:latest
+    depends_on:
+      - postgres
     build:
       context: .
       dockerfile: Dockerfile
@@ -78,11 +143,15 @@ services:
       seeder_grpcAddress: ":8083"
       blobserver_baseURL: "http://ubsv-3:8090"
       blobserver_remoteAddress: "ubsv-3:8091"
+      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      startTxMetaStore: "false"
     expose:
-      - 8081-8091
+      - 8081-8093
     ports:
-      - "38081-38088:8081-8088"
-      - "38090-38091:8090-8091"
+      - "38081-38089:8081-8089"
+      - "38090-38093:8090-8093"
     networks:
       - ubsv-network
 
