@@ -11,25 +11,23 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var (
-	prometheusCoinbaseAddBlock prometheus.Counter
-)
+// var (
+// 	prometheusCoinbaseAddBlock prometheus.Counter
+// )
 
-func init() {
-	prometheusCoinbaseAddBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "coinbase_add_block",
-			Help: "Number of blocks added to the coinbase service",
-		},
-	)
-}
+// func init() {
+// 	prometheusCoinbaseAddBlock = promauto.NewCounter(
+// 		prometheus.CounterOpts{
+// 			Name: "coinbase_add_block",
+// 			Help: "Number of blocks added to the coinbase service",
+// 		},
+// 	)
+// }
 
 // Server type carries the logger within it
 type Server struct {

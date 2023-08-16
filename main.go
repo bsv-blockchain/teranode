@@ -433,6 +433,7 @@ func main() {
 
 func shouldStart(app string) bool {
 
+	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
 	for _, cmd := range os.Args[1:] {
 		if cmd == cmdArg {
@@ -440,6 +441,15 @@ func shouldStart(app string) bool {
 		}
 	}
 
+	// See if the app is disabled in the command line
+	cmdArg = fmt.Sprintf("-%s=0", strings.ToLower(app))
+	for _, cmd := range os.Args[1:] {
+		if cmd == cmdArg {
+			return false
+		}
+	}
+
+	// If the app was not specified on the command line, see if it is enabled in the config
 	varArg := fmt.Sprintf("start%s", app)
 
 	return gocore.Config().GetBool(varArg)
