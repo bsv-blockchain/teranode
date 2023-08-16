@@ -189,14 +189,32 @@ func main() {
 
 	sm, ctx := servicemanager.NewServiceManager()
 
+	var blockchainService *blockchain.Blockchain
 	// blockchain service needs to start first !
 	if startBlockchain {
-		blockchainService, err := blockchain.New(gocore.Log("bchn"))
+		var err error
+		blockchainService, err = blockchain.New(gocore.Log("bchn"))
 		if err != nil {
 			panic(err)
 		}
 
-		sm.AddService("BlockChainService", blockchainService)
+		// TODO - for a temporary period, we will start the blockchain service
+		// outside of the service manager. This is because the blockchain service
+		// needs to be running before the other services start.
+
+		if err := blockchainService.Init(ctx); err != nil {
+			panic(err)
+		}
+
+		go func() {
+			if err := blockchainService.Start(ctx); err != nil {
+				panic(err)
+			}
+		}()
+
+		time.Sleep(5 * time.Second)
+
+		//sm.AddService("BlockChainService", blockchainService)
 	}
 
 	//----------------------------------------------------------------
@@ -415,6 +433,14 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
+
+	// TODO - As blockchain service is being started manually, we need to stop it manually
+	if blockchainService != nil {
+		logger.Infof("stopping blockchain service")
+		if err := blockchainService.Stop(shutdownCtx); err != nil {
+			logger.Errorf("failed to stop blockchain service: %v", err)
+		}
+	}
 
 	//
 	// close all the stores
