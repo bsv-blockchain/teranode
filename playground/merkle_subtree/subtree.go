@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 )
 
 type Subtree struct {

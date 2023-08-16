@@ -1,7 +1,7 @@
 package utxo
 
 import (
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 )
 
 type Options func(utxostore.Interface)

@@ -3,8 +3,8 @@ package blockassembly
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

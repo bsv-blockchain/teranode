@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/TAAL-GmbH/ubsv/cmd/txblaster/extra"
-	"github.com/TAAL-GmbH/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
+	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"golang.org/x/time/rate"

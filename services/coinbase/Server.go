@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/coinbase/coinbase_api"
-	"github.com/TAAL-GmbH/ubsv/stores/blockchain"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

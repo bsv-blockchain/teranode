@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

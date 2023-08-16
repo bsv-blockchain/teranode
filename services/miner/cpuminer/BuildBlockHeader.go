@@ -3,8 +3,8 @@ package cpuminer
 import (
 	"encoding/binary"
 
-	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 )
 

@@ -8,7 +8,7 @@ package blockassembly_api
 
 import (
 	context "context"
-	model "github.com/TAAL-GmbH/ubsv/model"
+	model "github.com/bitcoin-sv/ubsv/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"

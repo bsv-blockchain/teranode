@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/TAAL-GmbH/ubsv/db/model"
+	"github.com/bitcoin-sv/ubsv/db/model"
 	u "github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"gorm.io/driver/sqlite"

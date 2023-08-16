@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

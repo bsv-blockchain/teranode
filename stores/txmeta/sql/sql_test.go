@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta/tests"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/tests"
 	"github.com/stretchr/testify/require"
 )
 

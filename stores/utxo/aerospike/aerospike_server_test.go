@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/util"
 	aero "github.com/aerospike/aerospike-client-go/v6"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )

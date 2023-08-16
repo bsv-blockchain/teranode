@@ -3,7 +3,7 @@ package work
 import (
 	"math/big"
 
-	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

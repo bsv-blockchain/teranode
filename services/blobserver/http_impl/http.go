@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"

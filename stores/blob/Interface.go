@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 )
 
 type Store interface {

@@ -5,14 +5,14 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob/badger"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/file"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/gcs"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/kinesiss3"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/memory"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/minio"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/null"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/s3"
+	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
+	"github.com/bitcoin-sv/ubsv/stores/blob/file"
+	"github.com/bitcoin-sv/ubsv/stores/blob/gcs"
+	"github.com/bitcoin-sv/ubsv/stores/blob/kinesiss3"
+	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
+	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 )
 
 func NewStore(storeUrl *url.URL) (store Store, err error) {

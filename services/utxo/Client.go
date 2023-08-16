@@ -3,8 +3,8 @@ package utxo
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

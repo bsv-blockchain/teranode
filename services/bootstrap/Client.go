@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"

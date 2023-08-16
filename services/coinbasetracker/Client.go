@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
+	coinbasetracker_api "github.com/bitcoin-sv/ubsv/services/coinbasetracker/coinbasetracker_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"

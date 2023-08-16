@@ -8,9 +8,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
-	txmetastore "github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"

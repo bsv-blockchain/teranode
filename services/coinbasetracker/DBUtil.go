@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/db/base"
-	"github.com/TAAL-GmbH/ubsv/db/model"
+	"github.com/bitcoin-sv/ubsv/db/base"
+	"github.com/bitcoin-sv/ubsv/db/model"
 	sqlerr "github.com/mattn/go-sqlite3"
 	"github.com/ordishs/go-utils"
 	"gorm.io/gorm"

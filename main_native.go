@@ -12,7 +12,7 @@ import "C"
 import (
 	"log"
 
-	"github.com/TAAL-GmbH/ubsv/native"
+	"github.com/bitcoin-sv/ubsv/native"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/ordishs/gocore"
 )

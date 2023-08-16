@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/libsv/go-p2p"
 	"github.com/olekukonko/tablewriter"
 	"github.com/ordishs/go-utils"

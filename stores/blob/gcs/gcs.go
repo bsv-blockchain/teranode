@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
-	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/api/option"

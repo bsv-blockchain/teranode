@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/model"
 )
 
 func TestTarget(t *testing.T) {

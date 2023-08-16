@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/TAAL-GmbH/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"

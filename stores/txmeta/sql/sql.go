@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"

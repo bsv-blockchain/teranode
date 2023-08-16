@@ -5,9 +5,9 @@ import (
 	"log"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator"
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"

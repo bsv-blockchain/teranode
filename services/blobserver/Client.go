@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
-	"github.com/TAAL-GmbH/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

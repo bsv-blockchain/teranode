@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

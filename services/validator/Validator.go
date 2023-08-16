@@ -8,12 +8,12 @@ import (
 
 	"github.com/Shopify/sarama"
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
-	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/tracing"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-bitcoin"

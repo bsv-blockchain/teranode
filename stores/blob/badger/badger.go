@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blob/options"
-	"github.com/TAAL-GmbH/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

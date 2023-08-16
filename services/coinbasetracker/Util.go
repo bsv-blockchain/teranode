@@ -3,8 +3,8 @@ package coinbasetracker
 import (
 	"errors"
 
-	smodel "github.com/TAAL-GmbH/ubsv/db/model"
-	nmodel "github.com/TAAL-GmbH/ubsv/model"
+	smodel "github.com/bitcoin-sv/ubsv/db/model"
+	nmodel "github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 )
 

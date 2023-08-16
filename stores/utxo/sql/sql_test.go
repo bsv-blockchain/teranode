@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"

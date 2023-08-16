@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	blobserver_api "github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/repository"
-	"github.com/TAAL-GmbH/ubsv/services/blockchain"
+	blobserver_api "github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"

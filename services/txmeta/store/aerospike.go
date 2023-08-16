@@ -5,8 +5,8 @@ package store
 import (
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta/aerospike"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/aerospike"
 )
 
 func init() {

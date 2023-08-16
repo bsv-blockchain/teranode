@@ -1,10 +1,10 @@
 package db
 
 import (
-	"github.com/TAAL-GmbH/ubsv/db/base"
-	"github.com/TAAL-GmbH/ubsv/db/mongo"
-	"github.com/TAAL-GmbH/ubsv/db/postgres"
-	"github.com/TAAL-GmbH/ubsv/db/sqlite"
+	"github.com/bitcoin-sv/ubsv/db/base"
+	"github.com/bitcoin-sv/ubsv/db/mongo"
+	"github.com/bitcoin-sv/ubsv/db/postgres"
+	"github.com/bitcoin-sv/ubsv/db/sqlite"
 	"github.com/ordishs/gocore"
 )
 

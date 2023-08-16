@@ -3,8 +3,8 @@ package store
 import (
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 )
 
 func init() {

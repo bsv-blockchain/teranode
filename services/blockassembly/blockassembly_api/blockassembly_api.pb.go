@@ -7,7 +7,7 @@
 package blockassembly_api
 
 import (
-	model "github.com/TAAL-GmbH/ubsv/model"
+	model "github.com/bitcoin-sv/ubsv/model"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"

@@ -8,19 +8,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/db"
-	"github.com/TAAL-GmbH/ubsv/db/base"
-	"github.com/TAAL-GmbH/ubsv/db/model"
-	networkModel "github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/services/blobserver/blobserver_api"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/db"
+	"github.com/bitcoin-sv/ubsv/db/base"
+	"github.com/bitcoin-sv/ubsv/db/model"
+	networkModel "github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/util"
 
 	//"golang.org/x/time/rate"
 
 	"github.com/libsv/go-p2p/chaincfg/chainhash"
 
-	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	coinbasetracker_api "github.com/TAAL-GmbH/ubsv/services/coinbasetracker/coinbasetracker_api"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	coinbasetracker_api "github.com/bitcoin-sv/ubsv/services/coinbasetracker/coinbasetracker_api"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/lockfree"
 	"github.com/ordishs/gocore"

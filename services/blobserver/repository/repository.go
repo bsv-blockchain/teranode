@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

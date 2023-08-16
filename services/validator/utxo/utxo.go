@@ -6,9 +6,9 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/TAAL-GmbH/ubsv/model"
-	"github.com/TAAL-GmbH/ubsv/services/blockchain"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 )
 

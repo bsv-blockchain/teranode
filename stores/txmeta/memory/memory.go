@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

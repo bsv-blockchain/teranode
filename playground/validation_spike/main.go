@@ -7,8 +7,8 @@ import (
 	_ "net/http/pprof"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/services/validator"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"github.com/libsv/go-bt/v2/chainhash"

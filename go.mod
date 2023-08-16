@@ -1,4 +1,4 @@
-module github.com/TAAL-GmbH/ubsv
+module github.com/bitcoin-sv/ubsv
 
 go 1.20
 

@@ -3,8 +3,8 @@ package memory
 import (
 	"sync"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

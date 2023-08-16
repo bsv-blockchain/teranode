@@ -3,8 +3,8 @@ package txmeta
 import (
 	"context"
 
-	"github.com/TAAL-GmbH/ubsv/services/txmeta/txmeta_api"
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

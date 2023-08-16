@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	_ "github.com/TAAL-GmbH/ubsv/k8sresolver"
-	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
+	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
+	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"

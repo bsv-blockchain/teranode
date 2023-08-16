@@ -6,9 +6,9 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo"
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	bootstrap_api "github.com/TAAL-GmbH/ubsv/services/bootstrap/bootstrap_api"
-	"github.com/TAAL-GmbH/ubsv/util"
+	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"

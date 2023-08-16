@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/stores/blockchain/sql"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	"github.com/ordishs/go-utils"
 )
 

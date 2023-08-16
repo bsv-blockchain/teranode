@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/TAAL-GmbH/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/ordishs/go-utils"
 )
 

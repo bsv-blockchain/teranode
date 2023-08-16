@@ -6,8 +6,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/TAAL-GmbH/ubsv/services/blockassembly"
-	"github.com/TAAL-GmbH/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )

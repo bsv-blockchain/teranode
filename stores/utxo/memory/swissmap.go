@@ -4,9 +4,9 @@ import (
 	"context"
 	"sync"
 
-	"github.com/TAAL-GmbH/ubsv/services/utxo/utxostore_api"
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/dolthub/swiss"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

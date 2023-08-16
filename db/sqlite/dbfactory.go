@@ -1,7 +1,7 @@
 package sqlite
 
 import (
-	"github.com/TAAL-GmbH/ubsv/db/base"
+	"github.com/bitcoin-sv/ubsv/db/base"
 	u "github.com/ordishs/go-utils"
 )
 

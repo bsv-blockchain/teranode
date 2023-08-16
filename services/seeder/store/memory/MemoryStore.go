@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/TAAL-GmbH/ubsv/services/seeder/store"
+	"github.com/bitcoin-sv/ubsv/services/seeder/store"
 )
 
 type memorySeederStore struct {

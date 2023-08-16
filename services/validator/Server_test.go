@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/libsv/go-p2p"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"

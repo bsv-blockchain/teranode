@@ -4,8 +4,8 @@ import (
 	"context"
 	"net"
 
-	"github.com/TAAL-GmbH/ubsv/services/validator"
-	"github.com/TAAL-GmbH/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/ordishs/go-utils"
 )
 

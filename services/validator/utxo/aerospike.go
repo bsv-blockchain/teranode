@@ -5,8 +5,8 @@ package utxo
 import (
 	"net/url"
 
-	utxostore "github.com/TAAL-GmbH/ubsv/stores/utxo"
-	"github.com/TAAL-GmbH/ubsv/stores/utxo/aerospike"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 )
 
 func init() {
