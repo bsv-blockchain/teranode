@@ -80,6 +80,11 @@ type Ipv6MulticastMsg struct {
 	TxExtendedBytes []byte
 }
 
+type PropagationServer struct {
+	client    propagation_api.PropagationAPIClient
+	lastError *time.Time
+}
+
 type Worker struct {
 	logger                utils.Logger
 	utxoChan              chan *bt.UTXO
@@ -90,7 +95,7 @@ type Worker struct {
 	privateKey            *bec.PrivateKey
 	address               string
 	rateLimiter           *rate.Limiter
-	propagationServers    []propagation_api.PropagationAPIClient
+	propagationServers    []PropagationServer
 	kafkaProducer         sarama.SyncProducer
 	kafkaTopic            string
 	ipv6MulticastConn     *net.UDPConn
@@ -126,6 +131,13 @@ func NewWorker(
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
+	propServers := make([]PropagationServer, len(propagationServers))
+	for i, p := range propagationServers {
+		propServers[i] = PropagationServer{
+			client: p,
+		}
+	}
+
 	return &Worker{
 		logger:               logger,
 		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
@@ -135,7 +147,7 @@ func NewWorker(
 		privateKey:           privateKey.PrivKey,
 		address:              coinbaseAddr.AddressString,
 		rateLimiter:          rateLimiter,
-		propagationServers:   propagationServers,
+		propagationServers:   propServers,
 		kafkaProducer:        kafkaProducer,
 		kafkaTopic:           kafkaTopic,
 		ipv6MulticastConn:    ipv6MulticastConn,
@@ -535,16 +547,22 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	traceSpan.SetTag("transport", "grpc")
 
-	var propagationError error = nil
-	for _, propagationServer := range w.propagationServers {
-		if _, err := propagationServer.Set(traceSpan.Ctx, &propagation_api.SetRequest{
+	propagationErrors := make([]error, 0)
+	for idx, propagationServer := range w.propagationServers {
+		if _, err := propagationServer.client.Set(traceSpan.Ctx, &propagation_api.SetRequest{
 			Tx: txExtendedBytes,
 		}); err != nil {
-			propagationError = err
+			now := time.Now()
+			if propagationServer.lastError == nil || now.Sub(*propagationServer.lastError) > time.Second*10 {
+				w.propagationServers[idx].lastError = &now
+				propagationErrors = append(propagationErrors, err)
+			}
 		}
 	}
-	if propagationError != nil {
-		return fmt.Errorf("error sending transaction to propagation server: %s", propagationError.Error())
+	if len(propagationErrors) > 0 {
+		for _, propagationError := range propagationErrors {
+			w.logger.Warnf("error sending transaction to propagation server: %s", propagationError.Error())
+		}
 	}
 
 	counterLoad := counter.Add(1)

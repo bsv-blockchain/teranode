@@ -46,13 +46,13 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 }
 
 func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, baseUrl string) error {
-	g, _ := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(ctx)
 
 	for _, subtreeHash := range block.Subtrees {
 		st := subtreeHash
 
 		g.Go(func() error {
-			err := u.validateSubtree(ctx, st, baseUrl)
+			err := u.validateSubtree(gCtx, st, baseUrl)
 			if err != nil {
 				return errors.Join(fmt.Errorf("invalid subtree found [%s]", st.String()), err)
 			}

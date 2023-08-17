@@ -195,7 +195,7 @@ func main() {
 
 	propagationServers := []propagation_api.PropagationAPIClient{}
 	for _, propagationGrpcAddress := range propagationGrpcAddresses {
-		pConn, err := utils.GetGRPCClient(ctx, propagationGrpcAddress, &utils.ConnectionOptions{
+		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
 			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 			MaxRetries:  3,
 		})
