@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -119,8 +120,15 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		}
 	}
 
+	nrTransactions := len(txHashes)
+	if !util.IsPowerOfTwo(nrTransactions) {
+		u.logger.Warnf("subtree is not a power of two [%d], mining on incomplete tree", nrTransactions)
+		height := math.Ceil(math.Log2(float64(nrTransactions)))
+		nrTransactions = int(math.Pow(2, height)) // 1024 * 1024
+	}
+
 	// create the empty subtree
-	subtree := util.NewTreeByLeafCount(len(txHashes))
+	subtree := util.NewTreeByLeafCount(nrTransactions)
 
 	// validate the subtree
 	var txMeta *txmeta.Data
