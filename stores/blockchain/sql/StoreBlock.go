@@ -99,7 +99,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("previous block not found: %w", store.ErrBlockNotFound)
+				return fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), store.ErrBlockNotFound)
 			}
 			return err
 		}

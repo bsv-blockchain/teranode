@@ -51,7 +51,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 		<-sigs
-		sm.logger.Infof("🟠Received shutdown signal. Stopping services...")
+		sm.logger.Infof("🟠 Received shutdown signal. Stopping services...")
 		sm.cancelFunc()
 	}()
 
@@ -62,7 +62,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 			return sm.ctx.Err()
 
 		default:
-			sm.logger.Infof("♻️Initializing service %s...", service.name)
+			sm.logger.Infof("♻️ Initializing service %s...", service.name)
 			if err := service.instance.Init(sm.ctx); err != nil {
 				return err
 			}
@@ -80,7 +80,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 			return ctx.Err()
 
 		default:
-			sm.logger.Infof("🟢Starting service %s...", s.name)
+			sm.logger.Infof("🟢 Starting service %s...", s.name)
 
 			g.Go(func() error {
 				return s.instance.Start(ctx)
@@ -100,7 +100,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 		// Ensure all other services are stopped gracefully with a 10-second timeout
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-		sm.logger.Infof("🟠Stopping service %s...", service.name)
+		sm.logger.Infof("🟠 Stopping service %s...", service.name)
 
 		if err := service.instance.Stop(stopCtx); err != nil {
 			sm.logger.Warnf("[%s] Failed to stop service: %v", service.name, err)
@@ -111,7 +111,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 		stopCancel()
 	}
 
-	sm.logger.Infof("🛑All services stopped.")
+	sm.logger.Infof("🛑 All services stopped.")
 
 	return err // This is the original error
 }

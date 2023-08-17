@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -83,17 +84,17 @@ func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) ([]by
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error in GetSubtree Get method: %w", err)
 	}
 
 	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error in NewSubtreeFromBytes: %w", err)
 	}
 
 	subtreeNodeBytes, err := subtree.SerializeNodes()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error in SerializeNodes: %w", err)
 	}
 
 	return subtreeNodeBytes, nil

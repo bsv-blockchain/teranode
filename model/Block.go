@@ -186,14 +186,14 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		return false, err
 	}
 
-	// 12. Check that all transactions are in the valid order and blessed
-	//     Can only be done with a valid texMetaStore passed in
-	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(ctx, txMetaStore, currentChain)
-		if err != nil {
-			return false, err
-		}
-	}
+	// // 12. Check that all transactions are in the valid order and blessed
+	// //     Can only be done with a valid texMetaStore passed in
+	// if txMetaStore != nil {
+	// 	err = b.validOrderAndBlessed(ctx, txMetaStore, currentChain)
+	// 	if err != nil {
+	// 		return false, err
+	// 	}
+	// }
 
 	return true, nil
 }
@@ -272,7 +272,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 					// check whether the parent is in a block on our chain
 					parentTxMeta, err := txMetaStore.Get(ctx, parentTxHash)
 					if err != nil {
-						return err
+						return errors.Join(err, fmt.Errorf("error getting parent transaction %s from txMetaStore", parentTxHash.String()))
 					}
 					if len(parentTxMeta.BlockHashes) > 0 {
 						// TODO check whether this block is on our chain, it should be

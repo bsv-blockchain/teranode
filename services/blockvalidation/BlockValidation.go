@@ -2,11 +2,11 @@ package blockvalidation
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -66,6 +66,14 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 	blockHeaders, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
+	}
+
+	// Add the coinbase transaction to the metaTxStore
+	// TODO - we need to consider if we can do this differently
+	if err := u.txMetaStore.Create(ctx, block.CoinbaseTx.TxIDChainHash(), 0, nil, nil, 0); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("failed to create coinbase transaction in txMetaStore [%s]", err.Error())
+		}
 	}
 
 	// validate the block
@@ -133,24 +141,32 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// validate the subtree
 	var txMeta *txmeta.Data
 	for _, txHash := range txHashes {
-		// is the txid in the store?
-		// no - get it from the network
-		// yes - is the txid blessed?
-		// if all txs in tree are blessed, then bless the tree
-		txMeta, err = u.txMetaStore.Get(ctx, txHash)
-		if err != nil {
-			if errors.Is(err, txmeta.ErrNotFound) {
-				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
-				if err != nil {
-					u.logger.Errorf("failed to bless missing transaction [%s]", err.Error())
+		if txHash.IsEqual(model.CoinbasePlaceholderHash) {
+			txMeta = &txmeta.Data{
+				Fee: 0,
+			}
+		} else {
+
+			// is the txid in the store?
+			// no - get it from the network
+			// yes - is the txid blessed?
+			// if all txs in tree are blessed, then bless the tree
+			txMeta, err = u.txMetaStore.Get(ctx, txHash)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") {
+					txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
+					if err != nil {
+						u.logger.Errorf("failed to bless missing transaction [%s]", err.Error())
+						return false
+					}
+					// there was no error, so the transaction has been blessed
+				} else {
+					u.logger.Errorf("failed to get tx meta [%s]", err.Error())
 					return false
 				}
-				// there was no error, so the transaction has been blessed
-			} else {
-				u.logger.Errorf("failed to get tx meta [%s]", err.Error())
-				return false
 			}
 		}
+
 		if txMeta == nil {
 			u.logger.Errorf("tx meta is nil [%s]", txHash.String())
 			return false
