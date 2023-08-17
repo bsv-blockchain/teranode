@@ -260,9 +260,9 @@ func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvali
 			u.processingSubtreeMu.Unlock()
 		}()
 
-		ok = u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
-		if !ok {
-			u.logger.Errorf("invalid subtree found [%s]", subtreeHash.String())
+		err = u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
+		if err != nil {
+			u.logger.Errorf("invalid subtree found [%s]: %v", subtreeHash.String(), err)
 			return
 		}
 	}()

@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -51,9 +52,9 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 		st := subtreeHash
 
 		g.Go(func() error {
-			isValid := u.validateSubtree(ctx, st, baseUrl)
-			if !isValid {
-				return fmt.Errorf("invalid subtree found [%s]", st.String())
+			err := u.validateSubtree(ctx, st, baseUrl)
+			if err != nil {
+				return errors.Join(fmt.Errorf("invalid subtree found [%s]", st.String()), err)
 			}
 
 			return nil
@@ -90,31 +91,28 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 	return nil
 }
 
-func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) bool {
+func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
 	// get subtree from store
 	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {
-		u.logger.Errorf("failed to check if subtree exists in store [%s]", err.Error())
-		return false
+		return errors.Join(fmt.Errorf("failed to check if subtree exists in store [%s]", err))
 	}
 	if subtreeExists {
 		// subtree already exists in store, which means it's valid
 		// TODO is this true?
-		return true
+		return nil
 	}
 
 	// get subtree from network over http using the baseUrl
 	if baseUrl == "" {
-		u.logger.Errorf("baseUrl for subtree is empty [%s]", subtreeHash.String())
-		return false
+		return fmt.Errorf("baseUrl for subtree is empty [%s]", subtreeHash.String())
 	}
 
 	// do http request to baseUrl + subtreeHash.String()
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
 	subtreeBytes, err := util.DoHTTPRequest(ctx, url)
 	if err != nil {
-		u.logger.Errorf("failed to do http request [%s]", err.Error())
-		return false
+		return errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
 
 	// the subtree bytes we got from our competing miner only contain the transaction hashes
@@ -123,8 +121,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	for i := 0; i < len(subtreeBytes); i += 32 {
 		txHashes[i/32], err = chainhash.NewHash(subtreeBytes[i : i+32])
 		if err != nil {
-			u.logger.Errorf("failed to create transaction hash from bytes [%s]", err.Error())
-			return false
+			return errors.Join(fmt.Errorf("failed to create transaction hash from bytes [%s]", err))
 		}
 	}
 
@@ -156,51 +153,44 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				if strings.Contains(err.Error(), "not found") {
 					txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
 					if err != nil {
-						u.logger.Errorf("failed to bless missing transaction [%s]", err.Error())
-						return false
+						return errors.Join(fmt.Errorf("failed to bless missing transaction"), err)
 					}
 					// there was no error, so the transaction has been blessed
 				} else {
-					u.logger.Errorf("failed to get tx meta [%s]", err.Error())
-					return false
+					return errors.Join(fmt.Errorf("failed to get tx meta"), err)
 				}
 			}
 		}
 
 		if txMeta == nil {
-			u.logger.Errorf("tx meta is nil [%s]", txHash.String())
-			return false
+			return fmt.Errorf("tx meta is nil [%s]", txHash.String())
 		}
 
 		// finally add the transaction hash and fee to the subtree
 		err = subtree.AddNode(txHash, txMeta.Fee)
 		if err != nil {
-			u.logger.Errorf("failed to add node to subtree [%s]", err.Error())
-			return false
+			return errors.Join(fmt.Errorf("failed to add node to subtree"), err)
 		}
 	}
 
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(subtreeHash) {
-		u.logger.Errorf("subtree root hash does not match [%s] [%s]", merkleRoot.String(), subtreeHash.String())
-		return false
+		return fmt.Errorf("subtree root hash does not match [%s] [%s]", merkleRoot.String(), subtreeHash.String())
 	}
 
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		u.logger.Errorf("failed to serialize subtree [%s]", err.Error())
-		return false
+		return errors.Join(fmt.Errorf("failed to serialize subtree"), err)
 	}
 
 	// store subtree in store
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes)
 	if err != nil {
-		u.logger.Errorf("failed to store subtree [%s]", err.Error())
-		return false
+		return errors.Join(fmt.Errorf("failed to store subtree"), err)
 	}
 
-	return true
+	return nil
 }
 
 func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*txmeta.Data, error) {
