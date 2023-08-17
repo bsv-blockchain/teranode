@@ -55,7 +55,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("no blobserver_grpcAddress or blobserver_httpAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(ctx, v.utxoStore, v.txStore, v.subtreeStore)
+	repo, err := repository.NewRepository(ctx, v.logger, v.utxoStore, v.txStore, v.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}

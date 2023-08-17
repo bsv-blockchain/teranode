@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +43,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(context.Background(), utxoStore, txStore, subtreeStore)
+	repo, err := repository.NewRepository(context.Background(), p2p.TestLogger{}, utxoStore, txStore, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -94,7 +95,7 @@ func TestSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(context.Background(), utxoStore, txStore, subtreeStore)
+	repo, err := repository.NewRepository(context.Background(), p2p.TestLogger{}, utxoStore, txStore, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the subtree node bytes from the repository

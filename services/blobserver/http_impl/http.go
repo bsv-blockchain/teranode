@@ -38,10 +38,12 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	e.HidePort = true
 
 	e.GET("/health", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] Health check")
 		return c.String(http.StatusOK, "OK")
 	})
 
 	e.GET("/tx/:hash", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetTransaction: %s", c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -62,6 +64,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/subtree/:hash", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetSubtree: %s", c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -82,6 +85,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/header/:height/height", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetBlockHeaderByHeight: %s", c.Param("height"))
 		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -101,6 +105,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/header/:hash", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetBlockHeaderByHash: %s", c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -121,6 +126,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/block/:height/height", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetBlockByHeight: %s", c.Param("height"))
 		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -140,6 +146,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/block/:hash", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetBlockByHash: %s", c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -160,6 +167,7 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	})
 
 	e.GET("/utxo/:hash", func(c echo.Context) error {
+		logger.Debugf("[BlobServer_http] GetUTXO: %s", c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err

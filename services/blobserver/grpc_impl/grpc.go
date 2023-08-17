@@ -89,6 +89,8 @@ func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {
 }
 
 func (g *GRPC) Init(ctx context.Context) (err error) {
+	g.logger.Infof("[BlobServer] GRPC service initializing")
+
 	g.blockchainClient, err = blockchain.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
@@ -98,6 +100,8 @@ func (g *GRPC) Init(ctx context.Context) (err error) {
 }
 
 func (g *GRPC) Start(ctx context.Context, addr string) error {
+	g.logger.Infof("[BlobServer] GRPC service starting")
+
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := g.blockchainClient.Subscribe(ctx, "blobserver")
 	if err != nil {
@@ -175,6 +179,8 @@ func (g *GRPC) Stop(ctx context.Context) error {
 }
 
 func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
+	g.logger.Debugf("[BlobServer_grpc] Health check")
+
 	return &blobserver_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -182,6 +188,8 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 }
 
 func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
+	g.logger.Debugf("[BlobServer_grpc] Subscribe: %s", req.Source)
+
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 

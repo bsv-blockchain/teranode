@@ -40,6 +40,7 @@ func (s *File) Close(_ context.Context) error {
 }
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
+	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
 	// TODO: handle options
@@ -54,11 +55,13 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 }
 
 func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
+	s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
 	// not supported on files yet
 	return nil
 }
 
 func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
+	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
 	bytes, err := os.ReadFile(fileName)
@@ -70,6 +73,7 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 }
 
 func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
+	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
 	_, err := os.Stat(fileName)
@@ -84,6 +88,7 @@ func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
 }
 
 func (s *File) Del(_ context.Context, hash []byte) error {
+	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
 	return os.Remove(fileName)
