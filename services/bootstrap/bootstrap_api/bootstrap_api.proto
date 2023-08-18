@@ -10,6 +10,7 @@ import "google/protobuf/empty.proto";
 service BootstrapAPI {
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Connect(Info) returns (stream Notification) {}
+  rpc GetNodes(google.protobuf.Empty) returns (NodeList) {}
 }
 
 enum Type {
@@ -34,4 +35,8 @@ message Info {
 message Notification {
   Type type = 1;
   Info info = 2;
+}
+
+message NodeList {
+  repeated Info nodes = 1;
 }

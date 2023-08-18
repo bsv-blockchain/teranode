@@ -168,6 +168,21 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 	}
 }
 
+func (s *Server) GetNodes(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.NodeList, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	list := make([]*bootstrap_api.Info, 0, len(s.subscribers))
+
+	for _, s := range s.subscribers {
+		list = append(list, s)
+	}
+
+	return &bootstrap_api.NodeList{
+		Nodes: list,
+	}, nil
+}
+
 func (s *Server) BroadcastNotification(notification *bootstrap_api.Notification) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

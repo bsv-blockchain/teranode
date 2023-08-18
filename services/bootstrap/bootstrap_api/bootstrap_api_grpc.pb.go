@@ -20,8 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BootstrapAPI_Health_FullMethodName  = "/bootstrap_api.BootstrapAPI/Health"
-	BootstrapAPI_Connect_FullMethodName = "/bootstrap_api.BootstrapAPI/Connect"
+	BootstrapAPI_Health_FullMethodName   = "/bootstrap_api.BootstrapAPI/Health"
+	BootstrapAPI_Connect_FullMethodName  = "/bootstrap_api.BootstrapAPI/Connect"
+	BootstrapAPI_GetNodes_FullMethodName = "/bootstrap_api.BootstrapAPI/GetNodes"
 )
 
 // BootstrapAPIClient is the client API for BootstrapAPI service.
@@ -30,6 +31,7 @@ const (
 type BootstrapAPIClient interface {
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error)
+	GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NodeList, error)
 }
 
 type bootstrapAPIClient struct {
@@ -81,12 +83,22 @@ func (x *bootstrapAPIConnectClient) Recv() (*Notification, error) {
 	return m, nil
 }
 
+func (c *bootstrapAPIClient) GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NodeList, error) {
+	out := new(NodeList)
+	err := c.cc.Invoke(ctx, BootstrapAPI_GetNodes_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BootstrapAPIServer is the server API for BootstrapAPI service.
 // All implementations must embed UnimplementedBootstrapAPIServer
 // for forward compatibility
 type BootstrapAPIServer interface {
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	Connect(*Info, BootstrapAPI_ConnectServer) error
+	GetNodes(context.Context, *emptypb.Empty) (*NodeList, error)
 	mustEmbedUnimplementedBootstrapAPIServer()
 }
 
@@ -99,6 +111,9 @@ func (UnimplementedBootstrapAPIServer) Health(context.Context, *emptypb.Empty) (
 }
 func (UnimplementedBootstrapAPIServer) Connect(*Info, BootstrapAPI_ConnectServer) error {
 	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
+}
+func (UnimplementedBootstrapAPIServer) GetNodes(context.Context, *emptypb.Empty) (*NodeList, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNodes not implemented")
 }
 func (UnimplementedBootstrapAPIServer) mustEmbedUnimplementedBootstrapAPIServer() {}
 
@@ -152,6 +167,24 @@ func (x *bootstrapAPIConnectServer) Send(m *Notification) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _BootstrapAPI_GetNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapAPIServer).GetNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapAPI_GetNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapAPIServer).GetNodes(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BootstrapAPI_ServiceDesc is the grpc.ServiceDesc for BootstrapAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -162,6 +195,10 @@ var BootstrapAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _BootstrapAPI_Health_Handler,
+		},
+		{
+			MethodName: "GetNodes",
+			Handler:    _BootstrapAPI_GetNodes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
