@@ -17,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/coinbasetracker"
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
@@ -82,7 +81,6 @@ func main() {
 	startMiner := shouldStart("Miner")
 	startBlobServer := shouldStart("BlobServer")
 	startCoinbase := shouldStart("Coinbase")
-	startCoinbaseTracker := shouldStart("CoinbaseTracker")
 	startBootstrapServer := shouldStart("BootstrapServer")
 	help := shouldStart("help")
 
@@ -98,8 +96,7 @@ func main() {
 			!startMiner &&
 			!startBootstrapServer &&
 			!startBlobServer &&
-			!startCoinbase &&
-			!startCoinbaseTracker) {
+			!startCoinbase) {
 		fmt.Println("usage: main [options]")
 		fmt.Println("where options are:")
 		fmt.Println("")
@@ -135,9 +132,6 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -coinbase=<1|0>")
 		fmt.Println("          whether to start the coinbase server")
-		fmt.Println("")
-		fmt.Println("    -coinbasetracker=<1|0>")
-		fmt.Println("          whether to start the coinbase tracker server")
 		fmt.Println("")
 		fmt.Println("    -bootstrap=<1|0>")
 		fmt.Println("          whether to start the bootstrap server")
@@ -188,6 +182,13 @@ func main() {
 	}
 
 	sm, ctx := servicemanager.NewServiceManager()
+
+	// bootstrap server
+	if startBootstrapServer {
+		sm.AddService("BootstrapServer", bootstrap.NewServer(
+			gocore.Log("bootS"),
+		))
+	}
 
 	var blockchainService *blockchain.Blockchain
 	// blockchain service needs to start first !
@@ -392,20 +393,6 @@ func main() {
 	if startCoinbase {
 		sm.AddService("Coinbase", coinbase.New(
 			gocore.Log("coinB"),
-		))
-	}
-
-	// coinbase tracker server
-	if startCoinbaseTracker {
-		sm.AddService("CoinbaseTracker", coinbasetracker.New(
-			gocore.Log("coinT"),
-		))
-	}
-
-	// bootstrap server
-	if startBootstrapServer {
-		sm.AddService("BootstrapServer", bootstrap.NewServer(
-			gocore.Log("bootS"),
 		))
 	}
 

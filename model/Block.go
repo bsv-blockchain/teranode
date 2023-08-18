@@ -212,7 +212,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	coinbaseReward := util.GetBlockSubsidyForHeight(height)
 	// TODO should this be != instead of > ?
 	if coinbaseOutputSatoshis != subtreeFees+coinbaseReward {
-		return fmt.Errorf("fees paid (%d) are noteequal to fees + block reward (%d)", coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		return fmt.Errorf("fees paid (%d) are not equal to fees + block reward (%d)", coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
 	}
 
 	return nil
@@ -236,59 +236,59 @@ func (b *Block) checkDuplicateTransactions() error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChain []*BlockHeader) error {
-	if b.txMap == nil {
-		return fmt.Errorf("txMap is nil, cannot check transaction order")
-	}
+// func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChain []*BlockHeader) error {
+// 	if b.txMap == nil {
+// 		return fmt.Errorf("txMap is nil, cannot check transaction order")
+// 	}
 
-	for _, subtree := range b.subtreeSlices {
-		for _, subtreeNode := range subtree.Nodes {
-			if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
-				continue
-			}
+// 	for _, subtree := range b.subtreeSlices {
+// 		for _, subtreeNode := range subtree.Nodes {
+// 			if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
+// 				continue
+// 			}
 
-			txMeta, err := txMetaStore.Get(ctx, subtreeNode.Hash)
-			if err != nil {
-				return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
-			}
+// 			txMeta, err := txMetaStore.Get(ctx, subtreeNode.Hash)
+// 			if err != nil {
+// 				return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
+// 			}
 
-			if txMeta == nil {
-				return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
-			}
+// 			if txMeta == nil {
+// 				return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
+// 			}
 
-			if len(txMeta.BlockHashes) > 0 {
-				// TODO check whether this tx is on our chain, it should NOT be
-				return fmt.Errorf("transaction %s is blessed by block(s) %s, not by block %s", subtreeNode.Hash.String(), txMeta.BlockHashes, b.Hash().String())
-			}
+// 			if len(txMeta.BlockHashes) > 0 {
+// 				// TODO check whether this tx is on our chain, it should NOT be
+// 				return fmt.Errorf("transaction %s is blessed by block(s) %s, not by block %s", subtreeNode.Hash.String(), txMeta.BlockHashes, b.Hash().String())
+// 			}
 
-			txIdx, ok := b.txMap.Get(*subtreeNode.Hash)
-			if !ok {
-				return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
-			}
+// 			txIdx, ok := b.txMap.Get(*subtreeNode.Hash)
+// 			if !ok {
+// 				return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
+// 			}
 
-			for _, parentTxHash := range txMeta.ParentTxHashes {
-				parentTxIdx, ok := b.txMap.Get(*parentTxHash)
-				if !ok {
-					// check whether the parent is in a block on our chain
-					parentTxMeta, err := txMetaStore.Get(ctx, parentTxHash)
-					if err != nil {
-						return errors.Join(err, fmt.Errorf("error getting parent transaction %s from txMetaStore", parentTxHash.String()))
-					}
-					if len(parentTxMeta.BlockHashes) > 0 {
-						// TODO check whether this block is on our chain, it should be
-						return nil
-					}
-				}
+// 			for _, parentTxHash := range txMeta.ParentTxHashes {
+// 				parentTxIdx, ok := b.txMap.Get(*parentTxHash)
+// 				if !ok {
+// 					// check whether the parent is in a block on our chain
+// 					parentTxMeta, err := txMetaStore.Get(ctx, parentTxHash)
+// 					if err != nil {
+// 						return errors.Join(err, fmt.Errorf("error getting parent transaction %s from txMetaStore", parentTxHash.String()))
+// 					}
+// 					if len(parentTxMeta.BlockHashes) > 0 {
+// 						// TODO check whether this block is on our chain, it should be
+// 						return nil
+// 					}
+// 				}
 
-				if parentTxIdx > txIdx {
-					return fmt.Errorf("transaction %s is before parent transaction %s", subtreeNode.Hash.String(), parentTxHash.String())
-				}
-			}
-		}
-	}
+// 				if parentTxIdx > txIdx {
+// 					return fmt.Errorf("transaction %s is before parent transaction %s", subtreeNode.Hash.String(), parentTxHash.String())
+// 				}
+// 			}
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
 	b.subtreeSlices = make([]*util.Subtree, len(b.Subtrees))

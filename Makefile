@@ -132,14 +132,6 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/coinbasetracker/coinbasetracker_api/coinbasetracker_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
 
 .PHONY: clean_gen
@@ -154,6 +146,7 @@ clean_gen:
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
 	rm -f ./services/blobserver/blobserver_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
+	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./model/*.pb.go
 
 .PHONY: clean
@@ -162,7 +155,6 @@ clean:
 	rm -f blaster.run
 	rm -f status.run
 	rm -rf build/
-	rm -rf services/coinbasetracker/testblocks.db
 
 .PHONY: install-lint
 install-lint:
@@ -171,9 +163,7 @@ install-lint:
 
 .PHONY: lint
 lint: # todo enable coinbase tracker
-	# golangci-lint run --skip-dirs services/coinbasetracker ./...
 	golangci-lint run ./...
-	# go list ./... | grep -v coinbasetracker | xargs staticcheck
 	staticcheck ./...
 
 .PHONY: install

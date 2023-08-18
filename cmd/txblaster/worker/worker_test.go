@@ -7,7 +7,6 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"golang.org/x/time/rate"
@@ -22,7 +21,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 		satoshisPerOutput    uint64
 		privateKey           *bec.PrivateKey
 		rateLimiter          *rate.Limiter
-		propagationServers   []propagation_api.PropagationAPIClient
+		propagationServers   []PropagationServer
 		kafkaProducer        sarama.SyncProducer
 		kafkaTopic           string
 		printProgress        uint64

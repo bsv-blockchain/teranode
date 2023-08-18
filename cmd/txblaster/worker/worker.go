@@ -13,7 +13,6 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/coinbasetracker"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/seeder/seeder_api"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -86,23 +85,23 @@ type PropagationServer struct {
 }
 
 type Worker struct {
-	logger                utils.Logger
-	utxoChan              chan *bt.UTXO
-	startTime             time.Time
-	numberOfOutputs       int
-	numberOfTransactions  uint32
-	satoshisPerOutput     uint64
-	privateKey            *bec.PrivateKey
-	address               string
-	rateLimiter           *rate.Limiter
-	propagationServers    []PropagationServer
-	kafkaProducer         sarama.SyncProducer
-	kafkaTopic            string
-	ipv6MulticastConn     *net.UDPConn
-	ipv6MulticastChan     chan Ipv6MulticastMsg
-	printProgress         uint64
-	logIdsCh              chan string
-	coinbaseTrackerClient coinbasetracker.ClientI
+	logger               utils.Logger
+	utxoChan             chan *bt.UTXO
+	startTime            time.Time
+	numberOfOutputs      int
+	numberOfTransactions uint32
+	satoshisPerOutput    uint64
+	privateKey           *bec.PrivateKey
+	address              string
+	rateLimiter          *rate.Limiter
+	propagationServers   []PropagationServer
+	kafkaProducer        sarama.SyncProducer
+	kafkaTopic           string
+	ipv6MulticastConn    *net.UDPConn
+	ipv6MulticastChan    chan Ipv6MulticastMsg
+	printProgress        uint64
+	logIdsCh             chan string
+	coinbaseClient       coinbase.ClientI
 }
 
 func NewWorker(
@@ -203,17 +202,12 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		Script:     keysetScript,
 	}
 
-	useSimpleCoinbaseTracker := gocore.Config().GetBool("coinbaseSimpleTracker")
-	if useSimpleCoinbaseTracker {
-		w.coinbaseTrackerClient, err = coinbase.NewClient(ctx)
-	} else {
-		w.coinbaseTrackerClient, err = coinbasetracker.NewClient(ctx)
-	}
+	w.coinbaseClient, err = coinbase.NewClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error creating coinbase tracker client: %v", err)
 	}
 
-	utxo, err := w.getUtxosFromCoinbaseTracker(50)
+	utxo, err := w.getUtxosFromCoinbase()
 	if err != nil {
 		return nil, fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
 	}
@@ -297,7 +291,7 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		}(w.numberOfOutputs, utxo.TxID)
 	}
 
-	if err = w.coinbaseTrackerClient.MarkUtxoSpent(ctx, utxo.TxID, utxo.Vout, utxo.TxID); err != nil {
+	if err = w.coinbaseClient.MarkUtxoSpent(ctx, utxo.TxID, utxo.Vout, utxo.TxID); err != nil {
 		return nil, fmt.Errorf("error marking utxo as spent: %v", err)
 	}
 
@@ -405,12 +399,12 @@ func (w *Worker) calculateOutputs(utxoSats uint64) (uint64, uint64) {
 	return actualOutputs, change
 }
 
-func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) (*bt.UTXO, error) {
+func (w *Worker) getUtxosFromCoinbase() (*bt.UTXO, error) {
 	ctx := context.Background()
 	var resp *bt.UTXO
 	var err error
 	for i := 0; i < 10; i++ {
-		resp, err = w.coinbaseTrackerClient.GetUtxo(ctx, w.address)
+		resp, err = w.coinbaseClient.GetUtxo(ctx, w.address)
 		if err == nil {
 			break
 		}
@@ -420,7 +414,7 @@ func (w *Worker) getUtxosFromCoinbaseTracker(amount uint64) (*bt.UTXO, error) {
 	}
 
 	if resp == nil {
-		return nil, fmt.Errorf("no utxos received from coinbasetracker")
+		return nil, fmt.Errorf("no utxos received from coinbase")
 	}
 
 	return resp, nil
