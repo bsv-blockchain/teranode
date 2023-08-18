@@ -25,13 +25,13 @@ type ServiceManager struct {
 }
 
 func NewServiceManager() (*ServiceManager, context.Context) {
-	ctx, cancelCtx := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	return &ServiceManager{
 		services:   make([]serviceWrapper, 0),
 		logger:     gocore.Log("sm"),
 		ctx:        ctx,
-		cancelFunc: cancelCtx,
+		cancelFunc: cancelFunc,
 	}, ctx
 }
 
@@ -62,7 +62,7 @@ func (sm *ServiceManager) StartAllAndWait() error {
 			return sm.ctx.Err()
 
 		default:
-			sm.logger.Infof("♻️ Initializing service %s...", service.name)
+			sm.logger.Infof("⚪️ Initializing service %s...", service.name)
 			if err := service.instance.Init(sm.ctx); err != nil {
 				return err
 			}

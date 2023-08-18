@@ -10,6 +10,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type void struct{}
+
 type Peer struct {
 	BlobServerGrpcAddress string
 }
