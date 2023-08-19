@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -29,7 +27,7 @@ type HTTP struct {
 	e          *echo.Echo
 }
 
-func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) {
+func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	// TODO: change logger name
 	// logger := gocore.Log("b_http")
 
@@ -37,161 +35,50 @@ func New(logger utils.Logger, repository *repository.Repository) (*HTTP, error) 
 	e.HideBanner = true
 	e.HidePort = true
 
+	h := &HTTP{
+		logger:     logger,
+		repository: repo,
+		e:          e,
+	}
+
 	e.GET("/health", func(c echo.Context) error {
 		logger.Debugf("[BlobServer_http] Health check")
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/tx/:hash", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetTransaction: %s", c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
+	e.GET("/tx/:hash", h.GetTransaction(BINARY_STREAM))
+	e.GET("/tx/:hash/hex", h.GetTransaction(HEX))
+	e.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
-		b, err := repository.GetTransaction(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
+	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
+	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
+	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
-		prometheusBlobServerHttpGetTransaction.WithLabelValues("OK", "200").Inc()
+	e.GET("/header/:height/height", h.GetBlockHeaderByHeight(BINARY_STREAM))
+	e.GET("/header/:height/height/hex", h.GetBlockHeaderByHeight(HEX))
+	e.GET("/header/:height/height/json", h.GetBlockHeaderByHeight(JSON))
 
-		return c.Blob(200, echo.MIMEOctetStream, b)
+	e.GET("/header/:hash/hash", h.GetBlockHeaderByHash(BINARY_STREAM))
+	e.GET("/header/:hash/hash/hex", h.GetBlockHeaderByHash(HEX))
+	e.GET("/header/:hash/hash/json", h.GetBlockHeaderByHash(JSON))
+
+	e.GET("/block/:height/height", h.GetBlockByHeight(BINARY_STREAM))
+	e.GET("/block/:height/height/hex", h.GetBlockByHeight(HEX))
+	e.GET("/block/:height/height/json", h.GetBlockByHeight(JSON))
+
+	e.GET("/block/:hash/hash", h.GetBlockByHash(BINARY_STREAM))
+	e.GET("/block/:hash/hash/hex", h.GetBlockByHash(HEX))
+	e.GET("/block/:hash/hash/json", h.GetBlockByHash(JSON))
+
+	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
+	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
+	e.GET("/utxo/:hash/json", h.GetUTXO(JSON))
+
+	e.GET("*", func(c echo.Context) error {
+		return dashboard.AppHandler(c)
 	})
 
-	e.GET("/subtree/:hash", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetSubtree: %s", c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		b, err := repository.GetSubtree(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		prometheusBlobServerHttpGetSubtree.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	e.GET("/header/:height/height", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetBlockHeaderByHeight: %s", c.Param("height"))
-		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-		}
-
-		b, err := repository.GetBlockHeaderByHeight(c.Request().Context(), uint32(h))
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	e.GET("/header/:hash", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetBlockHeaderByHash: %s", c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		b, err := repository.GetBlockHeaderByHash(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	e.GET("/block/:height/height", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetBlockByHeight: %s", c.Param("height"))
-		h, err := strconv.ParseUint(c.Param("height"), 10, 64)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-		}
-
-		b, err := repository.GetBlockByHeight(c.Request().Context(), uint32(h))
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	e.GET("/block/:hash", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetBlockByHash: %s", c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		b, err := repository.GetBlockByHash(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	e.GET("/utxo/:hash", func(c echo.Context) error {
-		logger.Debugf("[BlobServer_http] GetUTXO: %s", c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		b, err := repository.GetUtxo(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()
-
-		return c.Blob(200, echo.MIMEOctetStream, b)
-	})
-
-	return &HTTP{
-		logger:     logger,
-		repository: repository,
-		e:          e,
-	}, nil
+	return h, nil
 }
 
 func (h *HTTP) Init(_ context.Context) error {
@@ -277,5 +164,4 @@ func init() {
 			"operation", // type of operation achieved
 		},
 	)
-
 }

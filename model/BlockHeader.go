@@ -99,6 +99,18 @@ func (bh *BlockHeader) String() string {
 	return bh.Hash().String()
 }
 
+// Write a function to marshal to JSON
+func (bh *BlockHeader) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"version":%d,"previousblockhash":"%s","merkleroot":"%s","time":%d,"bits":"%s","nonce":%d}`,
+		bh.Version,
+		bh.HashPrevBlock.String(),
+		bh.HashMerkleRoot.String(),
+		bh.Timestamp,
+		bh.Bits.String(),
+		bh.Nonce,
+	)), nil
+}
+
 func (bh *BlockHeader) StringDump() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Version: %d\n", bh.Version))

@@ -99,7 +99,10 @@ func TestSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get the subtree node bytes from the repository
-	b, err := repo.GetSubtree(context.Background(), key)
+	st, err := repo.GetSubtree(context.Background(), key)
+	require.NoError(t, err)
+
+	b, err := st.SerializeNodes()
 	require.NoError(t, err)
 
 	subtreeNodes := make([]*chainhash.Hash, len(b)/32)

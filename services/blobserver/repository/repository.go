@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -46,22 +47,22 @@ func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) (
 	return tx, nil
 }
 
-func (r *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+func (r *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
 	r.logger.Debugf("[Repository] GetBlockByHash: %s", hash.String())
 	block, err := r.BlockchainClient.GetBlock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 
-	return block.Bytes()
+	return block, nil
 }
 
-func (r *Repository) GetBlockByHeight(ctx context.Context, height uint32) ([]byte, error) {
+func (r *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	r.logger.Debugf("[Repository] GetBlockByHeight: %d", height)
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetBlockHeaderByHash(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+func (r *Repository) GetBlockHeaderByHash(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaderByHash: %s", hash.String())
 	blockHeaders, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 1)
 	if err != nil {
@@ -72,15 +73,28 @@ func (r *Repository) GetBlockHeaderByHash(ctx context.Context, hash *chainhash.H
 		return nil, errors.New("block header not found")
 	}
 
-	return blockHeaders[0].Bytes(), nil
+	return blockHeaders[0], nil
 }
 
-func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) ([]byte, error) {
+func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) (*model.BlockHeader, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaderByHeight: %d", height)
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+	subtree, err := r.GetSubtree(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeNodeBytes, err := subtree.SerializeNodes()
+	if err != nil {
+		return nil, fmt.Errorf("error in SerializeNodes: %w", err)
+	}
+
+	return subtreeNodeBytes, nil
+}
+func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
@@ -92,20 +106,24 @@ func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) ([]by
 		return nil, fmt.Errorf("error in NewSubtreeFromBytes: %w", err)
 	}
 
-	subtreeNodeBytes, err := subtree.SerializeNodes()
-	if err != nil {
-		return nil, fmt.Errorf("error in SerializeNodes: %w", err)
-	}
-
-	return subtreeNodeBytes, nil
+	return subtree, nil
 }
 
-func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
+	resp, err := r.GetUtxo(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.SpendingTxID.CloneBytes(), nil
+}
+
+func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.UTXOResponse, error) {
 	r.logger.Debugf("[Repository] GetUtxo: %s", hash.String())
 	resp, err := r.UtxoStore.Get(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 
-	return resp.SpendingTxID.CloneBytes(), nil
+	return resp, nil
 }

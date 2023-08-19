@@ -12,8 +12,8 @@ import (
 )
 
 type SubtreeNode struct {
-	Hash *chainhash.Hash
-	Fee  uint64
+	Hash *chainhash.Hash `json:"hash"`
+	Fee  uint64          `json:"fee"`
 }
 
 type Subtree struct {

@@ -7,9 +7,9 @@ import (
 )
 
 type UTXOResponse struct {
-	Status       int
-	SpendingTxID *chainhash.Hash
-	LockTime     uint32
+	Status       int             `json:"status"`
+	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+	LockTime     uint32          `json:"lockTime,omitempty"`
 }
 
 type BatchResponse struct {
