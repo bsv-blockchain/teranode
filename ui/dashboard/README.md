@@ -1,3 +1,5 @@
+# Dashboard
+
 ```txt
 SAO - Here are the steps I took to create this project as a fully static site:
 
@@ -23,7 +25,7 @@ npm run build
 npx serve build
 ```
 
-# create-svelte
+## create-svelte
 
 Everything you need to build a Svelte project, powered by [`create-svelte`](https://github.com/sveltejs/kit/tree/master/packages/create-svelte).
 

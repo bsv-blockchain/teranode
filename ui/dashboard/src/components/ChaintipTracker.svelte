@@ -29,24 +29,9 @@
 
 <div class="card panel">
 	<header class="card-header">
-		<p class="card-header-title">Connected nodes</p>
+		<p class="card-header-title">Chaintip tracker</p>
 	</header>
-	<div class="card-content">
-		{#if error}
-			<p>Error fetching nodes: {error}</p>
-		{:else if nodes.length === 0}
-			<p>Loading...</p>
-		{:else}
-			<ul>
-				{#each nodes as node (node.blobServerGRPCAddress + '-' + node.source)}
-					<li>
-						<span>{node.blobServerGRPCAddress || 'anonymous'}</span>
-						<span>{node.source}</span>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	</div>
+	<div class="card-content">Not implemented yet</div>
 	<!-- <footer class="card-footer">
 		<a class="card-footer-item">Action 1</a>
 		<a class="card-footer-item">Action 2</a>
@@ -54,15 +39,6 @@
 </div>
 
 <style>
-	/* You can add custom styles here if needed */
-	ul {
-		list-style-type: none;
-		padding: 0;
-	}
-	li {
-		padding: 10px 0;
-	}
-
 	.panel {
 		margin: 20px; /* Adjust as needed */
 	}

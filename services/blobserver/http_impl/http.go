@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -34,6 +35,11 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+	}))
 
 	h := &HTTP{
 		logger:     logger,

@@ -109,7 +109,7 @@ func (v *Server) Start(ctx context.Context) error {
 			// Start a subscription to the bootstrap service
 
 			g.Go(func() error {
-				bootstrapClient := bootstrap.NewClient().WithCallback(func(p bootstrap.Peer) {
+				bootstrapClient := bootstrap.NewClient("BLOB_SERVER").WithCallback(func(p bootstrap.Peer) {
 					// Start a subscription to the new peer's blob server
 					g.Go(func() error {
 						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)

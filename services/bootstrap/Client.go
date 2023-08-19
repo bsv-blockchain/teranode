@@ -13,7 +13,9 @@ import (
 type void struct{}
 
 type Peer struct {
+	ConnectedAt           time.Time
 	BlobServerGrpcAddress string
+	Source                string
 }
 
 type Client struct {
@@ -22,12 +24,14 @@ type Client struct {
 	blobServerGrpcAddress string
 	peers                 map[Peer]void
 	callbackFunc          func(peer Peer)
+	source                string
 }
 
-func NewClient() *Client {
+func NewClient(source string) *Client {
 	return &Client{
 		logger: gocore.Log("bootC"),
 		peers:  make(map[Peer]void),
+		source: source,
 	}
 }
 
@@ -76,7 +80,8 @@ func (c *Client) Start(ctx context.Context) error {
 				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
 				c.logger.Debugf("BlobServerGRPC address: %s", c.blobServerGrpcAddress)
 				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
-					BlobServerGrpcAddress: c.blobServerGrpcAddress,
+					BlobServerGRPCAddress: c.blobServerGrpcAddress,
+					Source:                c.source,
 				})
 				if err != nil {
 					time.Sleep(1 * time.Second)
@@ -96,11 +101,13 @@ func (c *Client) Start(ctx context.Context) error {
 
 					case bootstrap_api.Type_ADD:
 						peer := Peer{
-							BlobServerGrpcAddress: resp.Info.BlobServerGrpcAddress,
+							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
+							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
+							Source:                resp.Info.Source,
 						}
 
 						c.peers[peer] = void{}
-						c.logger.Infof("Added peer %s", resp.Info.BlobServerGrpcAddress)
+						c.logger.Infof("Added peer %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.Source)
 
 						if c.callbackFunc != nil {
 							c.callbackFunc(peer)
@@ -108,11 +115,13 @@ func (c *Client) Start(ctx context.Context) error {
 
 					case bootstrap_api.Type_REMOVE:
 						peer := Peer{
-							BlobServerGrpcAddress: resp.Info.BlobServerGrpcAddress,
+							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
+							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
+							Source:                resp.Info.Source,
 						}
 
 						delete(c.peers, peer)
-						c.logger.Infof("Removed peer %s", resp.Info.BlobServerGrpcAddress)
+						c.logger.Infof("Removed peer %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.Source)
 					}
 				}
 			}
