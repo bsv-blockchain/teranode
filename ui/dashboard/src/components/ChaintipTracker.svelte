@@ -1,37 +1,37 @@
 <script>
-	import { onMount, onDestroy } from 'svelte';
-
-	let nodes = [];
-	let error = null;
-	let intervalId;
-
-	async function fetchData() {
-		try {
-			const response = await fetch('http://localhost:8099/nodes');
-
-			if (!response.ok) {
-				throw new Error(`HTTP error! Status: ${response.status}`);
-			}
-
-			nodes = await response.json();
-		} catch (e) {
-			error = e.message;
-		}
-	}
-
-	onMount(() => {
-		fetchData(); // Fetch data immediately when component is mounted
-		intervalId = setInterval(fetchData, 5000); // Re-fetch every 5 seconds
-
-		return () => clearInterval(intervalId); // Cleanup when component is destroyed
-	});
+	import Node from './Node.svelte';
+	export let nodes;
+	export let error;
 </script>
 
 <div class="card panel">
 	<header class="card-header">
 		<p class="card-header-title">Chaintip tracker</p>
 	</header>
-	<div class="card-content">Not implemented yet</div>
+	<div class="card-content">
+		{#if error}
+			<p>Error fetching chaintip data: {error}</p>
+		{:else}
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Type</th>
+						<th>Address</th>
+						<th>Height</th>
+						<th>Latest hash</th>
+						<th>Previous hash</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each nodes as node (node.blobServerGRPCAddress + '-' + node.source)}
+						{#if node.blobServerGRPCAddress}
+							<Node name={node.source || 'anonymous'} address={node.blobServerGRPCAddress} />
+						{/if}
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	</div>
 	<!-- <footer class="card-footer">
 		<a class="card-footer-item">Action 1</a>
 		<a class="card-footer-item">Action 2</a>
@@ -41,5 +41,21 @@
 <style>
 	.panel {
 		margin: 20px; /* Adjust as needed */
+	}
+
+	/* Custom styles for the table inside card-content */
+	.card-content .table {
+		width: 100%; /* Make the table take the full width of the card */
+		border-collapse: collapse; /* Collapse table borders */
+	}
+
+	.card-content .table th,
+	.card-content .table th {
+		background-color: #f5f5f5; /* Light background for table headers */
+		text-align: left; /* Align header text to the left */
+	}
+
+	.card-content .table tr:nth-child(even) {
+		background-color: #f9f9f9; /* Zebra-striping for even rows */
 	}
 </style>

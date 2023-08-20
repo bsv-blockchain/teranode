@@ -1,6 +1,35 @@
 <script>
 	import ConnectedNodes from '@components/ConnectedNodes.svelte';
 	import ChaintipTracker from '@components/ChaintipTracker.svelte';
+	import { onMount, onDestroy } from 'svelte';
+
+	let nodes = [];
+	let loading = true;
+	let error = null;
+	let intervalId;
+
+	async function fetchData() {
+		try {
+			const response = await fetch('http://localhost:8099/nodes');
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! Status: ${response.status}`);
+			}
+
+			nodes = await response.json();
+			error = null;
+			loading = false;
+		} catch (e) {
+			error = e.message;
+		}
+	}
+
+	onMount(() => {
+		fetchData(); // Fetch data immediately when component is mounted
+		intervalId = setInterval(fetchData, 2000); // Re-fetch every 2s seconds
+
+		return () => clearInterval(intervalId); // Cleanup when component is destroyed
+	});
 </script>
 
 <svelte:head>
@@ -66,6 +95,6 @@
 </nav>
 
 <div>
-	<ConnectedNodes />
-	<ChaintipTracker />
+	<ConnectedNodes {nodes} {loading} {error} />
+	<ChaintipTracker {nodes} {loading} />
 </div>

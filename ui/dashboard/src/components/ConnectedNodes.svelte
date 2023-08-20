@@ -1,30 +1,56 @@
 <script>
-	import { onMount, onDestroy } from 'svelte';
+	export let nodes;
+	export let loading;
+	export let error;
 
-	let nodes = [];
-	let error = null;
-	let intervalId;
+	function humanTime(time) {
+		let diff = new Date().getTime() - new Date(time).getTime();
+		diff = diff / 1000;
+		const days = Math.floor(diff / 86400);
+		const hours = Math.floor((diff % 86400) / 3600);
+		const minutes = Math.floor(((diff % 86400) % 3600) / 60);
+		const seconds = Math.floor(((diff % 86400) % 3600) % 60);
 
-	async function fetchData() {
-		try {
-			const response = await fetch('http://localhost:8099/nodes');
+		let difference = '';
 
-			if (!response.ok) {
-				throw new Error(`HTTP error! Status: ${response.status}`);
-			}
-
-			nodes = await response.json();
-		} catch (e) {
-			error = e.message;
+		if (days > 0) {
+			difference += days;
+			difference += ' day' + (days === 1 ? ', ' : 's, ');
+			difference += hours;
+			difference += ' hour' + (hours === 1 ? ', ' : 's, ');
+			difference += minutes;
+			difference += ' minute' + (minutes === 1 ? ' and ' : 's and ');
+			difference += seconds;
+			difference += ' second' + (seconds === 1 ? '' : 's');
+			return difference;
 		}
+
+		if (hours > 0) {
+			difference += hours;
+			difference += ' hour' + (hours === 1 ? ', ' : 's, ');
+			difference += minutes;
+			difference += ' minute' + (minutes === 1 ? ' and ' : 's and ');
+			difference += seconds;
+			difference += ' second' + (seconds === 1 ? '' : 's');
+			return difference;
+		}
+
+		if (minutes > 0) {
+			difference += minutes;
+			difference += ' minute' + (minutes === 1 ? ' and ' : 's and ');
+			difference += seconds;
+			difference += ' second' + (seconds === 1 ? '' : 's');
+			return difference;
+		}
+
+		if (seconds > 0) {
+			difference += seconds;
+			difference += ' second' + (seconds === 1 ? '' : 's');
+			return difference;
+		}
+
+		return '0 seconds';
 	}
-
-	onMount(() => {
-		fetchData(); // Fetch data immediately when component is mounted
-		intervalId = setInterval(fetchData, 5000); // Re-fetch every 5 seconds
-
-		return () => clearInterval(intervalId); // Cleanup when component is destroyed
-	});
 </script>
 
 <div class="card panel">
@@ -34,17 +60,26 @@
 	<div class="card-content">
 		{#if error}
 			<p>Error fetching nodes: {error}</p>
-		{:else if nodes.length === 0}
+		{:else if loading}
 			<p>Loading...</p>
+		{:else if nodes.length === 0}
+			<p>No nodes connected</p>
 		{:else}
-			<ul>
-				{#each nodes as node (node.blobServerGRPCAddress + '-' + node.source)}
-					<li>
-						<span>{node.blobServerGRPCAddress || 'anonymous'}</span>
-						<span>{node.source}</span>
-					</li>
-				{/each}
-			</ul>
+			<table class="table">
+				<tbody>
+					{#each nodes as node (node.blobServerGRPCAddress + '-' + node.source)}
+						<tr>
+							<td>{node.blobServerGRPCAddress || 'anonymous'}</td>
+							<td>{node.source}</td>
+							<td>
+								Connected at {new Date(node.connectedAt).toISOString().replace('T', ' ')} ({humanTime(
+									node.connectedAt
+								)} ago)
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		{/if}
 	</div>
 	<!-- <footer class="card-footer">
@@ -54,16 +89,21 @@
 </div>
 
 <style>
-	/* You can add custom styles here if needed */
-	ul {
-		list-style-type: none;
-		padding: 0;
-	}
-	li {
-		padding: 10px 0;
+	.panel {
+		margin: 20px; /* Adjust as needed */
 	}
 
 	.panel {
 		margin: 20px; /* Adjust as needed */
+	}
+
+	/* Custom styles for the table inside card-content */
+	.table {
+		width: 100%; /* Make the table take the full width of the card */
+		border-collapse: collapse; /* Collapse table borders */
+	}
+
+	.table tr:nth-child(even) {
+		background-color: #f9f9f9; /* Zebra-striping for even rows */
 	}
 </style>

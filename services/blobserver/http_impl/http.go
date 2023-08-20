@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	prometheusBlobServerHttpGetTransaction *prometheus.CounterVec
-	prometheusBlobServerHttpGetSubtree     *prometheus.CounterVec
-	prometheusBlobServerHttpGetBlockHeader *prometheus.CounterVec
-	prometheusBlobServerHttpGetBlock       *prometheus.CounterVec
-	prometheusBlobServerHttpGetUTXO        *prometheus.CounterVec
+	prometheusBlobServerHttpGetTransaction     *prometheus.CounterVec
+	prometheusBlobServerHttpGetSubtree         *prometheus.CounterVec
+	prometheusBlobServerHttpGetBlockHeader     *prometheus.CounterVec
+	prometheusBlobServerHttpGetBestBlockHeader *prometheus.CounterVec
+	prometheusBlobServerHttpGetBlock           *prometheus.CounterVec
+	prometheusBlobServerHttpGetUTXO            *prometheus.CounterVec
 )
 
 type HTTP struct {
@@ -79,6 +80,10 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
 	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
 	e.GET("/utxo/:hash/json", h.GetUTXO(JSON))
+
+	e.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
+	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
+	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
 	e.GET("*", func(c echo.Context) error {
 		return dashboard.AppHandler(c)
@@ -142,6 +147,17 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blobserver_http_get_block_header",
 			Help: "Number of Get block header ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetBestBlockHeader = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_best_block_header",
+			Help: "Number of Get best block header ops",
 		},
 		[]string{
 			"function",  //function tracking the operation

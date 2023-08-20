@@ -38,7 +38,8 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 			return c.Blob(200, echo.MIMEOctetStream, b)
 		case HEX:
 			return c.String(200, hex.EncodeToString(b))
-		// case JSON: // Not supported for blocks
+		case JSON:
+			return echo.NewHTTPError(http.StatusInternalServerError, "JSON is not supported for blocks")
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}

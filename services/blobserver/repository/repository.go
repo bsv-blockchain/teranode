@@ -127,3 +127,14 @@ func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.U
 
 	return resp, nil
 }
+
+func (r *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+	r.logger.Debugf("[Repository] GetBestBlockHeader")
+
+	header, height, err := r.BlockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return header, height, nil
+}

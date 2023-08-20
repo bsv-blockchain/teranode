@@ -111,6 +111,10 @@ func (bh *BlockHeader) MarshalJSON() ([]byte, error) {
 	)), nil
 }
 
+func (bh *BlockHeader) UnmarshalJSON([]byte) error {
+	return nil
+}
+
 func (bh *BlockHeader) StringDump() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Version: %d\n", bh.Version))
