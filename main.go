@@ -81,7 +81,7 @@ func main() {
 	startMiner := shouldStart("Miner")
 	startBlobServer := shouldStart("BlobServer")
 	startCoinbase := shouldStart("Coinbase")
-	startBootstrapServer := shouldStart("BootstrapServer")
+	startBootstrap := shouldStart("Bootstrap")
 	help := shouldStart("help")
 
 	if help ||
@@ -94,7 +94,7 @@ func main() {
 			!startPropagation &&
 			!startSeeder &&
 			!startMiner &&
-			!startBootstrapServer &&
+			!startBootstrap &&
 			!startBlobServer &&
 			!startCoinbase) {
 		fmt.Println("usage: main [options]")
@@ -184,8 +184,8 @@ func main() {
 	sm, ctx := servicemanager.NewServiceManager()
 
 	// bootstrap server
-	if startBootstrapServer {
-		sm.AddService("BootstrapServer", bootstrap.NewServer(
+	if startBootstrap {
+		sm.AddService("Bootstrap", bootstrap.NewServer(
 			gocore.Log("bootS"),
 		))
 	}
@@ -323,7 +323,7 @@ func main() {
 
 	// blockAssembly
 	if startBlockAssembly {
-		if _, found = gocore.Config().Get("blockassembly_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockassembly_grpcListenAddress"); found {
 			sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bass"),
 				txStore,
@@ -334,7 +334,7 @@ func main() {
 
 	// blockValidation
 	if startBlockValidation {
-		if _, found = gocore.Config().Get("blockvalidation_grpcAddress"); found {
+		if _, found = gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
 			sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
 				utxoStore,
@@ -347,7 +347,7 @@ func main() {
 
 	// validator
 	if startValidator {
-		if _, found = gocore.Config().Get("validator_grpcAddress"); found {
+		if _, found = gocore.Config().Get("validator_grpcListenAddress"); found {
 			sm.AddService("Validator", validator.NewServer(
 				gocore.Log("valid"),
 				utxoStore,
@@ -366,7 +366,7 @@ func main() {
 
 	// seeder
 	if startSeeder {
-		_, found = gocore.Config().Get("seeder_grpcAddress")
+		_, found = gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
 			sm.AddService("Seeder", seeder.NewServer(
 				gocore.Log("seed"),
@@ -398,7 +398,7 @@ func main() {
 
 	// propagation
 	if startPropagation {
-		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
 			sm.AddService("PropagationServer", propagation.New(
 				gocore.Log("prop"),

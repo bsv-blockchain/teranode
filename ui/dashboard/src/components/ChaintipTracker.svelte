@@ -23,9 +23,9 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each nodes as node (node.blobServerGRPCAddress + '-' + node.source)}
-						{#if node.blobServerGRPCAddress}
-							<Node name={node.source || 'anonymous'} address={node.blobServerGRPCAddress} />
+					{#each nodes as node (node.ip)}
+						{#if node.blobServerHTTPAddress}
+							<Node name={node.source || 'anonymous'} address={node.blobServerHTTPAddress} />
 						{/if}
 					{/each}
 				</tbody>

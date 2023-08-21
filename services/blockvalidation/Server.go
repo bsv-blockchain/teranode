@@ -66,7 +66,7 @@ type BlockValidationServer struct {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("blockvalidation_grpcAddress")
+	_, found := gocore.Config().Get("blockvalidation_grpcListenAddress")
 	return found
 }
 

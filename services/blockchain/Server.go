@@ -55,7 +55,7 @@ type Blockchain struct {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("blockchain_grpcAddress")
+	_, found := gocore.Config().Get("blockchain_grpcListenAddress")
 	return found
 }
 

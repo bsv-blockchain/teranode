@@ -3,7 +3,6 @@ package blobserver
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/http_impl"
@@ -29,8 +28,8 @@ type Server struct {
 }
 
 func Enabled() bool {
-	_, grpcOk := gocore.Config().Get("blobserver_grpcAddress")
-	_, httpOk := gocore.Config().Get("blobserver_httpAddress")
+	_, grpcOk := gocore.Config().Get("blobserver_grpcListenAddress")
+	_, httpOk := gocore.Config().Get("blobserver_httpListenAddress")
 	return grpcOk || httpOk
 }
 
@@ -48,11 +47,11 @@ func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store
 
 func (v *Server) Init(ctx context.Context) (err error) {
 	var grpcOk, httpOk bool
-	v.grpcAddr, grpcOk = gocore.Config().Get("blobserver_grpcAddress")
-	v.httpAddr, httpOk = gocore.Config().Get("blobserver_httpAddress")
+	v.grpcAddr, grpcOk = gocore.Config().Get("blobserver_grpcListenAddress")
+	v.httpAddr, httpOk = gocore.Config().Get("blobserver_httpListenAddress")
 
 	if !grpcOk && !httpOk {
-		return fmt.Errorf("no blobserver_grpcAddress or blobserver_httpAddress setting found")
+		return fmt.Errorf("no blobserver_grpcListenAddress or blobserver_httpListenAddress setting found")
 	}
 
 	repo, err := repository.NewRepository(ctx, v.logger, v.utxoStore, v.txStore, v.subtreeStore)
@@ -101,47 +100,48 @@ func (v *Server) Start(ctx context.Context) error {
 		// blobserver subscription for that node.
 
 		// TODO - This may need to be moved to a separate location in the code
-		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_remoteAddress")
+		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
+		blobServerHttpAddress, _ := gocore.Config().Get("blobserver_httpAddress")
 
 		// Get a list of all blob servers
-		blobServersList, _ := gocore.Config().Get("blobserver_remoteAddresses")
-		if blobServersList == "" {
-			// Start a subscription to the bootstrap service
+		// blobServersList, _ := gocore.Config().Get("blobserver_remoteAddresses")
+		// if blobServersList == "" {
+		// Start a subscription to the bootstrap service
 
-			g.Go(func() error {
-				bootstrapClient := bootstrap.NewClient("BLOB_SERVER").WithCallback(func(p bootstrap.Peer) {
-					// Start a subscription to the new peer's blob server
-					g.Go(func() error {
-						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-						return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
-					})
-				}).WithBlobServerGrpcAddress(blobServerGrpcAddress)
-
-				return bootstrapClient.Start(ctx)
-			})
-		} else {
-
-			tokens := strings.Split(blobServersList, "|")
-
-			// Remove myself from the list
-			blobServers := make([]string, 0, len(tokens))
-
-			for _, token := range tokens {
-				token = strings.TrimSpace(token)
-				if token != blobServerGrpcAddress {
-					blobServers = append(blobServers, token)
-				}
-			}
-
-			// Now create a client connection to all remaining blobServers
-			for _, blobServer := range blobServers {
-				b := blobServer
+		g.Go(func() error {
+			bootstrapClient := bootstrap.NewClient("BLOB_SERVER").WithCallback(func(p bootstrap.Peer) {
+				// Start a subscription to the new peer's blob server
 				g.Go(func() error {
-					v.logger.Infof("[BlobServer] Connecting to blob server at: %s", b)
-					return NewClient(ctx, "blobserver_gc", b).Start(ctx)
+					v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+					return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
 				})
-			}
-		}
+			}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddress)
+
+			return bootstrapClient.Start(ctx)
+		})
+		// } else {
+
+		// 	tokens := strings.Split(blobServersList, "|")
+
+		// 	// Remove myself from the list
+		// 	blobServers := make([]string, 0, len(tokens))
+
+		// 	for _, token := range tokens {
+		// 		token = strings.TrimSpace(token)
+		// 		if token != blobServerGrpcAddress {
+		// 			blobServers = append(blobServers, token)
+		// 		}
+		// 	}
+
+		// 	// Now create a client connection to all remaining blobServers
+		// 	for _, blobServer := range blobServers {
+		// 		b := blobServer
+		// 		g.Go(func() error {
+		// 			v.logger.Infof("[BlobServer] Connecting to blob server at: %s", b)
+		// 			return NewClient(ctx, "blobserver_gc", b).Start(ctx)
+		// 		})
+		// 	}
+		// }
 	}
 
 	if v.httpServer != nil {

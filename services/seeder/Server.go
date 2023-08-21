@@ -68,7 +68,7 @@ func init() {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("seeder_grpcAddress")
+	_, found := gocore.Config().Get("seeder_grpcListenAddress")
 	return found
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -30,7 +31,7 @@ type Server struct {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("bootstrap_grpcAddress")
+	_, found := gocore.Config().Get("bootstrap_grpcListenAddress")
 	return found
 }
 
@@ -57,7 +58,9 @@ func (s *Server) Init(_ context.Context) (err error) {
 		type node struct {
 			Source                string `json:"source"`
 			BlobServerGRPCAddress string `json:"blobServerGRPCAddress"`
+			BlobServerHTTPAddress string `json:"blobServerHTTPAddress"`
 			ConnectedAt           string `json:"connectedAt"`
+			IP                    string `json:"ip"`
 		}
 
 		nodes := make([]*node, 0, len(s.subscribers))
@@ -67,7 +70,9 @@ func (s *Server) Init(_ context.Context) (err error) {
 			nodes = append(nodes, &node{
 				Source:                s.Source,
 				BlobServerGRPCAddress: s.BlobServerGRPCAddress,
+				BlobServerHTTPAddress: s.BlobServerHTTPAddress,
 				ConnectedAt:           utils.ISOFormat(s.ConnectedAt.AsTime()),
+				IP:                    s.Ip,
 			})
 		}
 		s.mu.RUnlock()
@@ -122,7 +127,7 @@ func (s *Server) Start(ctx context.Context) (err error) {
 	}()
 
 	go func() {
-		addr, httpOk := gocore.Config().Get("bootstrap_httpAddress")
+		addr, httpOk := gocore.Config().Get("bootstrap_httpListenAddress")
 		if !httpOk {
 			s.logger.Infof("[BootstrapServer] HTTP service not configured")
 			return
@@ -168,6 +173,9 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.Hea
 
 // Connect Subscribe to this service and receive updates whenever a peer is added or removed
 func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.BootstrapAPI_ConnectServer) error {
+	p, _ := peer.FromContext(stream.Context())
+	info.Ip = p.Addr.String()
+
 	ch := make(chan *bootstrap_api.Notification)
 
 	s.mu.RLock()

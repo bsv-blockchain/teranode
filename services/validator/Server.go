@@ -76,7 +76,7 @@ func init() {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("validator_grpcAddress")
+	_, found := gocore.Config().Get("validator_grpcListenAddress")
 	return found
 }
 

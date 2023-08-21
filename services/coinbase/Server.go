@@ -37,7 +37,7 @@ type Server struct {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("coinbase_grpcAddress")
+	_, found := gocore.Config().Get("coinbase_grpcListenAddress")
 	return found
 }
 

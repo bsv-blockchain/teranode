@@ -85,7 +85,7 @@ type BlockAssembly struct {
 }
 
 func Enabled() bool {
-	_, found := gocore.Config().Get("blockassembly_grpcAddress")
+	_, found := gocore.Config().Get("blockassembly_grpcListenAddress")
 	return found
 }
 

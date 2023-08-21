@@ -15,6 +15,7 @@ type void struct{}
 type Peer struct {
 	ConnectedAt           time.Time
 	BlobServerGrpcAddress string
+	BlobServerHttpAddress string
 	Source                string
 }
 
@@ -22,6 +23,7 @@ type Client struct {
 	client                bootstrap_api.BootstrapAPIClient
 	logger                utils.Logger
 	blobServerGrpcAddress string
+	blobServerHttpAddress string
 	peers                 map[Peer]void
 	callbackFunc          func(peer Peer)
 	source                string
@@ -47,10 +49,17 @@ func (c *Client) WithCallback(callbackFunc func(peer Peer)) *Client {
 	return c
 }
 
-// WithBlobServerGrpcAddress overrides the local address for the client
+// WithBlobServerGrpcAddress overrides the local GRPC address for the client
 func (c *Client) WithBlobServerGrpcAddress(addr string) *Client {
 	c.blobServerGrpcAddress = addr
 	c.logger.Debugf("Local address set to: %s", c.blobServerGrpcAddress)
+	return c
+}
+
+// WithBlobServerGrpcAddress overrides the local HTTP address for the client
+func (c *Client) WithBlobServerHttpAddress(addr string) *Client {
+	c.blobServerHttpAddress = addr
+	c.logger.Debugf("Local address set to: %s", c.blobServerHttpAddress)
 	return c
 }
 
@@ -81,6 +90,7 @@ func (c *Client) Start(ctx context.Context) error {
 				c.logger.Debugf("BlobServerGRPC address: %s", c.blobServerGrpcAddress)
 				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
 					BlobServerGRPCAddress: c.blobServerGrpcAddress,
+					BlobServerHTTPAddress: c.blobServerHttpAddress,
 					Source:                c.source,
 				})
 				if err != nil {
@@ -103,11 +113,12 @@ func (c *Client) Start(ctx context.Context) error {
 						peer := Peer{
 							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
 							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
+							BlobServerHttpAddress: resp.Info.BlobServerHTTPAddress,
 							Source:                resp.Info.Source,
 						}
 
 						c.peers[peer] = void{}
-						c.logger.Infof("Added peer %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.Source)
+						c.logger.Infof("Added peer %s / %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.BlobServerHTTPAddress, resp.Info.Source)
 
 						if c.callbackFunc != nil {
 							c.callbackFunc(peer)
@@ -117,11 +128,12 @@ func (c *Client) Start(ctx context.Context) error {
 						peer := Peer{
 							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
 							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
+							BlobServerHttpAddress: resp.Info.BlobServerHTTPAddress,
 							Source:                resp.Info.Source,
 						}
 
 						delete(c.peers, peer)
-						c.logger.Infof("Removed peer %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.Source)
+						c.logger.Infof("Removed peer %s / %s (%s)", resp.Info.BlobServerGRPCAddress, resp.Info.BlobServerHTTPAddress, resp.Info.Source)
 					}
 				}
 			}
