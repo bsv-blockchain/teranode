@@ -11,7 +11,7 @@ import (
 func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetUTXO in %s: %s", mode, c.Param("hash"))
+		h.logger.Debugf("[BlobServer_http] GetUTXO in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err

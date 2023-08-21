@@ -14,7 +14,7 @@ import (
 func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashOrHeight := c.Param("hash")
-		h.logger.Debugf("[BlobServer_http] GetBlockHeader in %s: %s", mode, hashOrHeight)
+		h.logger.Debugf("[BlobServer_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashOrHeight)
 
 		var hash *chainhash.Hash
 		var header *model.BlockHeader

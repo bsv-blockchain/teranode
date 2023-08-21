@@ -12,7 +12,7 @@ import (
 
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBlockByHeight: %s", c.Param("height"))
+		h.logger.Debugf("[BlobServer_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
 		height, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -48,7 +48,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBlockByHash in %s: %s", mode, c.Param("hash"))
+		h.logger.Debugf("[BlobServer_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err

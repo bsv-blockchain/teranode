@@ -34,7 +34,7 @@ func (r *resp) UnmarshalJSON([]byte) error {
 
 func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s", mode)
+		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
 
 		blockHeader, height, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
