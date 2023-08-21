@@ -12,7 +12,7 @@ import (
 )
 
 func StartGRPCServer(ctx context.Context, logger utils.Logger, serviceName string, register func(server *grpc.Server)) error {
-	grpcAddress := fmt.Sprintf("%s_grpcAddress", serviceName)
+	grpcAddress := fmt.Sprintf("%s_grpcListenAddress", serviceName)
 	address, ok := gocore.Config().Get(grpcAddress)
 	if !ok {
 		return fmt.Errorf("[%s] no setting %s found", serviceName, grpcAddress)
