@@ -28,6 +28,7 @@ var (
 	// prometheusUtxoReSpend    prometheus.Counter
 	// prometheusUtxoSpendSpent prometheus.Counter
 	prometheusUtxoReset  prometheus.Counter
+	prometheusUtxoDelete prometheus.Counter
 	prometheusUtxoErrors *prometheus.CounterVec
 )
 
@@ -78,6 +79,12 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "sql_utxo_reset",
 			Help: "Number of utxo reset calls done to sql",
+		},
+	)
+	prometheusUtxoDelete = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "sql_utxo_delete",
+			Help: "Number of utxo delete calls done to sql",
 		},
 	)
 	prometheusUtxoErrors = promauto.NewCounterVec(
@@ -285,6 +292,22 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	}
 
 	prometheusUtxoReset.Inc()
+
+	return &utxostore.UTXOResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
+}
+
+func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	q := `
+		DELETE FROM utxos
+		WHERE hash = $1
+	`
+	if _, err := s.db.ExecContext(ctx, q, hash[:]); err != nil {
+		return nil, err
+	}
+
+	prometheusUtxoDelete.Inc()
 
 	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),

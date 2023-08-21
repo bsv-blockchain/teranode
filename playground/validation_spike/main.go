@@ -50,6 +50,11 @@ func (ns *NullStore) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostor
 	return nil, nil
 }
 
+func (ns *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	// fmt.Printf("Reset(%s)\n", hash.String())
+	return nil, nil
+}
+
 func (ns *NullStore) SetBlockHeight(height uint32) error {
 	// fmt.Printf("SetBlockHeight(%d)\n", height)
 	return nil

@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -49,6 +50,7 @@ type SubtreeProcessor struct {
 	currentBlockHeader  *model.BlockHeader
 	sync.Mutex
 	subtreeStore blob.Store
+	utxoStore    utxostore.Interface
 	logger       utils.Logger
 }
 
@@ -56,7 +58,9 @@ var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
+	newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
 	firstSubtree := util.NewTreeByLeafCount(initialItemsPerFile)
@@ -75,6 +79,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		subtreeStore:        subtreeStore,
+		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
 		logger:              logger,
 	}
 
@@ -272,19 +277,16 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		}
 
 		if idx == 0 {
+			var utxoHash *chainhash.Hash
 			for outputIdx, output := range block.CoinbaseTx.Outputs {
-				_, err = util.UTXOHashFromOutput(block.CoinbaseTx.TxIDChainHash(), output, uint32(outputIdx))
+				utxoHash, err = util.UTXOHashFromOutput(block.CoinbaseTx.TxIDChainHash(), output, uint32(outputIdx))
 				if err != nil {
 					return fmt.Errorf("error creating utxo hash: %s", err.Error())
 				}
 
-				// TODO remove the coinbase transaction from the utxo store
-				//      utxoStore is not in the subtree processor
-				//if resp, err := stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-				//	b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
-				//	success = false
-				//	break
-				//}
+				if _, err = stp.utxoStore.Reset(ctx, utxoHash); err != nil {
+					stp.logger.Errorf("[BlockAssembler] error deleting utxo (%s): %w", utxoHash, err)
+				}
 			}
 
 			// skip the first transaction of the first subtree (coinbase)

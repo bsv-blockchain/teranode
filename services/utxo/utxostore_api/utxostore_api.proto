@@ -13,6 +13,7 @@ service UtxoStoreAPI {
   rpc Store (StoreRequest) returns (StoreResponse) {}
   rpc Spend (SpendRequest) returns (SpendResponse) {}
   rpc Reset (ResetRequest) returns (ResetResponse) {}
+  rpc Delete (DeleteRequest) returns (DeleteResponse) {}
   rpc Get (GetRequest) returns (GetResponse) {}
 }
 
@@ -61,6 +62,16 @@ message ResetRequest {
 
 // swagger:model ResetResponse
 message ResetResponse {
+  Status status = 1;
+}
+
+// swagger:model DeleteRequest
+message DeleteRequest {
+  bytes uxto_hash = 1;
+}
+
+// swagger:model DeleteResponse
+message DeleteResponse {
   Status status = 1;
 }
 

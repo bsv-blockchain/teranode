@@ -29,6 +29,7 @@ var (
 	prometheusUtxoReSpend    prometheus.Counter
 	prometheusUtxoSpendSpent prometheus.Counter
 	prometheusUtxoReset      prometheus.Counter
+	prometheusUtxoDelete     prometheus.Counter
 	prometheusUtxoErrors     *prometheus.CounterVec
 )
 
@@ -79,6 +80,12 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "aerospike_utxo_reset",
 			Help: "Number of utxo reset calls done to aerospike",
+		},
+	)
+	prometheusUtxoDelete = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_utxo_delete",
+			Help: "Number of utxo delete calls done to aerospike",
 		},
 	)
 	prometheusUtxoErrors = promauto.NewCounterVec(
@@ -311,8 +318,8 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("MoveUpBlock", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike MoveUpBlock: %v\n", err)
+		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike Reset: %v\n", err)
 		return nil, err
 	}
 
@@ -337,6 +344,30 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	prometheusUtxoReset.Inc()
 
 	return s.Store(ctx, hash, uint32(nLockTime))
+}
+
+func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+
+	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
+	if err != nil {
+		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
+		fmt.Printf("ERROR panic in aerospike Delete: %v\n", err)
+		return nil, err
+	}
+
+	_, err = s.client.Delete(policy, key)
+	if err != nil {
+		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
+		return nil, errors.Join(fmt.Errorf("ERROR panic in aerospike Reset delete key: %v", err))
+	}
+
+	prometheusUtxoDelete.Inc()
+
+	return &utxostore.UTXOResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
 }
 
 func (s *Store) DeleteSpends(_ bool) {
