@@ -30,7 +30,8 @@ message HealthResponse {
 message Info {
   google.protobuf.Timestamp connectedAt = 1;
   string blobServerGRPCAddress = 2;
-  string source = 3;
+  string blobServerHTTPAddress = 3;
+  string source = 4;
 }
 
 // swagger:enum Notification
