@@ -10,7 +10,7 @@
 
 	async function fetchData() {
 		try {
-			const response = await fetch('http://localhost:8099/nodes');
+			const response = await fetch('http://13.49.21.218:8099/nodes');
 
 			if (!response.ok) {
 				throw new Error(`HTTP error! Status: ${response.status}`);
