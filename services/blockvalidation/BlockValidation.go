@@ -71,7 +71,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 
 	// Add the coinbase transaction to the metaTxStore
 	// TODO - we need to consider if we can do this differently
-	if err := u.txMetaStore.Create(ctx, block.CoinbaseTx.TxIDChainHash(), 0, nil, nil, 0); err != nil {
+	if err = u.txMetaStore.Create(ctx, block.CoinbaseTx.TxIDChainHash(), 0, nil, nil, 0); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("failed to create coinbase transaction in txMetaStore [%s]", err.Error())
 		}

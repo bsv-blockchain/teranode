@@ -3,8 +3,10 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -171,7 +173,10 @@ func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, pa
 
 	_, err := s.db.ExecContext(ctx, q, hash[:], txmeta.Validated, fee, parents, utxos, nLockTime)
 	if err != nil {
-		return fmt.Errorf("failed to insert txmeta: %+v", err)
+		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+			return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
+		}
+		return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", err))
 	}
 
 	prometheusTxMetaSet.Inc()
