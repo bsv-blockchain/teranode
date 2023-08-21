@@ -213,7 +213,7 @@ func main() {
 			}
 		}()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(3 * time.Second)
 
 		//sm.AddService("BlockChainService", blockchainService)
 	}
