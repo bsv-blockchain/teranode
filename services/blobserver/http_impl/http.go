@@ -61,21 +61,13 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
-	e.GET("/header/:height/height", h.GetBlockHeaderByHeight(BINARY_STREAM))
-	e.GET("/header/:height/height/hex", h.GetBlockHeaderByHeight(HEX))
-	e.GET("/header/:height/height/json", h.GetBlockHeaderByHeight(JSON))
+	e.GET("/header/:hash", h.GetBlockHeaderByHash(BINARY_STREAM))
+	e.GET("/header/:hash/hex", h.GetBlockHeaderByHash(HEX))
+	e.GET("/header/:hash/json", h.GetBlockHeaderByHash(JSON))
 
-	e.GET("/header/:hash/hash", h.GetBlockHeaderByHash(BINARY_STREAM))
-	e.GET("/header/:hash/hash/hex", h.GetBlockHeaderByHash(HEX))
-	e.GET("/header/:hash/hash/json", h.GetBlockHeaderByHash(JSON))
-
-	e.GET("/block/:height/height", h.GetBlockByHeight(BINARY_STREAM))
-	e.GET("/block/:height/height/hex", h.GetBlockByHeight(HEX))
-	e.GET("/block/:height/height/json", h.GetBlockByHeight(JSON))
-
-	e.GET("/block/:hash/hash", h.GetBlockByHash(BINARY_STREAM))
-	e.GET("/block/:hash/hash/hex", h.GetBlockByHash(HEX))
-	e.GET("/block/:hash/hash/json", h.GetBlockByHash(JSON))
+	e.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
+	e.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
+	e.GET("/block/:hash/json", h.GetBlockByHash(JSON))
 
 	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
 	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
