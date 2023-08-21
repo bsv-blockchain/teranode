@@ -10,6 +10,7 @@ import (
 	blobserver_api "github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -62,7 +63,7 @@ func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {
 	// TODO: change logger name
 	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
 
-	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
+	grpcServer, err := util.GetGRPCServer(&util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 	})

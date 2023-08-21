@@ -78,6 +78,7 @@ func (c *Client) Start(ctx context.Context) error {
 		c.logger.Infof("BlobServer GRPC address: %s", c.blobServerGrpcAddress)
 
 		var resp *bootstrap_api.Notification
+		var stream bootstrap_api.BootstrapAPI_ConnectClient
 
 		for {
 			select {
@@ -88,7 +89,7 @@ func (c *Client) Start(ctx context.Context) error {
 			default:
 				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
 				c.logger.Debugf("BlobServerGRPC address: %s", c.blobServerGrpcAddress)
-				stream, err := c.client.Connect(ctx, &bootstrap_api.Info{
+				stream, err = c.client.Connect(ctx, &bootstrap_api.Info{
 					BlobServerGRPCAddress: c.blobServerGrpcAddress,
 					BlobServerHTTPAddress: c.blobServerHttpAddress,
 					Source:                c.source,

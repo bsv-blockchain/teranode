@@ -18,7 +18,7 @@ func StartGRPCServer(ctx context.Context, logger utils.Logger, serviceName strin
 		return fmt.Errorf("[%s] no setting %s found", serviceName, grpcAddress)
 	}
 
-	grpcServer, err := utils.GetGRPCServer(&utils.ConnectionOptions{
+	grpcServer, err := GetGRPCServer(&ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 	})
