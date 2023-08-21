@@ -165,6 +165,17 @@ func (m *Memory) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UT
 	return m.Store(ctx, hash, nLockTime)
 }
 
+func (m *Memory) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.m, *hash)
+
+	return &utxostore.UTXOResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
+}
+
 func (m *Memory) delete(hash *chainhash.Hash) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

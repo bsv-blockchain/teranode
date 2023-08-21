@@ -99,6 +99,19 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	}, nil
 }
 
+func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	response, err := s.db.Delete(ctx, &utxostore_api.DeleteRequest{
+		UxtoHash: hash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &utxostore.UTXOResponse{
+		Status: int(response.Status),
+	}, nil
+}
+
 func (s *Store) DeleteSpends(deleteSpends bool) {
 	// do nothing
 }

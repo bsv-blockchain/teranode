@@ -110,6 +110,15 @@ func (m *SplitByHash) Reset(ctx context.Context, hash *chainhash.Hash) (*utxosto
 	return m.Store(ctx, hash, nLockTime)
 }
 
+func (m *SplitByHash) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	memMap := m.m[[1]byte{hash[0]}]
+	memMap.Delete(hash)
+
+	return &utxostore.UTXOResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
+}
+
 // only used for testing
 func (m *SplitByHash) delete(hash *chainhash.Hash) error {
 	memMap := m.m[[1]byte{hash[0]}]

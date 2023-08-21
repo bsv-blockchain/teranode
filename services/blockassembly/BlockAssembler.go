@@ -56,7 +56,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		txStore:           txStore,
 		subtreeStore:      subtreeStore,
 		blockchainClient:  blockchainClient,
-		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, newSubtreeChan),
+		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
 		miningCandidateCh: make(chan chan *miningCandidateResponse),
 		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
 	}

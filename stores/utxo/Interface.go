@@ -22,6 +22,7 @@ type Interface interface {
 	BatchStore(ctx context.Context, hash []*chainhash.Hash) (*BatchResponse, error)
 	Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*UTXOResponse, error)
 	Reset(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
+	Delete(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
 	DeleteSpends(deleteSpends bool)
 	SetBlockHeight(height uint32) error
 }

@@ -152,6 +152,14 @@ func (m *XsyncMap) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.
 	return m.Store(ctx, hash, nLockTime)
 }
 
+func (m *XsyncMap) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+	m.m.Delete(*hash)
+
+	return &utxostore.UTXOResponse{
+		Status: int(utxostore_api.Status_OK),
+	}, nil
+}
+
 func (m *XsyncMap) delete(hash *chainhash.Hash) error {
 	m.m.Delete(*hash)
 	return nil
