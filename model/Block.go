@@ -17,10 +17,10 @@ import (
 )
 
 type Block struct {
-	Header           *BlockHeader
-	CoinbaseTx       *bt.Tx
-	TransactionCount uint64
-	Subtrees         []*chainhash.Hash
+	Header           *BlockHeader      `json:"header"`
+	CoinbaseTx       *bt.Tx            `json:"coinbase_tx"`
+	TransactionCount uint64            `json:"transaction_count"`
+	Subtrees         []*chainhash.Hash `json:"subtrees"`
 
 	// local
 	hash          *chainhash.Hash

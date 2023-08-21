@@ -12,7 +12,7 @@ import (
 
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetSubtree: %s", c.Param("hash"))
+		h.logger.Debugf("[BlobServer_http] GetSubtree in %s: %s", mode, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err

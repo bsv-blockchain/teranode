@@ -1,6 +1,7 @@
 package http_impl
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/http"
 
@@ -33,27 +34,27 @@ func (r *resp) UnmarshalJSON([]byte) error {
 
 func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader")
+		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s", mode)
 
-		block, height, err := h.repository.GetBestBlockHeader(c.Request().Context())
+		blockHeader, height, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 		prometheusBlobServerHttpGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		r := &resp{
-			BlockHeader: block,
+			BlockHeader: blockHeader,
 			Height:      height,
-			Hash:        block.String(),
+			Hash:        blockHeader.String(),
 		}
 
 		switch mode {
 		case JSON:
 			return c.JSONPretty(200, r, "  ")
 		case BINARY_STREAM:
-			return echo.NewHTTPError(http.StatusInternalServerError, "BINARY is not supported for BestBlockHeader")
+			return c.Blob(200, echo.MIMEOctetStream, blockHeader.Bytes())
 		case HEX:
-			return echo.NewHTTPError(http.StatusInternalServerError, "HEX is not supported for BestBlockHeader")
+			return c.String(200, hex.EncodeToString(blockHeader.Bytes()))
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}

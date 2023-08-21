@@ -33,6 +33,21 @@ func (b NBit) String() string {
 	return utils.ReverseAndHexEncodeSlice(b[:])
 }
 
+func (b NBit) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + b.String() + `"`), nil
+}
+
+func (b NBit) UnmarshalJSON(data []byte) error {
+	nBits, err := utils.DecodeAndReverseHexString(string(data))
+	if err != nil {
+		return err
+	}
+
+	copy(b[:], nBits)
+
+	return nil
+}
+
 func (b NBit) CloneBytes() []byte {
 	return b[:]
 }

@@ -7,3 +7,16 @@ const (
 	HEX
 	JSON
 )
+
+func (r ReadMode) String() string {
+	switch r {
+	case BINARY_STREAM:
+		return "BINARY"
+	case HEX:
+		return "HEX"
+	case JSON:
+		return "JSON"
+	default:
+		return "UNKNOWN"
+	}
+}

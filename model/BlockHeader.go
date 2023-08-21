@@ -13,22 +13,22 @@ import (
 
 type BlockHeader struct {
 	// Version of the block.  This is not the same as the protocol version.
-	Version uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
+	Version uint32 `json:"version"` // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 
 	// Hash of the previous block header in the blockchain.
-	HashPrevBlock *chainhash.Hash
+	HashPrevBlock *chainhash.Hash `json:"hash_prev_block"`
 
 	// Merkle tree reference to hash of all transactions for the block.
-	HashMerkleRoot *chainhash.Hash
+	HashMerkleRoot *chainhash.Hash `json:"hash_merkle_root"`
 
 	// Time the block was created im unix time.
-	Timestamp uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
+	Timestamp uint32 `json:"timestamp"` // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 
 	// Difficulty target for the block.
-	Bits NBit // This is the target threshold in little endian - this is the way it is store in a bitcoin block.
+	Bits NBit `json:"bits"` // This is the target threshold in little endian - this is the way it is store in a bitcoin block.
 
 	// Nonce used to generate the block.
-	Nonce uint32 // When the block header bytes are built, this will be represented as 4 bytes in little endian.
+	Nonce uint32 `json:"nonce"` // When the block header bytes are built, this will be represented as 4 bytes in little endian.
 }
 
 var (
@@ -97,22 +97,6 @@ func (bh *BlockHeader) Hash() *chainhash.Hash {
 
 func (bh *BlockHeader) String() string {
 	return bh.Hash().String()
-}
-
-// Write a function to marshal to JSON
-func (bh *BlockHeader) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`{"version":%d,"previousblockhash":"%s","merkleroot":"%s","time":%d,"bits":"%s","nonce":%d}`,
-		bh.Version,
-		bh.HashPrevBlock.String(),
-		bh.HashMerkleRoot.String(),
-		bh.Timestamp,
-		bh.Bits.String(),
-		bh.Nonce,
-	)), nil
-}
-
-func (bh *BlockHeader) UnmarshalJSON([]byte) error {
-	return nil
 }
 
 func (bh *BlockHeader) StringDump() string {

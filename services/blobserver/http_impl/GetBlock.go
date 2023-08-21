@@ -48,7 +48,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBlockByHash: %s", c.Param("hash"))
+		h.logger.Debugf("[BlobServer_http] GetBlockByHash in %s: %s", mode, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -65,6 +65,10 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 
 		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
+		if mode == JSON {
+			return c.JSONPretty(200, block, "  ")
+		}
+
 		b, err := block.Bytes()
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -75,8 +79,6 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 			return c.Blob(200, echo.MIMEOctetStream, b)
 		case HEX:
 			return c.String(200, hex.EncodeToString(b))
-		case JSON:
-			return echo.NewHTTPError(http.StatusInternalServerError, "JSON is not supported for blocks")
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}
