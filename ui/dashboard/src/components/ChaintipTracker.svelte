@@ -26,7 +26,11 @@
 				<tbody>
 					{#each nodes as node (node.ip)}
 						{#if node.blobServerHTTPAddress}
-							<Node name={node.source || 'anonymous'} address={node.blobServerHTTPAddress} />
+							<Node
+								name={node.name}
+								source={node.source || 'anonymous'}
+								address={node.blobServerHTTPAddress}
+							/>
 						{/if}
 					{/each}
 				</tbody>

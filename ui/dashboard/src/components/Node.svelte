@@ -11,7 +11,7 @@
 
 	async function fetchData() {
 		try {
-			const response = await fetch(`http://${address}/bestblockheader/json`);
+			const response = await fetch(`${address}/bestblockheader/json`);
 
 			if (!response.ok) {
 				throw new Error(`HTTP error! Status: ${response.status}`);
