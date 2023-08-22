@@ -19,8 +19,11 @@ func StartGRPCServer(ctx context.Context, logger utils.Logger, serviceName strin
 	}
 
 	grpcServer, err := GetGRPCServer(&ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		OpenTracing:   gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:    gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		SecurityLevel: 1,
+		CertFile:      "./certs/example.server.crt",
+		KeyFile:       "./certs/example.server.key",
 	})
 	if err != nil {
 		return fmt.Errorf("[%s] could not create GRPC server [%w]", serviceName, err)

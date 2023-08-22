@@ -277,7 +277,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			caCertPool.AppendCertsFromPEM(caCert)
 
 			return credentials.NewTLS(&tls.Config{
-				RootCAs: caCertPool,
+				RootCAs:            caCertPool,
+				InsecureSkipVerify: true,
 			}), nil
 		}
 
