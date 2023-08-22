@@ -15,7 +15,8 @@
 			<table class="table">
 				<thead>
 					<tr>
-						<th>Type</th>
+						<th>Source</th>
+						<th>Name</th>
 						<th>Address</th>
 						<th>Height</th>
 						<th>Latest hash</th>

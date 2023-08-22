@@ -43,7 +43,7 @@ type GRPC struct {
 }
 
 func init() {
-	baseURL, _ = gocore.Config().Get("blobserver_baseURL")
+	baseURL, _ = gocore.Config().Get("blobserver_httpAddress")
 
 	if baseURL == "" {
 		remoteAddress, err := utils.GetPublicIPAddress()
@@ -56,6 +56,8 @@ func init() {
 		port := strings.Split(blobServerAddress, ":")[1]
 
 		baseURL = fmt.Sprintf("http://%s:%s", remoteAddress, port)
+	} else {
+		baseURL = "http://" + baseURL
 	}
 }
 
@@ -135,6 +137,10 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 		for {
 			select {
 			case <-ctx.Done():
+				// Close all subscription channels
+				for sub := range g.subscribers {
+					safeClose(sub.done)
+				}
 				return
 			case notification := <-g.notifications:
 				for sub := range g.subscribers {
@@ -211,4 +217,12 @@ func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_ap
 			return nil
 		}
 	}
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }

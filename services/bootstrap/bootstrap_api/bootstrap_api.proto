@@ -33,6 +33,7 @@ message Info {
   string blobServerHTTPAddress = 3;
   string source = 4;
   string ip = 5;
+  string name = 6;
 }
 
 // swagger:enum Notification

@@ -71,6 +71,7 @@
 						<tr>
 							<td>{node.blobServerHTTPAddress || 'anonymous'}</td>
 							<td>{node.source}</td>
+							<td>{node.name}</td>
 							<td>{node.ip}</td>
 							<td>
 								Connected at {new Date(node.connectedAt).toISOString().replace('T', ' ')} ({humanTime(

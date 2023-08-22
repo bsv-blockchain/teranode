@@ -6,12 +6,12 @@
 		<meta name="viewport" content="width=device-width" />
 
 		<link href="./_app/immutable/assets/2.9c786d5a.css" rel="stylesheet">
-		<link rel="modulepreload" href="./_app/immutable/entry/start.fc958bae.js">
+		<link rel="modulepreload" href="./_app/immutable/entry/start.b54a3a0c.js">
 		<link rel="modulepreload" href="./_app/immutable/chunks/index.05b33c6f.js">
-		<link rel="modulepreload" href="./_app/immutable/chunks/singletons.8eee4cde.js">
-		<link rel="modulepreload" href="./_app/immutable/entry/app.fbf5e6fb.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/singletons.eb8bcb3d.js">
+		<link rel="modulepreload" href="./_app/immutable/entry/app.7bac4a4c.js">
 		<link rel="modulepreload" href="./_app/immutable/nodes/0.10413fb1.js">
-		<link rel="modulepreload" href="./_app/immutable/nodes/2.79cae76a.js"><!-- HEAD_svelte-d8odrr_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><style>body {
+		<link rel="modulepreload" href="./_app/immutable/nodes/2.1987060b.js"><!-- HEAD_svelte-d8odrr_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><style>body {
 			font-family: 'Arial', sans-serif;
 			background-color: #f4f4f4;
 			margin: 0;
@@ -55,7 +55,8 @@
 
 </div>
 	<div class="card panel svelte-99p0jp"><header class="card-header"><p class="card-header-title">Chaintip tracker</p></header>
-	<div class="card-content svelte-99p0jp"><table class="table svelte-99p0jp"><thead><tr class="svelte-99p0jp"><th class="svelte-99p0jp">Type</th>
+	<div class="card-content svelte-99p0jp"><table class="table svelte-99p0jp"><thead><tr class="svelte-99p0jp"><th class="svelte-99p0jp">Source</th>
+						<th class="svelte-99p0jp">Name</th>
 						<th class="svelte-99p0jp">Address</th>
 						<th class="svelte-99p0jp">Height</th>
 						<th class="svelte-99p0jp">Latest hash</th>
@@ -68,7 +69,7 @@
 
 			<script>
 				{
-					__sveltekit_iywn82 = {
+					__sveltekit_1eotmu2 = {
 						base: new URL(".", location).pathname.slice(0, -1),
 						env: {}
 					};
@@ -78,8 +79,8 @@
 					const data = [null,null];
 
 					Promise.all([
-						import("./_app/immutable/entry/start.fc958bae.js"),
-						import("./_app/immutable/entry/app.fbf5e6fb.js")
+						import("./_app/immutable/entry/start.b54a3a0c.js"),
+						import("./_app/immutable/entry/app.7bac4a4c.js")
 					]).then(([kit, app]) => {
 						kit.start(app, element, {
 							node_ids: [0, 2],

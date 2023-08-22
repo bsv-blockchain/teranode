@@ -103,13 +103,12 @@ func (v *Server) Start(ctx context.Context) error {
 		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
 		blobServerHttpAddress, _ := gocore.Config().Get("blobserver_httpAddress")
 
-		// Get a list of all blob servers
-		// blobServersList, _ := gocore.Config().Get("blobserver_remoteAddresses")
-		// if blobServersList == "" {
+		blobServerClientName, _ := gocore.Config().Get("blobserver_clientName")
+
 		// Start a subscription to the bootstrap service
 
 		g.Go(func() error {
-			bootstrapClient := bootstrap.NewClient("BLOB_SERVER").WithCallback(func(p bootstrap.Peer) {
+			bootstrapClient := bootstrap.NewClient("BLOB_SERVER", blobServerClientName).WithCallback(func(p bootstrap.Peer) {
 				if p.BlobServerGrpcAddress != "" {
 					// Start a subscription to the new peer's blob server
 					g.Go(func() error {
@@ -121,29 +120,6 @@ func (v *Server) Start(ctx context.Context) error {
 
 			return bootstrapClient.Start(ctx)
 		})
-		// } else {
-
-		// 	tokens := strings.Split(blobServersList, "|")
-
-		// 	// Remove myself from the list
-		// 	blobServers := make([]string, 0, len(tokens))
-
-		// 	for _, token := range tokens {
-		// 		token = strings.TrimSpace(token)
-		// 		if token != blobServerGrpcAddress {
-		// 			blobServers = append(blobServers, token)
-		// 		}
-		// 	}
-
-		// 	// Now create a client connection to all remaining blobServers
-		// 	for _, blobServer := range blobServers {
-		// 		b := blobServer
-		// 		g.Go(func() error {
-		// 			v.logger.Infof("[BlobServer] Connecting to blob server at: %s", b)
-		// 			return NewClient(ctx, "blobserver_gc", b).Start(ctx)
-		// 		})
-		// 	}
-		// }
 	}
 
 	if v.httpServer != nil {

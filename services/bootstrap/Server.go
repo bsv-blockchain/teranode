@@ -60,6 +60,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 			BlobServerGRPCAddress string `json:"blobServerGRPCAddress"`
 			BlobServerHTTPAddress string `json:"blobServerHTTPAddress"`
 			ConnectedAt           string `json:"connectedAt"`
+			Name                  string `json:"name"`
 			IP                    string `json:"ip"`
 		}
 
@@ -73,6 +74,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 				BlobServerHTTPAddress: s.BlobServerHTTPAddress,
 				ConnectedAt:           utils.ISOFormat(s.ConnectedAt.AsTime()),
 				IP:                    s.Ip,
+				Name:                  s.Name,
 			})
 		}
 		s.mu.RUnlock()

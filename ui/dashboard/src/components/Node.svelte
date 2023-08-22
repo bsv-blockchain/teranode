@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 
 	export let name;
+	export let source;
 	export let address;
 	let loading = true;
 	let data = {};
@@ -39,6 +40,7 @@
 </script>
 
 <tr>
+	<td>{source}</td>
 	<td>{name}</td>
 	<td>{address}</td>
 	<td>{data.height}</td>
