@@ -47,6 +47,7 @@ var (
 	merkleRoot, _ = chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
 	bits          = NewNBitFromString("1d00ffff")
 
+	BlockHeaderSize    = 80
 	GenesisBlockHeader = &BlockHeader{
 		Version:        1,
 		Timestamp:      1231006505,

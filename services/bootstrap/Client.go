@@ -59,7 +59,7 @@ func (c *Client) WithBlobServerGrpcAddress(addr string) *Client {
 	return c
 }
 
-// WithBlobServerGrpcAddress overrides the local HTTP address for the client
+// WithBlobServerHttpAddress overrides the local HTTP address for the client
 func (c *Client) WithBlobServerHttpAddress(addr string) *Client {
 	c.blobServerHttpAddress = addr
 	c.logger.Debugf("Local address set to: %s", c.blobServerHttpAddress)

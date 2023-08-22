@@ -81,6 +81,16 @@ func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) 
 	return nil, errors.New("not implemented")
 }
 
+func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash) ([]*model.BlockHeader, error) {
+	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
+	blockHeaders, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 100)
+	if err != nil {
+		return nil, err
+	}
+
+	return blockHeaders, nil
+}
+
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	subtree, err := r.GetSubtree(ctx, hash)
 	if err != nil {
