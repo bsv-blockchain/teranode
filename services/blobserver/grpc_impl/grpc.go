@@ -56,8 +56,6 @@ func init() {
 		port := strings.Split(blobServerAddress, ":")[1]
 
 		baseURL = fmt.Sprintf("http://%s:%s", remoteAddress, port)
-	} else {
-		baseURL = "http://" + baseURL
 	}
 }
 

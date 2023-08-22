@@ -71,7 +71,7 @@ services:
       txmeta_grpcListenAddress: ":8086"
       validator_grpcListenAddress: ":8081"
       seeder_grpcListenAddress: ":8083"
-      blobserver_httpAddress: "ubsv-1:8090"
+      blobserver_httpAddress: "http://ubsv-1:8090"
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -103,7 +103,7 @@ services:
       txmeta_grpcListenAddress: ":8086"
       validator_grpcListenAddress: ":8081"
       seeder_grpcListenAddress: ":8083"
-      blobserver_httpAddress: "ubsv-2:8090"
+      blobserver_httpAddress: "http://ubsv-2:8090"
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -136,7 +136,7 @@ services:
       txmeta_grpcListenAddress: ":8086"
       validator_grpcListenAddress: ":8081"
       seeder_grpcListenAddress: ":8083"
-      blobserver_httpAddress: "ubsv-3:8090"
+      blobserver_httpAddress: "http://ubsv-3:8090"
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
