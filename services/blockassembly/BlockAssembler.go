@@ -252,7 +252,7 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 }
 
 func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
-	b.currentChain, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Hash(), 100)
+	b.currentChain, _, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Hash(), 100)
 	if err != nil {
 		return fmt.Errorf("error getting block headers from blockchain: %v", err)
 	}
@@ -459,7 +459,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, fmt.Errorf("header is nil")
 	}
 
-	newChain, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), 100)
+	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), 100)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting new chain: %w", err)
 	}

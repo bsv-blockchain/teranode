@@ -64,7 +64,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 		return err
 	}
 
-	blockHeaders, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
 	}

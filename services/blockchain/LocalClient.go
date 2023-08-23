@@ -55,7 +55,11 @@ func (c LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader
 	return c.store.GetBestBlockHeader(ctx)
 }
 
-func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error) {
+func (c LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+	return c.store.GetBlockHeader(ctx, blockHash)
+}
+
+func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 

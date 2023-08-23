@@ -43,7 +43,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 		assert.Equal(t, uint32(2573394689), blockHeader.Nonce)
 	})
 
-	t.Run("block bytes", func(t *testing.T) {
+	t.Run("block 1 bytes", func(t *testing.T) {
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
@@ -51,6 +51,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 		}
 
 		assert.Equal(t, blockHeaderBytes, blockHeader.Bytes())
+		assert.Equal(t, "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", blockHeader.Hash().String())
 	})
 
 	t.Run("block hash", func(t *testing.T) {

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -115,6 +118,26 @@ func (v *Server) Start(ctx context.Context) error {
 						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
 						return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
 					})
+				}
+
+				if p.BlobServerHttpAddress != "" {
+					// get the best block header and send to the block validation for processing
+					v.logger.Infof("[BlobServer] Getting best block header from server at: %s", p.BlobServerHttpAddress)
+					blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.BlobServerHttpAddress))
+					if err != nil {
+						v.logger.Errorf("[BlobServer] error getting best block header from %s: %s", p.BlobServerHttpAddress, err)
+						return
+					}
+					blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
+					if err != nil {
+						v.logger.Errorf("[BlobServer] error parsing best block header from %s: %s", p.BlobServerHttpAddress, err)
+						return
+					}
+
+					validationClient := blockvalidation.NewClient(ctx)
+					if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.BlobServerHttpAddress); err != nil {
+						v.logger.Errorf("[BlobServer] error validating block from %s: %s", p.BlobServerHttpAddress, err)
+					}
 				}
 			}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddress)
 

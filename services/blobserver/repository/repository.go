@@ -62,18 +62,14 @@ func (r *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*mode
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetBlockHeaderByHash(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, error) {
+func (r *Repository) GetBlockHeaderByHash(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
 	r.logger.Debugf("[Repository] GetBlockHeader: %s", hash.String())
-	blockHeaders, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 1)
+	blockHeaders, height, err := r.BlockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	if len(blockHeaders) != 1 {
-		return nil, errors.New("block header not found")
-	}
-
-	return blockHeaders[0], nil
+	return blockHeaders, height, nil
 }
 
 func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) (*model.BlockHeader, error) {
@@ -81,14 +77,14 @@ func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) 
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash) ([]*model.BlockHeader, error) {
+func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash) ([]*model.BlockHeader, []uint32, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
-	blockHeaders, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 100)
+	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 100)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return blockHeaders, nil
+	return blockHeaders, heights, nil
 }
 
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {

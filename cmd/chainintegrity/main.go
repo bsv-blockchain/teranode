@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// get all block headers
-	blockHeaders, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000)
+	blockHeaders, _, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000)
 	if err != nil {
 		panic(err)
 	}
