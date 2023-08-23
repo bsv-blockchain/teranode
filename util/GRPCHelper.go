@@ -13,6 +13,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
+	"github.com/ordishs/gocore"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -109,6 +110,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 			grpc.MaxCallSendMsgSize(connectionOptions.MaxMessageSize),
 		),
 	}
+
+	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+	connectionOptions.SecurityLevel = securityLevel
 
 	tlsCredentials, err := loadTLSCredentials(connectionOptions, false)
 	if err != nil {
