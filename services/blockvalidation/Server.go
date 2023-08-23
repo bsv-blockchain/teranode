@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -67,6 +68,7 @@ type Server struct {
 
 	blockFoundCh        chan processBlockFound
 	catchupCh           chan processBlockCatchup
+	catchingUp          atomic.Bool
 	blockValidation     *BlockValidation
 	processingSubtreeMu sync.Mutex
 	processingSubtree   map[chainhash.Hash]bool
@@ -152,6 +154,9 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
+	if u.catchingUp.Load() {
+		return &emptypb.Empty{}, nil
+	}
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
@@ -265,6 +270,10 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
 	u.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
+	u.catchingUp.Store(true)
+	defer func() {
+		u.catchingUp.Store(false)
+	}()
 
 	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
 	var exists bool
@@ -284,7 +293,6 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
-			u.logger.Debugf("checking if block exists [%s]", blockHeader.String())
 			exists, err = u.blockchainClient.GetBlockExists(ctx, blockHeader.Hash())
 			if err != nil {
 				return fmt.Errorf("failed to check if block exists [%w]", err)

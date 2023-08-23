@@ -2,10 +2,10 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -23,27 +23,74 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
 	heights := make([]uint32, 0, numberOfHeaders)
 
-	blockHeader, height, err := s.GetBlockHeader(ctx, blockHashFrom)
+	q := `
+		SELECT
+			 b.version
+			,b.block_time
+			,b.nonce
+			,b.previous_hash
+			,b.merkle_root
+			,b.n_bits
+			,b.height
+		FROM blocks b
+		WHERE id IN (
+			SELECT id FROM blocks
+			WHERE id IN (
+				WITH RECURSIVE ChainBlocks AS (
+					SELECT id, parent_id, height
+					FROM blocks
+					WHERE hash = $1
+					UNION ALL
+					SELECT bb.id, bb.parent_id, bb.height
+					FROM blocks bb
+					JOIN ChainBlocks cb ON bb.id = cb.parent_id
+					WHERE bb.id != cb.id
+				)
+				SELECT id FROM ChainBlocks
+				LIMIT $2
+			)
+		)
+		ORDER BY height DESC
+	`
+	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
 	if err != nil {
-		if errors.Is(err, store.ErrBlockNotFound) {
-			// could not find header, return empty list
-			return blockHeaders, []uint32{}, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return blockHeaders, heights, nil
 		}
-		return nil, nil, fmt.Errorf("failed to get header: %w", err)
+		return nil, nil, fmt.Errorf("failed to get headers: %w", err)
 	}
+	defer rows.Close()
 
-	blockHeaders = append(blockHeaders, blockHeader)
-	heights = append(heights, height)
+	var hashPrevBlock []byte
+	var hashMerkleRoot []byte
+	var nBits []byte
+	var height uint32
+	for rows.Next() {
+		blockHeader := &model.BlockHeader{}
 
-	for i := uint64(1); i < numberOfHeaders; i++ {
-		blockHeader, height, err = s.GetBlockHeader(ctx, blockHeaders[i-1].HashPrevBlock)
-		if err != nil {
-			if errors.Is(err, store.ErrBlockNotFound) {
-				break
-			} else {
-				return nil, nil, fmt.Errorf("failed to get header: %w", err)
-			}
+		if err = rows.Scan(
+			&blockHeader.Version,
+			&blockHeader.Timestamp,
+			&blockHeader.Nonce,
+			&hashPrevBlock,
+			&hashMerkleRoot,
+			&nBits,
+			&height,
+		); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
 		}
+
+		blockHeader.Bits = model.NewNBitFromSlice(nBits)
+
+		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		}
+		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		}
+
 		blockHeaders = append(blockHeaders, blockHeader)
 		heights = append(heights, height)
 	}

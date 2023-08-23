@@ -47,7 +47,6 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 
 		bytes := make([]byte, 0, len(headers)*model.BlockHeaderSize)
 		for _, header := range headers {
-			h.logger.Debugf("Sending block header %s", header.Hash().String())
 			bytes = append(bytes, header.Bytes()...)
 		}
 
