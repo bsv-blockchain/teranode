@@ -44,6 +44,10 @@ var commit string
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
+
+	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
+		return gocore.Config().GetAll()
+	})
 }
 
 func main() {
