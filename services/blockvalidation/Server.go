@@ -55,8 +55,8 @@ type processBlockCatchup struct {
 	baseURL string
 }
 
-// BlockValidationServer type carries the logger within it
-type BlockValidationServer struct {
+// Server type carries the logger within it
+type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger           utils.Logger
 	blockchainClient blockchain.ClientI
@@ -79,9 +79,9 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txMetaStore txmeta_store.Store,
-	validatorClient *validator.Client) *BlockValidationServer {
+	validatorClient *validator.Client) *Server {
 
-	bVal := &BlockValidationServer{
+	bVal := &Server{
 		utxoStore:         utxoStore,
 		logger:            logger,
 		subtreeStore:      subtreeStore,
@@ -95,7 +95,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 	return bVal
 }
 
-func (u *BlockValidationServer) Init(ctx context.Context) (err error) {
+func (u *Server) Init(ctx context.Context) (err error) {
 	if u.blockchainClient, err = blockchain.NewClient(ctx); err != nil {
 		return fmt.Errorf("failed to create blockchain client [%w]", err)
 	}
@@ -128,19 +128,7 @@ func (u *BlockValidationServer) Init(ctx context.Context) (err error) {
 }
 
 // Start function
-func (u *BlockValidationServer) Start(ctx context.Context) error {
-	hash, _ := chainhash.NewHashFromStr("00d65139b2f625f2aee8e69a68a67573033e483cb94c20b5309541a817d27603")
-	headers, err := u.getBlockHeaders(ctx, hash, "http://13.49.21.218:18290")
-	//headers, err := u.getBlockHeaders(ctx, hash, "http://localhost:8090")
-	if err != nil {
-		u.logger.Errorf("failed to get block headers %s from peer [%w]", hash.String(), err)
-	}
-
-	for _, header := range headers {
-		u.logger.Debugf("header: %s", header.String())
-	}
-	<-time.After(10 * time.Second)
-
+func (u *Server) Start(ctx context.Context) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
 		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
@@ -151,18 +139,18 @@ func (u *BlockValidationServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (u *BlockValidationServer) Stop(_ context.Context) error {
+func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *BlockValidationServer) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {
+func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {
 	return &blockvalidation_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
+func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationBlockFound.Inc()
 
 	hash, err := chainhash.NewHash(req.Hash)
@@ -192,7 +180,7 @@ func (u *BlockValidationServer) BlockFound(ctx context.Context, req *blockvalida
 	return &emptypb.Empty{}, nil
 }
 
-func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
 	u.logger.Infof("processing block found [%s]", hash.String())
 
 	// first check if the block exists, it might have already been processed
@@ -237,7 +225,7 @@ func (u *BlockValidationServer) processBlockFound(ctx context.Context, hash *cha
 	return nil
 }
 
-func (u *BlockValidationServer) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
+func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block %s from peer [%w]", hash.String(), err)
@@ -255,7 +243,7 @@ func (u *BlockValidationServer) getBlock(ctx context.Context, hash *chainhash.Ha
 	return block, nil
 }
 
-func (u *BlockValidationServer) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
+func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
 	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block headers %s from peer [%w]", hash.String(), err)
@@ -275,7 +263,7 @@ func (u *BlockValidationServer) getBlockHeaders(ctx context.Context, hash *chain
 	return blockHeaders, nil
 }
 
-func (u *BlockValidationServer) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
 	u.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
 
 	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
@@ -333,7 +321,7 @@ LOOP:
 	return nil
 }
 
-func (u *BlockValidationServer) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
+func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
 	prometheusBlockValidationSubtreeFound.Inc()
 	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
 
