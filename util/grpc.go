@@ -11,19 +11,36 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-func StartGRPCServer(ctx context.Context, logger utils.Logger, serviceName string, register func(server *grpc.Server)) error {
+func StartGRPCServer(ctx context.Context, l utils.Logger, serviceName string, register func(server *grpc.Server)) error {
 	grpcAddress := fmt.Sprintf("%s_grpcListenAddress", serviceName)
 	address, ok := gocore.Config().Get(grpcAddress)
 	if !ok {
 		return fmt.Errorf("[%s] no setting %s found", serviceName, grpcAddress)
 	}
 
-	grpcServer, err := GetGRPCServer(&ConnectionOptions{
+	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+
+	var certFile, keyFile string
+
+	if securityLevel > 0 {
+		var found bool
+
+		certFile, found = gocore.Config().Get("server_certFile")
+		if !found {
+			return fmt.Errorf("server_certFile is required for security level %d", securityLevel)
+		}
+		keyFile, found = gocore.Config().Get("server_keyFile")
+		if !found {
+			return fmt.Errorf("server_keyFile is required for security level %d", securityLevel)
+		}
+	}
+
+	grpcServer, err := getGRPCServer(&ConnectionOptions{
 		OpenTracing:   gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:    gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		SecurityLevel: 1,
-		CertFile:      "./certs/example.server.crt",
-		KeyFile:       "./certs/example.server.key",
+		SecurityLevel: securityLevel,
+		CertFile:      certFile,
+		KeyFile:       keyFile,
 	})
 	if err != nil {
 		return fmt.Errorf("[%s] could not create GRPC server [%w]", serviceName, err)
@@ -41,11 +58,11 @@ func StartGRPCServer(ctx context.Context, logger utils.Logger, serviceName strin
 
 	register(grpcServer)
 
-	logger.Infof("[%s] GRPC service listening on %s", serviceName, address)
+	l.Infof("[%s] GRPC service listening on %s", serviceName, address)
 
 	go func() {
 		<-ctx.Done()
-		logger.Infof("[%s] GRPC service shutting down", serviceName)
+		l.Infof("[%s] GRPC service shutting down", serviceName)
 		grpcServer.GracefulStop()
 	}()
 

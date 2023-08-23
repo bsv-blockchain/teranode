@@ -6,6 +6,7 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -25,7 +26,7 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	}
 
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	conn, err := utils.GetGRPCClient(ctx, validator_grpcAddress, &utils.ConnectionOptions{
+	conn, err := util.GetGRPCClient(ctx, validator_grpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		MaxRetries:  3,
 	})

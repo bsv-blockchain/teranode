@@ -57,7 +57,7 @@ func (c *Coinbase) Init(ctx context.Context) error {
 		return errors.New("no blobserver_grpcAddress setting found")
 	}
 
-	blobServerConn, err := utils.GetGRPCClient(ctx, blobServerAddr, &utils.ConnectionOptions{})
+	blobServerConn, err := util.GetGRPCClient(ctx, blobServerAddr, &util.ConnectionOptions{})
 	if err != nil {
 		return err
 	}

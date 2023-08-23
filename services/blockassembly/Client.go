@@ -5,8 +5,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -20,7 +20,7 @@ func NewClient(ctx context.Context) *Client {
 	if !ok {
 		panic("no blockassembly_grpcAddress setting found")
 	}
-	baConn, err := utils.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &utils.ConnectionOptions{
+	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {

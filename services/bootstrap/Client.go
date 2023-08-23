@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -68,9 +69,9 @@ func (c *Client) WithBlobServerHttpAddress(addr string) *Client {
 
 func (c *Client) Start(ctx context.Context) error {
 	bootstrap_grpcAddress, _ := gocore.Config().Get("bootstrap_grpcAddress")
-	conn, err := utils.GetGRPCClient(ctx, bootstrap_grpcAddress, &utils.ConnectionOptions{
+	conn, err := util.GetGRPCClient(ctx, bootstrap_grpcAddress, &util.ConnectionOptions{
 		SecurityLevel: 1,
-		CaCertFile:    "./certs/example.ca.crt",
+		// CaCertFile:    "./certs/example.ca.crt",
 	})
 	if err != nil {
 		return err

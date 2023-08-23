@@ -173,7 +173,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	return conn, nil
 }
 
-func GetGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
+func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
 	if connectionOptions.MaxMessageSize == 0 {
@@ -263,21 +263,11 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
-				InsecureSkipVerify: true,
-				ClientAuth:         tls.NoClientCert,
+				Certificates: []tls.Certificate{cert},
+				ClientAuth:   tls.NoClientCert,
 			}), nil
 		} else {
-			// Load the server's CA certificate from disk
-			caCert, err := os.ReadFile(connectionData.CaCertFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read ca cert file: %w", err)
-			}
-			caCertPool := x509.NewCertPool()
-			caCertPool.AppendCertsFromPEM(caCert)
-
 			return credentials.NewTLS(&tls.Config{
-				RootCAs:            caCertPool,
 				InsecureSkipVerify: true,
 			}), nil
 		}

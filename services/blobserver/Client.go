@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -32,7 +33,7 @@ func NewClient(ctx context.Context, source string, addr string) *Client {
 }
 
 func (c *Client) Start(ctx context.Context) error {
-	conn, err := utils.GetGRPCClient(ctx, c.address, &utils.ConnectionOptions{})
+	conn, err := util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{})
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,6 @@ package grpc_impl
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -62,29 +60,14 @@ func init() {
 func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {
 	// TODO: change logger name
 	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
-
-	grpcServer, err := util.GetGRPCServer(&util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("could not create GRPC server [%w]", err)
-	}
-
 	g := &GRPC{
 		logger:            logger,
 		repository:        repo,
-		grpcServer:        grpcServer,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]bool),
 		notifications:     make(chan *blobserver_api.Notification, 100),
 	}
-
-	blobserver_api.RegisterBlobServerAPIServer(grpcServer, g)
-
-	// Register reflection service on gRPC server
-	reflection.Register(g.grpcServer)
 
 	return g, nil
 }
@@ -108,7 +91,6 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-
 	go func() {
 		for {
 			select {
@@ -161,20 +143,15 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 		}
 	}()
 
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("GRPC server failed to listen [%w]", err)
+	// this will block
+	if err := util.StartGRPCServer(ctx, g.logger, "blobserver", func(server *grpc.Server) {
+		blobserver_api.RegisterBlobServerAPIServer(server, g)
+		g.grpcServer = server
+	}); err != nil {
+		return err
 	}
 
-	g.logger.Infof("BlobServer GRPC service listening on %s", addr)
-
-	go func() {
-		<-ctx.Done()
-		g.logger.Infof("[BlobServer] GRPC (impl) service shutting down")
-		g.grpcServer.GracefulStop()
-	}()
-
-	return g.grpcServer.Serve(lis)
+	return nil
 }
 
 func (g *GRPC) Stop(ctx context.Context) error {

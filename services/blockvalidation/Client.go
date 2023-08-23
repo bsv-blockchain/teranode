@@ -4,8 +4,8 @@ import (
 	"context"
 
 	blockvalidation_api "github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -18,7 +18,7 @@ func NewClient(ctx context.Context) *Client {
 	if !ok {
 		panic("no blockvalidation_grpcAddress setting found")
 	}
-	baConn, err := utils.GetGRPCClient(ctx, blockValidationGrpcAddress, &utils.ConnectionOptions{
+	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
@@ -25,7 +26,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("no coinbase_grpcAddress setting found")
 	}
-	baConn, err := utils.GetGRPCClient(ctx, coinbaseGrpcAddress, &utils.ConnectionOptions{
+	baConn, err := util.GetGRPCClient(ctx, coinbaseGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
@@ -41,7 +42,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 }
 
 func NewClientWithAddress(ctx context.Context, logger utils.Logger, address string) (ClientI, error) {
-	baConn, err := utils.GetGRPCClient(ctx, address, &utils.ConnectionOptions{
+	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
