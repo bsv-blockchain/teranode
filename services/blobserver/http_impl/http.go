@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -104,8 +105,22 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 		}
 	}()
 
-	err := h.e.Start(addr)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// err := h.e.Start(addr)
+	// if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// 	return err
+	// }
+
+	certFile, found := gocore.Config().Get("server_certFile")
+	if !found {
+		return errors.New("server_certFile is required for HTTPS")
+	}
+	keyFile, found := gocore.Config().Get("server_keyFile")
+	if !found {
+		return errors.New("server_keyFile is required for HTTPS")
+	}
+
+	err := h.e.StartTLS(addr, certFile, keyFile)
+	if err != http.ErrServerClosed {
 		return err
 	}
 

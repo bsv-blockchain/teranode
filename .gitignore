@@ -1,6 +1,6 @@
 .history
 *.tar.gz
-build
+/build
 data/
 *.run
 .DS_Store
@@ -13,8 +13,8 @@ block.bin
 __debug_bin
 
 node_modules
-/.svelte-kit
-/package
+.svelte-kit
+package/
 .env
 .env.*
 !.env.example
