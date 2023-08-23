@@ -43,7 +43,7 @@
 	<td>{source}</td>
 	<td>{name}</td>
 	<td>{address}</td>
-	<td>{data.height}</td>
+	<td class="right">{data.height}</td>
 	<td title={data.hash}>{shortHash(data.hash)}</td>
 	<td title={data.previousblockhash}>{shortHash(data.previousblockhash)}</td>
 </tr>
@@ -52,5 +52,9 @@
 	td {
 		border: 1px solid #e5e5e5; /* Add a light border to table cells */
 		padding: 8px 12px; /* Add some padding to table cells */
+	}
+
+	.right {
+		text-align: right;
 	}
 </style>

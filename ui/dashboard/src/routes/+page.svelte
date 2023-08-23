@@ -35,10 +35,11 @@
 <svelte:head>
 	<!-- Include Bulma CSS for the entire app -->
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css" />
+	<link href="http://fonts.googleapis.com/css?family=Roboto" rel="stylesheet" type="text/css" />
 
 	<style>
 		body {
-			font-family: 'Arial', sans-serif;
+			font-family: 'Roboto', sans-serif;
 			background-color: #f4f4f4;
 			margin: 0;
 			padding: 0;

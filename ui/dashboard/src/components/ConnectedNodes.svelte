@@ -74,9 +74,9 @@
 							<td>{node.name}</td>
 							<td>{node.ip}</td>
 							<td>
-								Connected at {new Date(node.connectedAt).toISOString().replace('T', ' ')} ({humanTime(
-									node.connectedAt
-								)} ago)
+								Connected at {new Date(node.connectedAt).toISOString().replace('T', ' ')}
+								<br />
+								<span class="small">{humanTime(node.connectedAt)} ago</span>
 							</td>
 						</tr>
 					{/each}
@@ -105,7 +105,15 @@
 		border-collapse: collapse; /* Collapse table borders */
 	}
 
+	.table tr {
+		vertical-align: middle;
+	}
+
 	.table tr:nth-child(even) {
 		background-color: #f9f9f9; /* Zebra-striping for even rows */
+	}
+
+	.small {
+		font-size: 0.8em; /* Make the text smaller */
 	}
 </style>

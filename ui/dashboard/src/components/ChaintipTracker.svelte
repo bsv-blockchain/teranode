@@ -18,7 +18,7 @@
 						<th>Source</th>
 						<th>Name</th>
 						<th>Address</th>
-						<th>Height</th>
+						<th class="right">Height</th>
 						<th>Latest hash</th>
 						<th>Previous hash</th>
 					</tr>
@@ -44,6 +44,10 @@
 </div>
 
 <style>
+	.right {
+		text-align: right;
+	}
+
 	.panel {
 		margin: 20px; /* Adjust as needed */
 	}
