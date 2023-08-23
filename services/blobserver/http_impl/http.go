@@ -62,8 +62,8 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
 	e.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
-	e.GET("/headers/:hash", h.GetBlockHeaders(HEX))
-	e.GET("/headers/:hash", h.GetBlockHeaders(JSON))
+	e.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
+	e.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
 
 	e.GET("/header/:hash", h.GetBlockHeader(BINARY_STREAM))
 	e.GET("/header/:hash/hex", h.GetBlockHeader(HEX))

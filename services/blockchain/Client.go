@@ -141,25 +141,41 @@ func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uin
 	return header, resp.Height, nil
 }
 
-func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error) {
+func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return header, resp.Height, nil
+}
+
+func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
 	for _, headerBytes := range resp.BlockHeaders {
 		header, err := model.NewBlockHeaderFromBytes(headerBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		headers = append(headers, header)
 	}
 
-	return headers, nil
+	return headers, resp.Heights, nil
 }
 
 func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {

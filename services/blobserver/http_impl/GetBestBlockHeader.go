@@ -2,35 +2,10 @@ package http_impl
 
 import (
 	"encoding/hex"
-	"fmt"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/labstack/echo/v4"
 )
-
-type resp struct {
-	*model.BlockHeader
-	Hash   string `json:"hash"`
-	Height uint32 `json:"height"`
-}
-
-func (r *resp) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`{"hash":"%s","version":%d,"previousblockhash":"%s","merkleroot":"%s","time":%d,"bits":"%s","nonce":%d,"height":%d}`,
-		r.Hash,
-		r.Version,
-		r.HashPrevBlock.String(),
-		r.HashMerkleRoot.String(),
-		r.Timestamp,
-		r.Bits.String(),
-		r.Nonce,
-		r.Height,
-	)), nil
-}
-
-func (r *resp) UnmarshalJSON([]byte) error {
-	return nil
-}
 
 func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
@@ -42,7 +17,7 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 		}
 		prometheusBlobServerHttpGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
 
-		r := &resp{
+		r := &blockHeaderResponse{
 			BlockHeader: blockHeader,
 			Height:      height,
 			Hash:        blockHeader.String(),

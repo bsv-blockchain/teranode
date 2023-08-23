@@ -34,7 +34,8 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 				return err
 			}
 
-			header, err = h.repository.GetBlockHeaderByHash(c.Request().Context(), hash)
+			var blockHeight uint32
+			header, blockHeight, err = h.repository.GetBlockHeaderByHash(c.Request().Context(), hash)
 			if err != nil {
 				if strings.HasSuffix(err.Error(), " not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -42,6 +43,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
 			}
+			height = uint64(blockHeight)
 		}
 
 		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
@@ -52,7 +54,12 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 		case HEX:
 			return c.String(200, hex.EncodeToString(header.Bytes()))
 		case JSON:
-			return c.JSONPretty(200, header, "  ")
+			headerResponse := &blockHeaderResponse{
+				BlockHeader: header,
+				Height:      uint32(height),
+				Hash:        header.String(),
+			}
+			return c.JSONPretty(200, headerResponse, "  ")
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}

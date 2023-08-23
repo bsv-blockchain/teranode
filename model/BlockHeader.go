@@ -59,7 +59,7 @@ var (
 )
 
 func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
-	if len(headerBytes) != 80 {
+	if len(headerBytes) != BlockHeaderSize {
 		return nil, fmt.Errorf("block header should be 80 bytes long")
 	}
 

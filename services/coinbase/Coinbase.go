@@ -52,9 +52,12 @@ func (c *Coinbase) Init(ctx context.Context) error {
 		return fmt.Errorf("failed to create coinbase tables: %s", err)
 	}
 
-	blobServerAddr, ok := gocore.Config().Get("blobserver_grpcAddress")
+	blobServerAddr, ok := gocore.Config().Get("coinbase_blobserverGrpcAddress")
 	if !ok {
-		return errors.New("no blobserver_grpcAddress setting found")
+		blobServerAddr, ok = gocore.Config().Get("blobserver_grpcAddress")
+		if !ok {
+			return errors.New("no blobserver_grpcAddress setting found")
+		}
 	}
 
 	blobServerConn, err := util.GetGRPCClient(ctx, blobServerAddr, &util.ConnectionOptions{})
@@ -106,7 +109,7 @@ func (c *Coinbase) Init(ctx context.Context) error {
 				Source: "coinbase",
 			})
 			if err != nil {
-				c.logger.Errorf("could not subscribe to blobserver: %v", err)
+				c.logger.Errorf("could not subscribe to blobserver %s: %v", blobServerAddr, err)
 				time.Sleep(10 * time.Second)
 				continue
 			}

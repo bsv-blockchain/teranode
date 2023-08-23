@@ -16,12 +16,13 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 		h.logger.Debugf("[BlobServer_http] GetBlockHeaders in %s for %s: %s", mode, c.Request().RemoteAddr, hashOrHeight)
 
 		var headers []*model.BlockHeader
+		var heights []uint32
 		hash, err := chainhash.NewHashFromStr(hashOrHeight)
 		if err != nil {
 			return err
 		}
 
-		headers, err = h.repository.GetBlockHeaders(c.Request().Context(), hash)
+		headers, heights, err = h.repository.GetBlockHeaders(c.Request().Context(), hash)
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -33,11 +34,20 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
-			return c.JSONPretty(200, headers, "  ")
+			headerResponses := make([]*blockHeaderResponse, 0, len(headers))
+			for idx, header := range headers {
+				headerResponses = append(headerResponses, &blockHeaderResponse{
+					BlockHeader: header,
+					Height:      heights[idx],
+					Hash:        header.String(),
+				})
+			}
+			return c.JSONPretty(200, headerResponses, "  ")
 		}
 
 		bytes := make([]byte, 0, len(headers)*model.BlockHeaderSize)
 		for _, header := range headers {
+			h.logger.Debugf("Sending block header %s", header.Hash().String())
 			bytes = append(bytes, header.Bytes()...)
 		}
 

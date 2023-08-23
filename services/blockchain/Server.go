@@ -243,13 +243,30 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}, nil
 }
 
+func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHeader, height, err := b.store.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetBlockHeaderResponse{
+		BlockHeader: blockHeader.Bytes(),
+		Height:      height,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
 		return nil, err
 	}
 
-	blockHeaders, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
+	blockHeaders, heights, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +278,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 
 	return &blockchain_api.GetBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
+		Heights:      heights,
 	}, nil
 }
 

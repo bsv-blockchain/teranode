@@ -11,7 +11,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, error) {
+func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -21,29 +21,32 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	defer cancel()
 
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
+	heights := make([]uint32, 0, numberOfHeaders)
 
-	blockHeader, err := s.GetHeader(ctx, blockHashFrom)
+	blockHeader, height, err := s.GetBlockHeader(ctx, blockHashFrom)
 	if err != nil {
 		if errors.Is(err, store.ErrBlockNotFound) {
 			// could not find header, return empty list
-			return blockHeaders, nil
+			return blockHeaders, []uint32{}, nil
 		}
-		return nil, fmt.Errorf("failed to get header: %w", err)
+		return nil, nil, fmt.Errorf("failed to get header: %w", err)
 	}
 
 	blockHeaders = append(blockHeaders, blockHeader)
+	heights = append(heights, height)
 
 	for i := uint64(1); i < numberOfHeaders; i++ {
-		blockHeader, err = s.GetHeader(ctx, blockHeaders[i-1].HashPrevBlock)
+		blockHeader, height, err = s.GetBlockHeader(ctx, blockHeaders[i-1].HashPrevBlock)
 		if err != nil {
 			if errors.Is(err, store.ErrBlockNotFound) {
 				break
 			} else {
-				return nil, fmt.Errorf("failed to get header: %w", err)
+				return nil, nil, fmt.Errorf("failed to get header: %w", err)
 			}
 		}
 		blockHeaders = append(blockHeaders, blockHeader)
+		heights = append(heights, height)
 	}
 
-	return blockHeaders, nil
+	return blockHeaders, heights, nil
 }
