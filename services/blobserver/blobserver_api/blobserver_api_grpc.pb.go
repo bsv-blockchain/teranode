@@ -20,8 +20,12 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlobServerAPI_Health_FullMethodName    = "/blobserver_api.BlobServerAPI/Health"
-	BlobServerAPI_Subscribe_FullMethodName = "/blobserver_api.BlobServerAPI/Subscribe"
+	BlobServerAPI_Health_FullMethodName             = "/blobserver_api.BlobServerAPI/Health"
+	BlobServerAPI_GetBlock_FullMethodName           = "/blobserver_api.BlobServerAPI/GetBlock"
+	BlobServerAPI_GetBlockHeader_FullMethodName     = "/blobserver_api.BlobServerAPI/GetBlockHeader"
+	BlobServerAPI_GetBlockHeaders_FullMethodName    = "/blobserver_api.BlobServerAPI/GetBlockHeaders"
+	BlobServerAPI_GetBestBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBestBlockHeader"
+	BlobServerAPI_Subscribe_FullMethodName          = "/blobserver_api.BlobServerAPI/Subscribe"
 )
 
 // BlobServerAPIClient is the client API for BlobServerAPI service.
@@ -30,6 +34,10 @@ const (
 type BlobServerAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
+	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
+	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
+	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
@@ -44,6 +52,42 @@ func NewBlobServerAPIClient(cc grpc.ClientConnInterface) BlobServerAPIClient {
 func (c *blobServerAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, BlobServerAPI_Health_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error) {
+	out := new(GetBlockResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetBlock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error) {
+	out := new(GetBlockHeaderResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetBlockHeader_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error) {
+	out := new(GetBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetBlockHeaders_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error) {
+	out := new(BestBlockHeaderResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetBestBlockHeader_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +132,10 @@ func (x *blobServerAPISubscribeClient) Recv() (*Notification, error) {
 type BlobServerAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
+	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
+	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
+	GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error)
 	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
@@ -98,6 +146,18 @@ type UnimplementedBlobServerAPIServer struct {
 
 func (UnimplementedBlobServerAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeader not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaders not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBestBlockHeader not implemented")
 }
 func (UnimplementedBlobServerAPIServer) Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
@@ -133,6 +193,78 @@ func _BlobServerAPI_Health_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlobServerAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetBlock(ctx, req.(*GetBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlobServerAPI_GetBlockHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeaderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetBlockHeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetBlockHeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetBlockHeader(ctx, req.(*GetBlockHeaderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlobServerAPI_GetBlockHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeadersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetBlockHeaders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetBlockHeaders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetBlockHeaders(ctx, req.(*GetBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlobServerAPI_GetBestBlockHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetBestBlockHeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetBestBlockHeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetBestBlockHeader(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -164,6 +296,22 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _BlobServerAPI_Health_Handler,
+		},
+		{
+			MethodName: "GetBlock",
+			Handler:    _BlobServerAPI_GetBlock_Handler,
+		},
+		{
+			MethodName: "GetBlockHeader",
+			Handler:    _BlobServerAPI_GetBlockHeader_Handler,
+		},
+		{
+			MethodName: "GetBlockHeaders",
+			Handler:    _BlobServerAPI_GetBlockHeaders_Handler,
+		},
+		{
+			MethodName: "GetBestBlockHeader",
+			Handler:    _BlobServerAPI_GetBestBlockHeader_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

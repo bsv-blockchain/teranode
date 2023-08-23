@@ -34,10 +34,10 @@ func TestSQL_GetBlockHeight(t *testing.T) {
 		s, err := New(storeUrl)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block1)
+		_, err = s.StoreBlock(context.Background(), block1)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block2)
+		_, err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
 		height, err := s.GetBlockHeight(context.Background(), block2.Hash())

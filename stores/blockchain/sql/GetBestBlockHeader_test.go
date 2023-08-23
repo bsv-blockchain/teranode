@@ -32,10 +32,10 @@ func TestSQL_GetChainTip(t *testing.T) {
 		s, err := New(storeUrl)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block1)
+		_, err = s.StoreBlock(context.Background(), block1)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block2)
+		_, err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
 		tip, height, err := s.GetBestBlockHeader(context.Background())
@@ -59,10 +59,10 @@ func TestSQL_GetChainTip(t *testing.T) {
 		s, err := New(storeUrl)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block1)
+		_, err = s.StoreBlock(context.Background(), block1)
 		require.NoError(t, err)
 
-		err = s.StoreBlock(context.Background(), block2)
+		_, err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
 		tip, height, err := s.GetBestBlockHeader(context.Background())
@@ -73,7 +73,7 @@ func TestSQL_GetChainTip(t *testing.T) {
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 
 		// add a block that should not become the new tip
-		err = s.StoreBlock(context.Background(), blockAlternative2)
+		_, err = s.StoreBlock(context.Background(), blockAlternative2)
 		require.NoError(t, err)
 
 		tip, height, err = s.GetBestBlockHeader(context.Background())

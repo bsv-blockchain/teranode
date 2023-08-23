@@ -77,9 +77,9 @@ func (r *Repository) GetBlockHeaderByHeight(ctx context.Context, height uint32) 
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash) ([]*model.BlockHeader, []uint32, error) {
+func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
-	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, 1000)
+	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, numberOfHeaders)
 	if err != nil {
 		return nil, nil, err
 	}

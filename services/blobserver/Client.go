@@ -5,111 +5,178 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Client struct {
-	client           blobserver_api.BlobServerAPIClient
-	source           string
-	validationClient *blockvalidation.Client
-	logger           utils.Logger
-	address          string
-	running          bool
+	client  blobserver_api.BlobServerAPIClient
+	logger  utils.Logger
+	running bool
+	conn    *grpc.ClientConn
 }
 
-func NewClient(ctx context.Context, source string, addr string) *Client {
-	return &Client{
-		logger:           gocore.Log("blobC"),
-		address:          addr,
-		source:           source,
-		validationClient: blockvalidation.NewClient(ctx),
-		running:          true,
-	}
+type BestBlockHeader struct {
+	Header *model.BlockHeader
+	Height uint32
 }
 
-func (c *Client) Start(ctx context.Context) error {
-	conn, err := util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{})
+func NewClient(ctx context.Context, logger utils.Logger, address string) (*Client, error) {
+	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
+		MaxRetries: 3,
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	c.client = blobserver_api.NewBlobServerAPIClient(conn)
+	return &Client{
+		client:  blobserver_api.NewBlobServerAPIClient(baConn),
+		logger:  logger,
+		running: true,
+		conn:    baConn,
+	}, nil
+}
 
-	// define here to prevent malloc
-	var stream blobserver_api.BlobServerAPI_SubscribeClient
-	var resp *blobserver_api.Notification
-	var hash *chainhash.Hash
+func (c Client) Health(ctx context.Context) (*blobserver_api.HealthResponse, error) {
+	return c.client.Health(ctx, &emptypb.Empty{})
+}
+
+func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+	resp, err := c.client.GetBlock(ctx, &blobserver_api.GetBlockRequest{
+		Hash: blockHash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.Header)
+	if err != nil {
+		return nil, err
+	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(resp.CoinbaseTx)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
+	for _, subtreeHash := range resp.SubtreeHashes {
+		hash, err := chainhash.NewHash(subtreeHash)
+		if err != nil {
+			return nil, err
+		}
+		subtreeHashes = append(subtreeHashes, hash)
+	}
+
+	return model.NewBlock(header, coinbaseTx, subtreeHashes)
+}
+
+func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return header, resp.Height, nil
+}
+
+func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+	resp, err := c.client.GetBlockHeader(ctx, &blobserver_api.GetBlockHeaderRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return header, resp.Height, nil
+}
+
+func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+	resp, err := c.client.GetBlockHeaders(ctx, &blobserver_api.GetBlockHeadersRequest{
+		StartHash:       blockHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		headers = append(headers, header)
+	}
+
+	return headers, resp.Heights, nil
+}
+
+func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+	ch := make(chan *model.Notification)
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing client")
+		c.logger.Infof("[BlobServer] context done, closing subscription: %s", source)
 		c.running = false
-		err = conn.Close()
+		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[BlobServer] failed to close connection", err)
 		}
 	}()
 
 	go func() {
+		defer close(ch)
 
 		for c.running {
-			c.logger.Infof("starting new subscription to blobserver: %v", c.address)
-			stream, err = c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
-				Source: c.source,
+			stream, err := c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
+				Source: source,
 			})
 			if err != nil {
-				c.logger.Errorf("could not subscribe to blobserver: %v", err)
-				time.Sleep(10 * time.Second)
+				time.Sleep(1 * time.Second)
 				continue
 			}
 
 			for c.running {
-				resp, err = stream.Recv()
+				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
-						c.logger.Errorf("[BlobServer] could not receive: %v", err)
+						c.logger.Errorf("[BlobServer] failed to receive notification: %v", err)
 					}
-					_ = stream.CloseSend()
-					time.Sleep(10 * time.Second)
+					time.Sleep(1 * time.Second)
 					break
 				}
 
-				hash, err = chainhash.NewHash(resp.Hash)
+				hash, err := chainhash.NewHash(resp.Hash)
 				if err != nil {
-					c.logger.Errorf("could not create hash from bytes", "err", err)
+					c.logger.Errorf("[BlobServer] failed to parse hash", err)
 					continue
 				}
 
-				switch resp.Type {
-				case blobserver_api.Type_Subtree:
-					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
-
-					if err = c.validationClient.SubtreeFound(ctx, hash, resp.BaseUrl); err != nil {
-						c.logger.Errorf("could not validate subtree", "err", err)
-						continue
-					}
-
-				case blobserver_api.Type_Block:
-					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
-
-					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl); err != nil {
-						c.logger.Errorf("could not validate block", "err", err)
-						continue
-					}
+				ch <- &model.Notification{
+					Type:    model.NotificationType(resp.Type),
+					Hash:    hash,
+					BaseURL: resp.BaseUrl,
 				}
 			}
 		}
 	}()
 
-	return nil
-}
-
-func (c *Client) Stop() error {
-	c.running = false
-	return nil
+	return ch, nil
 }

@@ -3,6 +3,7 @@ package http_impl
 import (
 	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -13,7 +14,20 @@ import (
 func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashOrHeight := c.Param("hash")
-		h.logger.Debugf("[BlobServer_http] GetBlockHeaders in %s for %s: %s", mode, c.Request().RemoteAddr, hashOrHeight)
+		nr := c.Param("nr")
+
+		nrOfHeaders := 100
+		if nr != "" {
+			nrOfHeaders, _ = strconv.Atoi(nr)
+			if nrOfHeaders == 0 {
+				nrOfHeaders = 100
+			}
+			if nrOfHeaders > 1000 {
+				nrOfHeaders = 1000
+			}
+		}
+
+		h.logger.Debugf("[BlobServer_http] Get %s Block Headers in %s for %s: %s", mode, c.Request().RemoteAddr, hashOrHeight)
 
 		var headers []*model.BlockHeader
 		var heights []uint32
@@ -22,7 +36,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		headers, heights, err = h.repository.GetBlockHeaders(c.Request().Context(), hash)
+		headers, heights, err = h.repository.GetBlockHeaders(c.Request().Context(), hash, uint64(nrOfHeaders))
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())

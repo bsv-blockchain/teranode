@@ -84,7 +84,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 	}
 
 	// if valid, store the block
-	if err := u.blockchainClient.AddBlock(ctx, block); err != nil {
+	if err = u.blockchainClient.AddBlock(ctx, block); err != nil {
 		return fmt.Errorf("failed to store block [%w]", err)
 	}
 

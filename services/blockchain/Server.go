@@ -176,7 +176,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		TransactionCount: request.TransactionCount,
 	}
 
-	err = b.store.StoreBlock(ctx, block)
+	_, err = b.store.StoreBlock(ctx, block)
 	if err != nil {
 		return nil, err
 	}

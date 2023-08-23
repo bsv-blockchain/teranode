@@ -121,6 +121,11 @@ func createPostgresSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	}
+
 	if _, err := db.Exec(`
 		CREATE OR REPLACE FUNCTION reverse_bytes_iter(bytes bytea, length int, midpoint int, index int)
 		RETURNS bytea AS
@@ -200,6 +205,11 @@ func createSqliteSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	}
+
 	return nil
 }
 
@@ -237,7 +247,7 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
 
-		err = s.StoreBlock(context.Background(), genesisBlock)
+		_, err = s.StoreBlock(context.Background(), genesisBlock)
 		if err != nil {
 			return fmt.Errorf("failed to insert genesis block: %+v", err)
 		}

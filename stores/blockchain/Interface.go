@@ -24,7 +24,7 @@ type Store interface {
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
 	GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 	GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error)
-	StoreBlock(ctx context.Context, block *model.Block) error
+	StoreBlock(ctx context.Context, block *model.Block) (uint64, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error)                        // blockHeader, blockHeight
 	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) // blockHeader, blockHeight
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error)

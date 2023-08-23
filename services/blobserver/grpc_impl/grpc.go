@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -166,6 +167,94 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 	return &blobserver_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
+	}, nil
+}
+
+func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockRequest) (*blobserver_api.GetBlockResponse, error) {
+	blockHash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := g.repository.GetBlockByHash(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	height, _ := util.ExtractCoinbaseHeight(block.CoinbaseTx)
+	if height == 0 {
+		_, height, _ = g.repository.GetBlockHeaderByHash(ctx, blockHash)
+	}
+
+	subtreeHashes := make([][]byte, len(block.Subtrees))
+	for i, subtreeHash := range block.Subtrees {
+		subtreeHashes[i] = subtreeHash[:]
+	}
+
+	return &blobserver_api.GetBlockResponse{
+		Header:        block.Header.Bytes(),
+		Height:        height,
+		CoinbaseTx:    block.CoinbaseTx.Bytes(),
+		SubtreeHashes: subtreeHashes,
+	}, nil
+}
+
+func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockHeaderRequest) (*blobserver_api.GetBlockHeaderResponse, error) {
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHeader, height, err := g.repository.GetBlockHeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blobserver_api.GetBlockHeaderResponse{
+		BlockHeader: blockHeader.Bytes(),
+		Height:      height,
+	}, nil
+}
+
+func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlockHeadersRequest) (*blobserver_api.GetBlockHeadersResponse, error) {
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, err
+	}
+
+	nrOfHeaders := req.NumberOfHeaders
+	if nrOfHeaders == 0 {
+		nrOfHeaders = 100
+	}
+	if nrOfHeaders > 1000 {
+		nrOfHeaders = 1000 // max is 1000
+	}
+
+	blockHeaders, heights, err := g.repository.GetBlockHeaders(ctx, startHash, nrOfHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	return &blobserver_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Heights:      heights,
+	}, nil
+}
+
+func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.BestBlockHeaderResponse, error) {
+	blockHeader, height, err := g.repository.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blobserver_api.BestBlockHeaderResponse{
+		BlockHeader: blockHeader.Bytes(),
+		Height:      height,
 	}, nil
 }
 

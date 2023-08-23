@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -19,14 +17,26 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type processBlockFound struct {
+	hash    *chainhash.Hash
+	baseURL string
+}
+
+type processBlockCatchup struct {
+	block   *model.Block
+	baseURL string
+}
+
 type Coinbase struct {
-	db          *sql.DB
-	engine      util.SQLEngine
-	store       blockchain.Store
-	blockHeight uint32
-	running     bool
-	logger      utils.Logger
-	mu          sync.Mutex
+	db               *sql.DB
+	engine           util.SQLEngine
+	store            blockchain.Store
+	blobServerClient *blobserver.Client
+	running          bool
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	logger           utils.Logger
+	mu               sync.Mutex
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -38,17 +48,19 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 	}
 
 	c := &Coinbase{
-		store:  store,
-		db:     store.GetDB(),
-		engine: engine,
-		logger: logger,
+		store:        store,
+		db:           store.GetDB(),
+		engine:       engine,
+		blockFoundCh: make(chan processBlockFound, 100),
+		catchupCh:    make(chan processBlockCatchup),
+		logger:       logger,
 	}
 
 	return c, nil
 }
 
-func (c *Coinbase) Init(ctx context.Context) error {
-	if err := c.createTables(ctx); err != nil {
+func (c *Coinbase) Init(ctx context.Context) (err error) {
+	if err = c.createTables(ctx); err != nil {
 		return fmt.Errorf("failed to create coinbase tables: %s", err)
 	}
 
@@ -60,27 +72,29 @@ func (c *Coinbase) Init(ctx context.Context) error {
 		}
 	}
 
-	blobServerConn, err := util.GetGRPCClient(ctx, blobServerAddr, &util.ConnectionOptions{})
+	c.blobServerClient, err = blobserver.NewClient(ctx, c.logger, blobServerAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create blobserver client: %s", err)
 	}
 
-	blobServerClient := blobserver_api.NewBlobServerAPIClient(blobServerConn)
-
-	// start block height listener
+	// process blocks found from channel
 	go func() {
-		timer := time.NewTimer(10 * time.Second)
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-timer.C:
-				_, blockHeight, err := c.store.GetBestBlockHeader(ctx)
-				if err != nil {
-					c.logger.Errorf("error getting block height: %s", err)
-					continue
+			case catchup := <-c.catchupCh:
+				{
+					if err = c.catchup(ctx, catchup.block, catchup.baseURL); err != nil {
+						c.logger.Errorf("failed to catchup from [%s] [%v]", catchup.block.Hash().String(), err)
+					}
 				}
-				c.blockHeight = blockHeight
+			case block := <-c.blockFoundCh:
+				{
+					if _, err = c.processBlock(ctx, block.hash, block.baseURL); err != nil {
+						c.logger.Errorf("failed to process block [%s] [%v]", block.hash.String(), err)
+					}
+				}
 			}
 		}
 	}()
@@ -90,56 +104,40 @@ func (c *Coinbase) Init(ctx context.Context) error {
 		<-ctx.Done()
 		c.logger.Infof("[CoinbaseTracker] context done, closing client")
 		c.running = false
-		err = blobServerConn.Close()
-		if err != nil {
-			c.logger.Errorf("[CoinbaseTracker] failed to close connection", err)
-		}
 	}()
 
 	go func() {
-		c.running = true
+		ch, err := c.blobServerClient.Subscribe(ctx, "")
+		if err != nil {
+			c.logger.Errorf("could not subscribe to blob server: %v", err)
+			return
+		}
 
-		var stream blobserver_api.BlobServerAPI_SubscribeClient
-		var resp *blobserver_api.Notification
-		var blockHash *chainhash.Hash
-
-		for c.running {
-			c.logger.Infof("starting new subscription to blobserver: %v", blobServerAddr)
-			stream, err = blobServerClient.Subscribe(ctx, &blobserver_api.SubscribeRequest{
-				Source: "coinbase",
-			})
-			if err != nil {
-				c.logger.Errorf("could not subscribe to blobserver %s: %v", blobServerAddr, err)
-				time.Sleep(10 * time.Second)
-				continue
-			}
-
-			for c.running {
-				resp, err = stream.Recv()
-				if err != nil {
-					if !strings.Contains(err.Error(), context.Canceled.Error()) {
-						c.logger.Errorf("could not receive from blobserver: %v", err)
-					}
-					_ = stream.CloseSend()
-					time.Sleep(10 * time.Second)
-					break
-				}
-
-				if resp.Type == blobserver_api.Type_Block {
-					blockHash, err = chainhash.NewHash(resp.Hash)
-					if err != nil {
-						c.logger.Errorf("could not create hash from bytes", "err", err)
-						continue
-					}
-					c.logger.Debugf("Received BLOCK notification: %s", blockHash.String())
-
-					_, err = c.processBlock(ctx, blockHash, resp.BaseUrl)
-					if err != nil {
-						c.logger.Errorf("could not process block %+v", err)
-						continue
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case notification := <-ch:
+				if notification.Type == model.NotificationType_Block {
+					c.blockFoundCh <- processBlockFound{
+						hash:    notification.Hash,
+						baseURL: notification.BaseURL,
 					}
 				}
 			}
+		}
+	}()
+
+	// get the best block header on startup and process
+	go func() {
+		blockHeader, _, err := c.blobServerClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			c.logger.Errorf("could not get best block header from blob server [%w]", err)
+			return
+		}
+		c.blockFoundCh <- processBlockFound{
+			hash:    blockHeader.Hash(),
+			baseURL: "",
 		}
 	}()
 
@@ -152,12 +150,14 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		if _, err := c.db.ExecContext(ctx, `
 			CREATE TABLE IF NOT EXISTS coinbase_utxos (
 	    		id              BIGSERIAL PRIMARY KEY
+			    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
 				,block_hash     BYTEA NOT NULL
 				,tx_id          BYTEA NOT NULL
 				,vout           INTEGER NOT NULL
 				,locking_script BYTEA NOT NULL
 				,satoshis       BIGINT NOT NULL
 				,address        TEXT
+			    ,spendable      BOOLEAN NOT NULL DEFAULT FALSE
 				,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 				,reserved_at    TIMESTAMPTZ NULL
 				,spent_at       TIMESTAMPTZ NULL
@@ -170,12 +170,14 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		if _, err := c.db.ExecContext(ctx, `
 			CREATE TABLE IF NOT EXISTS coinbase_utxos (
 				id              INTEGER PRIMARY KEY AUTOINCREMENT
+			    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
 				,block_hash     BLOB NOT NULL
 				,tx_id          BLOB NOT NULL
 				,vout           INTEGER NOT NULL
 				,locking_script BLOB NOT NULL
 				,satoshis       BIGINT NOT NULL
 				,address        text
+			    ,spendable      BOOLEAN NOT NULL DEFAULT FALSE
 				,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 				,reserved_at    TEXT NULL
 				,spent_at       TEXT NULL
@@ -191,21 +193,78 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
 	}
 
+	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_spendable ON coinbase_utxos (spendable, address, reserved_at);`); err != nil {
+		_ = c.db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	}
+
+	return nil
+}
+
+func (c *Coinbase) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+	c.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
+
+	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
+	var exists bool
+
+	fromBlockHeaderHash := fromBlock.Header.HashPrevBlock
+
+LOOP:
+	for {
+		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
+		blockHeaders, _, err := c.blobServerClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+		if err != nil {
+			return err
+		}
+
+		if len(blockHeaders) == 0 {
+			return fmt.Errorf("failed to get block headers from [%s]", fromBlockHeaderHash.String())
+		}
+
+		for _, blockHeader := range blockHeaders {
+			exists, err = c.store.GetBlockExists(ctx, blockHeader.Hash())
+			if err != nil {
+				return fmt.Errorf("failed to check if block exists [%w]", err)
+			}
+			if exists {
+				break LOOP
+			}
+
+			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
+
+			fromBlockHeaderHash = blockHeader.HashPrevBlock
+			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
+				return fmt.Errorf("failed to find parent block header, last was: %s", blockHeader.String())
+			}
+		}
+	}
+
+	c.logger.Infof("catching up from [%s] to [%s]", catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+
+	// process the catchup block headers in reverse order
+	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
+		blockHeader := catchupBlockHeaders[i]
+
+		block, err := c.blobServerClient.GetBlock(ctx, blockHeader.Hash())
+		if err != nil {
+			return errors.Join(fmt.Errorf("failed to get block [%s] [%v]", blockHeader.String(), err))
+		}
+
+		err = c.storeBlock(ctx, block)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
-	// get the block
-	b, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, blockHash.String()))
+	block, err := c.blobServerClient.GetBlock(ctx, blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("could not get block from blobserver %+v", err)
-	}
-
-	block, err := model.NewBlockFromBytes(b)
-	if err != nil {
-		return nil, fmt.Errorf("could not get block from network %+v", err)
+		return block, err
 	}
 
 	// check whether we already have the parent block
@@ -213,33 +272,40 @@ func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, 
 	if err != nil {
 		return nil, fmt.Errorf("could not check whether block exists %+v", err)
 	}
-
 	if !exists {
-		// get the parent block, before storing the new block
-		c.logger.Debugf("getting parent block: %s", block.Header.HashPrevBlock.String())
-		_, err = c.processBlock(ctx, block.Header.HashPrevBlock, baseUrl)
-		if err != nil {
-			return nil, fmt.Errorf("could not get parent block %s: %+v", block.Header.HashPrevBlock.String(), err)
-		}
-		// SQLite doesn't like concurrent writes, so we sleep for a bit
-		time.Sleep(100 * time.Millisecond)
+		go func() {
+			c.catchupCh <- processBlockCatchup{
+				block:   block,
+				baseURL: baseUrl,
+			}
+		}()
+		return nil, nil
 	}
 
-	err = c.store.StoreBlock(ctx, block)
+	err = c.storeBlock(ctx, block)
 	if err != nil {
-		return nil, fmt.Errorf("could not store block: %+v", err)
-	}
-
-	// process coinbase into utxos
-	err = c.processCoinbase(ctx, blockHash, block.CoinbaseTx)
-	if err != nil {
-		return nil, fmt.Errorf("could not process coinbase %+v", err)
+		return nil, err
 	}
 
 	return block, err
 }
 
-func (c *Coinbase) processCoinbase(ctx context.Context, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
+	blockId, err := c.store.StoreBlock(ctx, block)
+	if err != nil {
+		return fmt.Errorf("could not store block: %+v", err)
+	}
+
+	// process coinbase into utxos
+	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+	if err != nil {
+		return fmt.Errorf("could not process coinbase %+v", err)
+	}
+
+	return nil
+}
+
+func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
 	c.logger.Debugf("processing coinbase: %s, for block: %s", coinbaseTx.TxID(), blockHash.String())
 
 	for vout, output := range coinbaseTx.Outputs {
@@ -254,11 +320,46 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockHash *chainhash.Has
 		}
 
 		if _, err = c.db.ExecContext(ctx, `
-			INSERT INTO coinbase_utxos (block_hash, tx_id, vout, locking_script, satoshis, address)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, blockHash[:], coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis, addresses[0]); err != nil {
-			return err
+			INSERT INTO coinbase_utxos (block_id, block_hash, tx_id, vout, locking_script, satoshis, address)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, blockId, blockHash[:], coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis, addresses[0]); err != nil {
+			return fmt.Errorf("could not insert coinbase utxo: %+v", err)
 		}
+	}
+
+	// update everything 100 blocks old on this chain to spendable
+	q := `
+		WITH LongestChainTip AS (
+			SELECT id, height
+			FROM blocks
+			ORDER BY chain_work DESC, id ASC
+			LIMIT 1
+		)
+		
+		UPDATE coinbase_utxos
+		SET spendable = true
+		WHERE id IN (
+			SELECT id FROM blocks
+			WHERE id IN (
+				WITH RECURSIVE ChainBlocks AS (
+					SELECT id, parent_id, height
+					FROM blocks
+					WHERE id = (SELECT id FROM LongestChainTip)
+					UNION ALL
+					SELECT b.id, b.parent_id, b.height
+					FROM blocks b
+					JOIN ChainBlocks cb ON b.id = cb.parent_id
+					WHERE b.id != cb.id
+				)
+				SELECT id FROM ChainBlocks
+				WHERE height <= (SELECT height - 100 FROM LongestChainTip)
+				LIMIT 100
+			)
+			ORDER BY height DESC
+		)
+	`
+	if _, err := c.db.ExecContext(ctx, q); err != nil {
+		return fmt.Errorf("could not update coinbase utxos to spendable: %+v", err)
 	}
 
 	return nil
@@ -276,9 +377,8 @@ func (c *Coinbase) ReserveUtxo(ctx context.Context, address string) (*bt.UTXO, e
 	if err := c.db.QueryRowContext(ctx, `
 		SELECT u.id, u.tx_id, u.vout, u.locking_script, u.satoshis
 		FROM coinbase_utxos u, blocks b
-		WHERE u.block_hash = b.hash
-		  AND b.height < (SELECT MAX(height) - 100 FROM blocks)
-		  And b.orphaned = false
+		WHERE u.block_id = b.id
+		  And u.spendable = true
 		  AND u.address = $1
 		  AND u.reserved_at IS NULL
 		ORDER BY u.id ASC

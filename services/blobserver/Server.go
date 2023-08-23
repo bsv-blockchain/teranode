@@ -116,7 +116,7 @@ func (v *Server) Start(ctx context.Context) error {
 					// Start a subscription to the new peer's blob server
 					g.Go(func() error {
 						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-						return NewClient(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
+						return NewPeer(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
 					})
 				}
 

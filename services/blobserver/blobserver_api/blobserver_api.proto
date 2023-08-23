@@ -10,9 +10,12 @@ import "google/protobuf/empty.proto";
 service BlobServerAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
+  rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
 }
-
 
 // swagger:enum Type
 enum Type {
@@ -32,6 +35,47 @@ message Notification {
   Type type = 1;
   bytes hash = 2;
   string base_url = 3;
+}
+
+// swagger:model GetBlockRequest
+message GetBlockRequest {
+  bytes hash = 1;
+}
+
+// swagger:model GetBlockResponse
+message GetBlockResponse {
+  bytes header = 1;
+  uint32 height = 2;
+  bytes coinbase_tx = 3;
+  repeated bytes subtree_hashes = 4;
+}
+
+// swagger:model GetBlockHeaderRequest
+message GetBlockHeaderRequest {
+  bytes blockHash = 1;
+}
+
+message GetBlockHeaderResponse {
+  bytes blockHeader = 1;
+  uint32 height = 2;
+}
+
+// swagger:model GetBlockHeadersRequest
+message GetBlockHeadersRequest {
+  bytes startHash = 1;
+  uint64 numberOfHeaders = 2;
+}
+
+// swagger:model GetBlockHeadersResponse
+message GetBlockHeadersResponse {
+  repeated bytes blockHeaders = 1;
+  repeated uint32 heights = 2;
+}
+
+// swagger:model BestBlockHeaderResponse
+message BestBlockHeaderResponse {
+  bytes blockHeader = 1;
+  uint32 height = 2;
 }
 
 // swagger:model SubscribeRequest

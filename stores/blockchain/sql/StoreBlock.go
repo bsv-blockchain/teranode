@@ -14,7 +14,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
+func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blocktx").NewStat("InsertBlock").AddTime(start)
@@ -99,9 +99,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), store.ErrBlockNotFound)
+				return 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), store.ErrBlockNotFound)
 			}
-			return err
+			return 0, err
 		}
 		height = previousHeight + 1
 
@@ -128,26 +128,26 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		if block.Header.Version > 1 {
 			blockHeight, err := block.ExtractCoinbaseHeight()
 			if err != nil {
-				return err
+				return 0, err
 			}
 			if blockHeight != uint32(height) {
-				return fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+				return 0, fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 			}
 		}
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return fmt.Errorf("failed to get subtree bytes: %w", err)
+		return 0, fmt.Errorf("failed to get subtree bytes: %w", err)
 	}
 
 	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
 	if err != nil {
-		return fmt.Errorf("failed to convert chain work hash: %w", err)
+		return 0, fmt.Errorf("failed to convert chain work hash: %w", err)
 	}
 	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
 	if err != nil {
-		return fmt.Errorf("failed to calculate cumulative chain work: %w", err)
+		return 0, fmt.Errorf("failed to calculate cumulative chain work: %w", err)
 	}
 
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -184,19 +184,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) error {
 		orphaned,
 	)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return fmt.Errorf("block already exists: %s", block.Hash())
+		return 0, fmt.Errorf("block already exists: %s", block.Hash())
 	}
 
-	if err = rows.Scan(&previousBlockId); err != nil {
-		return err
+	var newBlockId uint64
+	if err = rows.Scan(&newBlockId); err != nil {
+		return 0, err
 	}
 
-	return nil
+	return newBlockId, nil
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {

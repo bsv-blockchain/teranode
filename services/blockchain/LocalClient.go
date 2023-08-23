@@ -30,7 +30,8 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block) error {
-	return c.store.StoreBlock(ctx, block)
+	_, err := c.store.StoreBlock(ctx, block)
+	return err
 }
 
 func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
