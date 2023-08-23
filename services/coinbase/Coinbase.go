@@ -338,7 +338,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 		
 		UPDATE coinbase_utxos
 		SET spendable = true
-		WHERE id IN (
+		WHERE block_id IN (
 			SELECT id FROM blocks
 			WHERE id IN (
 				WITH RECURSIVE ChainBlocks AS (
