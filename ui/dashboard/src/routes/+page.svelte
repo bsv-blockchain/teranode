@@ -10,7 +10,7 @@
 
 	async function fetchData() {
 		try {
-			const response = await fetch('http://bootstrap.ubsv.dev:8099/nodes');
+			const response = await fetch('https://bootstrap.ubsv.dev:8099/nodes');
 
 			if (!response.ok) {
 				throw new Error(`HTTP error! Status: ${response.status}`);
