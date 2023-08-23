@@ -3,16 +3,17 @@
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" href="./favicon.png" />
+		<script src="https://d3js.org/d3.v6.min.js"></script>
 		<meta name="viewport" content="width=device-width" />
 
-		<link href="./_app/immutable/assets/2.44c79c74.css" rel="stylesheet">
-		<link rel="modulepreload" href="./_app/immutable/entry/start.8a05e8d4.js">
+		<link href="./_app/immutable/assets/2.94fa5cba.css" rel="stylesheet">
+		<link rel="modulepreload" href="./_app/immutable/entry/start.52f4b7db.js">
 		<link rel="modulepreload" href="./_app/immutable/chunks/index.05b33c6f.js">
-		<link rel="modulepreload" href="./_app/immutable/chunks/singletons.ac92c462.js">
-		<link rel="modulepreload" href="./_app/immutable/entry/app.78d56d93.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/singletons.a3e56045.js">
+		<link rel="modulepreload" href="./_app/immutable/entry/app.cb0ef4ed.js">
 		<link rel="modulepreload" href="./_app/immutable/nodes/0.10413fb1.js">
-		<link rel="modulepreload" href="./_app/immutable/nodes/2.de1b42df.js"><!-- HEAD_svelte-qzf459_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link href="http://fonts.googleapis.com/css?family=Roboto" rel="stylesheet" type="text/css"><style>body {
-			font-family: 'Roboto', sans-serif;
+		<link rel="modulepreload" href="./_app/immutable/nodes/2.67102fd1.js"><!-- HEAD_svelte-1t0gizo_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet"><style>body {
+			font-family: 'Roboto Mono', monospace;
 			background-color: #f4f4f4;
 			margin: 0;
 			padding: 0;
@@ -25,7 +26,7 @@
 		}
 
 		/* Add more global styles as needed */
-	</style><!-- HEAD_svelte-qzf459_END -->
+	</style><!-- HEAD_svelte-1t0gizo_END -->
 	</head>
 	<body data-sveltekit-preload-data="hover">
 		<div style="display: contents">
@@ -54,22 +55,23 @@
 	<div class="card-content"><p>Loading...</p></div>
 
 </div>
-	<div class="card panel svelte-1tjiedb"><header class="card-header"><p class="card-header-title">Chaintip tracker</p></header>
-	<div class="card-content svelte-1tjiedb"><table class="table svelte-1tjiedb"><thead><tr class="svelte-1tjiedb"><th class="svelte-1tjiedb">Source</th>
-						<th class="svelte-1tjiedb">Name</th>
-						<th class="svelte-1tjiedb">Address</th>
-						<th class="right svelte-1tjiedb">Height</th>
-						<th class="svelte-1tjiedb">Latest hash</th>
-						<th class="svelte-1tjiedb">Previous hash</th></tr></thead>
+	<div class="card panel svelte-x1qltz"><header class="card-header"><p class="card-header-title">Chaintip tracker</p></header>
+	<div class="card-content svelte-x1qltz"><table class="table svelte-x1qltz"><thead><tr class="svelte-x1qltz"><th class="svelte-x1qltz">Source</th>
+						<th class="svelte-x1qltz">Name</th>
+						<th class="svelte-x1qltz">Address</th>
+						<th class="right svelte-x1qltz">Height</th>
+						<th class="svelte-x1qltz">Latest hash</th>
+						<th class="svelte-x1qltz">Previous hash</th></tr></thead>
 				<tbody></tbody></table></div>
 
-</div></div>
+</div>
+	<div id="tree"></div></div>
 
 
 
 			<script>
 				{
-					__sveltekit_rrsw6s = {
+					__sveltekit_18pa8c8 = {
 						base: new URL(".", location).pathname.slice(0, -1),
 						env: {}
 					};
@@ -79,8 +81,8 @@
 					const data = [null,null];
 
 					Promise.all([
-						import("./_app/immutable/entry/start.8a05e8d4.js"),
-						import("./_app/immutable/entry/app.78d56d93.js")
+						import("./_app/immutable/entry/start.52f4b7db.js"),
+						import("./_app/immutable/entry/app.cb0ef4ed.js")
 					]).then(([kit, app]) => {
 						kit.start(app, element, {
 							node_ids: [0, 2],

@@ -1,6 +1,7 @@
 <script>
 	import ConnectedNodes from '@components/ConnectedNodes.svelte';
 	import ChaintipTracker from '@components/ChaintipTracker.svelte';
+	import Tree from '@components/Tree.svelte';
 	import { onMount, onDestroy } from 'svelte';
 
 	let nodes = [];
@@ -35,11 +36,13 @@
 <svelte:head>
 	<!-- Include Bulma CSS for the entire app -->
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css" />
-	<link href="http://fonts.googleapis.com/css?family=Roboto" rel="stylesheet" type="text/css" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet" />
 
 	<style>
 		body {
-			font-family: 'Roboto', sans-serif;
+			font-family: 'Roboto Mono', monospace;
 			background-color: #f4f4f4;
 			margin: 0;
 			padding: 0;
@@ -98,4 +101,5 @@
 <div>
 	<ConnectedNodes {nodes} {loading} {error} />
 	<ChaintipTracker {nodes} {loading} />
+	<Tree />
 </div>
