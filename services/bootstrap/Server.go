@@ -135,8 +135,20 @@ func (s *Server) Start(ctx context.Context) (err error) {
 			return
 		}
 
+		certFile, found := gocore.Config().Get("server_certFile")
+		if !found {
+			s.logger.Errorf("server_certFile is required for HTTPS")
+			return
+		}
+
+		keyFile, found := gocore.Config().Get("server_keyFile")
+		if !found {
+			s.logger.Errorf("server_keyFile is required for HTTPS")
+			return
+		}
+
 		go func() {
-			err := s.e.Start(addr)
+			err := s.e.StartTLS(addr, certFile, keyFile)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Errorf("[BootstrapServer] HTTP (impl) service error: %s", err)
 			}
