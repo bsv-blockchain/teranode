@@ -2,7 +2,6 @@
 *.tar.gz
 build
 data/
-*.key
 *.run
 .DS_Store
 *.pprof
