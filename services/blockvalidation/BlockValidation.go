@@ -236,6 +236,18 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		return nil, fmt.Errorf("transaction is coinbase [%s]", txHash.String())
 	}
 
+	// store the transaction, we did not get it via propagation
+	exists, err := u.txStore.Exists(ctx, txHash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if transaction exists in store [%s]", err.Error())
+	}
+	if !exists {
+		err = u.txStore.Set(ctx, txHash[:], txBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to store transaction [%s]", err.Error())
+		}
+	}
+
 	// validate the transaction in the validation service
 	// TODO should this request over network, whereby it will be added to block assembly?
 	err = u.validatorClient.Validate(ctx, tx)
