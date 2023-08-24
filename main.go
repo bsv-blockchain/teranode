@@ -343,6 +343,7 @@ func main() {
 				gocore.Log("bval"),
 				utxoStore,
 				subtreeStore,
+				txStore,
 				txMetaStore,
 				validatorClient,
 			))
