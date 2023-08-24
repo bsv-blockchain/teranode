@@ -13,8 +13,11 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -43,12 +46,9 @@ var commit string
 var kafkaProducer sarama.SyncProducer
 var kafkaTopic string
 var ipv6MulticastConn *net.UDPConn
-
 var coinbasePrivKey string
-
-// var coinbaseAddr string
-
 var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
+var totalTransactions atomic.Uint64
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
@@ -65,6 +65,19 @@ func init() {
 
 func main() {
 	_ = os.Chdir("../../")
+
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
+	go func() {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		<-sigs
+
+		cancelFunc() // cancel the contexts and wait for all to stop
+		time.Sleep(1 * time.Second)
+		logger.Infof("TX Blaster finished, total transactions: ~%d", totalTransactions.Load())
+		os.Exit(0)
+	}()
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -87,7 +100,7 @@ func main() {
 		http.Handle(prometheusEndpoint, promhttp.Handler())
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
+	g, ctx := errgroup.WithContext(ctx)
 
 	if kafka != nil && *kafka != "" {
 		logger.Infof("Connecting to kafka at %s", *kafka)
@@ -265,6 +278,7 @@ func main() {
 				ipv6MulticastChan,
 				printProgress,
 				logIdsFile,
+				&totalTransactions,
 			)
 			if err != nil {
 				return err
@@ -284,4 +298,7 @@ func main() {
 	if err := g.Wait(); err != nil {
 		logger.Errorf("error occurred in tx blaster: %v", err)
 	}
+
+	waitForSigTerm := make(chan bool)
+	<-waitForSigTerm
 }

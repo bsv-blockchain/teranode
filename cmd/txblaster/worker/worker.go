@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/seeder/seeder_api"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -102,6 +103,7 @@ type Worker struct {
 	printProgress        uint64
 	logIdsCh             chan string
 	coinbaseClient       coinbase.ClientI
+	totalTransactions    *atomic.Uint64
 }
 
 func NewWorker(
@@ -118,6 +120,7 @@ func NewWorker(
 	ipv6MulticastChan chan Ipv6MulticastMsg,
 	printProgress uint64,
 	logIdsCh chan string,
+	totalTransactions *atomic.Uint64,
 ) (*Worker, error) {
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
@@ -153,6 +156,7 @@ func NewWorker(
 		ipv6MulticastChan:    ipv6MulticastChan,
 		printProgress:        printProgress,
 		logIdsCh:             logIdsCh,
+		totalTransactions:    totalTransactions,
 	}, nil
 }
 
@@ -313,9 +317,10 @@ func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
 
 	seederServers := make([]seeder_api.SeederAPIClient, 0)
 	for _, seederGrpcAddress := range seederGrpcAddresses {
-		sConn, err := utils.GetGRPCClient(ctx, seederGrpcAddress, &utils.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			MaxRetries:  3,
+		sConn, err := util.GetGRPCClient(ctx, seederGrpcAddress, &util.ConnectionOptions{
+			OpenTracing:   gocore.Config().GetBool("use_open_tracing", true),
+			SecurityLevel: 1,
+			MaxRetries:    3,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to seeder server: %v", err)
@@ -470,6 +475,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	w.totalTransactions.Add(1)
 
 	// w.logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
