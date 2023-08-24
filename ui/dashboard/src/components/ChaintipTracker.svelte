@@ -1,7 +1,6 @@
 <script>
-	import Node from './Node.svelte';
-	export let nodes;
-	export let error;
+	import { nodes, error } from '@stores/nodeStore.js';
+	import Node from './ChaintipTrackerNode.svelte';
 </script>
 
 <div class="card panel">
@@ -9,8 +8,8 @@
 		<p class="card-header-title">Chaintip tracker</p>
 	</header>
 	<div class="card-content">
-		{#if error}
-			<p>Error fetching chaintip data: {error}</p>
+		{#if $error}
+			<p>{$error}</p>
 		{:else}
 			<table class="table">
 				<thead>
@@ -24,13 +23,9 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each nodes as node (node.ip)}
+					{#each $nodes as node (node.ip)}
 						{#if node.blobServerHTTPAddress}
-							<Node
-								name={node.name}
-								source={node.source || 'anonymous'}
-								address={node.blobServerHTTPAddress}
-							/>
+							<Node {node} />
 						{/if}
 					{/each}
 				</tbody>

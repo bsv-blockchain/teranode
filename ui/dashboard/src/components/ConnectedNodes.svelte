@@ -1,7 +1,5 @@
 <script>
-	export let nodes;
-	export let loading;
-	export let error;
+	import { nodes, error } from '@stores/nodeStore.js';
 
 	function humanTime(time) {
 		let diff = new Date().getTime() - new Date(time).getTime();
@@ -58,16 +56,14 @@
 		<p class="card-header-title">Connected nodes</p>
 	</header>
 	<div class="card-content">
-		{#if error}
-			<p>Error fetching nodes: {error}</p>
-		{:else if loading}
-			<p>Loading...</p>
-		{:else if nodes.length === 0}
+		{#if $error}
+			<p>Error fetching nodes: {$error}</p>
+		{:else if $nodes.length === 0}
 			<p>No nodes connected</p>
 		{:else}
 			<table class="table">
 				<tbody>
-					{#each nodes as node (node.ip)}
+					{#each $nodes as node (node.ip)}
 						<tr>
 							<td>{node.blobServerHTTPAddress || 'anonymous'}</td>
 							<td>{node.source}</td>

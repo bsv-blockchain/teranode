@@ -73,20 +73,3 @@
 </script>
 
 <div id="tree" />
-
-<style>
-	.link {
-		fill: none;
-		stroke: #555;
-		stroke-opacity: 0.4;
-		stroke-width: 2;
-	}
-	.node circle {
-		fill: #999;
-		stroke: #555;
-		stroke-width: 2px;
-	}
-	.node text {
-		font-size: 12px;
-	}
-</style>

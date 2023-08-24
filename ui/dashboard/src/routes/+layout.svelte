@@ -1,0 +1,69 @@
+<script>
+	let isActive = false;
+
+	function toggleMenu() {
+		isActive = !isActive;
+	}
+
+	function closeMenu() {
+		isActive = false;
+	}
+</script>
+
+<svelte:head>
+	<!-- Include Bulma CSS for the entire app -->
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet" />
+
+	<style>
+		body {
+			font-family: 'Roboto Mono', monospace;
+			background-color: #f4f4f4;
+			margin: 0;
+			padding: 0;
+			padding-top: 52px; /* Adjust for the height of the fixed navbar */
+		}
+
+		/* Custom darker blue color */
+		.navbar.is-primary {
+			background-color: #004466; /* Change this value to your preferred shade of dark blue */
+		}
+
+		/* Add more global styles as needed */
+	</style>
+</svelte:head>
+
+<nav class="navbar is-fixed-top is-dark" aria-label="main navigation">
+	<div class="navbar-brand">
+		<span class="navbar-item has-text-light">
+			<span class="is-size-4 client">Teranode</span>
+		</span>
+	</div>
+
+	<!-- svelte-ignore a11y-invalid-attribute -->
+	<a
+		role="button"
+		class="navbar-burger"
+		href="#"
+		aria-label="menu"
+		aria-expanded="false"
+		data-target="navbarBasicExample"
+	>
+		<span aria-hidden="true" />
+		<span aria-hidden="true" />
+		<span aria-hidden="true" />
+	</a>
+
+	<div id="navbarBasicExample" class="navbar-menu">
+		<div class="navbar-start">
+			<a class="navbar-item" href="/"> Dashboard </a>
+			<a class="navbar-item" href="/tree"> Tree </a>
+			<a class="navbar-item" href="/viewer"> Viewer </a>
+			<a class="navbar-item" href="/blocks"> Blocks </a>
+		</div>
+	</div>
+</nav>
+
+<slot />

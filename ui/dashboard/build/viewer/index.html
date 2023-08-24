@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="../favicon.png" />
+		<script src="https://d3js.org/d3.v6.min.js"></script>
+		<meta name="viewport" content="width=device-width" />
+
+		<link href="../_app/immutable/assets/5.a80ff0f0.css" rel="stylesheet">
+		<link rel="modulepreload" href="../_app/immutable/entry/start.a72d5720.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/index.6e981c2a.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/singletons.441ce5a8.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/index.75a27731.js">
+		<link rel="modulepreload" href="../_app/immutable/entry/app.4da3daa8.js">
+		<link rel="modulepreload" href="../_app/immutable/nodes/0.1b4d18fb.js">
+		<link rel="modulepreload" href="../_app/immutable/nodes/5.f13b2647.js"><!-- HEAD_svelte-1t0gizo_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet"><style>body {
+			font-family: 'Roboto Mono', monospace;
+			background-color: #f4f4f4;
+			margin: 0;
+			padding: 0;
+			padding-top: 52px; /* Adjust for the height of the fixed navbar */
+		}
+
+		/* Custom darker blue color */
+		.navbar.is-primary {
+			background-color: #004466; /* Change this value to your preferred shade of dark blue */
+		}
+
+		/* Add more global styles as needed */
+	</style><!-- HEAD_svelte-1t0gizo_END -->
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">
+
+
+
+
+<nav class="navbar is-fixed-top is-dark" aria-label="main navigation"><div class="navbar-brand"><span class="navbar-item has-text-light"><span class="is-size-4 client">Teranode</span></span></div>
+
+
+	<a role="button" class="navbar-burger" href="#" aria-label="menu" aria-expanded="false" data-target="navbarBasicExample"><span aria-hidden="true"></span>
+		<span aria-hidden="true"></span>
+		<span aria-hidden="true"></span></a>
+
+	<div id="navbarBasicExample" class="navbar-menu"><div class="navbar-start"><a class="navbar-item" href="/">Dashboard </a>
+			<a class="navbar-item" href="/tree">Tree </a>
+			<a class="navbar-item" href="/viewer">Viewer </a>
+			<a class="navbar-item" href="/blocks">Blocks </a></div></div></nav>
+
+<section class="section"><h1 class="title">Enter ID and Select Item Type to Fetch Data</h1>
+	<div class="field is-horizontal"><div class="field-label is-normal"><label class="label">Item Type</label></div>
+		<div class="field-body"><div class="field"><div class="control"><div class="select"><select><option value="">-- Select Item Type --</option><option value="tx">tx</option><option value="subtree">subtree</option><option value="header">header</option><option value="block">block</option><option value="utxo">utxo</option></select></div></div></div>
+			<div class="field"><div class="control"><input class="input" type="text" placeholder="Enter HTTP address" value="https://miner1.ubsv.dev:8090"></div></div>
+			<div class="field"><div class="control"><input class="input hex-input svelte-12g716w" type="text" placeholder="Enter ID" value=""></div></div>
+			<div class="field"><div class="control"><button class="button is-primary">Fetch</button></div></div></div></div>
+
+
+</section>
+
+
+
+			<script>
+				{
+					__sveltekit_1kyh6hg = {
+						base: new URL("..", location).pathname.slice(0, -1),
+						env: {}
+					};
+
+					const element = document.currentScript.parentElement;
+
+					const data = [null,null];
+
+					Promise.all([
+						import("../_app/immutable/entry/start.a72d5720.js"),
+						import("../_app/immutable/entry/app.4da3daa8.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element, {
+							node_ids: [0, 5],
+							data,
+							form: null,
+							error: null
+						});
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>
