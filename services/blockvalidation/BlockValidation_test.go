@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -23,19 +25,19 @@ var (
 
 func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-		txMetaStore, validatorClient, deferFunc := setupBlessMissingTransaction()
+		txMetaStore, validatorClient, txStore, deferFunc := setupBlessMissingTransaction()
 		defer deferFunc()
 
 		// add hash1 to txMetaStore
 		_ = txMetaStore.Create(context.Background(), hash1, 123, nil, nil, 0)
 
-		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, nil, txMetaStore, validatorClient)
+		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
 		_, err := blockValidation.blessMissingTransaction(context.Background(), hash1, "http://localhost:8000")
 		require.NoError(t, err)
 	})
 }
 
-func setupBlessMissingTransaction() (*memory.Memory, *validator.MockValidatorClient, func()) {
+func setupBlessMissingTransaction() (*memory.Memory, *validator.MockValidatorClient, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
@@ -45,10 +47,11 @@ func setupBlessMissingTransaction() (*memory.Memory, *validator.MockValidatorCli
 	)
 
 	txMetaStore := memory.New()
+	txStore := blobmemory.New()
 
 	validatorClient := &validator.MockValidatorClient{}
 
-	return txMetaStore, validatorClient, func() {
+	return txMetaStore, validatorClient, txStore, func() {
 		httpmock.DeactivateAndReset()
 	}
 }
