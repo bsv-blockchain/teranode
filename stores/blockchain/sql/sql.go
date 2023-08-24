@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"sync"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -19,7 +20,12 @@ import (
 type SQL struct {
 	db     *sql.DB
 	engine util.SQLEngine
+	logger utils.Logger
 }
+
+var (
+	cache = sync.Map{}
+)
 
 func init() {
 	gocore.NewStat("blockchain")
@@ -51,6 +57,7 @@ func New(storeUrl *url.URL) (*SQL, error) {
 	s := &SQL{
 		db:     db,
 		engine: util.SQLEngine(storeUrl.Scheme),
+		logger: logger,
 	}
 
 	err = s.insertGenesisTransaction(logger)

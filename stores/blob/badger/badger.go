@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -43,6 +44,10 @@ type Badger struct {
 type loggerWrapper struct {
 	*gocore.Logger
 }
+
+var (
+	cache = expiringmap.New[string, []byte](1 * time.Minute)
+)
 
 func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
@@ -102,6 +107,8 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 
+	cache.Set(utils.ReverseAndHexEncodeSlice(key), value)
+
 	return nil
 }
 
@@ -134,6 +141,12 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 
 	traceSpan := tracing.Start(ctx, "Badger:Get")
 	defer traceSpan.Finish()
+
+	cached, ok := cache.Get(utils.ReverseAndHexEncodeSlice(hash))
+	if ok {
+		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(hash))
+		return cached, nil
+	}
 
 	var result []byte
 	err := s.store.View(func(tx *badger.Txn) error {
@@ -168,6 +181,12 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	}()
 	traceSpan := tracing.Start(ctx, "Badger:Exists")
 	defer traceSpan.Finish()
+
+	_, ok := cache.Get(utils.ReverseAndHexEncodeSlice(hash))
+	if ok {
+		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(hash))
+		return true, nil
+	}
 
 	err := s.store.View(func(tx *badger.Txn) error {
 		_, err := tx.Get(hash)
@@ -205,6 +224,8 @@ func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	if err != nil {
 		traceSpan.RecordError(err)
 	}
+
+	cache.Delete(utils.ReverseAndHexEncodeSlice(hash))
 
 	return err
 }

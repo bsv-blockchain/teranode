@@ -12,11 +12,22 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type getBestBlockHeaderCache struct {
+	blockHeader *model.BlockHeader
+	height      uint32
+}
+
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
 	}()
+
+	cached, ok := cache.Load("GetBestBlockHeader")
+	if ok {
+		s.logger.Debugf("GetBestBlockHeader cache hit")
+		return cached.(*getBestBlockHeaderCache).blockHeader, cached.(*getBestBlockHeaderCache).height, nil
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -68,6 +79,12 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
+
+	// set cache
+	cache.Store("GetBestBlockHeader", &getBestBlockHeaderCache{
+		blockHeader: blockHeader,
+		height:      height,
+	})
 
 	return blockHeader, height, nil
 }

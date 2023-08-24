@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 )
 
@@ -26,6 +27,10 @@ type S3 struct {
 	bucket     string
 	logger     utils.Logger
 }
+
+var (
+	cache = expiringmap.New[string, []byte](1 * time.Minute)
+)
 
 func New(s3URL *url.URL) (*S3, error) {
 	logger := gocore.Log("s3")
@@ -87,10 +92,12 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
+	objectKey := g.generateKey(key)
+
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3manager.UploadInput{
 		Bucket: aws.String(g.bucket),
-		Key:    g.generateKey(key),
+		Key:    objectKey,
 		Body:   buf,
 	}
 
@@ -107,6 +114,8 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
 	}
+
+	cache.Set(*objectKey, value)
 
 	return nil
 }
@@ -131,11 +140,20 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
+	objectKey := g.generateKey(hash)
+
+	// check cache
+	cached, ok := cache.Get(*objectKey)
+	if ok {
+		g.logger.Debugf("Cache hit for: %s", *objectKey)
+		return cached, nil
+	}
+
 	buf := aws.NewWriteAtBuffer([]byte{})
 	_, err := g.downloader.Download(buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
-			Key:    g.generateKey(hash),
+			Key:    objectKey,
 		})
 	if err != nil {
 		traceSpan.RecordError(err)
@@ -153,9 +171,17 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
+	objectKey := g.generateKey(hash)
+
+	// check cache
+	_, ok := cache.Get(*objectKey)
+	if ok {
+		return true, nil
+	}
+
 	_, err := g.client.HeadObject(&s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
-		Key:    g.generateKey(hash),
+		Key:    objectKey,
 	})
 	if err != nil {
 		// there was a bug in the s3 library
@@ -182,11 +208,14 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
-	var key = g.generateKey(hash)
+
+	objectKey := g.generateKey(hash)
+
+	cache.Delete(*objectKey)
 
 	_, err := g.client.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
-		Key:    key,
+		Key:    objectKey,
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
@@ -195,7 +224,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 
 	err = g.client.WaitUntilObjectNotExists(&s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
-		Key:    key,
+		Key:    objectKey,
 	})
 	if err != nil {
 		traceSpan.RecordError(err)

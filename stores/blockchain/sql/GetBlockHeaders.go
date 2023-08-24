@@ -11,11 +11,23 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type getBlockHeadersCache struct {
+	blockHeaders []*model.BlockHeader
+	heights      []uint32
+}
+
 func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
 	}()
+
+	cacheId := fmt.Sprintf("GetBlockHeaders_%s_%d", blockHashFrom.String(), numberOfHeaders)
+	cached, ok := cache.Load(cacheId)
+	if ok {
+		s.logger.Debugf("GetBlockHeaders cache hit")
+		return cached.(*getBlockHeadersCache).blockHeaders, cached.(*getBlockHeadersCache).heights, nil
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -94,6 +106,11 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		blockHeaders = append(blockHeaders, blockHeader)
 		heights = append(heights, height)
 	}
+
+	cache.Store(cacheId, &getBlockHeadersCache{
+		blockHeaders: blockHeaders,
+		heights:      heights,
+	})
 
 	return blockHeaders, heights, nil
 }

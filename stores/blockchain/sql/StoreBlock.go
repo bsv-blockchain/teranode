@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -196,6 +197,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 	if err = rows.Scan(&newBlockId); err != nil {
 		return 0, err
 	}
+
+	// clear all caches after a new block is added
+	cache = sync.Map{}
 
 	return newBlockId, nil
 }
