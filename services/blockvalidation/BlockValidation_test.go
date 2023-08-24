@@ -41,6 +41,8 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		require.NoError(t, txMetaStore.Create(context.Background(), hash4, 124, nil, nil, 0))
 
 		nodeBytes, err := subtree.SerializeNodes()
+		require.NoError(t, err)
+
 		httpmock.RegisterResponder(
 			"GET",
 			`=~^/subtree/[a-z0-9]+\z`,

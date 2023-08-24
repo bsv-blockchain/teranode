@@ -204,6 +204,10 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 }
 
 func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
+	if len(st.Nodes) == 0 {
+		return []*chainhash.Hash{}, nil
+	}
+
 	// Calculate how many entries are re?n array of that size.
 	nextPoT := NextPowerOfTwo(len(st.Nodes))
 	arraySize := nextPoT*2 - 1

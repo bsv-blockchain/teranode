@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -140,27 +141,27 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	subtree := util.NewTreeByLeafCount(nrTransactions)
 
 	// validate the subtree
-	txMeta := make([]*txmeta.Data, len(txHashes))
+	txMetaMap := sync.Map{}
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(100) // max 100 concurrent requests
-
-	for idx, txHash := range txHashes {
-		idx := idx
+	for _, txHash := range txHashes {
 		txHash := txHash
 		g.Go(func() error {
+			var txMeta *txmeta.Data
+			var err error
 			if txHash.IsEqual(model.CoinbasePlaceholderHash) {
-				txMeta[idx] = &txmeta.Data{
+				txMetaMap.Store(txHash, &txmeta.Data{
 					Fee: 0,
-				}
+				})
 			} else {
 				// is the txid in the store?
 				// no - get it from the network
 				// yes - is the txid blessed?
 				// if all txs in tree are blessed, then bless the tree
-				txMeta[idx], err = u.txMetaStore.Get(gCtx, txHash)
+				txMeta, err = u.txMetaStore.Get(gCtx, txHash)
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
-						txMeta[idx], err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
+						txMeta, err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
 						if err != nil {
 							return errors.Join(fmt.Errorf("failed to bless missing transaction: %s", txHash.String()), err)
 						}
@@ -171,21 +172,31 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				}
 			}
 
-			if txMeta[idx] == nil {
+			if txMeta == nil {
 				return fmt.Errorf("tx meta is nil [%s]", txHash.String())
 			}
+
+			txMetaMap.Store(txHash, txMeta)
 
 			return nil
 		})
 	}
 
 	if err = g.Wait(); err != nil {
-		return errors.Join(fmt.Errorf("failed to bless all transactions in subtree %s", subtree.RootHash()), err)
+		return errors.Join(fmt.Errorf("failed to bless all transactions in subtree %s", subtreeHash.String()), err)
 	}
 
-	for idx, txHash := range txHashes {
+	var ok bool
+	var txMeta *txmeta.Data
+	for _, txHash := range txHashes {
 		// finally add the transaction hash and fee to the subtree
-		err = subtree.AddNode(txHash, txMeta[idx].Fee)
+		_txMeta, _ := txMetaMap.Load(txHash)
+		txMeta, ok = _txMeta.(*txmeta.Data)
+		if !ok {
+			return fmt.Errorf("tx meta is not of type *txmeta.Data [%s]", txHash.String())
+		}
+
+		err = subtree.AddNode(txHash, txMeta.Fee)
 		if err != nil {
 			return errors.Join(fmt.Errorf("failed to add node to subtree"), err)
 		}
