@@ -356,11 +356,11 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
 	}
 
-	if u.processBlockNotify.Get(*subtreeHash) != nil {
+	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
 		return &emptypb.Empty{}, nil
 	}
-	// set the processing flag for 1 minute, so we don't process the same block multiple times
-	u.processBlockNotify.Set(*subtreeHash, true, 1*time.Minute)
+	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
+	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
 
 	prometheusBlockValidationSubtreeFound.Inc()
 	u.logger.Infof("processing subtree found [%s]", subtreeHash.String())

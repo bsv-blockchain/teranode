@@ -293,18 +293,29 @@ func (b *Block) checkDuplicateTransactions() error {
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
 	b.subtreeSlices = make([]*util.Subtree, len(b.Subtrees))
+
+	var subtreeSize int
 	var subtreeBytes []byte
 	var err error
 	for i, subtreeHash := range b.Subtrees {
 		subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:])
 		if err != nil {
-			return err
+			return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 		}
 
 		subtree := &util.Subtree{}
 		err = subtree.Deserialize(subtreeBytes)
 		if err != nil {
-			return err
+			return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+		}
+
+		if i == 0 {
+			subtreeSize = subtree.Length()
+		} else {
+			// all subtrees need to be the same size as the first tree, except the last one
+			if subtree.Length() != subtreeSize && i != len(b.Subtrees)-1 {
+				return fmt.Errorf("subtree %d has length %d, expected %d", i, subtree.Length(), subtreeSize)
+			}
 		}
 
 		b.subtreeSlices[i] = subtree

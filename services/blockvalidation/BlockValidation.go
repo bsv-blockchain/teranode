@@ -94,6 +94,8 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+	u.logger.Infof("validating subtree [%s]", subtreeHash.String())
+
 	// get subtree from store
 	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {
@@ -129,7 +131,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	nrTransactions := len(txHashes)
 	if !util.IsPowerOfTwo(nrTransactions) {
-		u.logger.Warnf("subtree is not a power of two [%d], mining on incomplete tree", nrTransactions)
+		//u.logger.Warnf("subtree is not a power of two [%d], mining on incomplete tree", nrTransactions)
 		height := math.Ceil(math.Log2(float64(nrTransactions)))
 		nrTransactions = int(math.Pow(2, height)) // 1024 * 1024
 	}
@@ -138,38 +140,52 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	subtree := util.NewTreeByLeafCount(nrTransactions)
 
 	// validate the subtree
-	var txMeta *txmeta.Data
-	for _, txHash := range txHashes {
-		if txHash.IsEqual(model.CoinbasePlaceholderHash) {
-			txMeta = &txmeta.Data{
-				Fee: 0,
-			}
-		} else {
+	txMeta := make([]*txmeta.Data, len(txHashes))
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(100) // max 100 concurrent requests
 
-			// is the txid in the store?
-			// no - get it from the network
-			// yes - is the txid blessed?
-			// if all txs in tree are blessed, then bless the tree
-			txMeta, err = u.txMetaStore.Get(ctx, txHash)
-			if err != nil {
-				if strings.Contains(err.Error(), "not found") {
-					txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
-					if err != nil {
-						return errors.Join(fmt.Errorf("failed to bless missing transaction: %s", txHash.String()), err)
+	for idx, txHash := range txHashes {
+		idx := idx
+		txHash := txHash
+		g.Go(func() error {
+			if txHash.IsEqual(model.CoinbasePlaceholderHash) {
+				txMeta[idx] = &txmeta.Data{
+					Fee: 0,
+				}
+			} else {
+				// is the txid in the store?
+				// no - get it from the network
+				// yes - is the txid blessed?
+				// if all txs in tree are blessed, then bless the tree
+				txMeta[idx], err = u.txMetaStore.Get(gCtx, txHash)
+				if err != nil {
+					if strings.Contains(err.Error(), "not found") {
+						txMeta[idx], err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
+						if err != nil {
+							return errors.Join(fmt.Errorf("failed to bless missing transaction: %s", txHash.String()), err)
+						}
+						// there was no error, so the transaction has been blessed
+					} else {
+						return errors.Join(fmt.Errorf("failed to get tx meta"), err)
 					}
-					// there was no error, so the transaction has been blessed
-				} else {
-					return errors.Join(fmt.Errorf("failed to get tx meta"), err)
 				}
 			}
-		}
 
-		if txMeta == nil {
-			return fmt.Errorf("tx meta is nil [%s]", txHash.String())
-		}
+			if txMeta[idx] == nil {
+				return fmt.Errorf("tx meta is nil [%s]", txHash.String())
+			}
 
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return errors.Join(fmt.Errorf("failed to bless all transactions in subtree %s", subtree.RootHash()), err)
+	}
+
+	for idx, txHash := range txHashes {
 		// finally add the transaction hash and fee to the subtree
-		err = subtree.AddNode(txHash, txMeta.Fee)
+		err = subtree.AddNode(txHash, txMeta[idx].Fee)
 		if err != nil {
 			return errors.Join(fmt.Errorf("failed to add node to subtree"), err)
 		}
