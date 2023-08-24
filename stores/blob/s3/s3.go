@@ -160,7 +160,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	if err != nil {
 		// there was a bug in the s3 library
 		// https://github.com/aws/aws-sdk-go-v2/issues/2084
-		if strings.Contains(err.Error(), "not found") {
+		if strings.Contains(err.Error(), "NotFound") {
 			return false, nil
 		}
 

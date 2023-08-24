@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -148,6 +149,10 @@ func (g *KinesisS3) Exists(ctx context.Context, hash []byte) (bool, error) {
 		Key:    g.generateKey(hash),
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "NotFound") {
+			return false, nil
+		}
+
 		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == s3.ErrCodeNoSuchKey {
 			return false, nil
 		}
