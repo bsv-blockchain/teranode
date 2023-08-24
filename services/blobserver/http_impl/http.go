@@ -62,7 +62,7 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
-	e.GET("/:hash", h.GetBlockHeaders(BINARY_STREAM))
+	e.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
 	e.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
 	e.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
 
@@ -94,14 +94,14 @@ func (h *HTTP) Init(_ context.Context) error {
 }
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
-	h.logger.Infof("BlobServer HTTP service listening on %s", addr)
+	h.logger.Infof("BlobServer HTTPS service listening on %s", addr)
 
 	go func() {
 		<-ctx.Done()
-		h.logger.Infof("[BlobServer] HTTP (impl) service shutting down")
+		h.logger.Infof("[BlobServer] HTTPS (impl) service shutting down")
 		err := h.e.Shutdown(ctx)
 		if err != nil {
-			h.logger.Errorf("[BlobServer] HTTP (impl) service shutdown error: %s", err)
+			h.logger.Errorf("[BlobServer] HTTPS (impl) service shutdown error: %s", err)
 		}
 	}()
 
