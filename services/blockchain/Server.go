@@ -208,10 +208,11 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}
 
 	return &blockchain_api.GetBlockResponse{
-		Header:        block.Header.Bytes(),
-		Height:        height,
-		CoinbaseTx:    block.CoinbaseTx.Bytes(),
-		SubtreeHashes: subtreeHashes,
+		Header:           block.Header.Bytes(),
+		Height:           height,
+		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		SubtreeHashes:    subtreeHashes,
+		TransactionCount: block.TransactionCount,
 	}, nil
 }
 

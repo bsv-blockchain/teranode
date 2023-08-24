@@ -192,10 +192,11 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 	}
 
 	return &blobserver_api.GetBlockResponse{
-		Header:        block.Header.Bytes(),
-		Height:        height,
-		CoinbaseTx:    block.CoinbaseTx.Bytes(),
-		SubtreeHashes: subtreeHashes,
+		Header:           block.Header.Bytes(),
+		Height:           height,
+		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		SubtreeHashes:    subtreeHashes,
+		TransactionCount: block.TransactionCount,
 	}, nil
 }
 

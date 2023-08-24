@@ -201,8 +201,11 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		return nil, fmt.Errorf("baseUrl for transaction is empty [%s]", txHash.String())
 	}
 
+	alreadyHaveTransaction := true
 	txBytes, err := u.txStore.Get(ctx, txHash[:])
 	if txBytes == nil || err != nil {
+		alreadyHaveTransaction = false
+
 		// do http request to baseUrl + txHash.String()
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -236,12 +239,8 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		return nil, fmt.Errorf("transaction is coinbase [%s]", txHash.String())
 	}
 
-	// store the transaction, we did not get it via propagation
-	exists, err := u.txStore.Exists(ctx, txHash[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to check if transaction exists in store [%s]", err.Error())
-	}
-	if !exists {
+	if !alreadyHaveTransaction {
+		// store the transaction, we did not get it via propagation
 		err = u.txStore.Set(ctx, txHash[:], txBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to store transaction [%s]", err.Error())
@@ -249,7 +248,6 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	}
 
 	// validate the transaction in the validation service
-	// TODO should this request over network, whereby it will be added to block assembly?
 	err = u.validatorClient.Validate(ctx, tx)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting

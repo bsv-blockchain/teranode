@@ -338,16 +338,20 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
-	for i, subtree := range job.Subtrees {
-		jobSubtreeHashes[i] = subtree.RootHash()
+	if len(job.Subtrees) > 0 {
+		for i, subtree := range job.Subtrees {
+			jobSubtreeHashes[i] = subtree.RootHash()
 
-		subtreesInJob[i] = subtree
-		if i == 0 {
-			subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0)
+			subtreesInJob[i] = subtree
+			if i == 0 {
+				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0)
+			}
+			rootHash := subtree.RootHash()
+			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+			transactionCount += uint64(subtree.Length())
 		}
-		rootHash := subtree.RootHash()
-		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
-		transactionCount += uint64(subtree.Length())
+	} else {
+		transactionCount = 1 // Coinbase
 	}
 
 	// Create a new subtree with the subtreeHashes of the subtrees

@@ -50,7 +50,8 @@ message GetBlockResponse {
   bytes header = 1;
   uint32 height = 2;
   bytes coinbase_tx = 3;
-  repeated bytes subtree_hashes = 4;
+  uint64 transaction_count = 4;
+  repeated bytes subtree_hashes = 5;
 }
 
 // swagger:model GetBlockResponse

@@ -29,12 +29,13 @@ type Block struct {
 	txMap         *util.SplitSwissMapUint64
 }
 
-func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash) (*Block, error) {
+func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64) (*Block, error) {
 	return &Block{
-		Header:        header,
-		CoinbaseTx:    coinbase,
-		Subtrees:      subtrees,
-		subtreeLength: uint64(len(subtrees)),
+		Header:           header,
+		CoinbaseTx:       coinbase,
+		Subtrees:         subtrees,
+		TransactionCount: transactionCount,
+		subtreeLength:    uint64(len(subtrees)),
 	}, nil
 }
 

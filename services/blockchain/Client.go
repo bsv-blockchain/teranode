@@ -113,7 +113,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes)
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount)
 }
 
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
