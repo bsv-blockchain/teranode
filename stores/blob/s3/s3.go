@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -157,6 +158,12 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 		Key:    g.generateKey(hash),
 	})
 	if err != nil {
+		// there was a bug in the s3 library
+		// https://github.com/aws/aws-sdk-go-v2/issues/2084
+		if strings.Contains(err.Error(), "not found") {
+			return false, nil
+		}
+
 		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == s3.ErrCodeNoSuchKey {
 			return false, nil
 		}
