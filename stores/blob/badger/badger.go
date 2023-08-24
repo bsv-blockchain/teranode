@@ -85,7 +85,7 @@ func (s *Badger) Close(ctx context.Context) error {
 }
 
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
+	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
@@ -113,7 +113,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 }
 
 func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
+	//s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("SetTTL").AddTime(start)
@@ -133,7 +133,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 }
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
-	s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	//s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Get").AddTime(start)
@@ -174,7 +174,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 }
 
 func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
-	s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
+	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Exists").AddTime(start)
@@ -208,7 +208,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 }
 
 func (s *Badger) Del(ctx context.Context, hash []byte) error {
-	s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
+	//s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("prop_store_badger").NewStat("Del").AddTime(start)

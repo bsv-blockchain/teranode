@@ -16,6 +16,7 @@ import (
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -63,6 +64,7 @@ type Server struct {
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
+	txStore          blob.Store
 	txMetaStore      txmeta_store.Store
 	validatorClient  *validator.Client
 
@@ -72,6 +74,11 @@ type Server struct {
 	blockValidation     *BlockValidation
 	processingSubtreeMu sync.Mutex
 	processingSubtree   map[chainhash.Hash]bool
+
+	// cache to prevent processing the same block / subtree multiple times
+	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
+	processBlockNotify   *ttlcache.Cache[chainhash.Hash, bool]
+	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
 }
 
 func Enabled() bool {
@@ -80,18 +87,21 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txMetaStore txmeta_store.Store,
-	validatorClient *validator.Client) *Server {
+func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
+	txMetaStore txmeta_store.Store, validatorClient *validator.Client) *Server {
 
 	bVal := &Server{
-		utxoStore:         utxoStore,
-		logger:            logger,
-		subtreeStore:      subtreeStore,
-		txMetaStore:       txMetaStore,
-		validatorClient:   validatorClient,
-		blockFoundCh:      make(chan processBlockFound, 100),
-		catchupCh:         make(chan processBlockCatchup, 100),
-		processingSubtree: make(map[chainhash.Hash]bool),
+		utxoStore:            utxoStore,
+		logger:               logger,
+		subtreeStore:         subtreeStore,
+		txStore:              txStore,
+		txMetaStore:          txMetaStore,
+		validatorClient:      validatorClient,
+		blockFoundCh:         make(chan processBlockFound, 100),
+		catchupCh:            make(chan processBlockCatchup, 100),
+		processingSubtree:    make(map[chainhash.Hash]bool),
+		processBlockNotify:   ttlcache.New[chainhash.Hash, bool](),
+		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 	}
 
 	return bVal
@@ -102,7 +112,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to create blockchain client [%w]", err)
 	}
 
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txMetaStore, u.validatorClient)
+	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient)
 
 	// process blocks found from channel
 	go func() {
@@ -118,8 +128,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				}
 			case b := <-u.blockFoundCh:
 				{
-					if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
-						u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+					if u.processBlockNotify.Get(*b.hash) == nil {
+						// set the processing flag for 1 minute, so we don't process the same block multiple times
+						u.processBlockNotify.Set(*b.hash, true, 1*time.Minute)
+						if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
+							u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+						}
 					}
 				}
 			}
@@ -168,9 +182,8 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	if err != nil {
 		return nil, fmt.Errorf("failed to check if block exists [%w]", err)
 	}
-
 	if exists {
-		u.logger.Warnf("block found that already exists [%s]", hash.String())
+		//u.logger.Warnf("block found that already exists [%s]", hash.String())
 		return &emptypb.Empty{}, nil
 	}
 
@@ -275,8 +288,16 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 		u.catchingUp.Store(false)
 	}()
 
+	// first check whether this block already exists, which would mean we caught up from another peer
+	exists, err := u.blockchainClient.GetBlockExists(ctx, fromBlock.Hash())
+	if err != nil {
+		return fmt.Errorf("failed to check if block exists [%w]", err)
+	}
+	if exists {
+		return nil
+	}
+
 	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
-	var exists bool
 
 	fromBlockHeaderHash := fromBlock.Header.HashPrevBlock
 
@@ -330,13 +351,19 @@ LOOP:
 }
 
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
-	prometheusBlockValidationSubtreeFound.Inc()
-	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
-
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
 	}
+
+	if u.processBlockNotify.Get(*subtreeHash) != nil {
+		return &emptypb.Empty{}, nil
+	}
+	// set the processing flag for 1 minute, so we don't process the same block multiple times
+	u.processBlockNotify.Set(*subtreeHash, true, 1*time.Minute)
+
+	prometheusBlockValidationSubtreeFound.Inc()
+	u.logger.Infof("processing subtree found [%s]", subtreeHash.String())
 
 	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {

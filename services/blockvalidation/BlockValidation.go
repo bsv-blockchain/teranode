@@ -25,18 +25,20 @@ type BlockValidation struct {
 	logger           utils.Logger
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
+	txStore          blob.Store
 	txMetaStore      txmeta.Store
 	validatorClient  validator.Interface
 	httpClient       *http.Client
 }
 
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
+	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
 	bv := &BlockValidation{
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		subtreeStore:     subtreeStore,
+		txStore:          txStore,
 		txMetaStore:      txMetaStore,
 		validatorClient:  validatorClient,
 		httpClient:       &http.Client{},
@@ -153,7 +155,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				if strings.Contains(err.Error(), "not found") {
 					txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
 					if err != nil {
-						return errors.Join(fmt.Errorf("failed to bless missing transaction"), err)
+						return errors.Join(fmt.Errorf("failed to bless missing transaction: %s", txHash.String()), err)
 					}
 					// there was no error, so the transaction has been blessed
 				} else {
@@ -199,22 +201,29 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		return nil, fmt.Errorf("baseUrl for transaction is empty [%s]", txHash.String())
 	}
 
-	// do http request to baseUrl + txHash.String()
-	url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
-	}
+	txBytes, err := u.txStore.Get(ctx, txHash[:])
+	if txBytes == nil || err != nil {
+		// do http request to baseUrl + txHash.String()
+		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
+		}
 
-	resp, err := u.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
-	}
-	defer resp.Body.Close()
+		resp, err := u.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
+		}
+		defer resp.Body.Close()
 
-	txBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read http response body [%s]", err.Error())
+		txBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read http response body [%s]", err.Error())
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("http response status code [%d]: %s", resp.StatusCode, resp.Status)
+		}
 	}
 
 	// validate the transaction by creating a transaction object

@@ -262,13 +262,22 @@ LOOP:
 func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
+	// check whether we already have the parent block
+	exists, err := c.store.GetBlockExists(ctx, blockHash)
+	if err != nil {
+		return nil, fmt.Errorf("could not check whether block exists %+v", err)
+	}
+	if exists {
+		return nil, nil
+	}
+
 	block, err := c.blobServerClient.GetBlock(ctx, blockHash)
 	if err != nil {
 		return block, err
 	}
 
 	// check whether we already have the parent block
-	exists, err := c.store.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	exists, err = c.store.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return nil, fmt.Errorf("could not check whether block exists %+v", err)
 	}

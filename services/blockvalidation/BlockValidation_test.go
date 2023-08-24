@@ -29,7 +29,7 @@ func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 		// add hash1 to txMetaStore
 		_ = txMetaStore.Create(context.Background(), hash1, 123, nil, nil, 0)
 
-		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, txMetaStore, validatorClient)
+		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, nil, txMetaStore, validatorClient)
 		_, err := blockValidation.blessMissingTransaction(context.Background(), hash1, "http://localhost:8000")
 		require.NoError(t, err)
 	})
