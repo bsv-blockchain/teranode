@@ -81,7 +81,7 @@ func (c *Peer) Start(ctx context.Context) error {
 
 				hash, err = chainhash.NewHash(resp.Hash)
 				if err != nil {
-					c.logger.Errorf("could not create hash from bytes", "err", err)
+					c.logger.Errorf("could not create hash from bytes: %v", err)
 					continue
 				}
 
@@ -90,7 +90,7 @@ func (c *Peer) Start(ctx context.Context) error {
 					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
 
 					if err = c.validationClient.SubtreeFound(ctx, hash, resp.BaseUrl); err != nil {
-						c.logger.Errorf("could not validate subtree", "err", err)
+						c.logger.Errorf("could not validate subtree: %v", err)
 						continue
 					}
 
@@ -98,7 +98,7 @@ func (c *Peer) Start(ctx context.Context) error {
 					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
 
 					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl); err != nil {
-						c.logger.Errorf("could not validate block", "err", err)
+						c.logger.Errorf("could not validate block: %v", err)
 						continue
 					}
 				}

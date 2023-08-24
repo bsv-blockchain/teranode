@@ -214,10 +214,9 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	// register transaction in tx status store
 	// v.logger.Debugf("registering tx %s in tx status store", txIDChainHash)
 	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes, tx.LockTime); err != nil {
-		v.logger.Errorf("error sending tx to tx meta store: %v", err)
+		v.logger.Warnf("error sending tx %s to tx meta store: %v", txIDChainHash.String(), err)
+		return nil
 	}
-
-	// TODO make sure we do not add a transaction twice to the block assembly
 
 	if v.kafkaProducer != nil {
 		if err = v.publishToKafka(txIDChainHash); err != nil {
@@ -228,46 +227,6 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 			v.logger.Errorf("error sending tx to block assembler: %v", err)
 		}
 	}
-
-	// if v.saveInParallel {
-	// 	var wg sync.WaitGroup
-	// 	for i, output := range tx.Outputs {
-	// 		if output.Satoshis > 0 {
-	// 			i := i
-	// 			output := output
-	// 			wg.Add(1)
-	// 			go func() {
-	// 				defer wg.Done()
-
-	// 				utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
-	// 				if utxoErr != nil {
-	// 					fmt.Printf("error getting output utxo hash: %s", utxoErr.Error())
-	// 					//return err
-	// 				}
-
-	// 				_, utxoErr = v.store.Client(storeUtxoSpan.Ctx, utxoHash)
-	// 				if utxoErr != nil {
-	// 					fmt.Printf("error storing utxo: %s\n", utxoErr.Error())
-	// 				}
-	// 			}()
-	// 		}
-	// 	}
-	// 	wg.Wait()
-	// } else {
-	// 	for i, output := range tx.Outputs {
-	// 		if output.Satoshis > 0 {
-	// 			hash, err = util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
-	// 			if err != nil {
-	// 				return err
-	// 			}
-
-	// 			_, err = v.store.Client(storeUtxoSpan.Ctx, hash)
-	// 			if err != nil {
-	// 				break
-	// 			}
-	// 		}
-	// 	}
-	// }
 
 	return nil
 }
