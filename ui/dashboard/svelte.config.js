@@ -5,6 +5,15 @@ const config = {
 	kit: {
 		adapter: adapter()
 	},
+	vite: {
+		build: {
+			sourcemap: true,
+			terserOptions: {
+				keep_fnames: true
+			}
+		}
+
+	}
 };
 
 export default config;

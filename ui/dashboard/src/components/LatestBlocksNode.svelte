@@ -1,60 +1,82 @@
 <script>
-	import { onMount } from 'svelte';
-
-	export let name;
-	export let source;
-	export let address;
-	let loading = true;
-	let data = {};
-	let error = null;
-	let intervalId;
-
-	async function fetchData() {
-		try {
-			const response = await fetch(`${address}/bestblockheader/json`);
-
-			if (!response.ok) {
-				throw new Error(`HTTP error! Status: ${response.status}`);
-			}
-
-			data = await response.json();
-			error = null;
-			loading = false;
-		} catch (e) {
-			error = e.message;
-		}
-	}
-
-	onMount(() => {
-		fetchData(); // Fetch data immediately when component is mounted
-		intervalId = setInterval(fetchData, 2000); // Re-fetch every 2 seconds
-
-		return () => clearInterval(intervalId); // Cleanup when component is destroyed
-	});
-
-	function shortHash(hash) {
-		if (!hash) return '';
-
-		return hash.substring(0, 8) + '...' + hash.substring(hash.length - 8);
-	}
+	export let data = {};
 </script>
 
-<tr>
-	<td>{source}</td>
-	<td>{name}</td>
-	<td>{address}</td>
-	<td class="right">{data.height}</td>
-	<td title={data.hash}>{shortHash(data.hash)}</td>
-	<td title={data.previousblockhash}>{shortHash(data.previousblockhash)}</td>
-</tr>
+<section class="section">
+	<div class="container">
+		<h1 class="title">Block Data</h1>
+		<div class="box">
+			<div class="field">
+				<label class="label"
+					>Hash
+					<div class="control">
+						<input class="input" type="text" value={data.hash} readonly />
+					</div>
+				</label>
+			</div>
 
-<style>
-	td {
-		border: 1px solid #e5e5e5; /* Add a light border to table cells */
-		padding: 8px 12px; /* Add some padding to table cells */
-	}
+			<div class="field">
+				<label class="label"
+					>Version
+					<div class="control">
+						<input class="input" type="number" value={data.version} readonly />
+					</div>
+				</label>
+			</div>
 
-	.right {
-		text-align: right;
-	}
-</style>
+			<div class="field">
+				<label class="label"
+					>Previous Block Hash
+					<div class="control">
+						<input class="input" type="text" value={data.previousblockhash} readonly />
+					</div>
+				</label>
+			</div>
+
+			<div class="field">
+				<label class="label"
+					>Merkle Root
+					<div class="control">
+						<input class="input" type="text" value={data.merkleroot} readonly />
+					</div>
+				</label>
+			</div>
+
+			<div class="field">
+				<label class="label"
+					>Time
+					<div class="control">
+						<input class="input" type="number" value={data.time} readonly />
+					</div>
+				</label>
+			</div>
+
+			<div class="field">
+				<label class="label"
+					>Bits
+					<div class="control">
+						<input class="input" type="text" value={data.bits} readonly />
+					</div>
+				</label>
+			</div>
+
+			<div class="field">
+				<label class="label"
+					>Nonce
+					<div class="control">
+						<input class="input" type="number" value={data.nonce} readonly />
+					</div>
+				</label>
+			</div>
+
+			<div class="field">
+				<label class="label"
+					>Height
+					<div class="control">
+						<input class="input" type="number" value={data.height} readonly />
+					</div>
+				</label>
+			</div>
+		</div>
+	</div>
+</section>

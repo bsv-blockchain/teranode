@@ -87,22 +87,15 @@
 </div>
 
 <style>
-	.panel {
-		margin: 20px; /* Adjust as needed */
-	}
-
-	.panel {
-		margin: 20px; /* Adjust as needed */
-	}
-
-	/* Custom styles for the table inside card-content */
 	.table {
 		width: 100%; /* Make the table take the full width of the card */
 		border-collapse: collapse; /* Collapse table borders */
 	}
 
-	.table tr {
+	.table td {
 		vertical-align: middle;
+		padding-top: 2px;
+		padding-bottom: 2px;
 	}
 
 	.table tr:nth-child(even) {

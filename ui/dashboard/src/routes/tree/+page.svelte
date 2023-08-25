@@ -1,31 +1,73 @@
 <script>
+	import { blocks, error } from '@stores/nodeStore.js';
 	import { onMount } from 'svelte';
 
-	let svg;
+	function getUniqueValues(obj) {
+		let values = [];
+		for (let key in obj) {
+			values = values.concat(obj[key]);
+		}
+		return [...new Set(values)];
+	}
+
+	function createHierarchy(arr) {
+		const nodeMap = {};
+		let rootNode = null;
+
+		// First pass: Create nodes and identify the root node
+		arr.forEach((item) => {
+			// Create or get the current node
+			if (!nodeMap[item.hash]) {
+				nodeMap[item.hash] = { name: item.hash, children: [] };
+			}
+			const currentNode = nodeMap[item.hash];
+
+			// Create or get the parent node
+			if (!nodeMap[item.previousblockhash]) {
+				nodeMap[item.previousblockhash] = { name: item.previousblockhash, children: [] };
+			}
+			const parentNode = nodeMap[item.previousblockhash];
+
+			// Link the current node to its parent
+			parentNode.children.push(currentNode);
+
+			// If the parent node doesn't have a parent itself, it's the root
+			if (!arr.some((i) => i.hash === item.previousblockhash)) {
+				rootNode = parentNode;
+			}
+		});
+
+		return {
+			name: 'Root',
+			children: rootNode ? [rootNode] : []
+		};
+	}
 
 	onMount(() => {
 		const width = 600;
 		const height = 400;
 
-		svg = d3.select('#tree').append('svg').attr('width', width).attr('height', height);
+		const svg = d3.select('#tree').append('svg').attr('width', width).attr('height', height);
 
-		const treeData = {
-			name: 'Root',
-			children: [
-				{ name: 'Child 1' },
-				{
-					name: 'Child 2',
-					children: [{ name: 'Grandchild 1' }, { name: 'Grandchild 2' }]
-				}
-			]
-		};
+		// const treeData = {
+		// 	name: 'Root',
+		// 	children: [
+		// 		{ name: 'Child 1' },
+		// 		{
+		// 			name: 'Child 2',
+		// 			children: [{ name: 'Grandchild 1' }, { name: 'Grandchild 2' }]
+		// 		}
+		// 	]
+		// };
+		const treeData = createHierarchy(getUniqueValues($blocks));
+		debugger;
 
 		const root = d3.hierarchy(treeData);
-		const treeLayout = d3.tree().size([height, width - 200]);
+		const treeLayout = d3.tree().size([height, width - 6000]);
 
 		treeLayout(root);
 
-		const g = svg.append('g').attr('transform', 'translate(100,0)');
+		const g = svg.append('g').attr('transform', 'translate(1000,0)');
 
 		const link = g
 			.selectAll('.link')
@@ -68,8 +110,31 @@
 			.attr('dy', 3)
 			.attr('x', (d) => (d.children ? -15 : 15))
 			.style('text-anchor', (d) => (d.children ? 'end' : 'start'))
-			.text((d) => d.data.name);
+			.text((d) => d.data.name.substring(0, 6));
 	});
 </script>
 
-<div id="tree" />
+<div>
+	{#if $error}
+		<p>{$error}</p>
+	{:else}
+		<div id="tree" />
+	{/if}
+</div>
+
+<style>
+	:global(.link) {
+		fill: none;
+		stroke: #555;
+		stroke-opacity: 0.4;
+		stroke-width: 2;
+	}
+	:global(.node circle) {
+		fill: #999;
+		stroke: #555;
+		stroke-width: 2px;
+	}
+	:global(.node text) {
+		font-size: 12px;
+	}
+</style>

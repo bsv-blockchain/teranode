@@ -70,6 +70,10 @@ async function fetchData() {
       return acc;
     }, {});
 
+    // if (Object.entries(blockObject).length > 1) {
+    //   console.log(JSON.stringify(blockObject, null, 2))
+    // }
+
     // Update the stores
     nodes.set(n);
     blocks.set(blockObject);
