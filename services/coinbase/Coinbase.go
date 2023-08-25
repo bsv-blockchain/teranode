@@ -132,7 +132,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 	go func() {
 		blockHeader, _, err := c.blobServerClient.GetBestBlockHeader(ctx)
 		if err != nil {
-			c.logger.Errorf("could not get best block header from blob server [%w]", err)
+			c.logger.Errorf("could not get best block header from blob server [%v]", err)
 			return
 		}
 		c.blockFoundCh <- processBlockFound{
@@ -344,7 +344,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 			ORDER BY chain_work DESC, id ASC
 			LIMIT 1
 		)
-		
+
 		UPDATE coinbase_utxos
 		SET spendable = true
 		WHERE block_id IN (
