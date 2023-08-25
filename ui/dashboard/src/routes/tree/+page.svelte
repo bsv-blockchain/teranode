@@ -43,11 +43,13 @@
 		};
 	}
 
+	let unique = [];
+
 	onMount(() => {
 		const width = 600;
 		const height = 400;
 
-		const svg = d3.select('#tree').append('svg').attr('width', width).attr('height', height);
+		const svg = d3.select('#tree').append('svg').attr('width', '100%').attr('height', '100vh');
 
 		// const treeData = {
 		// 	name: 'Root',
@@ -59,15 +61,17 @@
 		// 		}
 		// 	]
 		// };
-		const treeData = createHierarchy(getUniqueValues($blocks));
+		unique = getUniqueValues($blocks);
+
+		const treeData = createHierarchy(unique);
 		debugger;
 
 		const root = d3.hierarchy(treeData);
-		const treeLayout = d3.tree().size([height, width - 6000]);
+		const treeLayout = d3.tree().size([height - 200, width]);
 
 		treeLayout(root);
 
-		const g = svg.append('g').attr('transform', 'translate(1000,0)');
+		const g = svg.append('g').attr('transform', 'translate(100,0)');
 
 		const link = g
 			.selectAll('.link')
@@ -104,25 +108,37 @@
 			.attr('class', (d) => 'node' + (d.children ? ' node--internal' : ' node--leaf'))
 			.attr('transform', (d) => 'translate(' + d.y + ',' + d.x + ')');
 
-		node.append('circle').attr('r', 10);
+		node
+			.append('circle')
+			.attr('r', 10)
+			.append('title')
+			.text((d) => d.data.name);
 		node
 			.append('text')
-			.attr('dy', 3)
+			.attr('dy', 30)
 			.attr('x', (d) => (d.children ? -15 : 15))
-			.style('text-anchor', (d) => (d.children ? 'end' : 'start'))
+			.style('text-anchor', (d) => (d.children ? 'start' : 'start'))
+			// Add tooltip
 			.text((d) => d.data.name.substring(0, 6));
 	});
 </script>
 
-<div>
+<div class="full">
 	{#if $error}
 		<p>{$error}</p>
 	{:else}
-		<div id="tree" />
+		<div class="full" id="tree" />
+
+		<pre>{JSON.stringify(unique, null, 2)}</pre>
 	{/if}
 </div>
 
 <style>
+	.full {
+		width: 100%;
+		height: 100vh;
+	}
+
 	:global(.link) {
 		fill: none;
 		stroke: #555;
@@ -135,6 +151,6 @@
 		stroke-width: 2px;
 	}
 	:global(.node text) {
-		font-size: 12px;
+		font-size: 10px;
 	}
 </style>
