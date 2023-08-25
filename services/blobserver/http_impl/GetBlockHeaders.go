@@ -14,7 +14,7 @@ import (
 func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
-		nStr := c.Param("n")
+		nStr := c.QueryParam("n")
 
 		numberOfHeaders := 100
 		if nStr != "" {
