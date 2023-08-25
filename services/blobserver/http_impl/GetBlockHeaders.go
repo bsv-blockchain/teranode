@@ -27,7 +27,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		h.logger.Debugf("[BlobServer_http] Get %s Block Headers in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr)
+		h.logger.Debugf("[BlobServer_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr)
 
 		var headers []*model.BlockHeader
 		var heights []uint32
