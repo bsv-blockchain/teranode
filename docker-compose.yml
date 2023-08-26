@@ -30,11 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      logLevel: "DEBUG"
-      blobserver_grpcListenAddress: ":8091"
-      blobserver_httpListenAddress: ":8090"
-      coinbase_grpcListenAddress: ":8093"
-      coinbase_store: "postgres://coinbase:coinbase@postgres:5432/coinbase"
+      SETTINGS_CONTEXT: "docker"
   tx-blaster:
     container_name: tx-blaster
     image: taal/ubsv:latest
@@ -44,11 +40,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      logLevel: "DEBUG"
-      txblaster_propagation_grpcTargets: "ubsv-1:8084|ubsv-2:8084|ubsv-3:8084"
-      coinbase_grpcAddress: "coinbase:8093"
+      SETTINGS_CONTEXT: "docker"
       tx_blaster_profilerAddr: ":9092"
-      number_of_outputs: "5000"
     # pass arguments to the command
     command: [ "./blaster.run", "-workers=1" ]
   ubsv-1:
@@ -60,17 +53,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBlobServer: "true"
-      blobserver_grpcListenAddress: ":8091"
-      blobserver_httpListenAddress: ":8090"
-      blockassembly_grpcListenAddress: ":8085"
-      blockchain_grpcListenAddress: ":8087"
-      blockvalidation_grpcListenAddress: ":8088"
-      gocore_stats_addr: ":9092"
-      propagation_grpcListenAddress: ":8084"
-      txmeta_grpcListenAddress: ":8086"
-      validator_grpcListenAddress: ":8081"
-      seeder_grpcListenAddress: ":8083"
+      SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-1:8090"
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -92,17 +75,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBlobServer: "true"
-      blobserver_grpcListenAddress: ":8091"
-      blobserver_httpListenAddress: ":8090"
-      blockassembly_grpcListenAddress: ":8085"
-      blockchain_grpcListenAddress: ":8087"
-      blockvalidation_grpcListenAddress: ":8088"
-      gocore_stats_addr: ":9092"
-      propagation_grpcListenAddress: ":8084"
-      txmeta_grpcListenAddress: ":8086"
-      validator_grpcListenAddress: ":8081"
-      seeder_grpcListenAddress: ":8083"
+      SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-2:8090"
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -125,17 +98,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      startBlobServer: "true"
-      blobserver_grpcListenAddress: ":8091"
-      blobserver_httpListenAddress: ":8090"
-      blockassembly_grpcListenAddress: ":8085"
-      blockchain_grpcListenAddress: ":8087"
-      blockvalidation_grpcListenAddress: ":8088"
-      gocore_stats_addr: ":9092"
-      propagation_grpcListenAddress: ":8084"
-      txmeta_grpcListenAddress: ":8086"
-      validator_grpcListenAddress: ":8081"
-      seeder_grpcListenAddress: ":8083"
+      SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-3:8090"
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3

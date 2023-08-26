@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -195,15 +194,9 @@ func main() {
 		defer closer.Close()
 	}
 
-	propagationGrpcAddresses := []string{}
-	if addresses, ok := gocore.Config().Get("txblaster_propagation_grpcTargets"); ok {
-		propagationGrpcAddresses = append(propagationGrpcAddresses, strings.Split(addresses, "|")...)
-	} else {
-		if address, ok := gocore.Config().Get("propagation_grpcAddress"); ok {
-			propagationGrpcAddresses = append(propagationGrpcAddresses, address)
-		} else {
-			panic("no propagation_grpcAddress setting found")
-		}
+	propagationGrpcAddresses, ok := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+	if !ok {
+		panic("no propagation_grpcAddresses setting found")
 	}
 
 	propagationServers := []propagation_api.PropagationAPIClient{}

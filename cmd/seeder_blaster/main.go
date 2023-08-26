@@ -44,11 +44,13 @@ func main() {
 		panic(err)
 	}
 
-	propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcAddress")
+	propagationGrpcAddresses, ok := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	if !ok {
-		panic("no propagation_grpcAddress setting found")
+		panic("no propagation_grpcAddresses setting found")
 	}
-	pConn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddress, &utils.ConnectionOptions{
+
+	// This code is expecting one address only.  Always use the first...
+	pConn, err := utils.GetGRPCClient(context.Background(), propagationGrpcAddresses[0], &utils.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
