@@ -4,6 +4,7 @@ import { writable } from 'svelte/store';
 export const nodes = writable([]);
 export const blocks = writable([]);
 export const error = writable("");
+export const loading = writable(false);
 
 function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error('Promise timed out')), ms));
@@ -11,6 +12,8 @@ function timeout(ms) {
 
 async function fetchData() {
   try {
+    loading.set(true);
+
     const n = await getNodes();
 
     await Promise.all(
@@ -84,6 +87,8 @@ async function fetchData() {
   } catch (err) {
     console.error(err)
     error.set(err.message);
+  } finally {
+    loading.set(false);
   }
 }
 

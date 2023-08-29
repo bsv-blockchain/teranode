@@ -16,6 +16,8 @@
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet" />
+	<link rel="preload" href="https://d3js.org/d3.v6.min.js" as="script" />
+	<script src="https://d3js.org/d3.v6.min.js" defer></script>
 
 	<style>
 		body {
@@ -60,6 +62,8 @@
 		<div class="navbar-start">
 			<a class="navbar-item" href="/"> Dashboard </a>
 			<a class="navbar-item" href="/tree"> Tree </a>
+			<a class="navbar-item" href="/treedemo1"> TreeDemo1 </a>
+			<a class="navbar-item" href="/treedemo2"> TreeDemo2 </a>
 			<a class="navbar-item" href="/viewer"> Viewer </a>
 			<a class="navbar-item" href="/blocks"> Blocks </a>
 		</div>

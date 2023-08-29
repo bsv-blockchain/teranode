@@ -5,14 +5,14 @@
 		<link rel="icon" href="../favicon.png" />
 		<meta name="viewport" content="width=device-width" />
 
-		<link href="../_app/immutable/assets/7.b5d84b58.css" rel="stylesheet">
+		<link href="../_app/immutable/assets/4.40905833.css" rel="stylesheet">
 		<link rel="modulepreload" href="../_app/immutable/entry/start.7d1fd2d6.js">
 		<link rel="modulepreload" href="../_app/immutable/chunks/index.56839d90.js">
 		<link rel="modulepreload" href="../_app/immutable/chunks/singletons.8fb4fa2e.js">
 		<link rel="modulepreload" href="../_app/immutable/chunks/index.7b465657.js">
 		<link rel="modulepreload" href="../_app/immutable/entry/app.81bf5238.js">
 		<link rel="modulepreload" href="../_app/immutable/nodes/0.0adc8bc0.js">
-		<link rel="modulepreload" href="../_app/immutable/nodes/7.bd04503a.js"><!-- HEAD_svelte-qrbdcu_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet"><link rel="preload" href="https://d3js.org/d3.v6.min.js" as="script"><script src="https://d3js.org/d3.v6.min.js" defer></script><style>body {
+		<link rel="modulepreload" href="../_app/immutable/nodes/5.09ba40a1.js"><!-- HEAD_svelte-qrbdcu_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet"><link rel="preload" href="https://d3js.org/d3.v6.min.js" as="script"><script src="https://d3js.org/d3.v6.min.js" defer></script><style>body {
 			font-family: 'Roboto Mono', monospace;
 			background-color: #f4f4f4;
 			margin: 0;
@@ -48,23 +48,10 @@
 			<a class="navbar-item" href="/viewer">Viewer </a>
 			<a class="navbar-item" href="/blocks">Blocks </a></div></div></nav>
 
-<section class="section"><div class="field"><p>Select the type and enter the hash to fetch data.</p></div>
-
-	<div class="field"><label class="label">HTTP Address
-			<div class="control"><input class="input" type="text" placeholder="Enter HTTP address" value="https://miner1.ubsv.dev:8090"></div></label></div>
-
-	<div class="field"><label class="label">Type
-			<div class="control"><div class="select"><select><option value="">-- Select Type --</option><option value="tx">tx</option><option value="subtree">subtree</option><option value="header">header</option><option value="block">block</option><option value="utxo">utxo</option></select></div></div></label></div>
-
-	<div class="field"><label class="label">Hash
-			<div class="control"><input class="input hex-input svelte-1kdjojl" type="text" placeholder="Enter ID" value=""></div></label></div>
-
-	<div class="field"><div class="control">https://miner1.ubsv.dev:8090///json</div></div>
-
-	<div class="field"><div class="control"><button class="button is-primary">Fetch</button></div></div>
-
-
-</section>
+<div class="full svelte-enjiyv"><section class="section"><div class="field">Last 10 blocks from demo data</div>
+			<div class="full svelte-enjiyv" id="tree"></div>
+			<pre>[]</pre></section>
+</div>
 
 
 
@@ -84,7 +71,7 @@
 						import("../_app/immutable/entry/app.81bf5238.js")
 					]).then(([kit, app]) => {
 						kit.start(app, element, {
-							node_ids: [0, 7],
+							node_ids: [0, 5],
 							data,
 							form: null,
 							error: null
