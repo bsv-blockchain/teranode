@@ -1,7 +1,6 @@
-import { S as SvelteComponent, i as init, s as safe_not_equal, k as element, q as text, a as space, l as claim_element, m as children, r as claim_text, h as detach, c as claim_space, n as attr, b as insert_hydration, F as append_hydration, u as set_data, J as noop, v as group_outros, L as update_keyed_each, N as outro_and_destroy_block, f as check_outros, g as transition_in, d as transition_out, e as empty, y as create_component, z as claim_component, A as mount_component, B as destroy_component, K as component_subscribe, o as onMount, O as select_value, P as add_render_callback, Q as select_option, R as listen, T as run_all, M as destroy_block } from "../chunks/index.ca9f8ef3.js";
-import { n as nodes } from "../chunks/nodeStore.61d98157.js";
+import { S as SvelteComponent, i as init, s as safe_not_equal, k as element, q as text, a as space, l as claim_element, m as children, r as claim_text, h as detach, c as claim_space, n as attr, b as insert_hydration, F as append_hydration, u as set_data, J as noop, v as group_outros, L as update_keyed_each, N as outro_and_destroy_block, f as check_outros, g as transition_in, d as transition_out, y as create_component, z as claim_component, A as mount_component, B as destroy_component, e as empty, K as component_subscribe, o as onMount, O as select_value, P as add_render_callback, Q as select_option, R as listen, T as run_all, M as destroy_block } from "../chunks/index.ca9f8ef3.js";
+import { n as nodes } from "../chunks/nodeStore.f7b61ab1.js";
 function create_fragment$2(ctx) {
-  let tr;
   let td0;
   let t0_value = (
     /*block*/
@@ -56,7 +55,6 @@ function create_fragment$2(ctx) {
   let t14;
   return {
     c() {
-      tr = element("tr");
       td0 = element("td");
       t0 = text(t0_value);
       t1 = space();
@@ -83,48 +81,45 @@ function create_fragment$2(ctx) {
       this.h();
     },
     l(nodes2) {
-      tr = claim_element(nodes2, "TR", {});
-      var tr_nodes = children(tr);
-      td0 = claim_element(tr_nodes, "TD", { class: true });
+      td0 = claim_element(nodes2, "TD", { class: true });
       var td0_nodes = children(td0);
       t0 = claim_text(td0_nodes, t0_value);
       td0_nodes.forEach(detach);
-      t1 = claim_space(tr_nodes);
-      td1 = claim_element(tr_nodes, "TD", {});
+      t1 = claim_space(nodes2);
+      td1 = claim_element(nodes2, "TD", {});
       var td1_nodes = children(td1);
       t2 = claim_text(td1_nodes, t2_value);
       td1_nodes.forEach(detach);
-      t3 = claim_space(tr_nodes);
-      td2 = claim_element(tr_nodes, "TD", { class: true });
+      t3 = claim_space(nodes2);
+      td2 = claim_element(nodes2, "TD", { class: true });
       var td2_nodes = children(td2);
       t4 = claim_text(td2_nodes, t4_value);
       td2_nodes.forEach(detach);
-      t5 = claim_space(tr_nodes);
-      td3 = claim_element(tr_nodes, "TD", { class: true });
+      t5 = claim_space(nodes2);
+      td3 = claim_element(nodes2, "TD", { class: true });
       var td3_nodes = children(td3);
       t6 = claim_text(td3_nodes, t6_value);
       td3_nodes.forEach(detach);
-      t7 = claim_space(tr_nodes);
-      td4 = claim_element(tr_nodes, "TD", {});
+      t7 = claim_space(nodes2);
+      td4 = claim_element(nodes2, "TD", {});
       var td4_nodes = children(td4);
       t8 = claim_text(td4_nodes, t8_value);
       td4_nodes.forEach(detach);
-      t9 = claim_space(tr_nodes);
-      td5 = claim_element(tr_nodes, "TD", { class: true });
+      t9 = claim_space(nodes2);
+      td5 = claim_element(nodes2, "TD", { class: true });
       var td5_nodes = children(td5);
       t10 = claim_text(td5_nodes, t10_value);
       td5_nodes.forEach(detach);
-      t11 = claim_space(tr_nodes);
-      td6 = claim_element(tr_nodes, "TD", { class: true });
+      t11 = claim_space(nodes2);
+      td6 = claim_element(nodes2, "TD", { class: true });
       var td6_nodes = children(td6);
       t12 = claim_text(td6_nodes, t12_value);
       td6_nodes.forEach(detach);
-      t13 = claim_space(tr_nodes);
-      td7 = claim_element(tr_nodes, "TD", { class: true });
+      t13 = claim_space(nodes2);
+      td7 = claim_element(nodes2, "TD", { class: true });
       var td7_nodes = children(td7);
       t14 = claim_text(td7_nodes, t14_value);
       td7_nodes.forEach(detach);
-      tr_nodes.forEach(detach);
       this.h();
     },
     h() {
@@ -136,29 +131,28 @@ function create_fragment$2(ctx) {
       attr(td7, "class", "has-text-right");
     },
     m(target, anchor) {
-      insert_hydration(target, tr, anchor);
-      append_hydration(tr, td0);
+      insert_hydration(target, td0, anchor);
       append_hydration(td0, t0);
-      append_hydration(tr, t1);
-      append_hydration(tr, td1);
+      insert_hydration(target, t1, anchor);
+      insert_hydration(target, td1, anchor);
       append_hydration(td1, t2);
-      append_hydration(tr, t3);
-      append_hydration(tr, td2);
+      insert_hydration(target, t3, anchor);
+      insert_hydration(target, td2, anchor);
       append_hydration(td2, t4);
-      append_hydration(tr, t5);
-      append_hydration(tr, td3);
+      insert_hydration(target, t5, anchor);
+      insert_hydration(target, td3, anchor);
       append_hydration(td3, t6);
-      append_hydration(tr, t7);
-      append_hydration(tr, td4);
+      insert_hydration(target, t7, anchor);
+      insert_hydration(target, td4, anchor);
       append_hydration(td4, t8);
-      append_hydration(tr, t9);
-      append_hydration(tr, td5);
+      insert_hydration(target, t9, anchor);
+      insert_hydration(target, td5, anchor);
       append_hydration(td5, t10);
-      append_hydration(tr, t11);
-      append_hydration(tr, td6);
+      insert_hydration(target, t11, anchor);
+      insert_hydration(target, td6, anchor);
       append_hydration(td6, t12);
-      append_hydration(tr, t13);
-      append_hydration(tr, td7);
+      insert_hydration(target, t13, anchor);
+      insert_hydration(target, td7, anchor);
       append_hydration(td7, t14);
     },
     p(ctx2, [dirty]) {
@@ -199,7 +193,35 @@ function create_fragment$2(ctx) {
     o: noop,
     d(detaching) {
       if (detaching)
-        detach(tr);
+        detach(td0);
+      if (detaching)
+        detach(t1);
+      if (detaching)
+        detach(td1);
+      if (detaching)
+        detach(t3);
+      if (detaching)
+        detach(td2);
+      if (detaching)
+        detach(t5);
+      if (detaching)
+        detach(td3);
+      if (detaching)
+        detach(t7);
+      if (detaching)
+        detach(td4);
+      if (detaching)
+        detach(t9);
+      if (detaching)
+        detach(td5);
+      if (detaching)
+        detach(t11);
+      if (detaching)
+        detach(td6);
+      if (detaching)
+        detach(t13);
+      if (detaching)
+        detach(td7);
     }
   };
 }
@@ -227,8 +249,9 @@ function get_each_context$1(ctx, list, i) {
   return child_ctx;
 }
 function create_each_block$1(key_1, ctx) {
-  let first;
+  let tr;
   let blockstablerow;
+  let t;
   let current;
   blockstablerow = new BlocksTableRow({ props: { block: (
     /*block*/
@@ -238,21 +261,27 @@ function create_each_block$1(key_1, ctx) {
     key: key_1,
     first: null,
     c() {
-      first = empty();
+      tr = element("tr");
       create_component(blockstablerow.$$.fragment);
+      t = space();
       this.h();
     },
     l(nodes2) {
-      first = empty();
-      claim_component(blockstablerow.$$.fragment, nodes2);
+      tr = claim_element(nodes2, "TR", { class: true });
+      var tr_nodes = children(tr);
+      claim_component(blockstablerow.$$.fragment, tr_nodes);
+      t = claim_space(tr_nodes);
+      tr_nodes.forEach(detach);
       this.h();
     },
     h() {
-      this.first = first;
+      attr(tr, "class", "svelte-1d96r2b");
+      this.first = tr;
     },
     m(target, anchor) {
-      insert_hydration(target, first, anchor);
-      mount_component(blockstablerow, target, anchor);
+      insert_hydration(target, tr, anchor);
+      mount_component(blockstablerow, tr, null);
+      append_hydration(tr, t);
       current = true;
     },
     p(new_ctx, dirty) {
@@ -276,8 +305,8 @@ function create_each_block$1(key_1, ctx) {
     },
     d(detaching) {
       if (detaching)
-        detach(first);
-      destroy_component(blockstablerow, detaching);
+        detach(tr);
+      destroy_component(blockstablerow);
     }
   };
 }
@@ -366,44 +395,44 @@ function create_fragment$1(ctx) {
       var table_nodes = children(table);
       thead = claim_element(table_nodes, "THEAD", {});
       var thead_nodes = children(thead);
-      tr = claim_element(thead_nodes, "TR", {});
+      tr = claim_element(thead_nodes, "TR", { class: true });
       var tr_nodes = children(tr);
-      th0 = claim_element(tr_nodes, "TH", {});
+      th0 = claim_element(tr_nodes, "TH", { class: true });
       var th0_nodes = children(th0);
       t0 = claim_text(th0_nodes, "Height");
       th0_nodes.forEach(detach);
       t1 = claim_space(tr_nodes);
-      th1 = claim_element(tr_nodes, "TH", {});
+      th1 = claim_element(tr_nodes, "TH", { class: true });
       var th1_nodes = children(th1);
       t2 = claim_text(th1_nodes, "Timestamp (UTC)");
       th1_nodes.forEach(detach);
       t3 = claim_space(tr_nodes);
-      th2 = claim_element(tr_nodes, "TH", {});
+      th2 = claim_element(tr_nodes, "TH", { class: true });
       var th2_nodes = children(th2);
       t4 = claim_text(th2_nodes, "Age");
       th2_nodes.forEach(detach);
       t5 = claim_space(tr_nodes);
-      th3 = claim_element(tr_nodes, "TH", {});
+      th3 = claim_element(tr_nodes, "TH", { class: true });
       var th3_nodes = children(th3);
       t6 = claim_text(th3_nodes, "Delta Time");
       th3_nodes.forEach(detach);
       t7 = claim_space(tr_nodes);
-      th4 = claim_element(tr_nodes, "TH", {});
+      th4 = claim_element(tr_nodes, "TH", { class: true });
       var th4_nodes = children(th4);
       t8 = claim_text(th4_nodes, "Miner");
       th4_nodes.forEach(detach);
       t9 = claim_space(tr_nodes);
-      th5 = claim_element(tr_nodes, "TH", {});
+      th5 = claim_element(tr_nodes, "TH", { class: true });
       var th5_nodes = children(th5);
       t10 = claim_text(th5_nodes, "Fees");
       th5_nodes.forEach(detach);
       t11 = claim_space(tr_nodes);
-      th6 = claim_element(tr_nodes, "TH", {});
+      th6 = claim_element(tr_nodes, "TH", { class: true });
       var th6_nodes = children(th6);
       t12 = claim_text(th6_nodes, "Number of Transactions");
       th6_nodes.forEach(detach);
       t13 = claim_space(tr_nodes);
-      th7 = claim_element(tr_nodes, "TH", {});
+      th7 = claim_element(tr_nodes, "TH", { class: true });
       var th7_nodes = children(th7);
       t14 = claim_text(th7_nodes, "Size");
       th7_nodes.forEach(detach);
@@ -420,7 +449,16 @@ function create_fragment$1(ctx) {
       this.h();
     },
     h() {
-      attr(table, "class", "table svelte-598tbc");
+      attr(th0, "class", "svelte-1d96r2b");
+      attr(th1, "class", "svelte-1d96r2b");
+      attr(th2, "class", "svelte-1d96r2b");
+      attr(th3, "class", "svelte-1d96r2b");
+      attr(th4, "class", "svelte-1d96r2b");
+      attr(th5, "class", "svelte-1d96r2b");
+      attr(th6, "class", "svelte-1d96r2b");
+      attr(th7, "class", "svelte-1d96r2b");
+      attr(tr, "class", "svelte-1d96r2b");
+      attr(table, "class", "table svelte-1d96r2b");
     },
     m(target, anchor) {
       insert_hydration(target, table, anchor);
@@ -505,12 +543,14 @@ class BlocksTable extends SvelteComponent {
     init(this, options, instance$1, create_fragment$1, safe_not_equal, { blocks: 0 });
   }
 }
+const _page_svelte_svelte_type_style_lang = "";
 function get_each_context(ctx, list, i) {
   const child_ctx = ctx.slice();
   child_ctx[7] = list[i];
   return child_ctx;
 }
 function create_else_block(ctx) {
+  let section;
   let div;
   let select;
   let option;
@@ -541,6 +581,7 @@ function create_else_block(ctx) {
   ) } });
   return {
     c() {
+      section = element("section");
       div = element("div");
       select = element("select");
       option = element("option");
@@ -553,7 +594,9 @@ function create_else_block(ctx) {
       this.h();
     },
     l(nodes2) {
-      div = claim_element(nodes2, "DIV", { class: true });
+      section = claim_element(nodes2, "SECTION", { class: true });
+      var section_nodes = children(section);
+      div = claim_element(section_nodes, "DIV", { class: true });
       var div_nodes = children(div);
       select = claim_element(div_nodes, "SELECT", {});
       var select_nodes = children(select);
@@ -566,8 +609,9 @@ function create_else_block(ctx) {
       }
       select_nodes.forEach(detach);
       div_nodes.forEach(detach);
-      t1 = claim_space(nodes2);
-      claim_component(blockstable.$$.fragment, nodes2);
+      t1 = claim_space(section_nodes);
+      claim_component(blockstable.$$.fragment, section_nodes);
+      section_nodes.forEach(detach);
       this.h();
     },
     h() {
@@ -582,10 +626,12 @@ function create_else_block(ctx) {
           /*select_change_handler*/
           ctx[5].call(select)
         ));
-      attr(div, "class", "select");
+      attr(div, "class", "select svelte-q00a3d");
+      attr(section, "class", "section");
     },
     m(target, anchor) {
-      insert_hydration(target, div, anchor);
+      insert_hydration(target, section, anchor);
+      append_hydration(section, div);
       append_hydration(div, select);
       append_hydration(select, option);
       append_hydration(option, t0);
@@ -600,8 +646,8 @@ function create_else_block(ctx) {
         ctx[0],
         true
       );
-      insert_hydration(target, t1, anchor);
-      mount_component(blockstable, target, anchor);
+      append_hydration(section, t1);
+      mount_component(blockstable, section, null);
       current = true;
       if (!mounted) {
         dispose = [
@@ -655,13 +701,11 @@ function create_else_block(ctx) {
     },
     d(detaching) {
       if (detaching)
-        detach(div);
+        detach(section);
       for (let i = 0; i < each_blocks.length; i += 1) {
         each_blocks[i].d();
       }
-      if (detaching)
-        detach(t1);
-      destroy_component(blockstable, detaching);
+      destroy_component(blockstable);
       mounted = false;
       run_all(dispose);
     }
@@ -883,4 +927,4 @@ class Page extends SvelteComponent {
 export {
   Page as component
 };
-//# sourceMappingURL=3.1c567329.js.map
+//# sourceMappingURL=3.c14d4968.js.map

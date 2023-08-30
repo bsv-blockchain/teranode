@@ -40,6 +40,7 @@ message CreateRequest {
   repeated bytes ParentTxHashes = 3;
   repeated bytes utxoHashes = 4;
   uint32 lockTime = 5;
+  uint64 sizeInBytes = 6;
 }
 
 // swagger:model SetResponse
@@ -72,6 +73,7 @@ message GetResponse {
   google.protobuf.Timestamp FirstSeen = 5;
   repeated bytes BlockHashes = 6;
   uint32 BlockHeight = 7;
+  uint64 SizeInBytes = 8;
 }
 
 // swagger:model DeleteRequest

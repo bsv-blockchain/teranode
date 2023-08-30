@@ -93,6 +93,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	SELECT
 	    status,
 	    fee,
+			size_in_bytes,
 	    parents,
 	    utxos,
 	    blocks,
@@ -102,12 +103,13 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 
 	var status int
 	var fee uint64
+	var sizeInBytes uint64
 	var parents []byte
 	var utxos []byte
 	var blocks []byte
 	var lockTime uint32
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&status, &fee, &parents, &utxos, &blocks, &lockTime)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&status, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, txmeta.ErrNotFound
@@ -148,6 +150,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	return &txmeta.Data{
 		Status:         txmeta.TxStatus(status),
 		Fee:            fee,
+		SizeInBytes:    sizeInBytes,
 		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		BlockHashes:    blockHashes,
@@ -155,11 +158,11 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	}, nil
 }
 
-func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 	q := `
 		INSERT INTO txmeta
-		    (hash, status, fee, parents, utxos, lock_time)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		    (hash, status, fee, size_in_bytes, parents, utxos, lock_time)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
 	parents := make([]byte, 0, len(parentTxHashes)*chainhash.HashSize)
 	for _, parent := range parentTxHashes {
@@ -171,7 +174,7 @@ func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, pa
 		utxos = append(utxos, utxo[:]...)
 	}
 
-	_, err := s.db.ExecContext(ctx, q, hash[:], txmeta.Validated, fee, parents, utxos, nLockTime)
+	_, err := s.db.ExecContext(ctx, q, hash[:], txmeta.Validated, fee, sizeInBytes, parents, utxos, nLockTime)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
 			return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
@@ -224,16 +227,17 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 
 func createPostgresSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
-      CREATE TABLE IF NOT EXISTS txmeta (
-	    id            BIGSERIAL PRIMARY KEY
-	    ,hash         BYTEA NOT NULL
-		,status       INT NOT NULL
-	    ,fee          BIGINT NOT NULL
-	    ,parents      BYTEA NULL
-	    ,utxos        BYTEA NULL
-	    ,blocks       BYTEA NULL
-	    ,lock_time    BIGINT NOT NULL
-        ,inserted_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    CREATE TABLE IF NOT EXISTS txmeta (
+	   id            BIGSERIAL PRIMARY KEY
+	  ,hash          BYTEA NOT NULL
+		,status        INT NOT NULL
+	  ,fee           BIGINT NOT NULL
+		,size_in_bytes BIGINT NOT NULL
+	  ,parents       BYTEA NULL
+	  ,utxos         BYTEA NULL
+	  ,blocks        BYTEA NULL
+	  ,lock_time     BIGINT NOT NULL
+    ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -251,15 +255,16 @@ func createPostgresSchema(db *sql.DB) error {
 func createSqliteSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS txmeta (
-		 id           INTEGER PRIMARY KEY AUTOINCREMENT
-	    ,hash           BLOB NOT NULL
-		,status         INT NOT NULL
-        ,fee    		BIGINT NOT NULL
-	    ,parents        BLOB NULL
-	    ,utxos          BLOB NULL
-	    ,blocks         BLOB NULL
-        ,lock_time		BIGINT NOT NULL
-        ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		 id            INTEGER PRIMARY KEY AUTOINCREMENT
+	  ,hash          BLOB NOT NULL
+		,status        INT NOT NULL
+    ,fee    		   BIGINT NOT NULL
+		,size_in_bytes BIGINT NOT NULL
+	  ,parents       BLOB NULL
+	  ,utxos         BLOB NULL
+	  ,blocks        BLOB NULL
+    ,lock_time	   BIGINT NOT NULL
+    ,inserted_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()

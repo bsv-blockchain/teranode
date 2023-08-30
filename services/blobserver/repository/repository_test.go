@@ -76,7 +76,7 @@ func TestSubtree(t *testing.T) {
 	}
 
 	for _, hash := range txns {
-		err := subtree.AddNode(hash, 1)
+		err := subtree.AddNode(hash, 1, 0)
 		require.NoError(t, err)
 	}
 
@@ -113,7 +113,7 @@ func TestSubtree(t *testing.T) {
 
 	subtree2 := util.NewTreeByLeafCount(len(b) / 32)
 	for _, hash := range subtreeNodes {
-		err = subtree2.AddNode(hash, 0)
+		err = subtree2.AddNode(hash, 0, 0)
 		require.NoError(t, err)
 	}
 

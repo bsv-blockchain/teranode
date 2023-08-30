@@ -33,10 +33,6 @@
 		width: 100%;
 	}
 
-	.left {
-		text-align: left;
-	}
-
 	.table tr th {
 		text-align: center;
 	}

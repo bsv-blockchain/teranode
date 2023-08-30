@@ -1,5 +1,8 @@
 import { writable } from 'svelte/store';
 
+// const BOOTSTRAP_SERVER="https://bootstrap.ubsv.dev:8099"
+const BOOTSTRAP_SERVER="https://localhost:8099"
+
 // Create a writable store
 export const nodes = writable([]);
 export const blocks = writable([]);
@@ -93,7 +96,7 @@ async function fetchData() {
 }
 
 async function getNodes() {
-  const response = await fetch('https://bootstrap.ubsv.dev:8099/nodes');
+  const response = await fetch(`${BOOTSTRAP_SERVER}/nodes`);
 
   if (!response.ok) {
     throw new Error(`HTTP error! Status: ${response.status}`);

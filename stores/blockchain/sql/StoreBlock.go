@@ -33,21 +33,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 	q := `
 		INSERT INTO blocks (
 		 parent_id
-        ,version
-	    ,hash
-	    ,previous_hash
-	    ,merkle_root
-        ,block_time
-        ,n_bits
-        ,nonce
-	    ,height
-        ,chain_work
+    ,version
+	  ,hash
+	  ,previous_hash
+	  ,merkle_root
+    ,block_time
+    ,n_bits
+    ,nonce
+	  ,height
+    ,chain_work
 		,tx_count
+		,size_in_bytes
 		,subtree_count
 		,subtrees
-        ,coinbase_tx
-        ,orphaned
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
+    ,coinbase_tx
+    ,orphaned
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
 		RETURNING id
 	`
 
@@ -75,11 +76,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 			,height
 			,chain_work
 			,tx_count
+			,size_in_bytes
 			,subtree_count
 			,subtrees
 			,coinbase_tx
 			,orphaned
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
 			RETURNING id
 		`
 	} else {
@@ -178,6 +180,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 		height,
 		bt.ReverseBytes(cumulativeChainWork.CloneBytes()),
 		block.TransactionCount,
+		block.SizeInBytes,
 		len(block.Subtrees),
 		subtreeBytes,
 		block.CoinbaseTx.Bytes(),

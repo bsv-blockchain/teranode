@@ -1,8 +1,8 @@
 var _a, _b;
 import { w as writable } from "./index.7880fa96.js";
-const base = ((_a = globalThis.__sveltekit_q4jro2) == null ? void 0 : _a.base) ?? "";
-const assets = ((_b = globalThis.__sveltekit_q4jro2) == null ? void 0 : _b.assets) ?? base;
-const version = "1693397102631";
+const base = ((_a = globalThis.__sveltekit_1odzvsg) == null ? void 0 : _a.base) ?? "";
+const assets = ((_b = globalThis.__sveltekit_1odzvsg) == null ? void 0 : _b.assets) ?? base;
+const version = "1693410215209";
 const SNAPSHOT_KEY = "sveltekit:snapshot";
 const SCROLL_KEY = "sveltekit:scroll";
 const INDEX_KEY = "sveltekit:index";
@@ -200,4 +200,4 @@ export {
   is_external_url as i,
   scroll_state as s
 };
-//# sourceMappingURL=singletons.5652f32a.js.map
+//# sourceMappingURL=singletons.f864bf87.js.map

@@ -18,18 +18,19 @@ func Store(t *testing.T, db txmeta.Store) {
 	t.Run("simple smoke test", func(t *testing.T) {
 		_ = db.Delete(ctx, Hash)
 
-		err := db.Create(ctx, Hash, 100, nil, nil, 0)
+		err := db.Create(ctx, Hash, 100, 1, nil, nil, 0)
 		require.NoError(t, err)
 
 		resp, err := db.Get(ctx, Hash)
 		require.NoError(t, err)
 		require.Equal(t, txmeta.Validated, resp.Status)
 		require.Equal(t, uint64(100), resp.Fee)
+		require.Equal(t, uint64(1), resp.SizeInBytes)
 		assert.Len(t, resp.ParentTxHashes, 0)
 		assert.Len(t, resp.UtxoHashes, 0)
 		assert.Equal(t, uint32(0), resp.LockTime)
 
-		err = db.Create(ctx, Hash, 100, nil, nil, 0)
+		err = db.Create(ctx, Hash, 100, 1, nil, nil, 0)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
@@ -44,13 +45,14 @@ func Store(t *testing.T, db txmeta.Store) {
 			Hash,
 			Hash2,
 		}
-		err := db.Create(ctx, Hash, 123, parentTxHashes, utxoHashes, 101)
+		err := db.Create(ctx, Hash, 123, 1, parentTxHashes, utxoHashes, 101)
 		require.NoError(t, err)
 
 		resp, err := db.Get(ctx, Hash)
 		require.NoError(t, err)
 		require.Equal(t, txmeta.Validated, resp.Status)
 		require.Equal(t, uint64(123), resp.Fee)
+		require.Equal(t, uint64(1), resp.SizeInBytes)
 		assert.Len(t, resp.ParentTxHashes, 2)
 		for i, h := range resp.ParentTxHashes {
 			assert.Equal(t, parentTxHashes[i], h)
@@ -61,14 +63,14 @@ func Store(t *testing.T, db txmeta.Store) {
 		}
 		assert.Equal(t, uint32(101), resp.LockTime)
 
-		err = db.Create(ctx, Hash, 100, nil, nil, 0)
+		err = db.Create(ctx, Hash, 100, 1, nil, nil, 0)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
 	t.Run("mined", func(t *testing.T) {
 		_ = db.Delete(ctx, Hash)
 
-		err := db.Create(ctx, Hash, 100, nil, nil, 0)
+		err := db.Create(ctx, Hash, 100, 1, nil, nil, 0)
 		require.NoError(t, err)
 
 		err = db.SetMined(ctx, Hash, Hash2)
@@ -97,7 +99,7 @@ func Benchmark(b *testing.B, db txmeta.Store) {
 
 			bHash, _ := chainhash.NewHash(buf)
 
-			err = db.Create(ctx, bHash, 100, nil, nil, 0)
+			err = db.Create(ctx, bHash, 100, 1, nil, nil, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

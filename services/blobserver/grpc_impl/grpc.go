@@ -3,7 +3,7 @@ package grpc_impl
 import (
 	"context"
 	"fmt"
-	"strings"
+	"net/url"
 	"time"
 
 	blobserver_api "github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
@@ -42,20 +42,45 @@ type GRPC struct {
 }
 
 func init() {
-	baseURL, _ = gocore.Config().Get("blobserver_httpAddress")
+	logger := gocore.Log("GRPC")
 
-	if baseURL == "" {
+	logLevel, _ := gocore.Config().GetInt("logLevel", 0)
+
+	u, err, found := gocore.Config().GetURL("blobserver_httpAddress")
+	if err != nil {
+		logger.Panicf("blobserver_httpAddress is not a valid URL: %v", err)
+	}
+
+	if !found {
 		remoteAddress, err := utils.GetPublicIPAddress()
 		if err != nil {
-			panic(err)
+			logger.Panicf("Failed to get public IP address: %v", err)
 		}
 
-		blobServerAddress, _ := gocore.Config().Get("blobserver_httpAddress")
+		blobServerPort, _ := gocore.Config().GetInt("blobserver_port")
+		if blobServerPort == 0 {
+			logger.Panic("blobserver_port is not set")
+		}
 
-		port := strings.Split(blobServerAddress, ":")[1]
+		scheme := "http"
+		if logLevel > 0 {
+			scheme = "https"
+		}
 
-		baseURL = fmt.Sprintf("http://%s:%s", remoteAddress, port)
+		u, err = url.ParseRequestURI(fmt.Sprintf("%s://%s:%d", scheme, remoteAddress, blobServerPort))
+		if err != nil {
+			logger.Panicf("Failed to parse url: %v", err)
+		}
+
+		// Warn if there is a mismatch between log level and scheme
+		if logLevel == 0 && u.Scheme != "http" {
+			logger.Warnf("blobserver_httpAddress scheme is not http, but logLevel is set to 0.")
+		} else if u.Scheme != "https" {
+			logger.Warnf("blobserver_httpAddress scheme is not https, but logLevel is set to %d.", logLevel)
+		}
 	}
+
+	baseURL = u.String()
 }
 
 func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {

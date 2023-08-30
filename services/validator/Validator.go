@@ -213,7 +213,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 	// register transaction in tx status store
 	// v.logger.Debugf("registering tx %s in tx status store", txIDChainHash)
-	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, parentTxHashes, utxoHashes, tx.LockTime); err != nil {
+	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, uint64(tx.Size()), parentTxHashes, utxoHashes, tx.LockTime); err != nil {
 		// this does not need to be a warning, it's just a duplicate validation request
 		// v.logger.Warnf("error sending tx %s to tx meta store: %v", txIDChainHash.String(), err)
 		return nil

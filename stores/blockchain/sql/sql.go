@@ -107,6 +107,7 @@ func createPostgresSchema(db *sql.DB) error {
 	    ,height         BIGINT NOT NULL
         ,chain_work     BYTEA NOT NULL
 		,tx_count       BIGINT NOT NULL
+		,size_in_bytes  BIGINT NOT NULL
 		,subtree_count  BIGINT NOT NULL
         ,subtrees       BYTEA NOT NULL
         ,coinbase_tx    BYTEA NOT NULL
@@ -191,6 +192,7 @@ func createSqliteSchema(db *sql.DB) error {
 	    ,height         BIGINT NOT NULL
         ,chain_work     BLOB NOT NULL
 		,tx_count       BIGINT NOT NULL
+		,size_in_bytes  BIGINT NOT NULL
 		,subtree_count  BIGINT NOT NULL
 		,subtrees       BLOB NOT NULL
         ,coinbase_tx    BLOB NOT NULL
@@ -244,6 +246,7 @@ func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
 			Header:           model.GenesisBlockHeader,
 			CoinbaseTx:       coinbaseTx,
 			TransactionCount: 1,
+			SizeInBytes:      285,
 			Subtrees:         []*chainhash.Hash{},
 		}
 

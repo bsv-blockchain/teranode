@@ -174,6 +174,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		CoinbaseTx:       btCoinbaseTx,
 		Subtrees:         subtreeHashes,
 		TransactionCount: request.TransactionCount,
+		SizeInBytes:      request.SizeInBytes,
 	}
 
 	_, err = b.store.StoreBlock(ctx, block)

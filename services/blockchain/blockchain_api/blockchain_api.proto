@@ -39,6 +39,7 @@ message AddBlockRequest {
   repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
   bytes coinbase_tx = 3;
   uint64 transaction_count = 4;
+  uint64 size_in_bytes = 5;
 }
 
 // swagger:model GetBlockRequest

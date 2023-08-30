@@ -30,15 +30,15 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		defer deferFunc()
 
 		subtree := util.NewTreeByLeafCount(4)
-		require.NoError(t, subtree.AddNode(hash1, 121))
-		require.NoError(t, subtree.AddNode(hash2, 122))
-		require.NoError(t, subtree.AddNode(hash3, 123))
-		require.NoError(t, subtree.AddNode(hash4, 124))
+		require.NoError(t, subtree.AddNode(hash1, 121, 0))
+		require.NoError(t, subtree.AddNode(hash2, 122, 0))
+		require.NoError(t, subtree.AddNode(hash3, 123, 0))
+		require.NoError(t, subtree.AddNode(hash4, 124, 0))
 
-		require.NoError(t, txMetaStore.Create(context.Background(), hash1, 121, nil, nil, 0))
-		require.NoError(t, txMetaStore.Create(context.Background(), hash2, 122, nil, nil, 0))
-		require.NoError(t, txMetaStore.Create(context.Background(), hash3, 123, nil, nil, 0))
-		require.NoError(t, txMetaStore.Create(context.Background(), hash4, 124, nil, nil, 0))
+		require.NoError(t, txMetaStore.Create(context.Background(), hash1, 121, 0, nil, nil, 0))
+		require.NoError(t, txMetaStore.Create(context.Background(), hash2, 122, 0, nil, nil, 0))
+		require.NoError(t, txMetaStore.Create(context.Background(), hash3, 123, 0, nil, nil, 0))
+		require.NoError(t, txMetaStore.Create(context.Background(), hash4, 124, 0, nil, nil, 0))
 
 		nodeBytes, err := subtree.SerializeNodes()
 		require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 		defer deferFunc()
 
 		// add hash1 to txMetaStore
-		_ = txMetaStore.Create(context.Background(), hash1, 123, nil, nil, 0)
+		_ = txMetaStore.Create(context.Background(), hash1, 123, 0, nil, nil, 0)
 
 		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
 		_, err := blockValidation.blessMissingTransaction(context.Background(), hash1, "http://localhost:8000")

@@ -19,7 +19,7 @@ func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 	// Create a new tree with the subtreeHashes of the subtrees
 	topTree := NewTreeByLeafCount(CeilPowerOfTwo(len(subtrees)))
 	for _, subtree := range subtrees {
-		err = topTree.AddNode(subtree.RootHash(), subtree.Fees)
+		err = topTree.AddNode(subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		if err != nil {
 			return nil, err
 		}

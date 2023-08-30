@@ -20,6 +20,7 @@ type Block struct {
 	Header           *BlockHeader      `json:"header"`
 	CoinbaseTx       *bt.Tx            `json:"coinbase_tx"`
 	TransactionCount uint64            `json:"transaction_count"`
+	SizeInBytes      uint64            `json:"size_in_bytes"`
 	Subtrees         []*chainhash.Hash `json:"subtrees"`
 
 	// local
@@ -335,7 +336,7 @@ func (b *Block) CheckMerkleRoot() (err error) {
 	for i, subtree := range b.subtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
-			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0)
+			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), uint64(b.CoinbaseTx.Size()), 0)
 		}
 
 		hashes[i] = subtree.RootHash()
@@ -348,7 +349,7 @@ func (b *Block) CheckMerkleRoot() (err error) {
 		// Create a new subtree with the hashes of the subtrees
 		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
 		for _, hash := range hashes {
-			err = st.AddNode(hash, 1)
+			err = st.AddNode(hash, 1, 0)
 			if err != nil {
 				return err
 			}

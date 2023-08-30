@@ -61,5 +61,5 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 		bi.CoinbaseValue,
 		timestamp.Format(time.RFC3339),
 		bi.TransactionCount,
-		0)), nil
+		bi.Size)), nil
 }

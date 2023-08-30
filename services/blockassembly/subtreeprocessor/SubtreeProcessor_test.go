@@ -66,7 +66,7 @@ func TestRotate(t *testing.T) {
 			assert.Equal(t, "fd8e7ab196c23534961ef2e792e13426844f831e83b856aa99998ab9908d854f", merkleRoot.String())
 
 			// Test the merkle root with the coinbase placeholder replaced
-			merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0)
+			merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0, 0)
 			assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", merkleRoot.String())
 
 			endTestChan <- true
@@ -82,7 +82,7 @@ func TestRotate(t *testing.T) {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(*hash, 1, waitCh)
+		stp.Add(*hash, 1, 0, waitCh)
 		<-waitCh
 	}
 
@@ -94,7 +94,7 @@ func TestRotate(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	require.NoError(t, err)
 
-	stp.Add(*hash, 1, waitCh)
+	stp.Add(*hash, 1, 0, waitCh)
 	<-waitCh
 
 	assert.Equal(t, 1, stp.currentSubtree.Length())
@@ -148,9 +148,9 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			require.NoError(t, err)
 
 			if i == 0 {
-				stp.currentSubtree.ReplaceRootNode(hash, 0)
+				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(*hash, 1, waitCh)
+				stp.Add(*hash, 1, 0, waitCh)
 				<-waitCh
 			}
 		}
@@ -180,9 +180,9 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			require.NoError(t, err)
 
 			if i == 0 {
-				stp.currentSubtree.ReplaceRootNode(hash, 0)
+				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(*hash, 1, waitCh)
+				stp.Add(*hash, 1, 0, waitCh)
 				<-waitCh
 			}
 		}
@@ -247,9 +247,9 @@ func TestMoveUpBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash, 0)
+			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(*hash, 1, waitCh)
+			stp.Add(*hash, 1, 0, waitCh)
 			<-waitCh
 		}
 	}
@@ -322,9 +322,9 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash, 0)
+			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(*hash, 1, waitCh)
+			stp.Add(*hash, 1, 0, waitCh)
 			<-waitCh
 		}
 	}
@@ -396,9 +396,9 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash, 0)
+			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(*hash, 1, waitCh)
+			stp.Add(*hash, 1, 0, waitCh)
 			<-waitCh
 		}
 	}
@@ -470,9 +470,9 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		require.NoError(t, err)
 
 		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash, 0)
+			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(*hash, 1, waitCh)
+			stp.Add(*hash, 1, 0, waitCh)
 			<-waitCh
 		}
 	}
@@ -544,13 +544,13 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	subtreeProcessor := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
 	for i, hash := range hashes {
 		if i == 0 {
-			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0)
+			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			subtreeProcessor.Add(*hash, 111)
+			subtreeProcessor.Add(*hash, 111, 0)
 		}
 	}
 	// add 1 more hash to create the second subtree
-	subtreeProcessor.Add(*hashes[0], 111)
+	subtreeProcessor.Add(*hashes[0], 111, 0)
 
 	wg.Wait()
 
@@ -578,9 +578,9 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtrees)))
 	for idx, subtree := range subtrees {
 		if idx == 0 {
-			subtree.ReplaceRootNode(coinbaseHash, 0)
+			subtree.ReplaceRootNode(coinbaseHash, 0, 0)
 		}
-		err = topTree.AddNode(subtree.RootHash(), 1)
+		err = topTree.AddNode(subtree.RootHash(), 1, 0)
 		require.NoError(t, err)
 	}
 
@@ -612,7 +612,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(*txHashes[i], 1, nil)
+		stp.Add(*txHashes[i], 1, 0, nil)
 	}
 }
 

@@ -1,4 +1,5 @@
 import { w as writable } from "./index.7880fa96.js";
+const BOOTSTRAP_SERVER = "https://localhost:8099";
 const nodes = writable([]);
 const blocks = writable([]);
 const error = writable("");
@@ -70,7 +71,7 @@ async function fetchData() {
   }
 }
 async function getNodes() {
-  const response = await fetch("https://bootstrap.ubsv.dev:8099/nodes");
+  const response = await fetch(`${BOOTSTRAP_SERVER}/nodes`);
   if (!response.ok) {
     throw new Error(`HTTP error! Status: ${response.status}`);
   }
@@ -106,4 +107,4 @@ export {
   loading as l,
   nodes as n
 };
-//# sourceMappingURL=nodeStore.61d98157.js.map
+//# sourceMappingURL=nodeStore.f7b61ab1.js.map

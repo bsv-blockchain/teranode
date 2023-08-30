@@ -111,8 +111,10 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		),
 	}
 
-	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
-	connectionOptions.SecurityLevel = securityLevel
+	if connectionOptions.SecurityLevel == 0 {
+		securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+		connectionOptions.SecurityLevel = securityLevel
+	}
 
 	tlsCredentials, err := loadTLSCredentials(connectionOptions, false)
 	if err != nil {

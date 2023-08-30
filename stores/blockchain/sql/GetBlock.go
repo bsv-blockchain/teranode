@@ -34,6 +34,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		,b.previous_hash
 		,b.merkle_root
 	  ,b.tx_count
+		,b.size_in_bytes
 		,b.coinbase_tx
 		,b.subtree_count
 		,b.subtrees
@@ -48,6 +49,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	var subtreeCount uint64
 	var transactionCount uint64
+	var sizeInBytes uint64
 	var subtreeBytes []byte
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
@@ -64,6 +66,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&hashPrevBlock,
 		&hashMerkleRoot,
 		&transactionCount,
+		&sizeInBytes,
 		&coinbaseTx,
 		&subtreeCount,
 		&subtreeBytes,
@@ -86,6 +89,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
 	block.TransactionCount = transactionCount
+	block.SizeInBytes = sizeInBytes
 
 	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 	if err != nil {
@@ -118,6 +122,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 		,b.previous_hash
 		,b.merkle_root
 	  ,b.tx_count
+		,b.size_in_bytes
 		,b.coinbase_tx
 		,b.height
 		,b.inserted_at
@@ -152,6 +157,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 			&hashPrevBlock,
 			&hashMerkleRoot,
 			&info.TransactionCount,
+			&info.Size,
 			&coinbaseBytes,
 			&info.Height,
 			&seenAt,

@@ -61,7 +61,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), hash, 101, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		err = db.Create(context.Background(), hash, 101, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -70,6 +70,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(101), uint64(value.Bins["fee"].(int)))
+		assert.Equal(t, uint64(1), uint64(value.Bins["sizeInBytes"].(int)))
 		assert.Len(t, value.Bins["utxoHashes"].([]interface{}), 1)
 		assert.Equal(t, []interface{}{utxoHash[:]}, value.Bins["utxoHashes"])
 		assert.Len(t, value.Bins["parentTxHashes"].([]interface{}), 1)
@@ -77,7 +78,7 @@ func TestAerospike(t *testing.T) {
 		assert.LessOrEqual(t, int(time.Now().Unix()), value.Bins["firstSeen"].(int))
 		assert.Nil(t, value.Bins["blockHashes"])
 
-		err = db.Create(context.Background(), hash, 102, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		err = db.Create(context.Background(), hash, 102, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		// not allowed
 		require.Error(t, err)
 
@@ -102,13 +103,14 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), hash, 103, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		err = db.Create(context.Background(), hash, 103, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
 		require.NoError(t, err)
 
 		var value *txmeta.Data
 		value, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)
+		assert.Equal(t, uint64(1), value.SizeInBytes)
 		assert.Len(t, value.UtxoHashes, 1)
 		assert.Equal(t, []*chainhash.Hash{utxoHash}, value.UtxoHashes)
 		assert.Len(t, value.ParentTxHashes, 1)

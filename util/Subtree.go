@@ -12,13 +12,15 @@ import (
 )
 
 type SubtreeNode struct {
-	Hash *chainhash.Hash `json:"hash"`
-	Fee  uint64          `json:"fee"`
+	Hash        *chainhash.Hash `json:"hash"`
+	Fee         uint64          `json:"fee"`
+	SizeInBytes uint64          `json:"size"`
 }
 
 type Subtree struct {
 	Height           int
 	Fees             uint64
+	SizeInBytes      uint64
 	FeeHash          chainhash.Hash
 	Nodes            []SubtreeNode
 	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
@@ -78,25 +80,28 @@ func (st *Subtree) IsComplete() bool {
 	return len(st.Nodes) == cap(st.Nodes)
 }
 
-func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64) *chainhash.Hash {
+func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
 	if len(st.Nodes) < 1 {
 		st.Nodes = append(st.Nodes, SubtreeNode{
-			Hash: node,
-			Fee:  fee,
+			Hash:        node,
+			Fee:         fee,
+			SizeInBytes: sizeInBytes,
 		})
 	} else {
 		st.Nodes[0] = SubtreeNode{
-			Hash: node,
-			Fee:  fee,
+			Hash:        node,
+			Fee:         fee,
+			SizeInBytes: sizeInBytes,
 		}
 	}
 
 	st.rootHash = nil // reset rootHash
+	st.SizeInBytes += sizeInBytes
 
 	return st.RootHash()
 }
 
-func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64) error {
+func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
 	}
@@ -111,11 +116,13 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64) error {
 	}
 
 	st.Nodes = append(st.Nodes, SubtreeNode{
-		Hash: node,
-		Fee:  fee,
+		Hash:        node,
+		Fee:         fee,
+		SizeInBytes: sizeInBytes,
 	})
 	st.rootHash = nil // reset rootHash
 	st.Fees += fee
+	st.SizeInBytes += sizeInBytes
 
 	return nil
 }
@@ -283,6 +290,11 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		return nil, fmt.Errorf("unable to write fees: %v", err)
 	}
 
+	// write size
+	if err = wire.WriteVarInt(buf, 0, st.SizeInBytes); err != nil {
+		return nil, fmt.Errorf("unable to write sizeInBytes: %v", err)
+	}
+
 	// write number of nodes
 	if err = wire.WriteVarInt(buf, 0, uint64(len(st.Nodes))); err != nil {
 		return nil, fmt.Errorf("unable to write number of nodes: %v", err)
@@ -294,11 +306,19 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to write node: %v", err)
 		}
+
 		feeBytes := make([]byte, 8)
 		binary.LittleEndian.PutUint64(feeBytes, node.Fee)
 		_, err = buf.Write(feeBytes)
 		if err != nil {
 			return nil, fmt.Errorf("unable to write fee: %v", err)
+		}
+
+		sizeBytes := make([]byte, 8)
+		binary.LittleEndian.PutUint64(sizeBytes, node.SizeInBytes)
+		_, err = buf.Write(sizeBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to write sizeInBytes: %v", err)
 		}
 	}
 
@@ -351,6 +371,12 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		return fmt.Errorf("unable to read fees: %v", err)
 	}
 
+	// read sizeInBytes
+	st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+	}
+
 	// read number of leaves
 	numLeaves, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
@@ -378,9 +404,13 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		feeBytes := buf.Next(8)
 		fee := binary.LittleEndian.Uint64(feeBytes)
 
+		sizeBytes := buf.Next(8)
+		sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
+
 		st.Nodes[i] = SubtreeNode{
-			Hash: hash,
-			Fee:  fee,
+			Hash:        hash,
+			Fee:         fee,
+			SizeInBytes: sizeInBytes,
 		}
 	}
 

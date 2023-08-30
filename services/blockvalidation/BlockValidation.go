@@ -74,7 +74,7 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 
 	// Add the coinbase transaction to the metaTxStore
 	// TODO - we need to consider if we can do this differently
-	if err = u.txMetaStore.Create(ctx, block.CoinbaseTx.TxIDChainHash(), 0, nil, nil, 0); err != nil {
+	if err = u.txMetaStore.Create(ctx, block.CoinbaseTx.TxIDChainHash(), 0, 0, nil, nil, 0); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("failed to create coinbase transaction in txMetaStore [%s]", err.Error())
 		}
@@ -196,7 +196,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			return fmt.Errorf("tx meta is not of type *txmeta.Data [%s]", txHash.String())
 		}
 
-		err = subtree.AddNode(txHash, txMeta.Fee)
+		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
 			return errors.Join(fmt.Errorf("failed to add node to subtree"), err)
 		}

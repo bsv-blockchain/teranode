@@ -318,7 +318,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 
 	startTime = time.Now()
 
-	b.subtreeProcessor.Add(*txHash, txMetadata.Fee)
+	b.subtreeProcessor.Add(*txHash, txMetadata.Fee, txMetadata.SizeInBytes)
 
 	prometheusSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
@@ -359,7 +359,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
 		topTree := util.NewTree(height)
 		for _, subtree := range subtrees {
-			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees)
+			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}

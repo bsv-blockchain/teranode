@@ -73,6 +73,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
 		SubtreeHashes:    make([][]byte, 0),
 		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
 	}
 
 	for _, subtreeHash := range block.Subtrees {

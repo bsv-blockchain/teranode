@@ -30,9 +30,6 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.merkle_root
 		,b.n_bits
 		,b.height
-		,b.tx_count
-		,b.subtree_count
-		,b.orphaned
 		FROM blocks b
 		WHERE b.hash = $1
 	`

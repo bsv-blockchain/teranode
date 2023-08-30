@@ -334,6 +334,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
+	var sizeInBytes uint64
+
 	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
 	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
@@ -344,20 +346,23 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 			subtreesInJob[i] = subtree
 			if i == 0 {
-				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0)
+				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0, uint64(coinbaseTx.Size()))
 			}
 			rootHash := subtree.RootHash()
 			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+
 			transactionCount += uint64(subtree.Length())
+			sizeInBytes += subtree.SizeInBytes
 		}
 	} else {
 		transactionCount = 1 // Coinbase
+		sizeInBytes = uint64(coinbaseTx.Size())
 	}
 
 	// Create a new subtree with the subtreeHashes of the subtrees
 	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
 	for _, hash := range subtreeHashes {
-		err = topTree.AddNode(hash, 1)
+		err = topTree.AddNode(hash, 1, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -399,7 +404,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		},
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: transactionCount,
-		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
+		SizeInBytes:      sizeInBytes + 80 + 1, // 80 byte header and 1 for txcount,
+		Subtrees:         jobSubtreeHashes,     // we need to store the hashes of the subtrees in the block, without the coinbase
 	}
 
 	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())
