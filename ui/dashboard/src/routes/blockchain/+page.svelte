@@ -80,16 +80,24 @@
 {#if error}
 	<p>{error}</p>
 {:else}
-	<!-- Dropdown for URL selection -->
-	<div class="select">
-		<select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
-			<option disabled>Select a URL</option>
-			{#each urls as url (url)}
-				<option value={url}>{url}</option>
-			{/each}
-		</select>
-	</div>
+	<section class="section">
+		<!-- Dropdown for URL selection -->
+		<div class="select">
+			<select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
+				<option disabled>Select a URL</option>
+				{#each urls as url (url)}
+					<option value={url}>{url}</option>
+				{/each}
+			</select>
+		</div>
 
-	<!-- Blocks table -->
-	<BlocksTable {blocks} />
+		<!-- Blocks table -->
+		<BlocksTable {blocks} />
+	</section>
 {/if}
+
+<style>
+	.select {
+		margin-bottom: 10px;
+	}
+</style>

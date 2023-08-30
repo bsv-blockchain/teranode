@@ -21,7 +21,9 @@
 	</thead>
 	<tbody>
 		{#each blocks as block (block.height)}
-			<BlocksTableRow {block} />
+			<tr>
+				<BlocksTableRow {block} />
+			</tr>
 		{/each}
 	</tbody>
 </table>
@@ -29,5 +31,16 @@
 <style>
 	.table {
 		width: 100%;
+	}
+
+	.left {
+		text-align: left;
+	}
+
+	.table tr th {
+		text-align: center;
+	}
+	.table tr:nth-child(even) {
+		background-color: #f9f9f9; /* Zebra-striping for even rows */
 	}
 </style>
