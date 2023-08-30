@@ -29,6 +29,7 @@ type BlockHeader struct {
 
 	// Nonce used to generate the block.
 	Nonce uint32 `json:"nonce"` // When the block header bytes are built, this will be represented as 4 bytes in little endian.
+
 }
 
 var (

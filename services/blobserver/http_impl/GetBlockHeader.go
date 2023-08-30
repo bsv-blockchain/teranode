@@ -3,7 +3,6 @@ package http_impl
 import (
 	"encoding/hex"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -13,37 +12,27 @@ import (
 
 func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		hashOrHeight := c.Param("hash")
-		h.logger.Debugf("[BlobServer_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashOrHeight)
+		hashParam := c.Param("hash")
+		h.logger.Debugf("[BlobServer_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam)
 
 		var hash *chainhash.Hash
-		var header *model.BlockHeader
-		height, err := strconv.ParseUint(hashOrHeight, 10, 64)
-		if err == nil {
-			header, err = h.repository.GetBlockHeaderByHeight(c.Request().Context(), uint32(height))
-			if err != nil {
-				if strings.HasSuffix(err.Error(), " not found") {
-					return echo.NewHTTPError(http.StatusNotFound, err.Error())
-				} else {
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
-			}
-		} else {
-			hash, err = chainhash.NewHashFromStr(hashOrHeight)
-			if err != nil {
-				return err
-			}
+		var err error
 
-			var blockHeight uint32
-			header, blockHeight, err = h.repository.GetBlockHeaderByHash(c.Request().Context(), hash)
-			if err != nil {
-				if strings.HasSuffix(err.Error(), " not found") {
-					return echo.NewHTTPError(http.StatusNotFound, err.Error())
-				} else {
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
+		hash, err = chainhash.NewHashFromStr(hashParam)
+		if err != nil {
+			return err
+		}
+
+		var header *model.BlockHeader
+		var blockHeight uint32
+
+		header, blockHeight, err = h.repository.GetBlockHeader(c.Request().Context(), hash)
+		if err != nil {
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
-			height = uint64(blockHeight)
 		}
 
 		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
@@ -56,7 +45,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 		case JSON:
 			headerResponse := &blockHeaderResponse{
 				BlockHeader: header,
-				Height:      uint32(height),
+				Height:      blockHeight,
 				Hash:        header.String(),
 			}
 			return c.JSONPretty(200, headerResponse, "  ")

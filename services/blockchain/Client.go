@@ -116,6 +116,17 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount)
 }
 
+func (c Client) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
+		NumberOfBlocks: n,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Blocks, nil
+}
+
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],

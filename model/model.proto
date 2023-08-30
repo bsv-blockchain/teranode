@@ -2,6 +2,8 @@ syntax = "proto3";
 
 option go_package = "github.com/bitcoin-sv/ubsv/model";
 
+import "google/protobuf/timestamp.proto";
+
 package model;
 
 // swagger:model MiningCandidate
@@ -29,4 +31,16 @@ message MiningSolution {
 enum NotificationType {
   Subtree = 0;
   Block = 1;
+}
+
+// swagger:model BlockInfo
+message BlockInfo {
+  google.protobuf.Timestamp seen_at = 1;
+  uint32 height = 2;
+  bool orphaned = 3;
+  bytes block_header = 4;
+  string miner = 5;
+  uint64 coinbase_value = 6;
+  uint64 transaction_count = 7;
+  uint64 size = 8;
 }

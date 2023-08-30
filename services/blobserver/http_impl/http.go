@@ -21,6 +21,7 @@ var (
 	prometheusBlobServerHttpGetBlockHeader     *prometheus.CounterVec
 	prometheusBlobServerHttpGetBestBlockHeader *prometheus.CounterVec
 	prometheusBlobServerHttpGetBlock           *prometheus.CounterVec
+	prometheusBlobServerHttpGetLastNBlocks     *prometheus.CounterVec
 	prometheusBlobServerHttpGetUTXO            *prometheus.CounterVec
 )
 
@@ -73,6 +74,8 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	e.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	e.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+
+	e.GET("/lastblocks", h.GetLastNBlocks)
 
 	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
 	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
@@ -158,6 +161,17 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blobserver_http_get_block_header",
 			Help: "Number of Get block header ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusBlobServerHttpGetLastNBlocks = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "blobserver_http_get_last_n_blocks",
+			Help: "Number of Get last N blocks ops",
 		},
 		[]string{
 			"function",  //function tracking the operation

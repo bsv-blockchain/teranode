@@ -183,7 +183,7 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 
 	height, _ := util.ExtractCoinbaseHeight(block.CoinbaseTx)
 	if height == 0 {
-		_, height, _ = g.repository.GetBlockHeaderByHash(ctx, blockHash)
+		_, height, _ = g.repository.GetBlockHeader(ctx, blockHash)
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))
@@ -206,7 +206,7 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 		return nil, err
 	}
 
-	blockHeader, height, err := g.repository.GetBlockHeaderByHash(ctx, hash)
+	blockHeader, height, err := g.repository.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return nil, err
 	}

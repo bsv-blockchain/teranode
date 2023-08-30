@@ -43,6 +43,10 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
+func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	return c.store.GetLastNBlocks(ctx, n)
+}
+
 func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
 	if err != nil {

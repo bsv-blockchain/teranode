@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="../favicon.png" />
+		<meta name="viewport" content="width=device-width" />
+
+		<link href="../_app/immutable/assets/3.704d4e75.css" rel="stylesheet">
+		<link rel="modulepreload" href="../_app/immutable/entry/start.c3a9b0cc.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/index.ca9f8ef3.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/singletons.5652f32a.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/index.7880fa96.js">
+		<link rel="modulepreload" href="../_app/immutable/entry/app.2d0a2cfd.js">
+		<link rel="modulepreload" href="../_app/immutable/nodes/0.97fc3141.js">
+		<link rel="modulepreload" href="../_app/immutable/nodes/3.1c567329.js">
+		<link rel="modulepreload" href="../_app/immutable/chunks/nodeStore.61d98157.js"><!-- HEAD_svelte-qrbdcu_START --><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet"><link rel="preload" href="https://d3js.org/d3.v6.min.js" as="script"><script src="https://d3js.org/d3.v6.min.js" defer></script><style>body {
+			font-family: 'Roboto Mono', monospace;
+			background-color: #f4f4f4;
+			margin: 0;
+			padding: 0;
+			padding-top: 52px; /* Adjust for the height of the fixed navbar */
+		}
+
+		/* Custom darker blue color */
+		.navbar.is-primary {
+			background-color: #004466; /* Change this value to your preferred shade of dark blue */
+		}
+
+		/* Add more global styles as needed */
+	</style><!-- HEAD_svelte-qrbdcu_END -->
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">
+
+
+
+
+<nav class="navbar is-fixed-top is-dark" aria-label="main navigation"><div class="navbar-brand"><span class="navbar-item has-text-light"><span class="is-size-4 client">Teranode</span></span></div>
+
+
+	<a role="button" class="navbar-burger" href="#" aria-label="menu" aria-expanded="false" data-target="navbarBasicExample"><span aria-hidden="true"></span>
+		<span aria-hidden="true"></span>
+		<span aria-hidden="true"></span></a>
+
+	<div id="navbarBasicExample" class="navbar-menu"><div class="navbar-start"><a class="navbar-item" href="/">Dashboard </a>
+			<a class="navbar-item" href="/tree">Tree </a>
+			<a class="navbar-item" href="/treedemo1">TreeDemo1 </a>
+			<a class="navbar-item" href="/treedemo2">TreeDemo2 </a>
+			<a class="navbar-item" href="/viewer">Viewer </a>
+			<a class="navbar-item" href="/blocks">Blocks </a>
+			<a class="navbar-item" href="/blockchain">Blockchain </a></div></div></nav>
+
+
+	<div class="select"><select><option disabled value="Select a URL">Select a URL</option></select></div>
+
+
+	<table class="table svelte-598tbc"><thead><tr><th>Height</th>
+			<th>Timestamp (UTC)</th>
+			<th>Age</th>
+			<th>Delta Time</th>
+			<th>Miner</th>
+			<th>Fees</th>
+			<th>Number of Transactions</th>
+			<th>Size</th></tr></thead>
+	<tbody></tbody>
+</table>
+
+
+
+			<script>
+				{
+					__sveltekit_q4jro2 = {
+						base: new URL("..", location).pathname.slice(0, -1),
+						env: {}
+					};
+
+					const element = document.currentScript.parentElement;
+
+					const data = [null,null];
+
+					Promise.all([
+						import("../_app/immutable/entry/start.c3a9b0cc.js"),
+						import("../_app/immutable/entry/app.2d0a2cfd.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element, {
+							node_ids: [0, 3],
+							data,
+							form: null,
+							error: null
+						});
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>

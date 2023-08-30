@@ -216,6 +216,17 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
+	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetLastNBlocksResponse{
+		Blocks: blockInfo,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {

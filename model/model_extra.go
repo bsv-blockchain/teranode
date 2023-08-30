@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/ordishs/go-utils"
 )
@@ -40,4 +41,25 @@ func (ms *MiningSolution) Stringify() string {
 	sb.WriteString(fmt.Sprintf("CoinbaseTX:     %x\n\n", ms.Coinbase))
 
 	return sb.String()
+}
+
+// Create custom JSON marshal and unmarshal receivers for BlockInfo
+// so that we can return the JSON in the format we want.
+func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
+	header, err := NewBlockHeaderFromBytes(bi.BlockHeader)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := header.Hash()
+
+	timestamp := time.Unix(int64(header.Timestamp), 0)
+
+	return []byte(fmt.Sprintf(`{"height":%d,"hash":"%s","coinbaseValue":%d,"timestamp":"%s","transactionCount":%d,"size":"%d"}`,
+		bi.Height,
+		hash.String(),
+		bi.CoinbaseValue,
+		timestamp.Format(time.RFC3339),
+		bi.TransactionCount,
+		0)), nil
 }
