@@ -20,7 +20,7 @@
 		</tr>
 	</thead>
 	<tbody>
-		{#each blocks as block (block.height)}
+		{#each blocks as block (block.height + block.hash)}
 			<tr>
 				<BlocksTableRow {block} />
 			</tr>

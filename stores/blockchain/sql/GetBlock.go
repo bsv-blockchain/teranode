@@ -127,7 +127,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 		,b.height
 		,b.inserted_at
 		FROM blocks b
-		--WHERE orphaned = false
+		WHERE orphaned = false
 		ORDER BY b.height DESC
 		LIMIT $1
 	`

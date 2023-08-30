@@ -1,5 +1,5 @@
 import { S as SvelteComponent, i as init, s as safe_not_equal, k as element, q as text, a as space, l as claim_element, m as children, r as claim_text, c as claim_space, h as detach, n as attr, b as insert_hydration, F as append_hydration, u as set_data, J as noop, v as group_outros, d as transition_out, f as check_outros, g as transition_in, K as component_subscribe, U as destroy_each, y as create_component, z as claim_component, A as mount_component, B as destroy_component } from "../chunks/index.ca9f8ef3.js";
-import { e as error, b as blocks } from "../chunks/nodeStore.f7b61ab1.js";
+import { e as error, b as blocks } from "../chunks/nodeStore.2a80a2db.js";
 const LatestBlocksNode_svelte_svelte_type_style_lang = "";
 function create_fragment$2(ctx) {
   let div22;
@@ -820,4 +820,4 @@ class Page extends SvelteComponent {
 export {
   Page as component
 };
-//# sourceMappingURL=4.1bae9671.js.map
+//# sourceMappingURL=4.2ee7fac5.js.map

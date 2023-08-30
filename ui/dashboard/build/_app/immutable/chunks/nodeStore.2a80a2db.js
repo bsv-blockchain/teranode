@@ -1,5 +1,5 @@
 import { w as writable } from "./index.7880fa96.js";
-const BOOTSTRAP_SERVER = "https://localhost:8099";
+const BOOTSTRAP_SERVER = "https://bootstrap.ubsv.dev:8099";
 const nodes = writable([]);
 const blocks = writable([]);
 const error = writable("");
@@ -107,4 +107,4 @@ export {
   loading as l,
   nodes as n
 };
-//# sourceMappingURL=nodeStore.f7b61ab1.js.map
+//# sourceMappingURL=nodeStore.2a80a2db.js.map

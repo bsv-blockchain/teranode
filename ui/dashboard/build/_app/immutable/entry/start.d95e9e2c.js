@@ -1,5 +1,5 @@
 import { o as onMount, t as tick } from "../chunks/index.ca9f8ef3.js";
-import { S as SCROLL_KEY, a as SNAPSHOT_KEY, I as INDEX_KEY, g as get_base_uri, f as find_anchor, b as get_link_info, c as get_router_options, s as scroll_state, i as is_external_url, d as stores, e as base, P as PRELOAD_PRIORITIES, h as init } from "../chunks/singletons.f864bf87.js";
+import { S as SCROLL_KEY, a as SNAPSHOT_KEY, I as INDEX_KEY, g as get_base_uri, f as find_anchor, b as get_link_info, c as get_router_options, s as scroll_state, i as is_external_url, d as stores, e as base, P as PRELOAD_PRIORITIES, h as init } from "../chunks/singletons.9731cff8.js";
 function normalize_path(path, trailing_slash) {
   if (path === "/" || trailing_slash === "ignore")
     return path;
@@ -1813,4 +1813,4 @@ async function start(app, target, hydrate) {
 export {
   start
 };
-//# sourceMappingURL=start.3866b057.js.map
+//# sourceMappingURL=start.d95e9e2c.js.map
