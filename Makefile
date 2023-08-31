@@ -7,8 +7,8 @@ all: deps install lint build test
 deps:
 	go mod download
 
-.PHONY: build
-build: build-ubsv build-status build-tx-blaster
+.PHONY: build # build the dashboard first as it is embedded in the UBSV binary
+build: build-dashboard build-ubsv build-status build-tx-blaster
 
 .PHONY: build-ubsv
 build-ubsv:
@@ -21,6 +21,10 @@ build-tx-blaster:
 .PHONY: build-status
 build-status:
 	go build -o status.run ./cmd/status/
+
+.PHONY: build-dashboard
+build-dashboard:
+	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
 .PHONY: test
 test:
