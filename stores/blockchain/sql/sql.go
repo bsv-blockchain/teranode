@@ -111,7 +111,6 @@ func createPostgresSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
         ,subtrees       BYTEA NOT NULL
         ,coinbase_tx    BYTEA NOT NULL
-   	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -124,9 +123,9 @@ func createPostgresSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
+	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
+		return fmt.Errorf("could not drop pux_blocks_height index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
@@ -196,7 +195,6 @@ func createSqliteSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
 		,subtrees       BLOB NOT NULL
         ,coinbase_tx    BLOB NOT NULL
-	    ,orphaned       BOOLEAN NOT NULL DEFAULT FALSE
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -209,9 +207,9 @@ func createSqliteSchema(db *sql.DB) error {
 		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS pux_blocks_height ON blocks(height) WHERE orphaned = FALSE;`); err != nil {
+	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create pux_blocks_height index - [%+v]", err)
+		return fmt.Errorf("could not drop pux_blocks_height index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
