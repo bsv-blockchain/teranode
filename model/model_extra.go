@@ -55,11 +55,21 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 
 	timestamp := time.Unix(int64(header.Timestamp), 0)
 
-	return []byte(fmt.Sprintf(`{"height":%d,"hash":"%s","coinbaseValue":%d,"timestamp":"%s","transactionCount":%d,"size":"%d"}`,
+	return []byte(fmt.Sprintf(`
+	{
+		"height": %d,
+		"hash": "%s",
+		"coinbaseValue": %d,
+		"timestamp": "%s",
+		"transactionCount": %d,
+		"size": %d,
+		"miner": "%s"
+	}`,
 		bi.Height,
 		hash.String(),
 		bi.CoinbaseValue,
 		timestamp.Format(time.RFC3339),
 		bi.TransactionCount,
-		bi.Size)), nil
+		bi.Size,
+		bi.Miner)), nil
 }

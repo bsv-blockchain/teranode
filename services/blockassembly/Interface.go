@@ -9,7 +9,3 @@ import (
 type Store interface {
 	Store(ctx context.Context, hash *chainhash.Hash) (bool, error)
 }
-
-type SubtreeProcessor interface {
-	AddTxID(hash *chainhash.Hash) error
-}

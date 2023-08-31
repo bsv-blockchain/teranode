@@ -10,6 +10,7 @@ import (
 
 	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -208,6 +209,11 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 		info.CoinbaseValue = 0
 		for _, output := range coinbaseTx.Outputs {
 			info.CoinbaseValue += output.Satoshis
+		}
+
+		info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract miner: %w", err)
 		}
 
 		info.SeenAt = timestamppb.New(seenAt.Time)

@@ -150,9 +150,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			var txMeta *txmeta.Data
 			var err error
 			if txHash.IsEqual(model.CoinbasePlaceholderHash) {
-				txMetaMap.Store(txHash, &txmeta.Data{
-					Fee: 0,
-				})
+				txMeta = &txmeta.Data{
+					Fee:         0,
+					SizeInBytes: 0,
+				}
 			} else {
 				// is the txid in the store?
 				// no - get it from the network

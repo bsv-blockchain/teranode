@@ -30,7 +30,10 @@ function create_fragment$2(ctx) {
   let t6;
   let t7;
   let td4;
-  let t8_value = "miner";
+  let t8_value = (
+    /*block*/
+    ctx[0].miner + ""
+  );
   let t8;
   let t9;
   let td5;
@@ -174,6 +177,10 @@ function create_fragment$2(ctx) {
       1 && t6_value !== (t6_value = /*block*/
       ctx2[0].deltaTime + ""))
         set_data(t6, t6_value);
+      if (dirty & /*block*/
+      1 && t8_value !== (t8_value = /*block*/
+      ctx2[0].miner + ""))
+        set_data(t8, t8_value);
       if (dirty & /*block*/
       1 && t10_value !== (t10_value = formatNumber(
         /*block*/
@@ -928,4 +935,4 @@ class Page extends SvelteComponent {
 export {
   Page as component
 };
-//# sourceMappingURL=3.59c3d0ea.js.map
+//# sourceMappingURL=3.1a62c9ac.js.map

@@ -24,10 +24,6 @@
 			}
 
 			const d = await response.json();
-			d.extra = {
-				name: 'Simon',
-				age: 44
-			};
 
 			data = d;
 		} catch (err) {

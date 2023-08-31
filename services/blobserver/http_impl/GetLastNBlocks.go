@@ -21,7 +21,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	h.logger.Debugf("[BlobServer_http] GetBlockChain for %s for last %d blocks", c.Request().RemoteAddr, n)
 
-	block, err := h.repository.GetLastNBlocks(c.Request().Context(), n)
+	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n)
 	if err != nil {
 		if strings.HasSuffix(err.Error(), " not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -31,5 +31,5 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 	}
 	prometheusBlobServerHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
 
-	return c.JSONPretty(200, block, "  ")
+	return c.JSONPretty(200, blocks, "  ")
 }

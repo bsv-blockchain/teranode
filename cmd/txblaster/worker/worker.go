@@ -413,6 +413,7 @@ func (w *Worker) getUtxosFromCoinbase() (*bt.UTXO, error) {
 		if err == nil {
 			break
 		}
+		w.logger.Debugf("Could not get UTXO: %v", err)
 		t := time.NewTimer(time.Second * 1)
 		<-t.C
 		w.logger.Debugf("retrying GetUtxos %d time", i+1)

@@ -1,5 +1,5 @@
 import { S as SvelteComponent, i as init, s as safe_not_equal, k as element, q as text, a as space, l as claim_element, m as children, r as claim_text, h as detach, c as claim_space, b as insert_hydration, F as append_hydration, u as set_data, J as noop, K as component_subscribe } from "../chunks/index.ca9f8ef3.js";
-import { d as stores } from "../chunks/singletons.9731cff8.js";
+import { d as stores } from "../chunks/singletons.f0fe102a.js";
 const getStores = () => {
   const stores$1 = stores;
   return {
@@ -99,4 +99,4 @@ let Error$1 = class Error extends SvelteComponent {
 export {
   Error$1 as component
 };
-//# sourceMappingURL=1.b35d7c1f.js.map
+//# sourceMappingURL=1.e9b1250c.js.map

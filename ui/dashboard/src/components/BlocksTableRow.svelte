@@ -10,7 +10,7 @@
 <td>{new Date(block.timestamp).toISOString().replace('T', ' ')}</td>
 <td class="has-text-right">{block.age}</td>
 <td class="has-text-right">{block.deltaTime}</td>
-<td>{'miner'}</td>
+<td>{block.miner}</td>
 <td class="has-text-right">{formatNumber(block.coinbaseValue)}</td>
 <td class="has-text-right">{block.transactionCount}</td>
 <td class="has-text-right">{block.size}</td>

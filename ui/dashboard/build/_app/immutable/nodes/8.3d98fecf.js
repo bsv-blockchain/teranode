@@ -1299,7 +1299,6 @@ function instance($$self, $$props, $$invalidate) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
       const d = await response.json();
-      d.extra = { name: "Simon", age: 44 };
       $$invalidate(2, data = d);
     } catch (err) {
       $$invalidate(3, error = err.message);
@@ -1345,4 +1344,4 @@ class Page extends SvelteComponent {
 export {
   Page as component
 };
-//# sourceMappingURL=8.d91e32b5.js.map
+//# sourceMappingURL=8.3d98fecf.js.map
