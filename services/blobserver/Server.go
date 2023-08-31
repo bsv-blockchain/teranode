@@ -18,6 +18,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type peerWithContext struct {
+	peer       PeerI
+	cancelFunc context.CancelFunc
+}
+
 // Server type carries the logger within it
 type Server struct {
 	logger       utils.Logger
@@ -28,6 +33,7 @@ type Server struct {
 	httpAddr     string
 	grpcServer   *grpc_impl.GRPC
 	httpServer   *http_impl.HTTP
+	peers        map[string]peerWithContext
 }
 
 func Enabled() bool {
@@ -43,6 +49,7 @@ func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store
 		utxoStore:    utxoStore,
 		txStore:      txStore,
 		subtreeStore: subtreeStore,
+		peers:        make(map[string]peerWithContext),
 	}
 
 	return s
@@ -113,10 +120,23 @@ func (v *Server) Start(ctx context.Context) error {
 		g.Go(func() error {
 			bootstrapClient := bootstrap.NewClient("BLOB_SERVER", blobServerClientName).WithCallback(func(p bootstrap.Peer) {
 				if p.BlobServerGrpcAddress != "" {
+					v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+					if pp, ok := v.peers[p.BlobServerGrpcAddress]; ok {
+						v.logger.Infof("[BlobServer] Already connected to blob server at: %s, stopping...", p.BlobServerGrpcAddress)
+						_ = pp.peer.Stop()
+						pp.cancelFunc()
+						delete(v.peers, p.BlobServerGrpcAddress)
+					}
+
 					// Start a subscription to the new peer's blob server
+					peerCtx, peerCtxCancel := context.WithCancel(ctx)
+					peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress)
+					v.peers[p.BlobServerGrpcAddress] = peerWithContext{
+						peer:       peer,
+						cancelFunc: peerCtxCancel,
+					}
 					g.Go(func() error {
-						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-						return NewPeer(ctx, "blobserver_bs", p.BlobServerGrpcAddress).Start(ctx)
+						return v.peers[p.BlobServerGrpcAddress].peer.Start(peerCtx)
 					})
 				}
 
