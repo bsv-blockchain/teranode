@@ -85,6 +85,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 			RETURNING id
 		`
 	} else {
+		// Get the previous block that this incoming block is on top of to get the height and chain work.
 		qq := `
 			SELECT
 			 b.id

@@ -115,7 +115,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 
 	q := `
 		SELECT
-	   b.version
+		 b.version
 		,b.block_time
 		,b.n_bits
 	  ,b.nonce
@@ -127,11 +127,31 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 		,b.height
 		,b.inserted_at
 		FROM blocks b
-		WHERE orphaned = false
-		ORDER BY b.height DESC
-		LIMIT $1
+		WHERE id IN (
+			SELECT id FROM blocks
+			WHERE id IN (
+				WITH RECURSIVE ChainBlocks AS (
+					SELECT id, parent_id, height
+					FROM blocks
+					WHERE hash = (
+						SELECT
+	   					b.hash
+							FROM blocks b
+							ORDER BY chain_work DESC, id ASC
+						LIMIT 1
+					)
+					UNION ALL
+					SELECT bb.id, bb.parent_id, bb.height
+					FROM blocks bb
+					JOIN ChainBlocks cb ON bb.id = cb.parent_id
+					WHERE bb.id != cb.id
+				)
+				SELECT id FROM ChainBlocks
+				LIMIT $1
+			)
+		)
+		ORDER BY height DESC
 	`
-
 	rows, err := s.db.QueryContext(ctx, q, n)
 	if err != nil {
 		return nil, err
