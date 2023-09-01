@@ -49,6 +49,8 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 }
 
 func extractMiner(str string) string {
+	str = strings.ToValidUTF8(str, "?")
+
 	// Split the arbitrary text by "/"
 	parts := strings.Split(str, "/")
 	if len(parts) == 1 {

@@ -9,6 +9,8 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+const dateFormat = "2006-01-02T15:04:05.000Z" // ISO 8601
+
 func (mc *MiningCandidate) Stringify() string {
 	var sb strings.Builder
 
@@ -68,7 +70,7 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 		bi.Height,
 		hash.String(),
 		bi.CoinbaseValue,
-		timestamp.Format(time.RFC3339),
+		timestamp.Format(dateFormat),
 		bi.TransactionCount,
 		bi.Size,
 		bi.Miner)), nil
