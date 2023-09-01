@@ -4,6 +4,9 @@ ARG GITHUB_SHA
 
 RUN apt update && apt install -y wget curl build-essential libsecp256k1-dev
 
+RUN curl -sL https://deb.nodesource.com/setup_16.x | bash -
+RUN apt-get install -y nodejs
+
 # Set the working directory inside the container
 WORKDIR /app
 
