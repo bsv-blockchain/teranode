@@ -7,6 +7,22 @@ all: deps install lint build test
 deps:
 	go mod download
 
+.PHONY: dev
+dev:
+	$(MAKE) dev-node & $(MAKE) dev-go
+
+.PHONY: dev-go
+dev-go:
+	# Run go project
+	trap 'kill %1 %2' SIGINT; \
+	go run main.go
+
+.PHONY: dev-node
+dev-node:
+	# Run node project
+	trap 'kill %1 %2' SIGINT; \
+	npm run dev --prefix ./ui/dashboard
+
 .PHONY: build # build the dashboard first as it is embedded in the UBSV binary
 build: build-dashboard build-ubsv build-status build-tx-blaster
 

@@ -1,6 +1,6 @@
 .history
 *.tar.gz
-/build
+build/
 data/
 *.run
 .DS_Store
