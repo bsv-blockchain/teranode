@@ -273,6 +273,12 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 			}, nil
 		}
 
+		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			return &utxostore.UTXOResponse{
+				Status: int(utxostore_api.Status_NOT_FOUND),
+			}, nil
+		}
+
 		// check whether we had the same value set as before
 		prometheusUtxoGet.Inc()
 		value, getErr := s.client.Get(nil, key, "txid")
