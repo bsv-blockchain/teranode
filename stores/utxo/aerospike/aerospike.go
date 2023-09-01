@@ -249,8 +249,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		fmt.Printf("ERROR panic in aerospike Spend: %v\n", err)
-		return nil, err
+		return nil, fmt.Errorf("error failed creating key in aerospike Spend: %w", err)
 	}
 
 	policy.FilterExpression = aerospike.ExpOr(
@@ -278,7 +277,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		prometheusUtxoGet.Inc()
 		value, getErr := s.client.Get(nil, key, "txid")
 		if getErr != nil {
-			return nil, getErr
+			return nil, fmt.Errorf("could not see if the value was the same as before: %w", getErr)
 		}
 		valueBytes, ok := value.Bins["txid"].([]byte)
 		if ok && len(valueBytes) == 32 {
@@ -291,7 +290,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 				prometheusUtxoSpendSpent.Inc()
 				spendingTxHash, err := chainhash.NewHash(valueBytes)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("chainhash error: %w", err)
 				}
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
@@ -300,8 +299,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		fmt.Printf("ERROR in aerospike Spend PutBins: %v\n", err)
-		return nil, err
+		return nil, fmt.Errorf("error in aerospike spend PutBins: %w", err)
 	}
 
 	prometheusUtxoSpend.Inc()
