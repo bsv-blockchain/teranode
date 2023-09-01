@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -52,7 +51,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, 0, store.ErrBlockNotFound
+			return nil, 0, fmt.Errorf("error in GetBlockHeader: %w", err)
 		}
 		return nil, 0, err
 	}

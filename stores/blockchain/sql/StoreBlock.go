@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
 	"github.com/libsv/go-bt/v2"
@@ -96,7 +95,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 			&previousHeight,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), store.ErrBlockNotFound)
+				return 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
 			}
 			return 0, err
 		}

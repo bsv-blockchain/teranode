@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -74,7 +73,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, 0, store.ErrBlockNotFound
+			return nil, 0, fmt.Errorf("error in GetBlock: %w", err)
 		}
 		return nil, 0, err
 	}

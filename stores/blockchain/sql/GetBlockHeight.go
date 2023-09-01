@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
-	"github.com/TAAL-GmbH/arc/blocktx/store"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -33,7 +33,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, store.ErrBlockNotFound
+			return 0, fmt.Errorf("error in GetBlockHeight: %w", err)
 		}
 		return 0, err
 	}

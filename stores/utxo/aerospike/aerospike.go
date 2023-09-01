@@ -106,12 +106,12 @@ type Store struct {
 	blockHeight uint32
 }
 
-func New(url *url.URL) (*Store, error) {
+func New(u *url.URL) (*Store, error) {
 	//asl.Logger.SetLevel(asl.DEBUG)
 
-	namespace := url.Path[1:]
+	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(url)
+	client, err := util.GetAerospikeClient(u)
 	if err != nil {
 		return nil, err
 	}
