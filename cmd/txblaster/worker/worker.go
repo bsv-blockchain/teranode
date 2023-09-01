@@ -26,6 +26,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -548,22 +549,25 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	traceSpan.SetTag("transport", "grpc")
 
-	propagationErrors := make([]error, 0)
-	for idx, propagationServer := range w.propagationServers {
-		if _, err := propagationServer.client.Set(traceSpan.Ctx, &propagation_api.SetRequest{
-			Tx: txExtendedBytes,
-		}); err != nil {
+	g, ctx := errgroup.WithContext(traceSpan.Ctx)
+
+	for _, propagationServer := range w.propagationServers {
+		p := propagationServer
+
+		g.Go(func() error {
+			_, err := p.client.Set(ctx, &propagation_api.SetRequest{
+				Tx: txExtendedBytes,
+			})
 			now := time.Now()
-			if propagationServer.lastError == nil || now.Sub(*propagationServer.lastError) > time.Second*10 {
-				w.propagationServers[idx].lastError = &now
-				propagationErrors = append(propagationErrors, err)
+			if p.lastError == nil || now.Sub(*p.lastError) > time.Second*10 {
+				p.lastError = &now
 			}
-		}
+			return err
+		})
 	}
-	if len(propagationErrors) > 0 {
-		for _, propagationError := range propagationErrors {
-			w.logger.Warnf("error sending transaction to propagation server: %s", propagationError.Error())
-		}
+
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	counterLoad := counter.Add(1)
