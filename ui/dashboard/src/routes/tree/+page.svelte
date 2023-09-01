@@ -63,6 +63,7 @@
 			const height = 400;
 
 			localLoading = true;
+
 			unique = getUniqueValues($blocks);
 			const treeData = createHierarchy(unique);
 
@@ -133,21 +134,19 @@
 	}
 </script>
 
-<div class="full">
-	{#if localLoading || ($nodes.length === 0 && $loading)}
-		<Spinner />
-	{/if}
-	<section class="section">
-		<div class="field">
-			Last 10 blocks from {$nodes.length} connected nodes
-		</div>
-		<div class="full">
-			<div id="tree" />
-		</div>
+{#if $nodes.length === 0 && $loading}
+	<Spinner />
+{/if}
+<section class="section">
+	<div class="field">
+		Last 10 blocks from {$nodes.length} connected nodes
+	</div>
+	<div class="full">
+		<div id="tree" />
+	</div>
 
-		<pre>{JSON.stringify(unique, null, 2)}</pre>
-	</section>
-</div>
+	<pre>{JSON.stringify(unique, null, 2)}</pre>
+</section>
 
 <style>
 	.full {

@@ -86,7 +86,7 @@ async function fetchData() {
     error.set("");
 
     // Call fetchData() again in 1s
-    setTimeout(fetchData, 10000);
+    setTimeout(fetchData, 3000);
   } catch (err) {
     console.error(err)
     error.set(err.message);

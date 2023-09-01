@@ -1,6 +1,7 @@
 <script>
 	import { onMount } from 'svelte';
 	import BlocksTable from '@components/BlocksTable.svelte';
+	import Spinner from '@components/Spinner.svelte';
 
 	import { nodes } from '@stores/nodeStore.js';
 
@@ -8,6 +9,7 @@
 	let selectedURL = '';
 	let urls = [];
 	let error = '';
+	let loading = false;
 
 	$: if ($nodes) {
 		urls = $nodes.map((node) => node.blobServerHTTPAddress);
@@ -23,6 +25,9 @@
 	async function fetchData(url) {
 		try {
 			if (!url) return;
+
+			loading = true;
+
 			const res = await fetch(`${url}/lastblocks?n=11`); // Get 1 more block than we need to calculate the delta time
 
 			const b = await res.json();
@@ -73,6 +78,8 @@
 			blocks = b.slice(0, 10); // Only show the last 10 blocks
 		} catch (err) {
 			console.error(err);
+		} finally {
+			loading = false;
 		}
 	}
 </script>
@@ -80,6 +87,9 @@
 {#if error}
 	<p>{error}</p>
 {:else}
+	{#if loading}
+		<Spinner />
+	{/if}
 	<section class="section">
 		<!-- Dropdown for URL selection -->
 		<div class="select">
@@ -90,6 +100,8 @@
 				{/each}
 			</select>
 		</div>
+
+		<button class="button is-info" on:click={() => fetchData(selectedURL)}>Refresh</button>
 
 		<!-- Blocks table -->
 		<BlocksTable {blocks} />
