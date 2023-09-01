@@ -44,11 +44,11 @@ build-dashboard:
 
 .PHONY: test
 test:
-	go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: longtests
 longtests:
-	LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 
 .PHONY: testall
