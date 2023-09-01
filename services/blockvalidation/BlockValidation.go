@@ -51,6 +51,15 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, baseUrl string) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
+	var sizeInBytes uint64
+	sizeInBytesCh := make(chan uint64)
+
+	go func() {
+		for s := range sizeInBytesCh {
+			sizeInBytes += s
+		}
+	}()
+
 	for _, subtreeHash := range block.Subtrees {
 		st := subtreeHash
 
@@ -60,12 +69,15 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 				return errors.Join(fmt.Errorf("invalid subtree found [%s]", st.String()), err)
 			}
 
+			sizeInBytesCh <- 0 // TODO get the size all the transactions of the subtree
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return err
 	}
+
+	close(sizeInBytesCh)
 
 	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
@@ -80,11 +92,16 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 		}
 	}
 
+	sizeInBytes += uint64(block.CoinbaseTx.Size())
+
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	if ok, err := block.Valid(ctx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
 		return fmt.Errorf("block is not valid: %s - %v", block.String(), err)
 	}
+
+	// Store the size of the block
+	block.SizeInBytes = 80 + util.VarintSize(block.TransactionCount) + sizeInBytes
 
 	// if valid, store the block
 	if err = u.blockchainClient.AddBlock(ctx, block); err != nil {
