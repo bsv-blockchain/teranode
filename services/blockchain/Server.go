@@ -214,6 +214,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
 	}, nil
 }
 

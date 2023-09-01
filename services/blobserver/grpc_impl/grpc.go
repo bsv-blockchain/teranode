@@ -222,6 +222,7 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
 	}, nil
 }
 

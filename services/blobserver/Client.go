@@ -74,7 +74,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount)
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
 }
 
 func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
