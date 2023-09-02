@@ -21,7 +21,7 @@ dev-go:
 dev-node:
 	# Run node project
 	trap 'kill %1 %2' SIGINT; \
-	npm run dev --prefix ./ui/dashboard
+	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build # build the dashboard first as it is embedded in the UBSV binary
 build: build-dashboard build-ubsv build-status build-tx-blaster

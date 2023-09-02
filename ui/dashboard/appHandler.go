@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -26,6 +27,9 @@ func AppHandler(c echo.Context) error {
 	} else {
 		resource = fmt.Sprintf("build%s", path)
 	}
+
+	// Remove trailing slash if present
+	resource = strings.TrimSuffix(resource, "/")
 
 	b, err := res.ReadFile(resource)
 	if err != nil {
