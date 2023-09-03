@@ -5,7 +5,7 @@
 
   function getUniqueValues(obj) {
     let values = []
-    for (let key in obj) {
+    for (const key in obj) {
       values = values.concat(obj[key])
     }
     return [...new Set(values)]
@@ -75,15 +75,14 @@
       .tree()
       .size([height - 100, width])
       .separation((a, b) => {
-        return a.parent == b.parent ? 2 : 3 // Increase these values for more spacing
+        return a.parent === b.parent ? 2 : 3 // Increase these values for more spacing
       })
 
     treeLayout(root)
 
     const g = svg.append('g').attr('transform', 'translate(100,0)')
 
-    const link = g
-      .selectAll('.link')
+    g.selectAll('.link')
       .data(root.descendants().slice(1))
       .enter()
       .append('path')

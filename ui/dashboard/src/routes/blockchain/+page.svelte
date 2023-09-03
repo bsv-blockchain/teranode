@@ -26,6 +26,7 @@
     try {
       if (!url) return
 
+      error = ''
       loading = true
 
       const res = await fetch(`${url}/lastblocks?n=11`) // Get 1 more block than we need to calculate the delta time
@@ -79,6 +80,7 @@
 
       blocks = b.slice(0, 10) // Only show the last 10 blocks
     } catch (err) {
+      error = err.message
       console.error(err)
     } finally {
       loading = false

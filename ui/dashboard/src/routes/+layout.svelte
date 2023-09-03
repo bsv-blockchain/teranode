@@ -6,7 +6,7 @@
 
   // Create an interval to update the age
   $: {
-    const interval = setInterval(() => {
+    setInterval(() => {
       const seconds = Math.floor((new Date() - $lastUpdated) / 1000)
       if (seconds === 1) {
         age = `${seconds} second`
@@ -14,16 +14,6 @@
         age = `${seconds} seconds`
       }
     }, 500)
-  }
-
-  let isActive = false
-
-  function toggleMenu() {
-    isActive = !isActive
-  }
-
-  function closeMenu() {
-    isActive = false
   }
 </script>
 

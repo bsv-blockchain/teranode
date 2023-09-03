@@ -20,4 +20,7 @@ module.exports = {
     // Configure any specific rules or overrides here
     semi: 'off', // Turn off semicolon requirement
   },
+  globals: {
+    d3: 'readonly',
+  },
 }

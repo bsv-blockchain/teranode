@@ -1,8 +1,10 @@
 import { writable, get } from 'svelte/store'
 
-const BOOTSTRAP_SERVER = 'https://bootstrap.ubsv.dev:8099'
-// const BOOTSTRAP_SERVER = "https://localhost:8099";
 const LOCAL = false
+
+const BOOTSTRAP_SERVER = LOCAL
+  ? 'https://localhost:8099'
+  : 'https://bootstrap.ubsv.dev:8099'
 
 // Create writable stores
 export const nodes = writable([])
@@ -15,7 +17,7 @@ let cancelFunction = null
 
 // Promise to resolve after a certain time for timeout handling
 function timeout(ms) {
-  return new Promise((_, reject) =>
+  return new Promise((resolve, reject) =>
     setTimeout(() => reject(new Error('Promise timed out')), ms)
   )
 }
