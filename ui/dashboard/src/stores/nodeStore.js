@@ -2,20 +2,24 @@ import { writable, get } from 'svelte/store';
 
 const BOOTSTRAP_SERVER="https://bootstrap.ubsv.dev:8099"
 // const BOOTSTRAP_SERVER="https://localhost:8099"
+const LOCAL = true
 
 // Create a writable store
 export const nodes = writable([]);
 export const blocks = writable([]);
 export const error = writable("");
 export const loading = writable(false);
+export const lastUpdated = writable(new Date());
 
 let cancelFunction = null;
 
+// The following promise will resolve after ms milliseconds so we can
+// do a Promise.race() with it to timeout a promise
 function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error('Promise timed out')), ms));
 }
 
-async function fetchData(force = false) {
+export async function fetchData(force = false) {
   if (!force && get(loading) === true) {
     setTimeout(fetchData(true), 10000); // Try again in 10s
     return;
@@ -42,9 +46,10 @@ async function fetchData(force = false) {
     nodes.set(n);
     blocks.set(b);
     error.set("");
+    lastUpdated.set(new Date());
 
     // Call fetchData() again in 1s
-    setTimeout(fetchData, 1000);
+    setTimeout(fetchData, 10000);
   } catch (err) {
     console.error(err)
     error.set(err.message);
@@ -164,13 +169,16 @@ async function getLast10Blocks(hash, address) {
 function connectToWebSocket(node) {
   const url = new URL(node.blobServerHTTPAddress);
 
-  const wsUrl = `wss://${url.host}/ws`
+  let wsUrl = `wss://${url.host}/ws`
 
+  if (LOCAL) {
+    wsUrl = 'wss://localhost:8090/ws'
+  }
 
-  const socket = new WebSocket(wsUrl);
+  let socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
-    console.log(`WebSocket connection opened to ${url}`);
+    console.log(`WebSocket connection opened to ${wsUrl}`);
   };
 
   socket.onmessage = async (event) => {
@@ -187,14 +195,18 @@ function connectToWebSocket(node) {
   };
 
   socket.onclose = () => {
-    console.log(`WebSocket connection closed by server (${url})`);
+    console.log(`WebSocket connection closed by server (${wsUrl})`);
+    socket = null;
+
     // Reconnect logic can be added here if needed
   };
 
   // Cleanup function
   return () => {
-    console.log(`WebSocket connection closed by client (${url})`);
+    if (socket) {
+    console.log(`WebSocket connection closed by client (${wsUrl})`);
     socket.close();
+    }
   };
 }
 

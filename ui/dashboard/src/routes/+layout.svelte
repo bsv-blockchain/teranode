@@ -1,4 +1,21 @@
 <script>
+	import UpdateSpinner from '@components/UpdateSpinner.svelte';
+	import { fetchData, loading, lastUpdated } from '@stores/nodeStore.js';
+
+	let age = '';
+
+	// Create an interval to update the age
+	$: {
+		const interval = setInterval(() => {
+			const seconds = Math.floor((new Date() - $lastUpdated) / 1000);
+			if (seconds === 1) {
+				age = `${seconds} second`;
+			} else {
+				age = `${seconds} seconds`;
+			}
+		}, 500);
+	}
+
 	let isActive = false;
 
 	function toggleMenu() {
@@ -67,6 +84,10 @@
 			<a class="navbar-item" href="/viewer"> Viewer </a>
 			<a class="navbar-item" href="/blocks"> Blocks </a>
 			<a class="navbar-item" href="/blockchain"> Blockchain </a>
+		</div>
+
+		<div class="navbar-start">
+			<UpdateSpinner spin={$loading} text={age} updateFunc={fetchData} />
 		</div>
 	</div>
 </nav>
