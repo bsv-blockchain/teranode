@@ -128,6 +128,10 @@ func (bh *BlockHeader) HasMetTargetDifficulty() (bool, error) {
 }
 
 func (bh *BlockHeader) Bytes() []byte {
+	if bh == nil {
+		return nil
+	}
+
 	var blockHeaderBytes []byte
 	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Version)...)
 	blockHeaderBytes = append(blockHeaderBytes, bh.HashPrevBlock.CloneBytes()...)
