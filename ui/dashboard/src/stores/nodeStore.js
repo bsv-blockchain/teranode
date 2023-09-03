@@ -143,7 +143,7 @@ export const websocketStore = writable(null, (set) => {
   const socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
-    console.log('WebSocket connection opened');
+    console.log(`WebSocket connection opened to ${wsUrl}`);
   };
 
   socket.onmessage = async (event) => {
@@ -156,7 +156,7 @@ export const websocketStore = writable(null, (set) => {
   };
 
   socket.onclose = () => {
-    console.log('WebSocket connection closed');
+    console.log(`WebSocket connection closed to ${wsUrl}`);
     // Reconnect logic can be added here if needed
   };
 
