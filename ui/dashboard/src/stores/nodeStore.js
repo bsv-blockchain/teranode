@@ -3,6 +3,10 @@ import { writable } from 'svelte/store';
 const BOOTSTRAP_SERVER="https://bootstrap.ubsv.dev:8099"
 // const BOOTSTRAP_SERVER="https://localhost:8099"
 
+// WebSocket connection URL
+const wsUrl="wss://localhost:8090/ws"
+
+
 // Create a writable store
 export const nodes = writable([]);
 export const blocks = writable([]);
@@ -134,6 +138,34 @@ async function getLast10Blocks(hash, address) {
 
   return await response.json();
 }
+
+export const websocketStore = writable(null, (set) => {
+  const socket = new WebSocket(wsUrl);
+
+  socket.onopen = () => {
+    console.log('WebSocket connection opened');
+  };
+
+  socket.onmessage = async (event) => {
+    try {
+      const data = await event.data.text()
+      set(data);
+    } catch (error) {
+      console.error('Error parsing WebSocket data:', error);
+    }
+  };
+
+  socket.onclose = () => {
+    console.log('WebSocket connection closed');
+    // Reconnect logic can be added here if needed
+  };
+
+  // Cleanup function
+  return () => {
+    socket.close();
+  };
+});
+
 
 // Call fetchData() once on load
 fetchData();

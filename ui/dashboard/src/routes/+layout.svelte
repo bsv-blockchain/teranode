@@ -67,6 +67,7 @@
 			<a class="navbar-item" href="/viewer"> Viewer </a>
 			<a class="navbar-item" href="/blocks"> Blocks </a>
 			<a class="navbar-item" href="/blockchain"> Blockchain </a>
+			<a class="navbar-item" href="/websocket"> Websocket </a>
 		</div>
 	</div>
 </nav>

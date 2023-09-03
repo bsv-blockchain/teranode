@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/labstack/echo/v4"
@@ -26,12 +27,13 @@ var (
 )
 
 type HTTP struct {
-	logger     utils.Logger
-	repository *repository.Repository
-	e          *echo.Echo
+	logger         utils.Logger
+	repository     *repository.Repository
+	e              *echo.Echo
+	notificationCh chan *blobserver_api.Notification
 }
 
-func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
+func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *blobserver_api.Notification) (*HTTP, error) {
 	// TODO: change logger name
 	// logger := gocore.Log("b_http")
 
@@ -45,9 +47,10 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	}))
 
 	h := &HTTP{
-		logger:     logger,
-		repository: repo,
-		e:          e,
+		logger:         logger,
+		repository:     repo,
+		e:              e,
+		notificationCh: notificationCh,
 	}
 
 	e.GET("/health", func(c echo.Context) error {
@@ -84,6 +87,8 @@ func New(logger utils.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
+
+	e.GET("/ws", h.HandleWebSocket(h.notificationCh))
 
 	e.GET("*", func(c echo.Context) error {
 		return dashboard.AppHandler(c)

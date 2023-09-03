@@ -20,15 +20,17 @@ type Peer struct {
 	logger           utils.Logger
 	address          string
 	running          bool
+	notificationCh   chan *blobserver_api.Notification
 }
 
-func NewPeer(ctx context.Context, source string, addr string) *Peer {
+func NewPeer(ctx context.Context, source string, addr string, notificationCh chan *blobserver_api.Notification) *Peer {
 	return &Peer{
 		logger:           gocore.Log("blobC"),
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(ctx),
 		running:          true,
+		notificationCh:   notificationCh,
 	}
 }
 
@@ -101,7 +103,11 @@ func (c *Peer) Start(ctx context.Context) error {
 						c.logger.Errorf("could not validate block: %v", err)
 						continue
 					}
+
 				}
+
+				// If we reach here, the incoming message has validated successfully: pass it to the notification channel...
+				c.notificationCh <- resp
 			}
 		}
 	}()

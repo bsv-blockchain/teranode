@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
@@ -25,15 +26,16 @@ type peerWithContext struct {
 
 // Server type carries the logger within it
 type Server struct {
-	logger       utils.Logger
-	utxoStore    utxo.Interface
-	txStore      blob.Store
-	subtreeStore blob.Store
-	grpcAddr     string
-	httpAddr     string
-	grpcServer   *grpc_impl.GRPC
-	httpServer   *http_impl.HTTP
-	peers        map[string]peerWithContext
+	logger         utils.Logger
+	utxoStore      utxo.Interface
+	txStore        blob.Store
+	subtreeStore   blob.Store
+	grpcAddr       string
+	httpAddr       string
+	grpcServer     *grpc_impl.GRPC
+	httpServer     *http_impl.HTTP
+	peers          map[string]peerWithContext
+	notificationCh chan *blobserver_api.Notification
 }
 
 func Enabled() bool {
@@ -45,11 +47,12 @@ func Enabled() bool {
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, subtreeStore blob.Store) *Server {
 	s := &Server{
-		logger:       logger,
-		utxoStore:    utxoStore,
-		txStore:      txStore,
-		subtreeStore: subtreeStore,
-		peers:        make(map[string]peerWithContext),
+		logger:         logger,
+		utxoStore:      utxoStore,
+		txStore:        txStore,
+		subtreeStore:   subtreeStore,
+		peers:          make(map[string]peerWithContext),
+		notificationCh: make(chan *blobserver_api.Notification, 100),
 	}
 
 	return s
@@ -82,7 +85,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if httpOk {
-		v.httpServer, err = http_impl.New(v.logger, repo)
+		v.httpServer, err = http_impl.New(v.logger, repo, v.notificationCh)
 		if err != nil {
 			return fmt.Errorf("error creating http server: %s", err)
 		}
@@ -109,6 +112,10 @@ func (v *Server) Start(ctx context.Context) error {
 		// the bootstrap service.  Each time a new node connects to the network, we will start a new
 		// blobserver subscription for that node.
 
+		// We define a channel that will receive a notification whenever a new block or subtree is announced
+		// by any Peer.  This will be handled by a WebSocket service that will push messages to any registered
+		// browser clients.
+
 		// TODO - This may need to be moved to a separate location in the code
 		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
 		blobServerHttpAddress, _ := gocore.Config().Get("blobserver_httpAddress")
@@ -130,7 +137,9 @@ func (v *Server) Start(ctx context.Context) error {
 
 					// Start a subscription to the new peer's blob server
 					peerCtx, peerCtxCancel := context.WithCancel(ctx)
-					peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress)
+
+					peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress, v.notificationCh)
+
 					v.peers[p.BlobServerGrpcAddress] = peerWithContext{
 						peer:       peer,
 						cancelFunc: peerCtxCancel,
