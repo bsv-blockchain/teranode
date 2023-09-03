@@ -2,7 +2,7 @@ import { writable, get } from 'svelte/store'
 
 const BOOTSTRAP_SERVER = 'https://bootstrap.ubsv.dev:8099'
 // const BOOTSTRAP_SERVER = "https://localhost:8099";
-const LOCAL = true
+const LOCAL = false
 
 // Create writable stores
 export const nodes = writable([])
