@@ -1,29 +1,31 @@
 <script>
-	export let node;
+  export let node
 
-	function shortHash(hash) {
-		if (!hash) return '';
+  function shortHash(hash) {
+    if (!hash) return ''
 
-		return hash.substring(0, 8) + '...' + hash.substring(hash.length - 8);
-	}
+    return hash.substring(0, 8) + '...' + hash.substring(hash.length - 8)
+  }
 </script>
 
 <tr>
-	<td>{node.source || 'anonymous'}</td>
-	<td>{node.name}</td>
-	<td>{node.blobServerHTTPAddress}</td>
-	<td class="right">{node.header.height}</td>
-	<td title={node.header.hash}>{shortHash(node.header.hash)}</td>
-	<td title={node.header.previousblockhash}>{shortHash(node.header.previousblockhash)}</td>
+  <td>{node.source || 'anonymous'}</td>
+  <td>{node.name}</td>
+  <td>{node.blobServerHTTPAddress}</td>
+  <td class="right">{node.header.height}</td>
+  <td title={node.header.hash}>{shortHash(node.header.hash)}</td>
+  <td title={node.header.previousblockhash}
+    >{shortHash(node.header.previousblockhash)}</td
+  >
 </tr>
 
 <style>
-	td {
-		border: 1px solid #e5e5e5; /* Add a light border to table cells */
-		padding: 8px 12px; /* Add some padding to table cells */
-	}
+  td {
+    border: 1px solid #e5e5e5; /* Add a light border to table cells */
+    padding: 8px 12px; /* Add some padding to table cells */
+  }
 
-	.right {
-		text-align: right;
-	}
+  .right {
+    text-align: right;
+  }
 </style>

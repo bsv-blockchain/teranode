@@ -1,159 +1,161 @@
 <script>
-	import { goto } from '$app/navigation';
-	import JSONTree from '@components/JSONTree.svelte';
+  import { goto } from '$app/navigation'
+  import JSONTree from '@components/JSONTree.svelte'
 
-	import Spinner from '@components/Spinner.svelte';
+  import Spinner from '@components/Spinner.svelte'
 
-	import { nodes } from '@stores/nodeStore.js';
+  import { nodes } from '@stores/nodeStore.js'
 
-	export let data;
+  export let data
 
-	let selectedURL = '';
-	let urls = [];
-	let loading = false;
-	let res = null;
-	let error = null;
-	let url = '';
+  let selectedURL = ''
+  let urls = []
+  let loading = false
+  let res = null
+  let error = null
+  let url = ''
 
-	$: if ($nodes) {
-		urls = $nodes.map((node) => node.blobServerHTTPAddress);
-		if (!selectedURL && urls.length > 0) {
-			selectedURL = urls[0];
-		}
-	}
+  $: if ($nodes) {
+    urls = $nodes.map((node) => node.blobServerHTTPAddress)
+    if (!selectedURL && urls.length > 0) {
+      selectedURL = urls[0]
+    }
+  }
 
-	$: if (selectedURL && data.type && data.hash && data.hash.length === 64) {
-		url = selectedURL + '/' + data.type + '/' + data.hash + '/json';
-		fetchData();
-	} else {
-		url = '';
-	}
+  $: if (selectedURL && data.type && data.hash && data.hash.length === 64) {
+    url = selectedURL + '/' + data.type + '/' + data.hash + '/json'
+    fetchData()
+  } else {
+    url = ''
+  }
 
-	const itemTypes = ['block', 'header', 'subtree', 'tx', 'utxo'];
+  const itemTypes = ['block', 'header', 'subtree', 'tx', 'utxo']
 
-	async function fetchData() {
-		if (!url) return;
+  async function fetchData() {
+    if (!url) return
 
-		try {
-			loading = true;
+    try {
+      loading = true
 
-			const response = await fetch(url);
-			if (!response.ok) {
-				throw new Error(`HTTP error! Status: ${response.status}`);
-			}
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`)
+      }
 
-			const d = await response.json();
+      const d = await response.json()
 
-			res = d;
+      res = d
 
-			goto(`/viewer/${data.type}/${data.hash}`, { replaceState: true });
-		} catch (err) {
-			error = err.message;
-		} finally {
-			loading = false;
-		}
-	}
+      goto(`/viewer/${data.type}/${data.hash}`, { replaceState: true })
+    } catch (err) {
+      error = err.message
+    } finally {
+      loading = false
+    }
+  }
 </script>
 
 {#if loading}
-	<Spinner />
+  <Spinner />
 {/if}
 <section class="section">
-	<!-- Dropdown for URL selection -->
+  <!-- Dropdown for URL selection -->
 
-	<section class="search-bar">
-		<div class="select">
-			<select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
-				<option disabled>Select a URL</option>
-				{#each urls as url (url)}
-					<option value={url}>{url}</option>
-				{/each}
-			</select>
-		</div>
+  <section class="search-bar">
+    <div class="select">
+      <select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
+        <option disabled>Select a URL</option>
+        {#each urls as url (url)}
+          <option value={url}>{url}</option>
+        {/each}
+      </select>
+    </div>
 
-		<div class="search-field">
-			<div class="control">
-				<div class="select">
-					<select bind:value={data.type}>
-						<option value="">-- Select Type --</option>
-						{#each itemTypes as type}
-							<option value={type}>{type}</option>
-						{/each}
-					</select>
-				</div>
-			</div>
-		</div>
+    <div class="search-field">
+      <div class="control">
+        <div class="select">
+          <select bind:value={data.type}>
+            <option value="">-- Select Type --</option>
+            {#each itemTypes as type}
+              <option value={type}>{type}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+    </div>
 
-		<div class="search-field">
-			<input
-				class="input search-input"
-				type="text"
-				bind:value={data.hash}
-				placeholder="Enter hash"
-				maxlength="64"
-			/>
-		</div>
+    <div class="search-field">
+      <input
+        class="input search-input"
+        type="text"
+        bind:value={data.hash}
+        placeholder="Enter hash"
+        maxlength="64"
+      />
+    </div>
 
-		<div class="search-field">
-			<button class="button is-info" on:click={fetchData} disabled={url === ''}>Search</button>
-		</div>
-	</section>
+    <div class="search-field">
+      <button class="button is-info" on:click={fetchData} disabled={url === ''}
+        >Search</button
+      >
+    </div>
+  </section>
 
-	<div class="url">{url}</div>
+  <div class="url">{url}</div>
 
-	<div class="result">
-		{#if error}
-			<div class="error-message">{error}</div>
-		{:else if res}
-			<div class="data-box">
-				<JSONTree data={res} />
-			</div>
-		{/if}
-	</div>
+  <div class="result">
+    {#if error}
+      <div class="error-message">{error}</div>
+    {:else if res}
+      <div class="data-box">
+        <JSONTree data={res} />
+      </div>
+    {/if}
+  </div>
 </section>
 
 <style>
-	.search-bar {
-		display: flex;
-		align-items: flex-start;
-		justify-content: flex-start;
-		flex-direction: row;
-		padding: 20px;
-	}
+  .search-bar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-direction: row;
+    padding: 20px;
+  }
 
-	.search-field {
-		display: flex;
-		align-items: center;
-		justify-content: flex-start;
-	}
+  .search-field {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
 
-	.search-input {
-		width: 650px;
-		margin-right: 10px;
-		padding: 8px;
-		border: 1px solid #ccc;
-		border-radius: 4px;
-	}
+  .search-input {
+    width: 650px;
+    margin-right: 10px;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
 
-	.result {
-		margin-top: 20px;
-	}
+  .result {
+    margin-top: 20px;
+  }
 
-	.error-message {
-		color: red;
-	}
+  .error-message {
+    color: red;
+  }
 
-	.data-box {
-		border: 1px solid #ccc;
-		border-radius: 4px;
-		padding: 10px;
-		max-width: 100%;
-		overflow: auto;
-	}
+  .data-box {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    max-width: 100%;
+    overflow: auto;
+  }
 
-	.url {
-		margin-left: 25px;
-		padding: 10px;
-		font-size: 0.7rem;
-	}
+  .url {
+    margin-left: 25px;
+    padding: 10px;
+    font-size: 0.7rem;
+  }
 </style>

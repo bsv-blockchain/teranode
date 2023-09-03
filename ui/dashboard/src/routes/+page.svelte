@@ -1,9 +1,9 @@
 <script>
-	import ConnectedNodes from '@components/ConnectedNodes.svelte';
-	import ChaintipTracker from '@components/ChaintipTracker.svelte';
+  import ConnectedNodes from '@components/ConnectedNodes.svelte'
+  import ChaintipTracker from '@components/ChaintipTracker.svelte'
 </script>
 
 <div>
-	<ConnectedNodes />
-	<ChaintipTracker />
+  <ConnectedNodes />
+  <ChaintipTracker />
 </div>

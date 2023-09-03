@@ -1,9 +1,9 @@
 <script>
-	export let block = {};
+  export let block = {}
 
-	function formatNumber(number) {
-		return new Intl.NumberFormat().format(number);
-	}
+  function formatNumber(number) {
+    return new Intl.NumberFormat().format(number)
+  }
 </script>
 
 <td class="has-text-right">{block.height}</td>
