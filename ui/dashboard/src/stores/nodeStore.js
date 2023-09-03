@@ -1,10 +1,10 @@
 import { writable, get } from 'svelte/store';
 
-const BOOTSTRAP_SERVER="https://bootstrap.ubsv.dev:8099"
-// const BOOTSTRAP_SERVER="https://localhost:8099"
-const LOCAL = true
+const BOOTSTRAP_SERVER = "https://bootstrap.ubsv.dev:8099";
+// const BOOTSTRAP_SERVER = "https://localhost:8099";
+const LOCAL = true;
 
-// Create a writable store
+// Create writable stores
 export const nodes = writable([]);
 export const blocks = writable([]);
 export const error = writable("");
@@ -13,15 +13,21 @@ export const lastUpdated = writable(new Date());
 
 let cancelFunction = null;
 
-// The following promise will resolve after ms milliseconds so we can
-// do a Promise.race() with it to timeout a promise
+// Promise to resolve after a certain time for timeout handling
 function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error('Promise timed out')), ms));
 }
 
+// Retry fetchData after a delay if already loading
+async function retryFetchData() {
+  if (!get(loading)) {
+    setTimeout(fetchData, 10000); // Try again in 10s
+  }
+}
+
 export async function fetchData(force = false) {
-  if (!force && get(loading) === true) {
-    setTimeout(fetchData(true), 10000); // Try again in 10s
+  if (!force && get(loading)) {
+    retryFetchData();
     return;
   }
 
@@ -32,26 +38,24 @@ export async function fetchData(force = false) {
       cancelFunction();
     }
 
-    const n = await getNodes();
+    const nodesData = await getNodes();
+    await decorateNodesWithHeaders(nodesData);
+    const bestBlocks = await getBestBlocks(nodesData);
 
-    await decorateNodesWithHeaders(n);
+    // Start a websocket connection to the first node.  This will cause the
+    // dashboard to update when a new block is received.
+    cancelFunction = connectToWebSocket(nodesData[0]);
 
-    const b = await getBestBlocks(n);
-
-
-    // Start a websocket connection to the first node
-    cancelFunction = connectToWebSocket(n[0])
-
-    // Update the stores
-    nodes.set(n);
-    blocks.set(b);
+    // Update stores
+    nodes.set(nodesData);
+    blocks.set(bestBlocks);
     error.set("");
     lastUpdated.set(new Date());
 
-    // Call fetchData() again in 1s
+    // Schedule next automatic fetchData call
     setTimeout(fetchData, 10000);
   } catch (err) {
-    console.error(err)
+    console.error(err);
     error.set(err.message);
   } finally {
     loading.set(false);
@@ -65,49 +69,43 @@ async function getNodes() {
     throw new Error(`HTTP error! Status: ${response.status}`);
   }
 
-  const n = await response.json();
+  const nodesData = await response.json();
 
-  return n.sort((a, b) => {
-    if (a.name < b.name) return -1;
-    if (a.name > b.name) return 1;
-    return 0;
-  });
+  return nodesData.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function decorateNodesWithHeaders(nodes) {
+async function decorateNodesWithHeaders(nodesData) {
   await Promise.all(
-    nodes.map(async (node) => {
+    nodesData.map(async (node) => {
       if (node.blobServerHTTPAddress) {
         try {
           const header = await Promise.race([
             getBestBlockHeader(node.blobServerHTTPAddress),
             timeout(1000)
           ]);
-          node.header = header; // Add the header directly to the node
+          node.header = header || { error: "timeout" };
         } catch (error) {
           console.error(`Error fetching header for node ${node.id}:`, error.message);
-          node.header = { error: "timeout" }; // Add the error directly to the node
+          node.header = { error: "timeout" };
         }
       } else {
-        node.header = {}; // Add an empty header object if no blobServerHTTPAddress
+        node.header = {};
       }
     })
   );
 }
 
-async function getBestBlocks(nodes) {
-  // Go through all the nodes and get a unique list of hashes. Store these in a map
-  // along with the address of the server that has the hash.
-  const hs = {};
+async function getBestBlocks(nodesData) {
+  const hashesToAddresses = {};
 
-  nodes.forEach((node) => { // Use forEach instead of map
-    if (node.header && node.header.hash && node.blobServerHTTPAddress) {
-      hs[node.header.hash] = node.blobServerHTTPAddress;
+  nodesData.forEach((node) => {
+    if (node.header?.hash && node.blobServerHTTPAddress) {
+      hashesToAddresses[node.header.hash] = node.blobServerHTTPAddress;
     }
   });
 
-  const b = await Promise.all(
-    Object.entries(hs).map(async ([hash, addr]) => {
+  const blocksData = await Promise.all(
+    Object.entries(hashesToAddresses).map(async ([hash, addr]) => {
       try {
         const blocks = await Promise.race([
           getLast10Blocks(hash, addr),
@@ -117,34 +115,27 @@ async function getBestBlocks(nodes) {
         return {
           hash,
           blocks
-        }
+        };
       } catch (error) {
-        console.error(`Error fetching blocks for hash ${hash}:`, error.message); // Corrected the error message
+        console.error(`Error fetching blocks for hash ${hash}:`, error.message);
         return {
           hash,
           blocks: { error: "timeout" }
-        }
+        };
       }
     })
   );
 
-  // Convert the array to an object with hash as the key and blocks as the value
-  const blockObject = b.reduce((acc, { hash, blocks }) => {
+  const blockObject = blocksData.reduce((acc, { hash, blocks }) => {
     acc[hash] = blocks;
     return acc;
   }, {});
 
-  // if (Object.entries(blockObject).length > 1) {
-  //   console.log(JSON.stringify(blockObject, null, 2))
-  // }
-
   return blockObject;
 }
 
-
 async function getBestBlockHeader(address) {
-  const url = `${address}/bestblockheader/json`
-  // console.log("Fetching", url)
+  const url = `${address}/bestblockheader/json`;
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -155,8 +146,7 @@ async function getBestBlockHeader(address) {
 }
 
 async function getLast10Blocks(hash, address) {
-  const url = `${address}/headers/${hash}/json?n=10`
-  // console.log("Fetching", url)
+  const url = `${address}/headers/${hash}/json?n=10`;
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -168,12 +158,7 @@ async function getLast10Blocks(hash, address) {
 
 function connectToWebSocket(node) {
   const url = new URL(node.blobServerHTTPAddress);
-
-  let wsUrl = `wss://${url.host}/ws`
-
-  if (LOCAL) {
-    wsUrl = 'wss://localhost:8090/ws'
-  }
+  const wsUrl = LOCAL ? 'wss://localhost:8090/ws' : `wss://${url.host}/ws`;
 
   let socket = new WebSocket(wsUrl);
 
@@ -183,10 +168,9 @@ function connectToWebSocket(node) {
 
   socket.onmessage = async (event) => {
     try {
-      const data = await event.data.text()
-      const json = JSON.parse(data)
-      console.log(json)
-      if (json.type === 'Block') {  // Block
+      const data = await event.data.text();
+      const json = JSON.parse(data);
+      if (json.type === 'Block') {
         setTimeout(fetchData, 0);
       }
     } catch (error) {
@@ -197,19 +181,16 @@ function connectToWebSocket(node) {
   socket.onclose = () => {
     console.log(`WebSocket connection closed by server (${wsUrl})`);
     socket = null;
-
     // Reconnect logic can be added here if needed
   };
 
-  // Cleanup function
   return () => {
     if (socket) {
-    console.log(`WebSocket connection closed by client (${wsUrl})`);
-    socket.close();
+      console.log(`WebSocket connection closed by client (${wsUrl})`);
+      socket.close();
     }
   };
 }
-
 
 // Call fetchData() once on load
 fetchData();
