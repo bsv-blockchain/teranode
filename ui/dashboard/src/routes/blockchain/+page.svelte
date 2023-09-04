@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte'
   import BlocksTable from '@components/BlocksTable.svelte'
   import Spinner from '@components/Spinner.svelte'
 
@@ -16,11 +15,11 @@
     if (!selectedURL && urls.length > 0) {
       selectedURL = urls[0]
     }
-  }
 
-  onMount(async () => {
-    fetchData(selectedURL)
-  })
+    if (blocks.length === 0) {
+      fetchData(selectedURL)
+    }
+  }
 
   async function fetchData(url) {
     try {

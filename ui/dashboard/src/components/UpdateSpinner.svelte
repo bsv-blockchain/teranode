@@ -2,25 +2,27 @@
   export let size = '20px' // The default is 20px
   export let updateFunc
   export let spin = false
-  export let text = '00:00:00'
+  export let text = 0
 </script>
 
 {#if spin}
   <div class="overlay">
-    <div class="text">{text}</div>
-    {#if updateFunc}
-      <div class="spinner" style="--spinner-size: {size};" />
-    {/if}
+    <div class="spinner" style="--spinner-size: {size};" />
   </div>
 {:else}
   <div class="overlay">
-    <div class="text">{text}</div>
     {#if updateFunc}
       <button
         class="spinner-button"
         style="--spinner-size: {size};"
         on:click={updateFunc}
-      />
+      >
+        {text === 0 ? '' : text}
+      </button>
+    {:else}
+      <div class="spinner-button" style="--spinner-size: {size};">
+        {text === 0 ? '' : text}
+      </div>
     {/if}
   </div>
 {/if}
@@ -51,6 +53,10 @@
     width: var(--spinner-size, 20px);
     height: var(--spinner-size, 20px);
     margin: 10px; /* Adjust margin as needed */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   @keyframes spin {

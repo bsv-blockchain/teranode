@@ -2,17 +2,19 @@
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
   import { fetchData, loading, lastUpdated } from '@stores/nodeStore.js'
 
-  let age = ''
+  let age = 0
+  let cancel = null
 
   // Create an interval to update the age
   $: {
-    setInterval(() => {
-      const seconds = Math.floor((new Date() - $lastUpdated) / 1000)
-      if (seconds === 1) {
-        age = `${seconds} second`
-      } else {
-        age = `${seconds} seconds`
-      }
+    if (cancel) {
+      clearInterval(cancel)
+    }
+
+    age = 0
+
+    cancel = setInterval(() => {
+      age = Math.floor((new Date() - $lastUpdated) / 1000)
     }, 500)
   }
 </script>
@@ -82,8 +84,10 @@
       <a class="navbar-item" href="/blockchain"> Blockchain </a>
     </div>
 
-    <div class="navbar-start">
-      <UpdateSpinner spin={$loading} text={age} updateFunc={fetchData} />
+    <div class="navbar-end">
+      <div class="navbar-item">
+        <UpdateSpinner spin={$loading} text={age} updateFunc={fetchData} />
+      </div>
     </div>
   </div>
 </nav>
