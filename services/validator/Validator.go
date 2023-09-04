@@ -133,7 +133,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	parentTxHashes := make([]*chainhash.Hash, 0, len(tx.Inputs))
 
-	for idx, input := range tx.Inputs {
+	for _, input := range tx.Inputs {
 		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
 			utxoSpan.RecordError(err)
@@ -152,7 +152,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 			break
 		}
 		if utxoResponse.Status != int(utxostore_api.Status_OK) {
-			err = fmt.Errorf("utxo %d of %s is not spendable: %s", idx, input.PreviousTxIDStr(), utxostore_api.Status(utxoResponse.Status))
+			err = fmt.Errorf("utxo %d of %s (%s) is not spendable: %s", input.PreviousTxOutIndex, input.PreviousTxIDStr(), hash.String(), utxostore_api.Status(utxoResponse.Status))
 			utxoSpan.RecordError(err)
 			break
 		}
