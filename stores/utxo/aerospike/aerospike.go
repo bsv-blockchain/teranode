@@ -186,6 +186,7 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32)
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy.SendKey = true
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
@@ -247,6 +248,7 @@ func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash) (*utxost
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 	batchWritePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	batchWritePolicy.Generation = 0
+	batchWritePolicy.SendKey = true
 
 	batchPolicy := aerospike.NewBatchPolicy()
 
