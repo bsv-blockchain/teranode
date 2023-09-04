@@ -2,6 +2,7 @@ package http_impl
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/util"
@@ -11,6 +12,17 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
+
+type UTXOItem struct {
+	Txid          *chainhash.Hash `json:"txid"`
+	Vout          uint32          `json:"vout"`
+	LockingScript *bscript.Script `json:"lockingScript"`
+	Satoshis      uint64          `json:"satoshis"`
+	UtxoHash      *chainhash.Hash `json:"utxoHash"`
+	Status        int             `json:"status"`
+	SpendingTxID  *chainhash.Hash `json:"spendingTxId,omitempty"`
+	LockTime      uint32          `json:"lockTime,omitempty"`
+}
 
 func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
@@ -41,21 +53,9 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 		g, ctx := errgroup.WithContext(c.Request().Context())
 
-		type UTXOItem struct {
-			Txid          *chainhash.Hash `json:"txid"`
-			Vout          uint32          `json:"vout"`
-			LockingScript *bscript.Script `json:"lockingScript"`
-			Satoshis      uint64          `json:"satoshis"`
-			UtxoHash      *chainhash.Hash `json:"utxoHash"`
-			Status        int             `json:"status"`
-			SpendingTxID  *chainhash.Hash `json:"spendingTxId,omitempty"`
-			LockTime      uint32          `json:"lockTime,omitempty"`
-		}
-
 		// Create a channel to receive the results from the goroutines
 		// that will be created.
-		utxoCh := make(chan *UTXOItem, len(tx.Outputs))
-
+		utxoCh := make(chan *UTXOItem)
 		utxos := make([]*UTXOItem, 0, len(tx.Outputs))
 
 		go func() {
@@ -111,6 +111,11 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		if err := g.Wait(); err != nil {
 			return err
 		}
+
+		// Sort the UTXOs by the vout.
+		sort.SliceStable(utxos, func(i, j int) bool {
+			return utxos[i].Vout < utxos[j].Vout
+		})
 
 		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()
 

@@ -1,5 +1,7 @@
 export function load({ params }) {
-  const hash = params.rest || ''
+  const parts = params.rest.split('/')
+
+  const hash = parts[1] || ''
 
   return {
     hash
