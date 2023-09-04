@@ -130,7 +130,56 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	prometheusUtxoGet.Inc()
-	return nil, nil
+
+	key, aErr := aerospike.NewKey(s.namespace, "utxo", hash[:])
+	if aErr != nil {
+		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
+		fmt.Printf("Failed to init new aerospike key: %v\n", aErr)
+		return nil, aErr
+	}
+
+	value, aErr := s.client.Get(nil, key, "txid", "locktime")
+	if aErr != nil {
+		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
+		if aErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
+			return &utxostore.UTXOResponse{
+				Status: int(utxostore_api.Status_NOT_FOUND),
+			}, nil
+		}
+		fmt.Printf("Failed to get aerospike key: %v\n", aErr)
+		return nil, aErr
+	}
+
+	var err error
+	var spendingTxId *chainhash.Hash
+	var lockTime int
+	if value != nil {
+		spendingTxIdBytes, _ := value.Bins["txid"].([]byte)
+		if spendingTxIdBytes != nil {
+			spendingTxId, err = chainhash.NewHash(spendingTxIdBytes)
+			if err != nil {
+				return nil, fmt.Errorf("chainhash error: %w", err)
+			}
+		}
+		lockTime, _ = value.Bins["locktime"].(int)
+	}
+
+	status := utxostore_api.Status_OK
+	if spendingTxId != nil {
+		status = utxostore_api.Status_SPENT
+	} else if lockTime > 0 {
+		if lockTime < 500000000 && uint32(lockTime) > s.blockHeight {
+			status = utxostore_api.Status_LOCK_TIME
+		} else if lockTime >= 500000000 && uint32(lockTime) > uint32(time.Now().Unix()) {
+			status = utxostore_api.Status_LOCK_TIME
+		}
+	}
+
+	return &utxostore.UTXOResponse{
+		Status:       int(status),
+		SpendingTxID: spendingTxId,
+		LockTime:     uint32(lockTime),
+	}, nil
 }
 
 func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {

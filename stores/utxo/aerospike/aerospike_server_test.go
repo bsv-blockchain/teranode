@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospike
 
@@ -13,6 +13,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,6 +50,40 @@ func TestAerospike(t *testing.T) {
 
 	var resp *utxostore.UTXOResponse
 	var value *aero.Record
+	t.Run("aerospike get", func(t *testing.T) {
+		cleanDB(t, client, key)
+		resp, err = db.Store(context.Background(), hash, 0)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		resp, err = db.Get(context.Background(), hash)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+		assert.Equal(t, uint32(0), resp.LockTime)
+
+		resp, err = db.Spend(context.Background(), hash, hash)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		resp, err = db.Get(context.Background(), hash)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		assert.Equal(t, uint32(0), resp.LockTime)
+		assert.Equal(t, hash, resp.SpendingTxID)
+	})
+
+	t.Run("aerospike get with locktime", func(t *testing.T) {
+		cleanDB(t, client, key)
+		resp, err = db.Store(context.Background(), hash, 123)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+
+		resp, err = db.Get(context.Background(), hash)
+		require.NoError(t, err)
+		assert.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		assert.Equal(t, uint32(123), resp.LockTime)
+	})
+
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
 		resp, err = db.Store(context.Background(), hash, 0)
