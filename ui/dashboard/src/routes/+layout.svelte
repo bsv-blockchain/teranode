@@ -80,6 +80,7 @@
       <a class="navbar-item" href="/treedemo1"> TreeDemo1 </a>
       <a class="navbar-item" href="/treedemo2"> TreeDemo2 </a>
       <a class="navbar-item" href="/viewer"> Viewer </a>
+      <a class="navbar-item" href="/txviewer"> UTXOInspector </a>
       <a class="navbar-item" href="/blocks"> Blocks </a>
       <a class="navbar-item" href="/blockchain"> Blockchain </a>
     </div>

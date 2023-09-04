@@ -22,21 +22,18 @@
     }
   }
 
-  $: if (selectedURL && data.type && data.hash && data.hash.length === 64) {
-    url = selectedURL + '/' + data.type + '/' + data.hash + '/json'
+  $: if (selectedURL && data.hash && data.hash.length === 64) {
+    url = selectedURL + '/utxos/' + data.hash + '/json'
     fetchData()
   } else {
     url = ''
   }
-
-  const itemTypes = ['block', 'header', 'subtree', 'tx', 'utxo']
 
   async function fetchData() {
     if (!url) return
 
     try {
       error = null
-
       loading = true
 
       const response = await fetch(url)
@@ -46,13 +43,11 @@
 
       const d = await response.json()
 
-      console.log(d)
       res = d
 
-      goto(`/viewer/${data.type}/${data.hash}`, { replaceState: true })
+      goto(`/txviewer/utxos/${data.hash}/json`, { replaceState: true })
     } catch (err) {
       error = err.message
-      console.log(err)
     } finally {
       loading = false
     }
@@ -73,19 +68,6 @@
           <option value={url}>{url}</option>
         {/each}
       </select>
-    </div>
-
-    <div class="search-field">
-      <div class="control">
-        <div class="select">
-          <select bind:value={data.type}>
-            <option value="">-- Select Type --</option>
-            {#each itemTypes as type}
-              <option value={type}>{type}</option>
-            {/each}
-          </select>
-        </div>
-      </div>
     </div>
 
     <div class="search-field">

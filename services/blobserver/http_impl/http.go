@@ -84,6 +84,8 @@ func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *
 	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
 	e.GET("/utxo/:hash/json", h.GetUTXO(JSON))
 
+	e.GET("/utxos/:hash/json", h.GetUTXOsByTXID(JSON))
+
 	e.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))

@@ -1,17 +1,12 @@
 import { writable, get } from 'svelte/store'
 
-const LOCAL = false
-
-const BOOTSTRAP_SERVER = LOCAL
-  ? 'https://localhost:8099'
-  : 'https://bootstrap.ubsv.dev:8099'
-
 // Create writable stores
 export const nodes = writable([])
 export const blocks = writable([])
 export const error = writable('')
 export const loading = writable(false)
 export const lastUpdated = writable(new Date())
+export const localMode = writable(false)
 
 let cancelFunction = null
 
@@ -67,7 +62,10 @@ export async function fetchData(force = false) {
 }
 
 async function getNodes() {
-  const response = await fetch(`${BOOTSTRAP_SERVER}/nodes`)
+  const bootstrapServer = get(localMode)
+  ? 'https://localhost:8099'
+  : 'https://bootstrap.ubsv.dev:8099'
+  const response = await fetch(`${bootstrapServer}/nodes`)
 
   if (!response.ok) {
     throw new Error(`HTTP error! Status: ${response.status}`)
@@ -165,7 +163,7 @@ async function getLast10Blocks(hash, address) {
 
 function connectToWebSocket(node) {
   const url = new URL(node.blobServerHTTPAddress)
-  const wsUrl = LOCAL ? 'wss://localhost:8090/ws' : `wss://${url.host}/ws`
+  const wsUrl = get(localMode) ? 'wss://localhost:8090/ws' : `wss://${url.host}/ws`
 
   let socket = new WebSocket(wsUrl)
 

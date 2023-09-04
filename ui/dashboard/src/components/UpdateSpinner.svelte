@@ -1,4 +1,6 @@
 <script>
+  import { localMode } from '@stores/nodeStore.js'
+
   export let size = '20px' // The default is 20px
   export let updateFunc
   export let spin = false
@@ -11,6 +13,11 @@
   </div>
 {:else}
   <div class="overlay">
+    <label class="checkbox">
+      <input type="checkbox" bind:checked={$localMode} />
+      Local Mode
+    </label>
+
     {#if updateFunc}
       <button
         class="spinner-button"
