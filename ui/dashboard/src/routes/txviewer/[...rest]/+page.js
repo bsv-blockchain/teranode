@@ -4,6 +4,6 @@ export function load({ params }) {
   const hash = parts[1] || ''
 
   return {
-    hash
+    hash,
   }
 }
