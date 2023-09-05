@@ -2,12 +2,26 @@ import { writable, get } from 'svelte/store'
 
 // Create writable stores
 export const nodes = writable([])
-export const selectedNode = writable('')
 export const blocks = writable([])
 export const error = writable('')
 export const loading = writable(false)
 export const lastUpdated = writable(new Date())
 export const localMode = writable(false)
+
+// Create writable store for selectedNode with local storage handling
+export const selectedNode = (() => {
+  const savedSelectedNode = loadSelectedNodeFromLocalStorage();
+  const { subscribe, set } = writable(savedSelectedNode);
+
+  return {
+    subscribe,
+    set: (newValue) => {
+      saveSelectedNodeToLocalStorage(newValue);
+      set(newValue);
+    },
+  };
+})();
+
 
 let cancelFunction = null
 
@@ -51,6 +65,11 @@ export async function fetchData(force = false) {
     blocks.set(bestBlocks)
     error.set('')
     lastUpdated.set(new Date())
+
+    // Set the selected node from local storage or the first node
+    const savedSelectedNode = loadSelectedNodeFromLocalStorage();
+    const defaultSelectedNode = nodesData[0]?.id || '';
+    selectedNode.set(savedSelectedNode || defaultSelectedNode);
 
     // Schedule next automatic fetchData call
     setTimeout(fetchData, 10000)
@@ -163,6 +182,10 @@ async function getLast10Blocks(hash, address) {
 }
 
 function connectToWebSocket(node) {
+  if (typeof WebSocket === 'undefined') {
+    return () => {}
+  }
+
   const url = new URL(node.blobServerHTTPAddress)
   const wsUrl = get(localMode) ? 'wss://localhost:8090/ws' : `wss://${url.host}/ws`
 
@@ -197,6 +220,22 @@ function connectToWebSocket(node) {
     }
   }
 }
+
+
+// Save the selected node to local storage
+function saveSelectedNodeToLocalStorage(nodeId) {
+  if (typeof window !== 'undefined') {
+  localStorage.setItem('selectedNode', nodeId);
+  }
+}
+
+// Load the selected node from local storage
+function loadSelectedNodeFromLocalStorage() {
+  if (typeof window !== 'undefined') {
+  return localStorage.getItem('selectedNode');
+  }
+}
+
 
 // Call fetchData() once on load
 fetchData()
