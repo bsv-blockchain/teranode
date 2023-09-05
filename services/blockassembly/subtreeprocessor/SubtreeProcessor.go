@@ -280,6 +280,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		}
 
 		if idx == 0 {
+			// process coinbase utxos
 			var utxoHash *chainhash.Hash
 			for outputIdx, output := range block.CoinbaseTx.Outputs {
 				utxoHash, err = util.UTXOHashFromOutput(block.CoinbaseTx.TxIDChainHash(), output, uint32(outputIdx))
@@ -287,8 +288,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 					return fmt.Errorf("error creating utxo hash: %s", err.Error())
 				}
 
-				if _, err = stp.utxoStore.Reset(ctx, utxoHash); err != nil {
-					stp.logger.Errorf("[BlockAssembler] error deleting utxo (%s): %w", utxoHash, err)
+				if _, err = stp.utxoStore.Delete(ctx, utxoHash); err != nil {
+					return fmt.Errorf("error deleting utxo (%s): %s", utxoHash, err.Error())
 				}
 			}
 
@@ -334,6 +335,12 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
+	err := stp.processCoinbaseUtxos(ctx, block)
+	if err != nil {
+		return err
+	}
+
+	// TODO revert the block changes back to the original configuration if an error occurred
 	// create a reverse lookup map of all the subtrees in the block
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {
@@ -409,6 +416,53 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	}
 	// remainderTxHashes = nil
 
+	return nil
+}
+
+func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
+	// add the utxos from the block coinbase
+	txIDHash := block.CoinbaseTx.TxIDChainHash()
+	// TODO this does not work for the early blocks in Bitcoin
+	blockHeight, err := block.ExtractCoinbaseHeight()
+	if err != nil {
+		return fmt.Errorf("error extracting coinbase height: %v", err)
+	}
+
+	var utxoHash *chainhash.Hash
+	var utxoHashes []*chainhash.Hash
+	var resp *utxostore.UTXOResponse
+	var success = true
+	for i, output := range block.CoinbaseTx.Outputs {
+		if output.Satoshis > 0 {
+			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
+			if err != nil {
+				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %w", err)
+				success = false
+				break
+			}
+
+			if resp, err = stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
+				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
+				success = false
+				break
+			}
+
+			// this is used to revert if something goes wrong
+			utxoHashes = append(utxoHashes, utxoHash)
+		}
+	}
+
+	if err != nil || !success {
+		// revert the utxos we just added
+		for _, utxoHash = range utxoHashes {
+			_, err = stp.utxoStore.Delete(ctx, utxoHash)
+			if err != nil {
+				stp.logger.Errorf("[BlockAssembler] error reverting utxo (%s): %w", utxoHash, err)
+			}
+		}
+
+		return fmt.Errorf("error storing utxo (%s): %w", utxoHash, err)
+	}
 	return nil
 }
 

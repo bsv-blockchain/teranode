@@ -104,10 +104,13 @@ func main() {
 	transactionMap := make(map[chainhash.Hash]chainhash.Hash)
 
 	logger.Infof("checking blocks / subtrees")
+	var block *model.Block
+	var height uint32
+	var coinbaseHeight uint32
 	for _, blockHeader := range blockHeaders {
 		blockFees := uint64(0)
 
-		block, height, err := blockchainDB.GetBlock(ctx, blockHeader.Hash())
+		block, height, err = blockchainDB.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
 			logger.Errorf("failed to get block %s: %s", blockHeader.Hash(), err)
 			continue
@@ -120,7 +123,7 @@ func main() {
 		}
 
 		if block.CoinbaseTx.Inputs[0].UnlockingScript.String() != genesisScript {
-			coinbaseHeight, err := util.ExtractCoinbaseHeight(block.CoinbaseTx)
+			coinbaseHeight, err = util.ExtractCoinbaseHeight(block.CoinbaseTx)
 			if err != nil {
 				logger.Errorf("failed to extract coinbase height from block coinbase %s: %s", block.Hash(), err)
 			}
@@ -129,23 +132,30 @@ func main() {
 				logger.Errorf("coinbase height %d does not match block height %d", coinbaseHeight, height)
 			}
 
+			// add the coinbase to the map
+			transactionMap[*block.CoinbaseTx.TxIDChainHash()] = *block.Hash()
+
 			// check subtrees
+			var subtreeBytes []byte
+			var subtree *util.Subtree
 			logger.Debugf("checking subtrees: %d", len(block.Subtrees))
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("checking subtree %s", subtreeHash)
 
-				subtreeBytes, err := subtreeStore.Get(ctx, subtreeHash[:])
+				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:])
 				if err != nil {
 					logger.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, block, err)
 					logger.Debugf("block dump: %s", block.Header.StringDump())
 				}
 
-				subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
 				if err != nil {
 					logger.Errorf("failed to parse subtree %s for block %s: %s", subtreeHash, block, err)
 					continue
 				}
 
+				var tx []byte
+				var btTx *bt.Tx
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
@@ -156,27 +166,27 @@ func main() {
 							transactionMap[*node.Hash] = *block.Hash()
 						}
 
-						tx, err := txStore.Get(ctx, node.Hash[:])
+						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
 							logger.Errorf("failed to get transaction %s from tx store: %s", node, err)
 							continue
 						}
-						btTx, err := bt.NewTxFromBytes(tx)
+						btTx, err = bt.NewTxFromBytes(tx)
 						if err != nil {
 							logger.Errorf("failed to parse transaction %s from tx store: %s", node, err)
 							continue
 						}
 
+						// d82e9c7af903433a70469b7bb2f9a0ed1df70e907a69bae2e4fed9cfb7539d00
 						// check the topological order of the transactions
-						// TODO this can only be done after the seeder has been sunset and the CON is working
-						//for _, input := range btTx.Inputs {
-						//	// the input tx id (parent tx) should already be in the transaction map
-						//	inputHash := chainhash.Hash(input.PreviousTxID())
-						//	_, ok = transactionMap[inputHash]
-						//	if !ok {
-						//		logger.Errorf("transaction %s parent %s does not exist in any subtree in any block", node, inputHash)
-						//	}
-						//}
+						for _, input := range btTx.Inputs {
+							// the input tx id (parent tx) should already be in the transaction map
+							inputHash := chainhash.Hash(input.PreviousTxID())
+							_, ok = transactionMap[inputHash]
+							if !ok {
+								logger.Errorf("the parent %s does not appear before the transaction %s", inputHash, node.Hash.String())
+							}
+						}
 
 						// the coinbase fees are calculated differently to check if everything matches up
 						if !btTx.IsCoinbase() {
@@ -217,9 +227,10 @@ func main() {
 		fileScanner := bufio.NewScanner(txLog)
 		fileScanner.Split(bufio.ScanLines)
 
+		var txHash *chainhash.Hash
 		for fileScanner.Scan() {
 			txId := fileScanner.Text()
-			txHash, err := chainhash.NewHashFromStr(txId)
+			txHash, err = chainhash.NewHashFromStr(txId)
 			if err != nil {
 				logger.Errorf("failed to parse tx id %s: %s", txId, err)
 				continue

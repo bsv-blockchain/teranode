@@ -80,10 +80,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		var block *model.Block
 		var header *model.BlockHeader
 		var height uint32
-		var blockHeight uint32
-		var txIDHash *chainhash.Hash
-		var utxoHash *chainhash.Hash
-
 		for {
 			select {
 			case <-ctx.Done():
@@ -128,45 +124,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 							continue
 						}
 
-						// Build up the items we need to store the outputs in the utxostore.  We do this here so that
-						// any errors that occur will happen before we do any further processing.
-						txIDHash = block.CoinbaseTx.TxIDChainHash()
-
-						blockHeight, err = block.ExtractCoinbaseHeight()
-						if err != nil {
-							b.logger.Errorf("[BlockAssembler] error extracting coinbase height: %v", err)
-							continue
-						}
-
-						utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
-						success := true
-
-						for i, output := range block.CoinbaseTx.Outputs {
-							if output.Satoshis > 0 {
-								utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
-								if err != nil {
-									b.logger.Errorf("[BlockAssembler] error getting utxo utxoHash from output: %v", err)
-									continue
-								}
-
-								if resp, err := b.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-									b.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
-									success = false
-									break
-								}
-
-								utxoHashes = append(utxoHashes, utxoHash)
-							}
-						}
-
-						if !success {
-							b.removeAllAdded(ctx, utxoHashes)
-							continue
-						}
-
 						if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-							b.logger.Errorf("[BlockAssembler] error resetting subtree processor: %v", err)
-							b.removeAllAdded(ctx, utxoHashes)
+							b.logger.Errorf("[BlockAssembler] error moveUpBlock in subtree processor: %v", err)
 							continue
 						}
 					}
@@ -267,16 +226,6 @@ func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
 	return nil
 }
 
-func (b *BlockAssembler) removeAllAdded(ctx context.Context, hashes []*chainhash.Hash) {
-	// Remove all the utxos we added
-	for _, hash := range hashes {
-		// TODO should we be deleting here?
-		if resp, err := b.utxoStore.Reset(ctx, hash); err != nil {
-			b.logger.Errorf("[BlockAssembler] error resetting utxo (%v): %w", resp, err)
-		}
-	}
-}
-
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
@@ -308,8 +257,9 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 	startTime = time.Now()
 
 	// Add all the utxo hashes to the utxostore
+	var resp *utxostore.UTXOResponse
 	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err := b.utxoStore.Store(ctx, hash, txMetadata.LockTime); err != nil {
+		if resp, err = b.utxoStore.Store(ctx, hash, txMetadata.LockTime); err != nil {
 			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
 		}
 	}

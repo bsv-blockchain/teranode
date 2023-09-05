@@ -81,30 +81,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	defer traceSpan.Finish()
 
 	if tx.IsCoinbase() {
-		coinbaseSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:IsCoinbase")
-		defer coinbaseSpan.Finish()
-
-		// TODO what checks do we need to do on a coinbase tx?
-		// not just anyone should be able to send a coinbase tx through the system
-		txid := tx.TxIDChainHash()
-
-		hash, err := util.UTXOHashFromOutput(txid, tx.Outputs[0], 0)
-		if err != nil {
-			return err
-		}
-
-		height, err := util.ExtractCoinbaseHeight(tx)
-		if err != nil {
-			return err
-		}
-
-		// store the coinbase utxo, with an nLockTime of +100 blocks
-		_, err = v.store.Store(coinbaseSpan.Ctx, hash, height+100)
-		if err != nil {
-			return err
-		}
-
-		return nil
+		return fmt.Errorf("coinbase transactions are not supported: %s", tx.TxIDChainHash().String())
 	}
 
 	basicSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:Basic")

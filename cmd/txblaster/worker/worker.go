@@ -261,14 +261,14 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 			return nil, fmt.Errorf("error filling initial inputs: %v", err)
 		}
 
-		if err = w.sendTransaction(ctx, tx.TxID(), tx.ExtendedBytes()); err != nil {
+		if err = w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes()); err != nil {
 			return nil, fmt.Errorf("error sending initial transaction: %v", err)
 		}
 
 		w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 		for idx, output := range tx.Outputs {
 			u := &bt.UTXO{
-				TxID:          bt.ReverseBytes(tx.TxIDBytes()),
+				TxID:          tx.TxIDChainHash().CloneBytes(),
 				Vout:          uint32(idx),
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
@@ -282,9 +282,8 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		go func(numberOfOutputs int, txId []byte) {
 			w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 			for i := 0; i < numberOfOutputs; i++ {
-
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(txId),
+					TxID:          txId,
 					Vout:          uint32(i),
 					LockingScript: script,
 					Satoshis:      w.satoshisPerOutput,
@@ -373,7 +372,7 @@ func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
 			w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 			for i := uint32(0); i < numberOfOutputs; i++ {
 				u := &bt.UTXO{
-					TxID:          bt.ReverseBytes(res.Txid),
+					TxID:          res.Txid,
 					Vout:          i,
 					LockingScript: script,
 					Satoshis:      res.SatoshisPerOutput,
@@ -482,7 +481,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	// w.logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
 	w.utxoChan <- &bt.UTXO{
-		TxID:          tx.TxIDBytes(),
+		TxID:          tx.TxIDChainHash().CloneBytes(),
 		Vout:          0,
 		LockingScript: keySet.Script,
 		Satoshis:      u.Satoshis,
