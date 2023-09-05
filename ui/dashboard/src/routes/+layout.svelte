@@ -87,7 +87,7 @@
             <option disabled>Select a URL</option>
             {#each $nodes as node (node.blobServerHTTPAddress)}
               <option value={node.blobServerHTTPAddress}
-                >{node.blobServerHTTPAddress}</option
+                >{new URL(node.blobServerHTTPAddress).hostname}</option
               >
             {/each}
           </select>
