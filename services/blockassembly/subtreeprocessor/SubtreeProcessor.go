@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -420,6 +421,10 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 }
 
 func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
+	if block == nil || block.CoinbaseTx == nil {
+		log.Printf("********************************************* block or coinbase is nil")
+		return nil
+	}
 	// add the utxos from the block coinbase
 	txIDHash := block.CoinbaseTx.TxIDChainHash()
 	// TODO this does not work for the early blocks in Bitcoin
