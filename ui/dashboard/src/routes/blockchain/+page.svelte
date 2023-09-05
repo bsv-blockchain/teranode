@@ -2,33 +2,32 @@
   import BlocksTable from '@components/BlocksTable.svelte'
   import Spinner from '@components/Spinner.svelte'
 
-  import { nodes } from '@stores/nodeStore.js'
+  import { selectedNode } from '@stores/nodeStore.js'
 
   let blocks = []
-  let selectedURL = ''
-  let urls = []
   let error = ''
   let loading = false
+  let url = ''
 
-  $: if ($nodes) {
-    urls = $nodes.map((node) => node.blobServerHTTPAddress)
-    if (!selectedURL && urls.length > 0) {
-      selectedURL = urls[0]
-    }
+  // Fetch data when the selected node changes
+  $: $selectedNode && fetchData()
 
-    if (blocks.length === 0) {
-      fetchData(selectedURL)
-    }
-  }
-
-  async function fetchData(url) {
+  async function fetchData() {
     try {
-      if (!url) return
+      if (!$selectedNode) {
+        return
+      }
 
       error = ''
       loading = true
 
-      const res = await fetch(`${url}/lastblocks?n=11`) // Get 1 more block than we need to calculate the delta time
+      url = `${$selectedNode}/lastblocks?n=11` // Get 1 more block than we need to calculate the delta time
+
+      const res = await fetch(url)
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! Status: ${res.status}`)
+      }
 
       const b = await res.json()
 
@@ -94,27 +93,9 @@
     <Spinner />
   {/if}
   <section class="section">
-    <!-- Dropdown for URL selection -->
-    <div class="select">
-      <select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
-        <option disabled>Select a URL</option>
-        {#each urls as url (url)}
-          <option value={url}>{url}</option>
-        {/each}
-      </select>
-    </div>
-
-    <button class="button is-info" on:click={() => fetchData(selectedURL)}
-      >Refresh</button
-    >
+    <button class="button is-info" on:click={() => fetchData()}>Refresh</button>
 
     <!-- Blocks table -->
     <BlocksTable {blocks} />
   </section>
 {/if}
-
-<style>
-  .select {
-    margin-bottom: 10px;
-  }
-</style>

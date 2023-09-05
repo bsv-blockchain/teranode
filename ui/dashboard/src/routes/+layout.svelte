@@ -1,6 +1,12 @@
 <script>
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
-  import { fetchData, loading, lastUpdated } from '@stores/nodeStore.js'
+  import {
+    nodes,
+    selectedNode,
+    fetchData,
+    loading,
+    lastUpdated,
+  } from '@stores/nodeStore.js'
 
   let age = 0
   let cancel = null
@@ -54,8 +60,8 @@
 
 <nav class="navbar is-fixed-top is-dark" aria-label="main navigation">
   <div class="navbar-brand">
-    <span class="navbar-item has-text-light">
-      <span class="is-size-4 client">Teranode</span>
+    <span class="navbar-item">
+      <a class="is-size-4 client" href="/">Teranode</a>
     </span>
   </div>
 
@@ -75,13 +81,25 @@
 
   <div id="navbarBasicExample" class="navbar-menu">
     <div class="navbar-start">
-      <a class="navbar-item" href="/"> Dashboard </a>
-      <a class="navbar-item" href="/tree"> Tree </a>
+      <div class="navbar-item">
+        <div class="select">
+          <select bind:value={$selectedNode} on:change={() => fetchData()}>
+            <option disabled>Select a URL</option>
+            {#each $nodes as node (node.blobServerHTTPAddress)}
+              <option value={node.blobServerHTTPAddress}
+                >{node.blobServerHTTPAddress}</option
+              >
+            {/each}
+          </select>
+        </div>
+      </div>
+
+      <!-- <a class="navbar-item" href="/tree"> Tree </a> -->
       <a class="navbar-item" href="/treedemo1"> TreeDemo1 </a>
       <a class="navbar-item" href="/treedemo2"> TreeDemo2 </a>
       <a class="navbar-item" href="/viewer"> Viewer </a>
       <a class="navbar-item" href="/txviewer"> UTXOInspector </a>
-      <a class="navbar-item" href="/blocks"> Blocks </a>
+      <!-- <a class="navbar-item" href="/blocks"> Blocks </a> -->
       <a class="navbar-item" href="/blockchain"> Blockchain </a>
     </div>
 
@@ -94,3 +112,9 @@
 </nav>
 
 <slot />
+
+<style>
+  .client {
+    color: white;
+  }
+</style>

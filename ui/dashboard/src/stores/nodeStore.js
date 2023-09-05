@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store'
 
 // Create writable stores
 export const nodes = writable([])
+export const selectedNode = writable('')
 export const blocks = writable([])
 export const error = writable('')
 export const loading = writable(false)

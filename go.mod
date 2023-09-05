@@ -1,6 +1,6 @@
 module github.com/bitcoin-sv/ubsv
 
-go 1.20
+go 1.21
 
 replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.4
 

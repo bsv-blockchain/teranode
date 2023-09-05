@@ -1,5 +1,5 @@
 # Set the base image
-FROM --platform=linux/amd64 golang:1.20.7-bullseye
+FROM --platform=linux/amd64 golang:1.21.0-bullseye
 ARG GITHUB_SHA
 
 RUN apt update && apt install -y wget curl build-essential libsecp256k1-dev
@@ -7,8 +7,21 @@ RUN apt update && apt install -y wget curl build-essential libsecp256k1-dev
 RUN curl -sL https://deb.nodesource.com/setup_16.x | bash -
 RUN apt-get install -y nodejs
 
-# Set the working directory inside the container
+# Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
+WORKDIR /app/ui/dashboard
+
+COPY package.json package-lock.json ./
+RUN npm install
+
+
+# Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Install Delve debugger
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
 
 # Copy the source code from the current directory to the working directory inside the container
 COPY . /app
@@ -16,8 +29,6 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-# Install Delve debugger
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Build the Go libraries of the project
 # todo change to make build
