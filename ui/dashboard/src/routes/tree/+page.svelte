@@ -1,5 +1,6 @@
 <script>
-  import { nodes, loading, blocks } from '@stores/nodeStore.js'
+  import { nodes, loading } from '@stores/nodeStore.js'
+  import { blocks } from '@stores/blocksStore.js'
   import Spinner from '@components/Spinner.svelte'
 
   function getUniqueValues(obj) {

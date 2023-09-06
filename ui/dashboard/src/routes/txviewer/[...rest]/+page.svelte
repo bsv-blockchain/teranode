@@ -5,8 +5,6 @@
 
   import Spinner from '@components/Spinner.svelte'
 
-  import { nodes } from '@stores/nodeStore.js'
-
   export let data
 
   let loading = false

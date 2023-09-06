@@ -53,7 +53,6 @@ export async function getNodes() {
 
     await decorateNodesWithHeaders(nodesData)
 
-
     nodesData = nodesData.sort((a, b) => a.name.localeCompare(b.name))
 
     nodes.set(nodesData)
@@ -98,7 +97,6 @@ async function decorateNodesWithHeaders(nodesData) {
   )
 }
 
-
 async function getBestBlockHeader(address) {
   const url = `${address}/bestblockheader/json`
   const response = await fetch(url)
@@ -109,18 +107,6 @@ async function getBestBlockHeader(address) {
 
   return await response.json()
 }
-
-async function getLast10Blocks(hash, address) {
-  const url = `${address}/headers/${hash}/json?n=10`
-  const response = await fetch(url)
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! Status: ${response.status}`)
-  }
-
-  return await response.json()
-}
-
 
 getNodes()
 
@@ -140,7 +126,7 @@ function loadSelectedNodeFromLocalStorage() {
 
 function saveLocalModeToLocalStorage(localMode) {
   if (typeof window !== 'undefined') {
-    return localStorage.setItem('localMode', (localMode ? 'true' : 'false'))
+    return localStorage.setItem('localMode', localMode ? 'true' : 'false')
   }
 }
 

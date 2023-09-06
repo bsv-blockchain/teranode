@@ -1,6 +1,10 @@
 let cancelFunction = null
 
-export function connectToWebSocket(blobServerHTTPAddress, localMode, fetchData) {
+export function connectToWebSocket(
+  blobServerHTTPAddress,
+  localMode,
+  fetchData
+) {
   if (typeof WebSocket === 'undefined') {
     return
   }
@@ -47,6 +51,4 @@ export function connectToWebSocket(blobServerHTTPAddress, localMode, fetchData) 
       socket.close()
     }
   }
-
-  return
 }

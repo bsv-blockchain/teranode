@@ -69,9 +69,9 @@
     justify-content: center;
   }
 
-  .label {
+  /* .label {
     color: white;
-  }
+  } */
 
   @keyframes spin {
     0% {

@@ -5,9 +5,12 @@ export const blocks = writable([])
 export const error = writable('')
 export const loading = writable(false)
 
-
-let cancelFunction = null
-
+// Promise to resolve after a certain time for timeout handling
+function timeout(ms) {
+  return new Promise((resolve, reject) =>
+    setTimeout(() => reject(new Error('Promise timed out')), ms)
+  )
+}
 
 // Retry fetchData after a delay if already loading
 async function retryFetchData() {
@@ -25,16 +28,11 @@ export async function fetchData(force = false) {
   try {
     loading.set(true)
 
-    if (cancelFunction) {
-      cancelFunction()
-    }
-
-    const bestBlocks = await getBestBlocks($nodes)
+    const bestBlocks = await getBestBlocks(nodes)
 
     // Update stores
     blocks.set(bestBlocks)
     error.set('')
-    lastUpdated.set(new Date())
 
     // Schedule next automatic fetchData call
     setTimeout(fetchData, 10000)
@@ -83,4 +81,15 @@ async function getBestBlocks(nodesData) {
   }, {})
 
   return blockObject
+}
+
+async function getLast10Blocks(hash, address) {
+  const url = `${address}/headers/${hash}/json?n=10`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! Status: ${response.status}`)
+  }
+
+  return await response.json()
 }
