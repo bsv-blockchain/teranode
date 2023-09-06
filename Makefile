@@ -27,7 +27,7 @@ dev-node:
 build: build-dashboard build-ubsv build-status build-tx-blaster
 
 .PHONY: build-ubsv
-build-ubsv:
+build-ubsv: build-dashboard
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
 
 .PHONY: build-tx-blaster
