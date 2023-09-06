@@ -35,11 +35,7 @@ func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, 
 }
 
 func UTXOHashFromInput(input *bt.Input) (*chainhash.Hash, error) {
-	hash, err := chainhash.NewHash(bt.ReverseBytes(input.PreviousTxID()))
-	if err != nil {
-		return nil, err
-	}
-
+	hash := input.PreviousTxIDChainHash()
 	return UTXOHash(hash, input.PreviousTxOutIndex, *input.PreviousTxScript, input.PreviousTxSatoshis)
 }
 
