@@ -382,6 +382,8 @@ func (c *Coinbase) ReserveUtxo(ctx context.Context, address string) (*bt.UTXO, e
 		SequenceNumber: 0xffffffff,
 	}
 
+	var utxoBytes []byte
+
 	var id uint64
 	if err := c.db.QueryRowContext(ctx, `
 		SELECT u.id, u.tx_id, u.vout, u.locking_script, u.satoshis
@@ -394,7 +396,7 @@ func (c *Coinbase) ReserveUtxo(ctx context.Context, address string) (*bt.UTXO, e
 		LIMIT 1
 	`, address).Scan(
 		&id,
-		&utxo.TxID,
+		&utxoBytes,
 		&utxo.Vout,
 		&utxo.LockingScript,
 		&utxo.Satoshis,
@@ -402,7 +404,13 @@ func (c *Coinbase) ReserveUtxo(ctx context.Context, address string) (*bt.UTXO, e
 		return nil, err
 	}
 
-	if _, err := c.db.ExecContext(ctx, `
+	var err error
+	utxo.TxIDHash, err = chainhash.NewHash(utxoBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err = c.db.ExecContext(ctx, `
 		UPDATE coinbase_utxos
 		SET reserved_at = CURRENT_TIMESTAMP
 		WHERE id = $1

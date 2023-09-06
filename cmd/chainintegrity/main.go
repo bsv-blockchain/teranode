@@ -107,7 +107,10 @@ func main() {
 	var block *model.Block
 	var height uint32
 	var coinbaseHeight uint32
-	for _, blockHeader := range blockHeaders {
+
+	// range through the block headers in reverse order, oldest first
+	for i := len(blockHeaders) - 1; i >= 0; i-- {
+		blockHeader := blockHeaders[i]
 		blockFees := uint64(0)
 
 		block, height, err = blockchainDB.GetBlock(ctx, blockHeader.Hash())
@@ -177,7 +180,6 @@ func main() {
 							continue
 						}
 
-						// d82e9c7af903433a70469b7bb2f9a0ed1df70e907a69bae2e4fed9cfb7539d00
 						// check the topological order of the transactions
 						for _, input := range btTx.Inputs {
 							// the input tx id (parent tx) should already be in the transaction map

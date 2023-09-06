@@ -2,7 +2,6 @@ package extra
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"github.com/libsv/go-bk/chaincfg"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type KeySet struct {
@@ -126,13 +126,13 @@ func (k *KeySet) GetUTXOs(mainnet bool) ([]*bt.UTXO, error) {
 
 	unspent := make([]*bt.UTXO, len(wocUnspent))
 	for i, utxo := range wocUnspent {
-		txIDBytes, err := hex.DecodeString(utxo.Txid)
+		txIDHash, err := chainhash.NewHashFromStr(utxo.Txid)
 		if err != nil {
 			return nil, err
 		}
 
 		unspent[i] = &bt.UTXO{
-			TxID:          txIDBytes,
+			TxIDHash:      txIDHash,
 			Vout:          utxo.Vout,
 			LockingScript: k.Script,
 			Satoshis:      utxo.Satoshis,

@@ -2,7 +2,7 @@ module github.com/bitcoin-sv/ubsv
 
 go 1.21
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.4
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.5
 
 require (
 	cloud.google.com/go/storage v1.31.0

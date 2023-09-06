@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -67,8 +68,13 @@ func (c Client) GetUtxo(ctx context.Context, address string) (*bt.UTXO, error) {
 		return nil, err
 	}
 
+	txHash, err := chainhash.NewHash(utxo.GetTxId())
+	if err != nil {
+		return nil, err
+	}
+
 	return &bt.UTXO{
-		TxID:           utxo.GetTxId(),
+		TxIDHash:       txHash,
 		Vout:           utxo.Vout,
 		LockingScript:  bscript.NewFromBytes(utxo.Script),
 		Satoshis:       utxo.Satoshis,

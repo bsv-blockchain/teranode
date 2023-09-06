@@ -376,8 +376,8 @@ github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+
 github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYrxe9dPLANfrWvHYVTgc=
 github.com/ordishs/go-bitcoin v1.0.83 h1:4utDM40GMqPGt0hs7SOOsuivAGvwcGwOqkfqWHkyMz8=
 github.com/ordishs/go-bitcoin v1.0.83/go.mod h1:O3lqD8unDlwLXTmQTT4F5x/Gl3xgP4IgMQDFxTmi9V4=
-github.com/ordishs/go-bt/v2 v2.2.4 h1:jbaT03z+ti4A4RwSrHOgBfbWbcuGfUnm/nXWSDxVx5U=
-github.com/ordishs/go-bt/v2 v2.2.4/go.mod h1:YC71+kRox9h0uCEFZ6OR5+mZG/8ARvoxVp4ZekqWy7s=
+github.com/ordishs/go-bt/v2 v2.2.5 h1:PMty/zNK5pdgKDTfnnV9djH4eTwIqNZt+iSoGKCc/lY=
+github.com/ordishs/go-bt/v2 v2.2.5/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.50 h1:XVmyo3vsYSfFsc8Vue2bUHVznSdwnyI7Nh6LjEFaQpg=
 github.com/ordishs/go-utils v1.0.50/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
 github.com/ordishs/gocore v1.0.44 h1:8LZqoTLxYAMOy4jkK3rMbjlPYp8/TzDmsC+f36us1E8=

@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -217,7 +217,7 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		return nil, fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
 	}
 	w.logger.Debugf(" \U0001fa99  Got utxo from tracker txid:%s vout:%d satoshis:%d script: %s",
-		hex.EncodeToString(utxo.TxID),
+		utxo.TxIDHash.String(),
 		utxo.Vout,
 		utxo.Satoshis,
 		utxo.LockingScript.String())
@@ -268,7 +268,7 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 		for idx, output := range tx.Outputs {
 			u := &bt.UTXO{
-				TxID:          tx.TxIDChainHash().CloneBytes(),
+				TxIDHash:      tx.TxIDChainHash(),
 				Vout:          uint32(idx),
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
@@ -279,11 +279,11 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 		// 4. we send 100 outputs of 5000000 satoshis each
 	} else if utxo.Satoshis == w.satoshisPerOutput {
 		// if utxo amount == satoshisPerOutput send it directly
-		go func(numberOfOutputs int, txId []byte) {
+		go func(numberOfOutputs int, txIdHash chainhash.Hash) {
 			w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 			for i := 0; i < numberOfOutputs; i++ {
 				u := &bt.UTXO{
-					TxID:          txId,
+					TxIDHash:      &txIdHash,
 					Vout:          uint32(i),
 					LockingScript: script,
 					Satoshis:      w.satoshisPerOutput,
@@ -292,10 +292,10 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 				w.utxoChan <- u
 			}
 			w.logger.Infof("Done sending %d outputs to txChan", numberOfOutputs)
-		}(w.numberOfOutputs, utxo.TxID)
+		}(w.numberOfOutputs, *utxo.TxIDHash)
 	}
 
-	if err = w.coinbaseClient.MarkUtxoSpent(ctx, utxo.TxID, utxo.Vout, utxo.TxID); err != nil {
+	if err = w.coinbaseClient.MarkUtxoSpent(ctx, utxo.TxIDHash.CloneBytes(), utxo.Vout, utxo.TxIDHash.CloneBytes()); err != nil {
 		return nil, fmt.Errorf("error marking utxo as spent: %v", err)
 	}
 
@@ -370,9 +370,14 @@ func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
 
 		go func(numberOfOutputs uint32) {
 			w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
+			txIdHash, err := chainhash.NewHash(res.Txid)
+			if err != nil {
+				prometheusTransactionErrors.WithLabelValues("StartWithSeeder", err.Error()).Inc()
+				return
+			}
 			for i := uint32(0); i < numberOfOutputs; i++ {
 				u := &bt.UTXO{
-					TxID:          res.Txid,
+					TxIDHash:      txIdHash,
 					Vout:          i,
 					LockingScript: script,
 					Satoshis:      res.SatoshisPerOutput,
@@ -447,21 +452,19 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	}
 
 	if w.kafkaProducer != nil {
-		err := w.publishToKafka(w.kafkaProducer, w.kafkaTopic, tx.TxIDBytes(), tx.ExtendedBytes())
+		err := w.publishToKafka(w.kafkaProducer, w.kafkaTopic, tx.TxIDChainHash().CloneBytes(), tx.ExtendedBytes())
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return err
 		}
-
 	} else if w.ipv6MulticastConn != nil {
-		err := w.sendOnIpv6Multicast(w.ipv6MulticastConn, tx.TxIDBytes(), tx.ExtendedBytes())
+		err := w.sendOnIpv6Multicast(w.ipv6MulticastConn, tx.TxIDChainHash().CloneBytes(), tx.ExtendedBytes())
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return err
 		}
-
 	} else {
-		err := w.sendTransaction(ctx, tx.TxID(), tx.ExtendedBytes())
+		err := w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return err
@@ -469,7 +472,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	}
 
 	if w.logIdsCh != nil {
-		w.logIdsCh <- tx.TxID()
+		w.logIdsCh <- tx.TxIDChainHash().String()
 	}
 
 	// increment prometheus counter
@@ -481,7 +484,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	// w.logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
 	w.utxoChan <- &bt.UTXO{
-		TxID:          tx.TxIDChainHash().CloneBytes(),
+		TxIDHash:      tx.TxIDChainHash(),
 		Vout:          0,
 		LockingScript: keySet.Script,
 		Satoshis:      u.Satoshis,
@@ -547,6 +550,9 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 	traceSpan.SetTag("txid", txID)
 
 	traceSpan.SetTag("transport", "grpc")
+
+	btTx, _ := bt.NewTxFromBytes(txExtendedBytes)
+	_ = btTx
 
 	g, ctx := errgroup.WithContext(traceSpan.Ctx)
 

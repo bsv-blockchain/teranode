@@ -115,8 +115,13 @@ func main() {
 
 	tx := bt.NewTx()
 
+	txHash, err := chainhash.NewHash(res2.Txid)
+	if err != nil {
+		panic(err)
+	}
+
 	if err := tx.FromUTXOs(&bt.UTXO{
-		TxID:          bt.ReverseBytes(res2.Txid),
+		TxIDHash:      txHash,
 		Vout:          0,
 		LockingScript: script,
 		Satoshis:      res2.SatoshisPerOutput,

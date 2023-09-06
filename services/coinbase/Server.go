@@ -106,7 +106,7 @@ func (s *Server) GetUtxo(ctx context.Context, req *coinbase_api.GetUtxoRequest) 
 	}
 
 	return &coinbase_api.Utxo{
-		TxId:     utxo.TxID,
+		TxId:     utxo.TxIDHash.CloneBytes(),
 		Vout:     utxo.Vout,
 		Script:   *utxo.LockingScript,
 		Satoshis: utxo.Satoshis,
