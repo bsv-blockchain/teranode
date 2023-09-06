@@ -3,10 +3,13 @@
   import {
     nodes,
     selectedNode,
-    fetchData,
+    localMode,
     loading,
     lastUpdated,
+    getNodes,
   } from '@stores/nodeStore.js'
+
+  import { connectToWebSocket } from '@stores/websocket.js'
 
   let age = 0
   let cancel = null
@@ -83,7 +86,11 @@
     <div class="navbar-start">
       <div class="navbar-item">
         <div class="select">
-          <select bind:value={$selectedNode} on:change={() => fetchData()}>
+          <select
+            bind:value={$selectedNode}
+            on:change={() =>
+              connectToWebSocket($selectedNode, $localMode, getNodes)}
+          >
             <option disabled>Select a URL</option>
             {#each $nodes as node (node.blobServerHTTPAddress)}
               <option value={node.blobServerHTTPAddress}
@@ -105,7 +112,7 @@
 
     <div class="navbar-end">
       <div class="navbar-item">
-        <UpdateSpinner spin={$loading} text={age} updateFunc={fetchData} />
+        <UpdateSpinner spin={$loading} text={age} />
       </div>
     </div>
   </div>

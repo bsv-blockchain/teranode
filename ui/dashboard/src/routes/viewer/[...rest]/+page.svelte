@@ -1,29 +1,18 @@
 <script>
+  import { selectedNode } from '@stores/nodeStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
-
   import Spinner from '@components/Spinner.svelte'
-
-  import { nodes } from '@stores/nodeStore.js'
 
   export let data
 
-  let selectedURL = ''
-  let urls = []
   let loading = false
   let res = null
   let error = null
   let url = ''
 
-  $: if ($nodes) {
-    urls = $nodes.map((node) => node.blobServerHTTPAddress)
-    if (!selectedURL && urls.length > 0) {
-      selectedURL = urls[0]
-    }
-  }
-
-  $: if (selectedURL && data.type && data.hash && data.hash.length === 64) {
-    url = selectedURL + '/' + data.type + '/' + data.hash + '/json'
+  $: if ($selectedNode && data.type && data.hash && data.hash.length === 64) {
+    url = $selectedNode + '/' + data.type + '/' + data.hash + '/json'
     fetchData()
   } else {
     url = ''
@@ -46,13 +35,12 @@
 
       const d = await response.json()
 
-      console.log(d)
       res = d
 
       goto(`/viewer/${data.type}/${data.hash}`, { replaceState: true })
     } catch (err) {
       error = err.message
-      console.log(err)
+      console.error(err)
     } finally {
       loading = false
     }
@@ -66,15 +54,6 @@
   <!-- Dropdown for URL selection -->
 
   <section class="search-bar">
-    <div class="select">
-      <select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
-        <option disabled>Select a URL</option>
-        {#each urls as url (url)}
-          <option value={url}>{url}</option>
-        {/each}
-      </select>
-    </div>
-
     <div class="search-field">
       <div class="control">
         <div class="select">

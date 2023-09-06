@@ -2,11 +2,23 @@ import { writable, get } from 'svelte/store'
 
 // Create writable stores
 export const nodes = writable([])
-export const blocks = writable([])
-export const error = writable('')
-export const loading = writable(false)
 export const lastUpdated = writable(new Date())
-export const localMode = writable(false)
+export const loading = writable(false)
+export const error = writable('')
+
+// Create a writeable store for localMode with local storage handling
+export const localMode = (() => {
+  const savedLocalMode = loadLocalModeFromLocalStorage()
+  const { subscribe, set } = writable(savedLocalMode)
+
+  return {
+    subscribe,
+    set: (newValue) => {
+      saveLocalModeToLocalStorage(newValue)
+      set(newValue)
+    },
+  }
+})()
 
 // Create writable store for selectedNode with local storage handling
 export const selectedNode = (() => {
@@ -22,77 +34,44 @@ export const selectedNode = (() => {
   }
 })()
 
-let cancelFunction = null
+export async function getNodes() {
+  try {
+    error.set('')
+    loading.set(true)
+
+    const bootstrapServer = get(localMode)
+      ? 'https://localhost:8099'
+      : 'https://bootstrap.ubsv.dev:8099'
+
+    const response = await fetch(`${bootstrapServer}/nodes`)
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`)
+    }
+
+    let nodesData = await response.json()
+
+    await decorateNodesWithHeaders(nodesData)
+
+
+    nodesData = nodesData.sort((a, b) => a.name.localeCompare(b.name))
+
+    nodes.set(nodesData)
+    lastUpdated.set(new Date())
+  } catch (err) {
+    console.error('Error fetching nodes:', err.message)
+  } finally {
+    loading.set(false)
+
+    setTimeout(getNodes, 10000) // Try again in 10s
+  }
+}
 
 // Promise to resolve after a certain time for timeout handling
 function timeout(ms) {
   return new Promise((resolve, reject) =>
     setTimeout(() => reject(new Error('Promise timed out')), ms)
   )
-}
-
-// Retry fetchData after a delay if already loading
-async function retryFetchData() {
-  if (!get(loading)) {
-    setTimeout(fetchData, 10000) // Try again in 10s
-  }
-}
-
-export async function fetchData(force = false) {
-  if (!force && get(loading)) {
-    retryFetchData()
-    return
-  }
-
-  try {
-    loading.set(true)
-
-    if (cancelFunction) {
-      cancelFunction()
-    }
-
-    const nodesData = await getNodes()
-    await decorateNodesWithHeaders(nodesData)
-    const bestBlocks = await getBestBlocks(nodesData)
-
-    // Start a websocket connection to the first node.  This will cause the
-    // dashboard to update when a new block is received.
-    cancelFunction = connectToWebSocket(nodesData[0])
-
-    // Update stores
-    nodes.set(nodesData)
-    blocks.set(bestBlocks)
-    error.set('')
-    lastUpdated.set(new Date())
-
-    // Set the selected node from local storage or the first node
-    const savedSelectedNode = loadSelectedNodeFromLocalStorage()
-    const defaultSelectedNode = nodesData[0]?.id || ''
-    selectedNode.set(savedSelectedNode || defaultSelectedNode)
-
-    // Schedule next automatic fetchData call
-    setTimeout(fetchData, 10000)
-  } catch (err) {
-    console.error(err)
-    error.set(err.message)
-  } finally {
-    loading.set(false)
-  }
-}
-
-async function getNodes() {
-  const bootstrapServer = get(localMode)
-    ? 'https://localhost:8099'
-    : 'https://bootstrap.ubsv.dev:8099'
-  const response = await fetch(`${bootstrapServer}/nodes`)
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! Status: ${response.status}`)
-  }
-
-  const nodesData = await response.json()
-
-  return nodesData.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 async function decorateNodesWithHeaders(nodesData) {
@@ -119,44 +98,6 @@ async function decorateNodesWithHeaders(nodesData) {
   )
 }
 
-async function getBestBlocks(nodesData) {
-  const hashesToAddresses = {}
-
-  nodesData.forEach((node) => {
-    if (node.header?.hash && node.blobServerHTTPAddress) {
-      hashesToAddresses[node.header.hash] = node.blobServerHTTPAddress
-    }
-  })
-
-  const blocksData = await Promise.all(
-    Object.entries(hashesToAddresses).map(async ([hash, addr]) => {
-      try {
-        const blocks = await Promise.race([
-          getLast10Blocks(hash, addr),
-          timeout(1000),
-        ])
-
-        return {
-          hash,
-          blocks,
-        }
-      } catch (error) {
-        console.error(`Error fetching blocks for hash ${hash}:`, error.message)
-        return {
-          hash,
-          blocks: { error: 'timeout' },
-        }
-      }
-    })
-  )
-
-  const blockObject = blocksData.reduce((acc, { hash, blocks }) => {
-    acc[hash] = blocks
-    return acc
-  }, {})
-
-  return blockObject
-}
 
 async function getBestBlockHeader(address) {
   const url = `${address}/bestblockheader/json`
@@ -180,47 +121,8 @@ async function getLast10Blocks(hash, address) {
   return await response.json()
 }
 
-function connectToWebSocket(node) {
-  if (typeof WebSocket === 'undefined') {
-    return () => {}
-  }
 
-  const url = new URL(node.blobServerHTTPAddress)
-  const wsUrl = get(localMode)
-    ? 'wss://localhost:8090/ws'
-    : `wss://${url.host}/ws`
-
-  let socket = new WebSocket(wsUrl)
-
-  socket.onopen = () => {
-    console.log(`WebSocket connection opened to ${wsUrl}`)
-  }
-
-  socket.onmessage = async (event) => {
-    try {
-      const data = await event.data.text()
-      const json = JSON.parse(data)
-      if (json.type === 'Block') {
-        setTimeout(fetchData, 0)
-      }
-    } catch (error) {
-      console.error('Error parsing WebSocket data:', error)
-    }
-  }
-
-  socket.onclose = () => {
-    console.log(`WebSocket connection closed by server (${wsUrl})`)
-    socket = null
-    // Reconnect logic can be added here if needed
-  }
-
-  return () => {
-    if (socket) {
-      console.log(`WebSocket connection closed by client (${wsUrl})`)
-      socket.close()
-    }
-  }
-}
+getNodes()
 
 // Save the selected node to local storage
 function saveSelectedNodeToLocalStorage(nodeId) {
@@ -236,5 +138,14 @@ function loadSelectedNodeFromLocalStorage() {
   }
 }
 
-// Call fetchData() once on load
-fetchData()
+function saveLocalModeToLocalStorage(localMode) {
+  if (typeof window !== 'undefined') {
+    return localStorage.setItem('localMode', (localMode ? 'true' : 'false'))
+  }
+}
+
+function loadLocalModeFromLocalStorage() {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('localMode') === 'true'
+  }
+}

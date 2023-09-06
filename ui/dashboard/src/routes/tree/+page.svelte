@@ -133,7 +133,7 @@
         // .text((d) => d.data.name.substring(0, 6));
         .text((d) => d.data.height)
     } catch (err) {
-      console.log(err)
+      console.error(err)
     } finally {
       localLoading = false
     }

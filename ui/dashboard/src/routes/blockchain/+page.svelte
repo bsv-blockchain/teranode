@@ -86,6 +86,8 @@
   }
 </script>
 
+<div class="url">{url}</div>
+
 {#if error}
   <p>{error}</p>
 {:else}
@@ -99,3 +101,11 @@
     <BlocksTable {blocks} />
   </section>
 {/if}
+
+<style>
+  .url {
+    margin-left: 25px;
+    padding: 10px;
+    font-size: 0.7rem;
+  }
+</style>

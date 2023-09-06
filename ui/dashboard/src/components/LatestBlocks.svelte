@@ -1,5 +1,5 @@
 <script>
-  import { blocks, error } from '@stores/nodeStore.js'
+  import { blocks, error } from '@stores/blocksStore.js'
   import LatestBlocksNode from '@components/LatestBlocksNode.svelte'
 </script>
 

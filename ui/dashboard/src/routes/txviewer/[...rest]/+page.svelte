@@ -1,4 +1,5 @@
 <script>
+  import { selectedNode } from '@stores/nodeStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
@@ -8,22 +9,13 @@
 
   export let data
 
-  let selectedURL = ''
-  let urls = []
   let loading = false
   let res = null
   let error = null
   let url = ''
 
-  $: if ($nodes) {
-    urls = $nodes.map((node) => node.blobServerHTTPAddress)
-    if (!selectedURL && urls.length > 0) {
-      selectedURL = urls[0]
-    }
-  }
-
-  $: if (selectedURL && data.hash && data.hash.length === 64) {
-    url = selectedURL + '/utxos/' + data.hash + '/json'
+  $: if ($selectedNode && data.hash && data.hash.length === 64) {
+    url = $selectedNode + '/utxos/' + data.hash + '/json'
     fetchData()
   } else {
     url = ''
@@ -58,18 +50,7 @@
   <Spinner />
 {/if}
 <section class="section">
-  <!-- Dropdown for URL selection -->
-
   <section class="search-bar">
-    <div class="select">
-      <select bind:value={selectedURL} on:change={() => fetchData(selectedURL)}>
-        <option disabled>Select a URL</option>
-        {#each urls as url (url)}
-          <option value={url}>{url}</option>
-        {/each}
-      </select>
-    </div>
-
     <div class="search-field">
       <input
         class="input search-input"

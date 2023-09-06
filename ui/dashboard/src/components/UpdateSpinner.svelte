@@ -2,7 +2,7 @@
   import { localMode } from '@stores/nodeStore.js'
 
   export let size = '20px' // The default is 20px
-  export let updateFunc
+  export let updateFunc = null
   export let spin = false
   export let text = 0
 </script>
@@ -12,10 +12,13 @@
     <div class="spinner" style="--spinner-size: {size};" />
   </div>
 {:else}
-  <div class="overlay">
+  <div
+    class="overlay"
+    title="When enabled the app will use the BlobServer at localhost:8099"
+  >
     <label class="checkbox">
       <input type="checkbox" bind:checked={$localMode} />
-      Local Mode
+      <span class="label2">Local Mode</span>
     </label>
 
     {#if updateFunc}
@@ -27,9 +30,9 @@
         {text === 0 ? '' : text}
       </button>
     {:else}
-      <div class="spinner-button" style="--spinner-size: {size};">
+      <button class="spinner-button" style="--spinner-size: {size};">
         {text === 0 ? '' : text}
-      </div>
+      </button>
     {/if}
   </div>
 {/if}
@@ -64,6 +67,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .label {
+    color: white;
   }
 
   @keyframes spin {
