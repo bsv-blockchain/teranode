@@ -141,6 +141,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if err != nil {
+		v.logger.Debugf("reverse %d utxos for %s", len(reservedUtxos), txIDChainHash.String())
 		reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
 		defer func() {
 			reverseUtxoSpan.Finish()
@@ -149,7 +150,6 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 		// Revert all the spends
 		for _, hash = range reservedUtxos {
-			// TODO nLockTime needs to be set back to the original value
 			if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
 				reverseUtxoSpan.RecordError(errReset)
 				v.logger.Errorf(errReset.Error())

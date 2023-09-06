@@ -414,8 +414,15 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UT
 
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		return nil, errors.Join(fmt.Errorf("ERROR panic in aerospike Reset delete key: %v", err))
+		// if the key is not found, we don't need to delete, it's not there anyway
+		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			return &utxostore.UTXOResponse{
+				Status: int(utxostore_api.Status_OK),
+			}, nil
+		}
+
+		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
+		return nil, errors.Join(fmt.Errorf("error in aerospike delete key: %v", err))
 	}
 
 	prometheusUtxoDelete.Inc()
