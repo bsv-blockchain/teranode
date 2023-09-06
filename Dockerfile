@@ -1,35 +1,16 @@
-# Set the base image
-FROM --platform=linux/amd64 golang:1.21.0-bullseye
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v0
 ARG GITHUB_SHA
-
-RUN apt update && apt install -y ca-certificates curl gnupg wget build-essential libsecp256k1-dev
-
-# Add nodesource to apt sources
-RUN mkdir -p /etc/apt/keyrings
-RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-
-# 18 is the latest LTS version of NodeJS
-ENV NODE_MAJOR=18
-RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-
-RUN apt-get update && apt-get install -y nodejs
-
 
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
 WORKDIR /app/ui/dashboard
 
 COPY package.json package-lock.json ./
-RUN npm install
-
+RUN npm install && npx node-prune
 
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
-
-# Install Delve debugger
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
-
 
 # Copy the source code from the current directory to the working directory inside the container
 COPY . /app
@@ -37,19 +18,10 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-
 # Build the Go libraries of the project
-# todo change to make build
 RUN make build -j3
 
-
-
-FROM --platform=linux/amd64 debian:latest
-
-RUN apt update && \
-    apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
-    rm -rf /var/lib/apt/lists/*
-
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v0
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .

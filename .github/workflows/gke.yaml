@@ -55,8 +55,6 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           file: ./Dockerfile
           push: true
           tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}

@@ -1,0 +1,9 @@
+# docker file used to build the docker image. This was manually pushed to the ecr repo for now and used
+# in case you want to make an update to the base image, change this file, build and push.
+# you can authenticate to ecr using this:
+# $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
+FROM debian:bullseye-slim
+
+RUN apt update && \
+    apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
+    rm -rf /var/lib/apt/lists/*
