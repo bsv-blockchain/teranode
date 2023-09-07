@@ -279,7 +279,6 @@ func main() {
 
 			return w.Start(ctx, *seeder)
 		})
-
 	}
 
 	// start http health check server
@@ -291,7 +290,4 @@ func main() {
 	if err := g.Wait(); err != nil {
 		logger.Errorf("error occurred in tx blaster: %v", err)
 	}
-
-	waitForSigTerm := make(chan bool)
-	<-waitForSigTerm
 }

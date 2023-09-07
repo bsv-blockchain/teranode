@@ -35,6 +35,7 @@ import (
 
 var (
 	prometheusBlockAssemblyAddTx          prometheus.Counter
+	prometheusBlockAssemblySubtreeCreated prometheus.Counter
 	prometheusTxMetaGetDuration           prometheus.Histogram
 	prometheusUtxoStoreDuration           prometheus.Histogram
 	prometheusSubtreeAddToChannelDuration prometheus.Histogram
@@ -47,6 +48,13 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blockassembly_add_tx",
 			Help: "Number of txs added to the blockassembly service",
+		},
+	)
+
+	prometheusBlockAssemblySubtreeCreated = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "blockassembly_subtree_created",
+			Help: "Number of subtrees created in the block assembly service",
 		},
 	)
 
@@ -157,8 +165,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				ba.logger.Infof("Stopping subtree listener")
 				return
 			case subtree := <-newSubtreeChan:
-				// merkleRoot := stp.currentSubtree.ReplaceRootNode(*coinbaseHash)
-				// assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeHash(merkleRoot))
+				prometheusBlockAssemblySubtreeCreated.Inc()
 
 				if subtreeBytes, err = subtree.Serialize(); err != nil {
 					ba.logger.Errorf("Failed to serialize subtree [%s]", err)

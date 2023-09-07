@@ -28,7 +28,7 @@ func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	var err error
 	client, found := aerospikeConnections[url.Host]
 	if !found {
-		logger.Infof("[AEROSPIKE] Creating aerospike client for host: %v", url.Host)
+		logger.Infof("[AEROSPIKE] Creating aerospike client for host: %s", url.Host)
 		client, err = getAerospikeClient(url)
 		if err != nil {
 			return nil, err
@@ -90,7 +90,7 @@ func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 		}
 	}
 
-	fmt.Printf("url %v policy %v\n", url, policy)
+	logger.Debugf("url %s policy %#v\n", url, policy)
 
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {

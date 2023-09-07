@@ -31,14 +31,22 @@ import (
 )
 
 var (
+	prometheusWorkers               prometheus.Gauge
 	prometheusProcessedTransactions prometheus.Counter
 	prometheusInvalidTransactions   prometheus.Counter
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
+	prometheusWorkerErrors          *prometheus.CounterVec
 	prometheusTransactionErrors     *prometheus.CounterVec
 )
 
 func init() {
+	prometheusWorkers = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "tx_blaster_workers",
+			Help: "Number of workers running",
+		},
+	)
 	prometheusProcessedTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "tx_blaster_processed_transactions",
@@ -61,6 +69,16 @@ func init() {
 		prometheus.HistogramOpts{
 			Name: "tx_blaster_transactions_size",
 			Help: "Size of transactions processed by the tx blaster",
+		},
+	)
+	prometheusWorkerErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_worker_errors",
+			Help: "Number of tx blaster worker errors",
+		},
+		[]string{
+			"function", //function raising the error
+			"error",    // error returned
 		},
 	)
 	prometheusTransactionErrors = promauto.NewCounterVec(
@@ -162,6 +180,14 @@ func NewWorker(
 }
 
 func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
+	prometheusWorkers.Inc()
+	defer func() {
+		prometheusWorkers.Dec()
+		if err != nil {
+			prometheusWorkerErrors.WithLabelValues("Start", err.Error()).Inc()
+		}
+	}()
+
 	var keySet *extra.KeySet
 	if len(withSeeder) > 0 && withSeeder[0] {
 		w.logger.Infof("\U00002699  worker is running with SEEDER")
