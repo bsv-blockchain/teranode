@@ -153,7 +153,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 
 	var err error
 	var spendingTxId *chainhash.Hash
-	var lockTime uint32
+	lockTime := uint32(0)
 	if value != nil {
 		spendingTxIdBytes, _ := value.Bins["txid"].([]byte)
 		if spendingTxIdBytes != nil {
@@ -164,10 +164,11 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 		}
 
 		iVal := value.Bins["locktime"]
-		var ok bool
-		lockTime, ok = iVal.(uint32)
-		if !ok {
-			return nil, fmt.Errorf("could not parse locktime of '%v': %w", iVal, err)
+		if iVal != nil {
+			lockTimeInt, ok := iVal.(int)
+			if ok {
+				lockTime = uint32(lockTimeInt)
+			}
 		}
 	}
 
