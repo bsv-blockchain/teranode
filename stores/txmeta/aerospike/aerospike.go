@@ -4,11 +4,13 @@ package aerospike
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
+	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -184,6 +186,13 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, size
 	}
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
+		var aeroErr aerospike.AerospikeError
+		if ok := errors.As(err, &aeroErr); ok {
+			if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
+				return txmeta.ErrAlreadyExists
+			}
+		}
+
 		return err
 	}
 
