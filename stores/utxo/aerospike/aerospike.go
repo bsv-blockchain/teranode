@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/url"
 	"time"
@@ -152,7 +153,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 
 	var err error
 	var spendingTxId *chainhash.Hash
-	var lockTime int
+	var lockTime uint32
 	if value != nil {
 		spendingTxIdBytes, _ := value.Bins["txid"].([]byte)
 		if spendingTxIdBytes != nil {
@@ -161,7 +162,13 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 				return nil, fmt.Errorf("chainhash error: %w", err)
 			}
 		}
-		lockTime, _ = value.Bins["locktime"].(int)
+
+		iVal := value.Bins["locktime"]
+		var ok bool
+		lockTime, ok = iVal.(uint32)
+		if !ok {
+			return nil, fmt.Errorf("could not parse locktime of '%v': %w", iVal, err)
+		}
 	}
 
 	status := utxostore_api.Status_OK
@@ -306,6 +313,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	policy.FilterExpression = aerospike.ExpOr(
 		// anything below the block height is spendable, including 0
 		aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+
 		aerospike.ExpAnd(
 			aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
 			// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
@@ -318,6 +326,8 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	bin := aerospike.NewBin("txid", txID.CloneBytes())
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
+		log.Printf("AEROSPIKE: error in aerospike spend PutBins: %v", err)
+
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_LOCK_TIME),
