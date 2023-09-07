@@ -20,6 +20,30 @@
 
   const itemTypes = ['block', 'header', 'subtree', 'tx', 'utxo']
 
+  function reverse() {
+    if (data && data.hash && data.hash.length === 64) {
+      const hexString = data.hash
+      const byteLength = hexString.length / 2
+      const byteArray = new Uint8Array(byteLength)
+
+      for (let i = 0; i < byteLength; i++) {
+        const byte = parseInt(hexString.substr(i * 2, 2), 16)
+        byteArray[i] = byte
+      }
+
+      byteArray.reverse()
+
+      let reversedHexString = ''
+      for (let i = 0; i < byteArray.length; i++) {
+        reversedHexString += byteArray[i].toString(16).padStart(2, '0')
+      }
+
+      data.hash = reversedHexString
+
+      data = { ...data }
+    }
+  }
+
   async function fetchData() {
     if (!url) return
 
@@ -54,6 +78,7 @@
   <!-- Dropdown for URL selection -->
 
   <section class="search-bar">
+    <button class="reverse" on:click={reverse}>Reverse</button>
     <div class="search-field">
       <div class="control">
         <div class="select">
@@ -107,12 +132,20 @@
   }
 
   .search-field {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
+    position: relative;
+    display: inline-block;
+  }
+
+  .reverse {
+    position: relative;
+    top: -20px; /* Adjust the top position as needed */
+    left: 300px;
+    right: 0;
+    z-index: 1; /* Ensure it's above other elements */
   }
 
   .search-input {
+    flex-grow: 1; /* Allow the input to take up remaining space */
     width: 650px;
     margin-right: 10px;
     padding: 8px;
