@@ -70,13 +70,17 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 }
 
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
-	defer func() {
+	var reservedUtxos []*chainhash.Hash
+	defer func(reservedUtxos *[]*chainhash.Hash) {
 		if r := recover(); r != nil {
-			// TODO cleanup any utxo stuff that might have been changed
+			if len(*reservedUtxos) > 0 {
+				// TODO is this correct in the recover? should we be reversing the utxos?
+				v.reverseSpends(*reservedUtxos, tracing.Start(ctx, "Validator:Validate:Recover"))
+			}
 
 			v.logger.Errorf("[VALIDATOR] Validate recover: %v", r)
 		}
-	}()
+	}(&reservedUtxos)
 
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	defer traceSpan.Finish()
@@ -85,37 +89,78 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		return fmt.Errorf("coinbase transactions are not supported: %s", tx.TxIDChainHash().String())
 	}
 
+	if err := v.validateTransaction(traceSpan, tx); err != nil {
+		return err
+	}
+
+	// get the fees and utxoHashes, before we spend the utxos
+	fees, utxoHashes, err := v.getFeesAndUtxoHashes(tx)
+	if err != nil {
+		return fmt.Errorf("error getting fees and utxo hashes: %v", err)
+	}
+
+	var parentTxHashes []*chainhash.Hash
+	if reservedUtxos, parentTxHashes, err = v.spendUtxos(traceSpan, tx); err != nil {
+		return err
+	}
+
+	// register transaction in tx status store
+	if err = v.registerTxInMetaStore(ctx, traceSpan, tx, fees, parentTxHashes, utxoHashes, reservedUtxos); err != nil {
+		return err
+	}
+
+	return v.sendToBlockAssembler(ctx, tx.TxIDChainHash(), traceSpan, reservedUtxos)
+}
+
+func (v *Validator) registerTxInMetaStore(ctx context.Context, traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, reservedUtxos []*chainhash.Hash) error {
+	if err := v.txMetaStore.Create(ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, utxoHashes, tx.LockTime); err != nil {
+		if errors.Is(err, txmeta.ErrAlreadyExists) {
+			// this does not need to be a warning, it's just a duplicate validation request
+			return nil
+		}
+
+		v.reverseSpends(reservedUtxos, traceSpan)
+		return fmt.Errorf("error sending tx %s to tx meta store: %v", tx.TxIDChainHash().String(), err)
+	}
+
+	return nil
+}
+
+func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
 	basicSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:Basic")
+	defer func() {
+		basicSpan.Finish()
+	}()
 
 	// check all the basic stuff
 	// TODO this is using the ARC validator, but should be moved into a separate package or imported to this one
 	validator := defaultvalidator.New(&bitcoin.Settings{})
 	// this will also check whether the transaction is in extended format
 
-	if err := validator.ValidateTransaction(tx); err != nil {
-		basicSpan.Finish()
-		return err
-	}
-	basicSpan.Finish()
+	return validator.ValidateTransaction(tx)
+}
 
+func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*chainhash.Hash, []*chainhash.Hash, error) {
 	utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:CheckUtxos")
+	defer func() {
+		utxoSpan.Finish()
+	}()
 
-	// check the utxos
-	txIDChainHash := tx.TxIDChainHash()
-
+	var err error
 	var hash *chainhash.Hash
 	var utxoResponse *utxostore.UTXOResponse
 	var parentTxHash *chainhash.Hash
-	var err error
 
 	reservedUtxos := make([]*chainhash.Hash, 0, len(tx.Inputs))
 	parentTxHashes := make([]*chainhash.Hash, 0, len(tx.Inputs))
 
+	// check the utxos
+	txIDChainHash := tx.TxIDChainHash()
 	for _, input := range tx.Inputs {
 		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
 			utxoSpan.RecordError(err)
-			return err
+			return nil, nil, fmt.Errorf("error getting input utxo hash: %s", err.Error())
 		}
 
 		// TODO Should we be doing this in a batch?
@@ -143,28 +188,18 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 	if err != nil {
 		v.logger.Debugf("reverse %d utxos for %s", len(reservedUtxos), txIDChainHash.String())
-		reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
 		defer func() {
-			reverseUtxoSpan.Finish()
 			utxoSpan.Finish()
 		}()
 
-		// Revert all the spends
-		for _, hash = range reservedUtxos {
-			if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
-				reverseUtxoSpan.RecordError(errReset)
-				v.logger.Errorf(errReset.Error())
-			}
-		}
-
-		return fmt.Errorf("validator: UTXO Store spend failed: %v", err)
+		v.reverseSpends(reservedUtxos, traceSpan)
+		return nil, nil, fmt.Errorf("validator: UTXO Store spend failed: %v", err)
 	}
-	utxoSpan.Finish()
 
-	// process the outputs of the transaction into new spendable outputs
-	storeUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreUtxos")
-	defer storeUtxoSpan.Finish()
+	return reservedUtxos, parentTxHashes, nil
+}
 
+func (v *Validator) getFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
 	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 
@@ -176,40 +211,44 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		if output.Satoshis > 0 {
 			fees -= output.Satoshis
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txIDChainHash, output, uint32(i))
+			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
 			if utxoErr != nil {
-				fmt.Printf("error getting output utxo hash: %s\n", utxoErr.Error())
-				//return err
+				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
 			}
 
 			utxoHashes = append(utxoHashes, utxoHash)
 		}
 	}
 
-	// TODO what if one of these fails?
-	// we should probably recover and add it to a retry queue
+	return fees, utxoHashes, nil
+}
 
-	// register transaction in tx status store
-	// v.logger.Debugf("registering tx %s in tx status store", txIDChainHash)
-	if err = v.txMetaStore.Create(ctx, txIDChainHash, fees, uint64(tx.Size()), parentTxHashes, utxoHashes, tx.LockTime); err != nil {
-		if errors.Is(err, txmeta.ErrAlreadyExists) {
-			// this does not need to be a warning, it's just a duplicate validation request
-			return nil
-		}
-		return fmt.Errorf("error sending tx %s to tx meta store: %v", txIDChainHash.String(), err)
-	}
-
+func (v *Validator) sendToBlockAssembler(ctx context.Context, txIDChainHash *chainhash.Hash, traceSpan tracing.Span, reservedUtxos []*chainhash.Hash) error {
 	if v.kafkaProducer != nil {
-		if err = v.publishToKafka(txIDChainHash); err != nil {
-			v.logger.Errorf("error sending tx to kafka: %v", err)
+		if err := v.publishToKafka(txIDChainHash); err != nil {
+			v.reverseSpends(reservedUtxos, traceSpan)
+			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
 	} else {
-		if _, err = v.blockAssembler.Store(ctx, txIDChainHash); err != nil {
-			v.logger.Errorf("error sending tx to block assembler: %v", err)
+		if _, err := v.blockAssembler.Store(ctx, txIDChainHash); err != nil {
+			v.reverseSpends(reservedUtxos, traceSpan)
+			return fmt.Errorf("error sending tx to block assembler: %v", err)
 		}
 	}
 
 	return nil
+}
+
+func (v *Validator) reverseSpends(reservedUtxos []*chainhash.Hash, traceSpan tracing.Span) {
+	reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
+	defer func() { reverseUtxoSpan.Finish() }()
+
+	for _, hash := range reservedUtxos {
+		if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
+			reverseUtxoSpan.RecordError(errReset)
+			v.logger.Errorf("error resetting utxo %s: %v", hash.String(), errReset)
+		}
+	}
 }
 
 func (v *Validator) publishToKafka(txIDBytes *chainhash.Hash) error {
