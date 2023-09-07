@@ -230,7 +230,7 @@ func main() {
 	var err error
 	var found bool
 
-	if startBlockValidation || startValidator || startUtxoStore {
+	if startBlockValidation || startValidator || startUtxoStore || startBlobServer || startBlockAssembly {
 		utxostoreURL, err, found = gocore.Config().GetURL("utxostore")
 		if err != nil {
 			panic(err)
