@@ -172,21 +172,10 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 		}
 	}
 
-	status := utxostore_api.Status_OK
-	if spendingTxId != nil {
-		status = utxostore_api.Status_SPENT
-	} else if lockTime > 0 {
-		if lockTime < 500000000 && uint32(lockTime) > s.blockHeight {
-			status = utxostore_api.Status_LOCK_TIME
-		} else if lockTime >= 500000000 && uint32(lockTime) > uint32(time.Now().Unix()) {
-			status = utxostore_api.Status_LOCK_TIME
-		}
-	}
-
 	return &utxostore.UTXOResponse{
-		Status:       int(status),
+		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight)),
 		SpendingTxID: spendingTxId,
-		LockTime:     uint32(lockTime),
+		LockTime:     lockTime,
 	}, nil
 }
 

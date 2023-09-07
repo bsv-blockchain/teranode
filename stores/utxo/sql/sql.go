@@ -166,7 +166,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 	}
 
 	return &utxostore.UTXOResponse{
-		Status:       int(utxostore_api.Status_OK),
+		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)),
 		LockTime:     lockTime,
 		SpendingTxID: txHash,
 	}, nil
