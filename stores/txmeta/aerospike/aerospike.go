@@ -186,7 +186,7 @@ func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, size
 	}
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
-		var aeroErr aerospike.AerospikeError
+		aeroErr := &aerospike.AerospikeError{}
 		if ok := errors.As(err, &aeroErr); ok {
 			if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
 				return txmeta.ErrAlreadyExists
