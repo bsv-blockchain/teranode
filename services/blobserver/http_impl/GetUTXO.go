@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -24,6 +25,10 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
+		}
+
+		if utxo == nil || utxo.Status == int(utxostore_api.Status_NOT_FOUND) {
+			return echo.NewHTTPError(http.StatusNotFound, "UTXO not found")
 		}
 
 		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()

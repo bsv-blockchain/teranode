@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -14,14 +15,14 @@ import (
 )
 
 type UTXOItem struct {
-	Txid          *chainhash.Hash `json:"txid"`
-	Vout          uint32          `json:"vout"`
-	LockingScript *bscript.Script `json:"lockingScript"`
-	Satoshis      uint64          `json:"satoshis"`
-	UtxoHash      *chainhash.Hash `json:"utxoHash"`
-	Status        int             `json:"status"`
-	SpendingTxID  *chainhash.Hash `json:"spendingTxId,omitempty"`
-	LockTime      uint32          `json:"lockTime,omitempty"`
+	Txid          *chainhash.Hash      `json:"txid"`
+	Vout          uint32               `json:"vout"`
+	LockingScript *bscript.Script      `json:"lockingScript"`
+	Satoshis      uint64               `json:"satoshis"`
+	UtxoHash      *chainhash.Hash      `json:"utxoHash"`
+	Status        utxostore_api.Status `json:"status"`
+	SpendingTxID  *chainhash.Hash      `json:"spendingTxId,omitempty"`
+	LockTime      uint32               `json:"lockTime,omitempty"`
 }
 
 func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
@@ -91,24 +92,31 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 						return err
 					}
 
-					// Send the UTXO to the channel.
-					utxoCh <- &UTXOItem{
+					utxoItem := &UTXOItem{
 						Txid:          hash,
 						Vout:          uint32(safeI),
 						LockingScript: safeOutput.LockingScript,
 						Satoshis:      safeOutput.Satoshis,
 						UtxoHash:      utxoHash,
-						Status:        utxoRes.Status,
-						SpendingTxID:  utxoRes.SpendingTxID,
-						LockTime:      utxoRes.LockTime,
 					}
+
+					if utxoRes != nil && utxoRes.Status != int(utxostore_api.Status_NOT_FOUND) {
+						utxoItem.Status = utxostore_api.Status(utxoRes.Status)
+						utxoItem.SpendingTxID = utxoRes.SpendingTxID
+						utxoItem.LockTime = utxoRes.LockTime
+					} else {
+						utxoItem.Status = utxostore_api.Status_NOT_FOUND
+					}
+
+					// Send the UTXO to the channel.
+					utxoCh <- utxoItem
 				}
 
 				return nil
 			})
 		}
 
-		if err := g.Wait(); err != nil {
+		if err = g.Wait(); err != nil {
 			return err
 		}
 
