@@ -1,9 +1,13 @@
+import { writable } from 'svelte/store'
+
+export const lastUpdated = writable(new Date())
+
 let cancelFunction = null
 
 export function connectToWebSocket(
   blobServerHTTPAddress,
   localMode,
-  fetchData
+  updateFn
 ) {
   if (typeof WebSocket === 'undefined') {
     return
@@ -25,6 +29,7 @@ export function connectToWebSocket(
 
   socket.onopen = () => {
     console.log(`WebSocket connection opened to ${wsUrl}`)
+    lastUpdated.set(new Date())
   }
 
   socket.onmessage = async (event) => {
@@ -32,7 +37,10 @@ export function connectToWebSocket(
       const data = await event.data.text()
       const json = JSON.parse(data)
       if (json.type === 'Block') {
-        setTimeout(fetchData, 0)
+        lastUpdated.set(new Date())
+        if (updateFn) {
+          updateFn()
+        }
       }
     } catch (error) {
       console.error('Error parsing WebSocket data:', error)

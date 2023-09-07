@@ -85,7 +85,7 @@ async function decorateNodesWithHeaders(nodesData) {
           node.header = header || { error: 'timeout' }
         } catch (error) {
           console.error(
-            `Error fetching header for node ${node.id}:`,
+            `Error fetching header for node ${node.blobServerHTTPAddress}:`,
             error.message
           )
           node.header = { error: 'timeout' }

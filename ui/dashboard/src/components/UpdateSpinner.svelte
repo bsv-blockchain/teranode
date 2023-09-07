@@ -5,37 +5,31 @@
   export let updateFunc = null
   export let spin = false
   export let text = 0
+
+  $: updateFunction = updateFunc || function () {}
 </script>
 
-{#if spin}
-  <div class="overlay">
-    <div class="spinner" style="--spinner-size: {size};" />
-  </div>
-{:else}
-  <div
-    class="overlay"
-    title="When enabled the app will use the BlobServer at localhost:8099"
-  >
-    <label class="checkbox">
-      <input type="checkbox" bind:checked={$localMode} />
-      <span class="label2">Local Mode</span>
-    </label>
+<div
+  class="overlay"
+  title="When enabled the app will use the BlobServer at localhost:8099"
+>
+  <label class="checkbox">
+    <input type="checkbox" bind:checked={$localMode} />
+    <span class="label2">Local Mode</span>
+  </label>
 
-    {#if updateFunc}
-      <button
-        class="spinner-button"
-        style="--spinner-size: {size};"
-        on:click={updateFunc}
-      >
-        {text === 0 ? '' : text}
-      </button>
-    {:else}
-      <button class="spinner-button" style="--spinner-size: {size};">
-        {text === 0 ? '' : text}
-      </button>
-    {/if}
-  </div>
-{/if}
+  {#if spin}
+    <div class="spinner" style="--spinner-size: {size};" />
+  {:else}
+    <button
+      class="spinner-button"
+      style="--spinner-size: {size};"
+      on:click={updateFunction}
+    >
+      {text === 0 ? '' : text}
+    </button>
+  {/if}
+</div>
 
 <style>
   .overlay {

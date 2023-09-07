@@ -1,8 +1,7 @@
 <script>
   import BlocksTable from '@components/BlocksTable.svelte'
-  import Spinner from '@components/Spinner.svelte'
-
   import { selectedNode } from '@stores/nodeStore.js'
+  import { lastUpdated } from '@stores/websocketStore.js'
 
   let blocks = []
   let error = ''
@@ -11,6 +10,8 @@
 
   // Fetch data when the selected node changes
   $: $selectedNode && fetchData()
+
+  $: $lastUpdated && fetchData()
 
   async function fetchData() {
     try {
@@ -88,19 +89,12 @@
 
 <div class="url">{url}</div>
 
-{#if error}
-  <p>{error}</p>
-{:else}
-  {#if loading}
-    <Spinner />
-  {/if}
-  <section class="section">
-    <button class="button is-info" on:click={() => fetchData()}>Refresh</button>
+<section class="section">
+  <button class="button is-info" on:click={() => fetchData()}>Refresh</button>
 
-    <!-- Blocks table -->
-    <BlocksTable {blocks} />
-  </section>
-{/if}
+  <!-- Blocks table -->
+  <BlocksTable {blocks} />
+</section>
 
 <style>
   .url {

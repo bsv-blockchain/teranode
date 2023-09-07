@@ -1,5 +1,6 @@
 <script>
   import { nodes, loading, error } from '@stores/nodeStore.js'
+
   import Spinner from '@components/Spinner.svelte'
 
   function humanTime(time) {

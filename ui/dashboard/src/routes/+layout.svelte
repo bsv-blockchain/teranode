@@ -9,7 +9,7 @@
     getNodes,
   } from '@stores/nodeStore.js'
 
-  import { connectToWebSocket } from '@stores/websocket.js'
+  import { connectToWebSocket } from '@stores/websocketStore.js'
 
   let age = 0
   let cancel = null
