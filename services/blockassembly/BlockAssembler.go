@@ -44,10 +44,15 @@ type BlockAssembler struct {
 	currentChainMap          map[chainhash.Hash]uint32
 	currentChainMapMu        sync.RWMutex
 	blockchainSubscriptionCh chan *model.Notification
+	maxBlockReorg            int
+	maxBlockCatchup          int
 }
 
 func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmetastore.Store, utxoStore utxostore.Interface,
 	txStore blob.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
+
+	maxBlockReorg, _ := gocore.Config().GetInt("block_assembler_max_block_reorg", 100)
+	maxBlockCatchup, _ := gocore.Config().GetInt("block_assembler_max_block_catchup", 100)
 
 	b := &BlockAssembler{
 		logger:            logger,
@@ -59,9 +64,19 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
 		miningCandidateCh: make(chan chan *miningCandidateResponse),
 		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
+		maxBlockReorg:     maxBlockReorg,
+		maxBlockCatchup:   maxBlockCatchup,
 	}
 
 	return b
+}
+
+func (b *BlockAssembler) SetMaxBlockReorg(maxBlockReorg int) {
+	b.maxBlockReorg = maxBlockReorg
+}
+
+func (b *BlockAssembler) SetMaxBlockCatchup(maxBlockCatchup int) {
+	b.maxBlockCatchup = maxBlockCatchup
 }
 
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
@@ -360,6 +375,14 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
 	if err != nil {
 		return fmt.Errorf("error getting reorg blocks: %w", err)
+	}
+
+	if len(moveDownBlocks) > b.maxBlockReorg {
+		return fmt.Errorf("reorg is too big, not handling: %d", len(moveDownBlocks))
+	}
+
+	if len(moveUpBlocks) > b.maxBlockCatchup {
+		return fmt.Errorf("catchup is too big, not handling: %d", len(moveUpBlocks))
 	}
 
 	// now do the reorg in the subtree processor
