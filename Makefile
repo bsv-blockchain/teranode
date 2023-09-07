@@ -48,7 +48,7 @@ test:
 
 .PHONY: longtests
 longtests:
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
 
 .PHONY: testall
@@ -175,6 +175,7 @@ clean:
 	rm -f blaster.run
 	rm -f status.run
 	rm -rf build/
+	rm -f coverage.out
 
 .PHONY: install-lint
 install-lint:

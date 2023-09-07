@@ -24,6 +24,12 @@ jobs:
       - name: Run Go tests
         run: make longtests
 
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarqube.ubsv.dev
+
   build-docker:
     name: Build Docker image
     runs-on: ubuntu-latest
