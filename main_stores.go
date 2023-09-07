@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+
+	"github.com/bitcoin-sv/ubsv/services/txmeta"
+	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
+	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
+)
+
+var (
+	txStore      blob.Store
+	subtreeStore blob.Store
+	txMetaStore  txmetastore.Store
+	utxoStore    utxostore.Interface
+)
+
+func getTxMetaStore(logger *gocore.Logger) txmetastore.Store {
+	if txMetaStore != nil {
+		return txMetaStore
+	}
+
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no txmeta_store setting found")
+	}
+
+	if txMetaStoreURL.Scheme == "memory" {
+		// the memory store is reached through a grpc client
+		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		txMetaStore, err = store.New(logger, txMetaStoreURL)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return txMetaStore
+}
+
+func getUtxoStore(ctx context.Context, logger utils.Logger) utxostore.Interface {
+	if utxoStore != nil {
+		return utxoStore
+	}
+
+	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no utxostore setting found")
+	}
+	utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxoStoreURL, "main")
+	if err != nil {
+		panic(err)
+	}
+
+	return utxoStore
+}
+
+func getTxStore() blob.Store {
+	if txStore != nil {
+		return txStore
+	}
+
+	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("txstore config not found")
+	}
+	txStore, err = blob.NewStore(txStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+
+	return txStore
+}
+
+func getSubtreeStore() blob.Store {
+	if subtreeStore != nil {
+		return subtreeStore
+	}
+
+	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("subtreestore config not found")
+	}
+	subtreeStore, err = blob.NewStore(subtreeStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+
+	return subtreeStore
+}

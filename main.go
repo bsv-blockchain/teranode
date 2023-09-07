@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -21,13 +20,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
-	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/go-utils"
@@ -222,89 +216,7 @@ func main() {
 		//sm.AddService("BlockChainService", blockchainService)
 	}
 
-	//----------------------------------------------------------------
-	// These are the main stores used in the system
-	//
-	var utxostoreURL *url.URL
-	var utxoStore utxostore.Interface
 	var err error
-	var found bool
-
-	if startBlockValidation || startValidator || startUtxoStore || startBlobServer || startBlockAssembly {
-		utxostoreURL, err, found = gocore.Config().GetURL("utxostore")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("no utxostore setting found")
-		}
-		utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxostoreURL, "main")
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	var txStore blob.Store
-
-	var txStoreUrl *url.URL
-	if startBlockAssembly || startBlobServer || startPropagation {
-		txStoreUrl, err, found = gocore.Config().GetURL("txstore")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("txstore config not found")
-		}
-		txStore, err = blob.NewStore(txStoreUrl)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	var txMetaStoreURL *url.URL
-	var txMetaStore txmetastore.Store
-
-	if startTxMetaStore || startBlockValidation || startValidator {
-		txMetaStoreURL, err, found = gocore.Config().GetURL("txmeta_store")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("no txmeta_store setting found")
-		}
-
-		if txMetaStoreURL.Scheme == "memory" {
-			// the memory store is reached through a grpc client
-			txMetaStore, err = txmeta.NewClient(context.Background(), logger)
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			txMetaStore, err = store.New(logger, txMetaStoreURL)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	var subtreeStore blob.Store
-	var subtreeStoreUrl *url.URL
-	if startBlockAssembly || startBlockValidation || startBlobServer {
-		subtreeStoreUrl, err, found = gocore.Config().GetURL("subtreestore")
-		if err != nil {
-			panic(err)
-		}
-		if !found {
-			panic("subtreestore config not found")
-		}
-		subtreeStore, err = blob.NewStore(subtreeStoreUrl)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	//
-	//----------------------------------------------------------------
 	var validatorClient *validator.Client
 
 	if startBlockValidation || startPropagation {
@@ -316,6 +228,10 @@ func main() {
 
 	// txmeta store
 	if startTxMetaStore {
+		txMetaStoreURL, _, found := gocore.Config().GetURL("txmeta_store")
+		if !found {
+			panic("no txmeta_store setting found")
+		}
 		if txMetaStoreURL.Scheme != "memory" {
 			panic("txmeta grpc server only supports memory store")
 		}
@@ -327,24 +243,26 @@ func main() {
 
 	// blockAssembly
 	if startBlockAssembly {
-		if _, found = gocore.Config().Get("blockassembly_grpcListenAddress"); found {
+		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
 			sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bass"),
-				txStore,
-				subtreeStore,
+				getTxStore(),
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+				getSubtreeStore(),
 			))
 		}
 	}
 
 	// blockValidation
 	if startBlockValidation {
-		if _, found = gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
+		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
 			sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
-				utxoStore,
-				subtreeStore,
-				txStore,
-				txMetaStore,
+				getUtxoStore(ctx, logger),
+				getSubtreeStore(),
+				getTxStore(),
+				getTxMetaStore(logger),
 				validatorClient,
 			))
 		}
@@ -352,26 +270,26 @@ func main() {
 
 	// validator
 	if startValidator {
-		if _, found = gocore.Config().Get("validator_grpcListenAddress"); found {
+		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
 			sm.AddService("Validator", validator.NewServer(
 				gocore.Log("valid"),
-				utxoStore,
-				txMetaStore,
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
 			))
 		}
 	}
 
 	// utxo store server
-	if startUtxoStore && utxostoreURL != nil {
+	if startUtxoStore {
 		sm.AddService("UTXOStoreServer", utxo.New(
 			gocore.Log("utxo"),
-			utxoStore,
+			getUtxoStore(ctx, logger),
 		))
 	}
 
 	// seeder
 	if startSeeder {
-		_, found = gocore.Config().Get("seeder_grpcListenAddress")
+		_, found := gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
 			sm.AddService("Seeder", seeder.NewServer(
 				gocore.Log("seed"),
@@ -388,9 +306,9 @@ func main() {
 	if startBlobServer {
 		sm.AddService("BlobServer", blobserver.NewServer(
 			gocore.Log("blob"),
-			utxoStore,
-			txStore,
-			subtreeStore,
+			getUtxoStore(ctx, logger),
+			getTxStore(),
+			getSubtreeStore(),
 		))
 	}
 
@@ -407,7 +325,7 @@ func main() {
 		if ok && propagationGrpcAddress != "" {
 			sm.AddService("PropagationServer", propagation.New(
 				gocore.Log("prop"),
-				txStore,
+				getTxStore(),
 				validatorClient,
 			))
 		}

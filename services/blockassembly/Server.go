@@ -14,12 +14,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/txmeta"
-	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
-	"github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -88,6 +86,8 @@ type BlockAssembly struct {
 
 	blockchainClient blockchain.ClientI
 	txStore          blob.Store
+	utxoStore        utxostore.Interface
+	txMetaStore      txmeta_store.Store
 	subtreeStore     blob.Store
 	jobStore         *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 }
@@ -98,10 +98,14 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, subtreeStore blob.Store) *BlockAssembly {
+func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store,
+	subtreeStore blob.Store) *BlockAssembly {
+
 	ba := &BlockAssembly{
 		logger:       logger,
 		txStore:      txStore,
+		utxoStore:    utxoStore,
+		txMetaStore:  txMetaStore,
 		subtreeStore: subtreeStore,
 		jobStore:     ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 	}
@@ -115,46 +119,10 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 		panic(err)
 	}
 
-	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		return fmt.Errorf("failed to get utxostore setting [%w]", err)
-	}
-	if !found {
-		return fmt.Errorf("no utxostore setting found")
-	}
-
-	utxoStore, err := utxo.NewStore(ctx, ba.logger, utxostoreURL, "BlockAssembly")
-	if err != nil {
-		return fmt.Errorf("failed to create utxo store [%w]", err)
-	}
-
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		return fmt.Errorf("failed to get txmeta_store setting [%w]", err)
-	}
-	if !found {
-		return fmt.Errorf("no txmeta_store setting found")
-	}
-
-	// TODO abstract into a factory
-	var txMetaStore txmeta_store.Store
-	if txMetaStoreURL.Scheme == "memory" {
-		// the memory store is reached through a grpc client
-		txMetaStore, err = txmeta.NewClient(ctx, ba.logger)
-		if err != nil {
-			return fmt.Errorf("failed to create txmeta store [%w]", err)
-		}
-	} else {
-		txMetaStore, err = store.New(ba.logger, txMetaStoreURL)
-		if err != nil {
-			return fmt.Errorf("failed to create txmeta store [%w]", err)
-		}
-	}
-
 	newSubtreeChan := make(chan *util.Subtree)
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, txMetaStore, utxoStore, ba.txStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.txMetaStore, ba.utxoStore, ba.txStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	// start the new subtree listener in the background
 	go func() {
