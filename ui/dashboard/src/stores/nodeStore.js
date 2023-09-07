@@ -1,5 +1,7 @@
 import { writable, get } from 'svelte/store'
 
+import { connectToWebSocket } from '@stores/websocketStore.js'
+
 // Create writable stores
 export const nodes = writable([])
 export const lastUpdated = writable(new Date())
@@ -108,7 +110,11 @@ async function getBestBlockHeader(address) {
   return await response.json()
 }
 
-getNodes()
+// Create a IEFE to start the websocket connection
+;(async () => {
+  await getNodes()
+  connectToWebSocket(get(selectedNode), get(localMode), getNodes)
+})()
 
 // Save the selected node to local storage
 function saveSelectedNodeToLocalStorage(nodeId) {

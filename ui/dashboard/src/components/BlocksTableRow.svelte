@@ -6,7 +6,12 @@
   }
 </script>
 
-<td class="has-text-right">{block.height}</td>
+<td>
+  <a class="has-text-right" href={`/viewer/block/${block.hash}`}
+    >{block.height}</a
+  >
+</td>
+
 <td>{new Date(block.timestamp).toISOString().replace('T', ' ')}</td>
 <td class="has-text-right">{block.age}</td>
 <td class="has-text-right">{block.deltaTime}</td>

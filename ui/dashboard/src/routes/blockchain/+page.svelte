@@ -5,8 +5,9 @@
 
   let blocks = []
   let error = ''
-  let loading = false
   let url = ''
+
+  const numberOfBlocks = 100
 
   // Fetch data when the selected node changes
   $: $selectedNode && fetchData()
@@ -20,9 +21,8 @@
       }
 
       error = ''
-      loading = true
 
-      url = `${$selectedNode}/lastblocks?n=101` // Get 1 more block than we need to calculate the delta time
+      url = `${$selectedNode}/lastblocks?n=${numberOfBlocks + 1}` // Get 1 more block than we need to calculate the delta time
 
       const res = await fetch(url)
 
@@ -77,12 +77,10 @@
         }
       })
 
-      blocks = b.slice(0, 10) // Only show the last 10 blocks
+      blocks = b.slice(0, numberOfBlocks) // Only show the last 10 blocks
     } catch (err) {
       error = err.message
       console.error(err)
-    } finally {
-      loading = false
     }
   }
 </script>

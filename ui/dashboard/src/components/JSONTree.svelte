@@ -23,7 +23,15 @@
               {/each}
             </ul>
           {:else if getType(value) === 'string'}
-            <span class="string">"{value}"</span>
+            {#if value.length === 64 && key.includes('txid')}
+              <a href="/viewer/tx/{value}">"{value}"</a>
+            {:else if value.length === 64 && key.includes('block')}
+              <a href="/viewer/block/{value}">"{value}""</a>
+            {:else if value.length === 64 && key === 'utxoHash'}
+              <a href="/viewer/utxo/{value}">"{value}""</a>
+            {:else}
+              <span class="string">"{value}"</span>
+            {/if}
           {:else if getType(value) === 'number'}
             <span class="string2">{value}</span>
           {:else}

@@ -54,7 +54,7 @@
         class="input search-input"
         type="text"
         bind:value={data.hash}
-        placeholder="Enter hash"
+        placeholder="Enter transaction id / hash"
         maxlength="64"
       />
     </div>

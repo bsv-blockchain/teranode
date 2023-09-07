@@ -7,10 +7,6 @@
   export let text = 0
 
   $: updateFunction = updateFunc || function () {}
-
-  function toggleFlash() {
-    flash = !flash
-  }
 </script>
 
 <div
