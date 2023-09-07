@@ -22,7 +22,7 @@
       error = ''
       loading = true
 
-      url = `${$selectedNode}/lastblocks?n=11` // Get 1 more block than we need to calculate the delta time
+      url = `${$selectedNode}/lastblocks?n=101` // Get 1 more block than we need to calculate the delta time
 
       const res = await fetch(url)
 
@@ -87,7 +87,12 @@
   }
 </script>
 
-<div class="url">{url}</div>
+<div>
+  <div class="url">{url}</div>
+  {#if error}
+    <div class="error">{error}</div>
+  {/if}
+</div>
 
 <section class="section">
   <button class="button is-info" on:click={() => fetchData()}>Refresh</button>
@@ -98,8 +103,15 @@
 
 <style>
   .url {
+    display: inline-block;
     margin-left: 25px;
     padding: 10px;
     font-size: 0.7rem;
+  }
+
+  .error {
+    display: inline-block;
+    font-size: 0.7rem;
+    color: red;
   }
 </style>

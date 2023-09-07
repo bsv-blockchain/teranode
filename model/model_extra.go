@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -57,6 +58,11 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 
 	timestamp := time.Unix(int64(header.Timestamp), 0)
 
+	miner, err := escapeJSON(bi.Miner)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse miner '%s': %v", bi.Miner, err)
+	}
+
 	return []byte(fmt.Sprintf(`
 	{
 		"height": %d,
@@ -73,5 +79,19 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 		timestamp.Format(dateFormat),
 		bi.TransactionCount,
 		bi.Size,
-		bi.Miner)), nil
+		miner)), nil
+}
+
+func escapeJSON(input string) (string, error) {
+	// Use json.Marshal to escape the input string.
+	escapedJSON, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+
+	// Convert the JSON bytes to a string, removing the surrounding double quotes.
+	escapedString := string(escapedJSON[1 : len(escapedJSON)-1])
+
+	// Return the escaped string.
+	return escapedString, nil
 }
