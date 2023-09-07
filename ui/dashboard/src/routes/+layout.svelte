@@ -112,7 +112,7 @@
 
     <div class="navbar-end">
       <div class="navbar-item">
-        <UpdateSpinner spin={$loading} text={age} />
+        <UpdateSpinner flash={$loading} text={age} />
       </div>
     </div>
   </div>

@@ -3,10 +3,14 @@
 
   export let size = '20px' // The default is 20px
   export let updateFunc = null
-  export let spin = false
+  export let flash = false
   export let text = 0
 
   $: updateFunction = updateFunc || function () {}
+
+  function toggleFlash() {
+    flash = !flash
+  }
 </script>
 
 <div
@@ -18,61 +22,62 @@
     <span class="label2">Local Mode</span>
   </label>
 
-  {#if spin}
-    <div class="spinner" style="--spinner-size: {size};" />
-  {:else}
-    <button
-      class="spinner-button"
-      style="--spinner-size: {size};"
-      on:click={updateFunction}
-    >
+  <button
+    class="spinner-button"
+    style="--spinner-size: {size};"
+    on:click={updateFunction}
+  >
+    {#if flash}
+      <div class="led" />
+    {:else}
       {text === 0 ? '' : text}
-    </button>
-  {/if}
+    {/if}
+  </button>
 </div>
 
 <style>
   .overlay {
     position: relative;
-    display: flex; /* Use flexbox */
-    align-items: center; /* Align items vertically in the center */
-    justify-content: center; /* Align items horizontally in the center */
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  .spinner {
-    border: 4px solid rgba(255, 255, 255, 0.1);
+  .led {
+    background-color: red; /* Red color for LED */
     border-radius: 50%;
-    border-top: 4px solid white;
-    width: var(--spinner-size, 20px);
-    height: var(--spinner-size, 20px);
-    animation: spin 1s linear infinite;
-    margin: 10px; /* Adjust margin as needed */
+    min-width: var(--led-size, 10px);
+    min-height: var(--led-size, 10px);
+    width: var(--led-size, 10px);
+    height: var(--led-size, 10px);
+    animation: flash 0.5s linear infinite alternate; /* Flashing animation */
+    margin: 10px;
+    z-index: 1;
   }
 
   .spinner-button {
     border: 4px solid white;
     background-color: white;
     border-radius: 50%;
-    /* border-top: 4px solid white; Thinner top border */
     width: var(--spinner-size, 20px);
     height: var(--spinner-size, 20px);
-    margin: 10px; /* Adjust margin as needed */
+    margin: 10px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
-  /* .label {
-    color: white;
-  } */
-
-  @keyframes spin {
+  @keyframes flash {
     0% {
-      transform: rotate(0deg);
+      opacity: 1;
     }
     100% {
-      transform: rotate(360deg);
+      opacity: 0;
     }
+  }
+
+  label:hover {
+    color: inherit; /* You can use "inherit" to keep the original color */
   }
 </style>
