@@ -123,7 +123,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 				err := websocket.Message.Send(ws, data)
 				if err != nil {
 					deadClientCh <- ch
-					h.logger.Errorf("Failed to Send WS message: %w", err)
+					s.logger.Errorf("Failed to Send WS message: %w", err)
 					break
 				}
 			}
