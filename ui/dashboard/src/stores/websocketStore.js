@@ -4,14 +4,23 @@ export const lastUpdated = writable(new Date())
 
 let cancelFunction = null
 
-const updateFn = debounce(() => {
+let updateFns = []
+
+
+export function addSubscriber(fn) {
+  updateFns.push(fn)
+}
+
+export function removeSubscriber(fn) {
+  updateFns = updateFns.filter((f) => f !== fn)
+}
+
+const updateFn = debounce((json) => {
   lastUpdated.set(new Date())
-  if (updateFn) {
-    updateFn()
-  }
+  updateFns.forEach((fn) => fn(json))
 }, 1000)
 
-export function connectToWebSocket(blobServerHTTPAddress, localMode, updateFn) {
+export function connectToWebSocket(blobServerHTTPAddress, localMode) {
   if (typeof WebSocket === 'undefined') {
     return
   }
@@ -39,9 +48,9 @@ export function connectToWebSocket(blobServerHTTPAddress, localMode, updateFn) {
     try {
       const data = await event.data.text()
       const json = JSON.parse(data)
-      if (json.type === 'Block') {
-        updateFn()
-      }
+
+      updateFn(json)
+
     } catch (error) {
       console.error('Error parsing WebSocket data:', error)
     }

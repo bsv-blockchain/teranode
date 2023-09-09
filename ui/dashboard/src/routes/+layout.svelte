@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte'
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
   import {
     nodes,
@@ -9,7 +10,7 @@
     getNodes,
   } from '@stores/nodeStore.js'
 
-  import { connectToWebSocket } from '@stores/websocketStore.js'
+  import { connectToWebSocket, addSubscriber } from '@stores/websocketStore.js'
 
   let age = 0
   let cancel = null
@@ -26,6 +27,14 @@
       age = Math.floor((new Date() - $lastUpdated) / 1000)
     }, 500)
   }
+
+  // Get the nodes on mount
+
+  onMount(async () => {
+    await getNodes()
+    connectToWebSocket($selectedNode, $localMode)
+    addSubscriber(getNodes)
+  })
 </script>
 
 <svelte:head>
@@ -88,8 +97,7 @@
         <div class="select">
           <select
             bind:value={$selectedNode}
-            on:change={() =>
-              connectToWebSocket($selectedNode, $localMode, getNodes)}
+            on:change={() => connectToWebSocket($selectedNode, $localMode)}
           >
             <option disabled>Select a URL</option>
             {#each $nodes as node (node.blobServerHTTPAddress)}
@@ -101,13 +109,12 @@
         </div>
       </div>
 
-      <!-- <a class="navbar-item" href="/tree"> Tree </a> -->
-      <a class="navbar-item" href="/treedemo1"> TreeDemo1 </a>
-      <a class="navbar-item" href="/treedemo2"> TreeDemo2 </a>
       <a class="navbar-item" href="/viewer"> Viewer </a>
       <a class="navbar-item" href="/txviewer"> UTXOInspector </a>
       <!-- <a class="navbar-item" href="/blocks"> Blocks </a> -->
       <a class="navbar-item" href="/blockchain"> Blockchain </a>
+      <a class="navbar-item" href="/listener"> Listener </a>
+      <a class="navbar-item" href="/chain"> Chain </a>
     </div>
 
     <div class="navbar-end">
