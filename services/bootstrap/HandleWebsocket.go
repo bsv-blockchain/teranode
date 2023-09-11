@@ -37,15 +37,22 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 					continue
 				}
 
-				data, err := json.MarshalIndent(&discoveryMsg{
-					Type:                  msg.Type.String(),
-					ConnectedAt:           msg.Info.ConnectedAt.AsTime(),
-					BlobServerGRPCAddress: msg.Info.BlobServerGRPCAddress,
-					BlobServerHTTPAddress: msg.Info.BlobServerHTTPAddress,
-					Source:                msg.Info.Source,
-					Ip:                    msg.Info.Ip,
-					Name:                  msg.Info.Name,
-				}, "", "  ")
+				dm := &discoveryMsg{
+					Type: msg.Type.String(),
+				}
+
+				if msg.Info != nil {
+					if msg.Info.ConnectedAt != nil {
+						dm.ConnectedAt = msg.Info.ConnectedAt.AsTime()
+					}
+					dm.BlobServerGRPCAddress = msg.Info.BlobServerGRPCAddress
+					dm.BlobServerHTTPAddress = msg.Info.BlobServerHTTPAddress
+					dm.Source = msg.Info.Source
+					dm.Ip = msg.Info.Ip
+					dm.Name = msg.Info.Name
+				}
+
+				data, err := json.MarshalIndent(dm, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %W", err)
 					continue
