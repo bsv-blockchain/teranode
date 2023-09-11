@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -15,22 +14,11 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-type discoveryMsg struct {
-	Type                  string    `json:"type"`
-	ConnectedAt           time.Time `json:"connectedAt"`
-	BlobServerGRPCAddress string    `json:"blobServerGRPCAddress"`
-	BlobServerHTTPAddress string    `json:"blobServerHTTPAddress"`
-	Source                string    `json:"source"`
-	Ip                    string    `json:"ip"`
-	Name                  string    `json:"name"`
-}
 
 // Server type carries the logger within it
 type Server struct {
@@ -59,46 +47,7 @@ func NewServer(logger utils.Logger) *Server {
 func (s *Server) Init(_ context.Context) (err error) {
 	// Create a discovery channel
 
-	clientChannels := make(map[chan []byte]struct{})
-	newClientCh := make(chan chan []byte, 10)
-	deadClientCh := make(chan chan []byte, 10)
-
 	s.discoveryCh = make(chan *bootstrap_api.Notification, 10)
-
-	go func() {
-		for {
-			select {
-			case newClient := <-newClientCh:
-				clientChannels[newClient] = struct{}{}
-
-			case deadClient := <-deadClientCh:
-				delete(clientChannels, deadClient)
-
-			case msg := <-s.discoveryCh:
-				if len(clientChannels) == 0 {
-					continue
-				}
-
-				data, err := json.MarshalIndent(&discoveryMsg{
-					Type:                  msg.Type.String(),
-					ConnectedAt:           msg.Info.ConnectedAt.AsTime(),
-					BlobServerGRPCAddress: msg.Info.BlobServerGRPCAddress,
-					BlobServerHTTPAddress: msg.Info.BlobServerHTTPAddress,
-					Source:                msg.Info.Source,
-					Ip:                    msg.Info.Ip,
-					Name:                  msg.Info.Name,
-				}, "", "  ")
-				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %W", err)
-					continue
-				}
-
-				for clientCh := range clientChannels {
-					clientCh <- data
-				}
-			}
-		}
-	}()
 
 	// Set up the HTTP server
 	e := echo.New()
@@ -110,27 +59,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 		AllowMethods: []string{echo.GET},
 	}))
 
-	e.GET("/ws", func(c echo.Context) error {
-		ch := make(chan []byte)
-
-		websocket.Handler(func(ws *websocket.Conn) {
-			defer ws.Close()
-
-			newClientCh <- ch
-
-			for data := range ch {
-				// Write
-				err := websocket.Message.Send(ws, data)
-				if err != nil {
-					deadClientCh <- ch
-					s.logger.Errorf("Failed to Send WS message: %w", err)
-					break
-				}
-			}
-		}).ServeHTTP(c.Response(), c.Request())
-
-		return nil
-	})
+	e.GET("/ws", s.HandleWebSocket())
 
 	e.GET("/nodes", func(c echo.Context) error {
 		type node struct {
