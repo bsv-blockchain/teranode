@@ -11,6 +11,7 @@
   } from '@stores/nodeStore.js'
 
   import { connectToWebSocket, addSubscriber } from '@stores/websocketStore.js'
+  // import { connectToWebSocket2 } from '@stores/websocketStore2.js'
 
   let age = 0
   let cancel = null
@@ -33,7 +34,10 @@
   onMount(async () => {
     await getNodes()
     connectToWebSocket($selectedNode, $localMode)
+
     addSubscriber(getNodes)
+
+    // connectToWebSocket2()
   })
 </script>
 

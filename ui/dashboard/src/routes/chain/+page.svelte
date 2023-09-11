@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { addSubscriber, removeSubscriber } from '@stores/websocketStore.js'
+  import { addSubscriber } from '@stores/websocketStore.js'
   import { selectedNode } from '@stores/nodeStore.js'
   import { blocks, isFirstMount } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'

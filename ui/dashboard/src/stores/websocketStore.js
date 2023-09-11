@@ -6,7 +6,6 @@ let cancelFunction = null
 
 let updateFns = []
 
-
 export function addSubscriber(fn) {
   updateFns.push(fn)
 }
@@ -50,7 +49,6 @@ export function connectToWebSocket(blobServerHTTPAddress, localMode) {
       const json = JSON.parse(data)
 
       updateFn(json)
-
     } catch (error) {
       console.error('Error parsing WebSocket data:', error)
     }
