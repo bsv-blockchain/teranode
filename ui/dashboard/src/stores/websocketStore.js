@@ -19,7 +19,7 @@ const updateFn = debounce((json) => {
   updateFns.forEach((fn) => fn(json))
 }, 1000)
 
-export function connectToWebSocket(blobServerHTTPAddress, localMode) {
+export function connectToWebSocket(blobServerHTTPAddress) {
   if (typeof WebSocket === 'undefined') {
     return
   }
@@ -34,7 +34,7 @@ export function connectToWebSocket(blobServerHTTPAddress, localMode) {
   }
 
   const url = new URL(blobServerHTTPAddress)
-  const wsUrl = localMode ? 'wss://localhost:8090/ws' : `wss://${url.host}/ws`
+  const wsUrl = `wss://${url.host}/ws`
 
   let socket = new WebSocket(wsUrl)
 

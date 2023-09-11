@@ -1,6 +1,4 @@
 <script>
-  import { localMode } from '@stores/nodeStore.js'
-
   export let size = '20px' // The default is 20px
   export let updateFunc = null
   export let flash = false
@@ -13,11 +11,6 @@
   class="overlay"
   title="When enabled the app will use the BlobServer at localhost:8099"
 >
-  <label class="checkbox">
-    <input type="checkbox" bind:checked={$localMode} />
-    <span class="label2">Local Mode</span>
-  </label>
-
   <button
     class="spinner-button"
     style="--spinner-size: {size};"
@@ -71,9 +64,5 @@
     100% {
       opacity: 0;
     }
-  }
-
-  label:hover {
-    color: inherit; /* You can use "inherit" to keep the original color */
   }
 </style>

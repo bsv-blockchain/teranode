@@ -4,14 +4,13 @@
   import {
     nodes,
     selectedNode,
-    localMode,
     loading,
     lastUpdated,
     getNodes,
   } from '@stores/nodeStore.js'
 
   import { connectToWebSocket, addSubscriber } from '@stores/websocketStore.js'
-  // import { connectToWebSocket2 } from '@stores/websocketStore2.js'
+  import { connectToWebSocket2 } from '@stores/websocketStore2.js'
 
   let age = 0
   let cancel = null
@@ -33,11 +32,11 @@
 
   onMount(async () => {
     await getNodes()
-    connectToWebSocket($selectedNode, $localMode)
+    connectToWebSocket($selectedNode)
 
     addSubscriber(getNodes)
 
-    // connectToWebSocket2()
+    connectToWebSocket2()
   })
 </script>
 
@@ -101,7 +100,7 @@
         <div class="select">
           <select
             bind:value={$selectedNode}
-            on:change={() => connectToWebSocket($selectedNode, $localMode)}
+            on:change={() => connectToWebSocket($selectedNode)}
           >
             <option disabled>Select a URL</option>
             {#each $nodes as node (node.blobServerHTTPAddress)}

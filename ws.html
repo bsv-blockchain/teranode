@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Example</title>
+</head>
+<body>
+    <script>
+        const socket = new WebSocket('wss://m1.ubsv.dev:8099/ws');
+
+        // Connection opened
+        socket.addEventListener('open', (event) => {
+            console.log('Connected to WebSocket');
+        });
+
+        // Listen for messages
+        socket.addEventListener('message', (event) => {
+            console.log('Received message:', event.data);
+        });
+
+        // Connection closed
+        socket.addEventListener('close', (event) => {
+            if (event.wasClean) {
+                console.log(`Connection closed cleanly, code=${event.code}, reason=${event.reason}`);
+            } else {
+                console.error('Connection died');
+            }
+        });
+
+        // Connection error
+        socket.addEventListener('error', (error) => {
+            console.error('WebSocket Error:', error);
+        });
+    </script>
+</body>
+</html>

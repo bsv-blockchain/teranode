@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
@@ -104,14 +105,19 @@ func (h *HTTP) Init(_ context.Context) error {
 }
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
-	h.logger.Infof("BlobServer HTTPS service listening on %s", addr)
+	mode := "HTTPS"
+	if strings.HasPrefix(addr, "localhost:") {
+		mode = "HTTP"
+	}
+
+	h.logger.Infof("BlobServer %s service listening on %s", mode, addr)
 
 	go func() {
 		<-ctx.Done()
-		h.logger.Infof("[BlobServer] HTTPS (impl) service shutting down")
+		h.logger.Infof("[BlobServer] %s (impl) service shutting down", mode)
 		err := h.e.Shutdown(ctx)
 		if err != nil {
-			h.logger.Errorf("[BlobServer] HTTPS (impl) service shutdown error: %s", err)
+			h.logger.Errorf("[BlobServer] %s (impl) service shutdown error: %s", mode, err)
 		}
 	}()
 
@@ -120,16 +126,25 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	// 	return err
 	// }
 
-	certFile, found := gocore.Config().Get("server_certFile")
-	if !found {
-		return errors.New("server_certFile is required for HTTPS")
-	}
-	keyFile, found := gocore.Config().Get("server_keyFile")
-	if !found {
-		return errors.New("server_keyFile is required for HTTPS")
+	var err error
+
+	if mode == "HTTP" {
+		err = h.e.Start(addr)
+
+	} else {
+
+		certFile, found := gocore.Config().Get("server_certFile")
+		if !found {
+			return errors.New("server_certFile is required for HTTPS")
+		}
+		keyFile, found := gocore.Config().Get("server_keyFile")
+		if !found {
+			return errors.New("server_keyFile is required for HTTPS")
+		}
+
+		err = h.e.StartTLS(addr, certFile, keyFile)
 	}
 
-	err := h.e.StartTLS(addr, certFile, keyFile)
 	if err != http.ErrServerClosed {
 		return err
 	}

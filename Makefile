@@ -9,21 +9,21 @@ deps:
 
 .PHONY: dev
 dev:
-	$(MAKE) dev-node & $(MAKE) dev-go
+	$(MAKE) dev-dashboard & $(MAKE) dev-ubsv
 
-.PHONY: dev-go
-dev-go:
+.PHONY: dev-ubsv
+dev-ubsv:
 	# Run go project
 	trap 'kill %1 %2' SIGINT; \
 	go run .
 
-.PHONY: dev-node
-dev-node:
+.PHONY: dev-dashboard
+dev-dashboard:
 	# Run node project
 	trap 'kill %1 %2' SIGINT; \
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
-.PHONY: build # build the dashboard first as it is embedded in the UBSV binary
+.PHONY: build
 build: build-dashboard build-ubsv build-status build-tx-blaster
 
 .PHONY: build-ubsv

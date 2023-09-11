@@ -6,23 +6,20 @@ export const lastUpdated = writable(new Date())
 export const loading = writable(false)
 export const error = writable('')
 
-// Create a writeable store for localMode with local storage handling
-export const localMode = (() => {
-  const savedLocalMode = loadLocalModeFromLocalStorage()
-  const { subscribe, set } = writable(savedLocalMode)
-
-  return {
-    subscribe,
-    set: (newValue) => {
-      saveLocalModeToLocalStorage(newValue)
-      set(newValue)
-    },
-  }
-})()
-
 // Create writable store for selectedNode with local storage handling
 export const selectedNode = (() => {
-  const savedSelectedNode = loadSelectedNodeFromLocalStorage()
+  let savedSelectedNode = loadSelectedNodeFromLocalStorage()
+  // if the saveSelectedNode does not exist in our list or nodes, calculate it from the url.location
+  if (!(savedSelectedNode && get(nodes).find((node) => node.id === savedSelectedNode))) {
+    if (!import.meta.env.SSR) {
+      // Extract the node id from the URL
+      if (window && window.location) {
+        const url = new URL(window.location.href)
+        savedSelectedNode = `${url.protocol}/${url.host}:${url.port}`
+      }
+    }
+  }
+
   const { subscribe, set } = writable(savedSelectedNode)
 
   return {
@@ -38,11 +35,7 @@ export async function getNodes() {
     error.set('')
     loading.set(true)
 
-    const bootstrapServer = get(localMode)
-      ? 'https://localhost:8099'
-      : 'https://bootstrap.ubsv.dev:8099'
-
-    const response = await fetch(`${bootstrapServer}/nodes`)
+    const response = await fetch(`${get(selectedNode)}/nodes`)
 
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`)
@@ -123,17 +116,5 @@ function saveSelectedNodeToLocalStorage(nodeId) {
 function loadSelectedNodeFromLocalStorage() {
   if (typeof window !== 'undefined') {
     return localStorage.getItem('selectedNode')
-  }
-}
-
-function saveLocalModeToLocalStorage(localMode) {
-  if (typeof window !== 'undefined') {
-    return localStorage.setItem('localMode', localMode ? 'true' : 'false')
-  }
-}
-
-function loadLocalModeFromLocalStorage() {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('localMode') === 'true'
   }
 }
