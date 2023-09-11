@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -165,70 +164,15 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 }
 
 // Start function
-func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
+func (ba *BlockAssembly) Start(ctx context.Context) error {
 
-	if err = ba.blockAssembler.Start(ctx); err != nil {
+	if err := ba.blockAssembler.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
 	}
 
-	kafkaBrokers, ok := gocore.Config().Get("blockassembly_kafkaBrokers")
-	if ok {
-		ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s", kafkaBrokers)
-		kafkaURL, err := url.Parse(kafkaBrokers)
-		if err != nil {
-			ba.logger.Errorf("[BlockAssembly] Kafka failed to start: %s", err)
-		} else {
-			workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
-			ba.logger.Infof("[BlockAssembly] Kafka consumer started with %d workers", workers)
-
-			var clusterAdmin sarama.ClusterAdmin
-
-			// create the workers to process all messages
-			n := atomic.Uint64{}
-			workerCh := make(chan []byte)
-			for i := 0; i < workers; i++ {
-				go func() {
-					for txIDBytes := range workerCh {
-						if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-							Txid: txIDBytes,
-						}); err != nil {
-							ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
-						} else {
-							n.Add(1)
-						}
-					}
-				}()
-			}
-
-			go func() {
-				clusterAdmin, _, err = util.ConnectToKafka(kafkaURL)
-				if err != nil {
-					log.Fatal("[BlockAssembly] unable to connect to kafka: ", err)
-				}
-				defer func() { _ = clusterAdmin.Close() }()
-
-				topic := kafkaURL.Path[1:]
-				var partitions int
-				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
-					log.Fatal("[BlockAssembly] unable to parse Kafka partitions: ", err)
-				}
-
-				var replicationFactor int
-				if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
-					log.Fatal("[BlockAssembly] unable to parse Kafka replication factor: ", err)
-				}
-
-				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-					NumPartitions:     int32(partitions),
-					ReplicationFactor: int16(replicationFactor),
-				}, false)
-
-				err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "validators", workerCh)
-				if err != nil {
-					ba.logger.Errorf("[BlockAssembly] Kafka listener failed to start: %s", err)
-				}
-			}()
-		}
+	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockassembly_kafkaBrokers")
+	if err == nil && ok {
+		ba.startKafkaListener(ctx, kafkaBrokersURL)
 	}
 
 	// this will block
@@ -239,6 +183,64 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s", kafkaBrokersURL.String())
+
+	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
+	ba.logger.Infof("[BlockAssembly] Kafka consumer starting with %d workers", workers)
+
+	// create the workers to process all messages
+	n := atomic.Uint64{}
+	workerCh := make(chan []byte)
+	for i := 0; i < workers; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					ba.logger.Infof("[BlockAssembly] Stopping Kafka worker")
+					return
+				case txIDBytes := <-workerCh:
+					if _, err := ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
+						Txid: txIDBytes,
+					}); err != nil {
+						ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
+					} else {
+						n.Add(1)
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		clusterAdmin, _, err := util.ConnectToKafka(kafkaBrokersURL)
+		if err != nil {
+			ba.logger.Fatalf("[BlockAssembly] unable to connect to kafka: ", err)
+		}
+		defer func() { _ = clusterAdmin.Close() }()
+
+		topic := kafkaBrokersURL.Path[1:]
+		var partitions int
+		if partitions, err = strconv.Atoi(kafkaBrokersURL.Query().Get("partitions")); err != nil {
+			ba.logger.Fatalf("[BlockAssembly] unable to parse Kafka partitions: ", err)
+		}
+
+		var replicationFactor int
+		if replicationFactor, err = strconv.Atoi(kafkaBrokersURL.Query().Get("replication")); err != nil {
+			ba.logger.Fatalf("[BlockAssembly] unable to parse Kafka replication factor: ", err)
+		}
+
+		_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     int32(partitions),
+			ReplicationFactor: int16(replicationFactor),
+		}, false)
+
+		if err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "validators", workerCh); err != nil {
+			ba.logger.Errorf("[BlockAssembly] Kafka listener failed to start: %s", err)
+		}
+	}()
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
