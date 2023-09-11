@@ -42,7 +42,8 @@ func New(minioURL *url.URL) (*Minio, error) {
 	}
 
 	err = client.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{
-		Region: location,
+		Region:        location,
+		ObjectLocking: true,
 	})
 	if err != nil {
 		exists, errBucketExists := client.BucketExists(context.Background(), bucketName)
