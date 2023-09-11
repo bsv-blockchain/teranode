@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Teranode centrifuge client tester</title>
+    <style>
+        input[type="text"] { width: 300px; }
+        #messages {
+            white-space: pre;
+        }
+    </style>
+    <script type="text/javascript">
+      window.addEventListener('load', function() {
+        let clientID;
+        let unsubscribed = false;
+        let reconnect = true;
+        let numFailures = 0;
+
+        const baseURL = "localhost:8092"
+
+        function connect() {
+          const ws = new WebSocket('ws://' + baseURL + '/connection/websocket');
+
+          ws.onopen = function(e) {
+            numFailures = 0;
+            console.log("websocket: connection open");
+            console.log(e);
+            // This is required to trigger connect on server side since server expects
+            // initial connect request from a WebSocket unidirectional client.
+            ws.send(JSON.stringify({}));
+          };
+
+          ws.onerror = function(e) {
+            numFailures++;
+            console.log(e);
+            drawText("✋ websocket: connection error, see console");
+          };
+
+          ws.onclose = function (e) {
+            if (!reconnect) {
+              return;
+            }
+            setTimeout(function () {
+              drawText("🙏🏾 websocket: connection reconnecting");
+              connect();
+            }, Math.min(numFailures * 1000, 20000));
+          }
+
+          ws.onmessage = function(e) {
+            console.log("websocket: new message");
+            console.log(e);
+            processData(e.data);
+          };
+        }
+
+        connect();
+
+        function processData(rawData) {
+          if (rawData === "{}") {
+            drawText("--> ping");
+            return
+          }
+          //drawText("--> " + rawData);
+          const data = JSON.parse(rawData);
+          if (data.connect) {
+            clientID = data.connect.client;
+            let subscriptions = [];
+            const subs = data.connect.subs;
+            if (subs) {
+              for (const m in subs) {
+                if (subs.hasOwnProperty(m)) {
+                  subscriptions.push(m);
+                }
+              }
+            }
+            drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
+          } else if (data.disconnect) {
+            clientID = null;
+            drawText("🔴 disconnected from a server");
+            const code = data.disconnect.code;
+            reconnect = !((code >= 3500 && code < 4000) || (code >= 4500 && code < 5000));
+          } else if (data.unsubscribe) {
+            drawText("🔓 unsubscribed from a channel " + data.channel);
+          } else if (data.subscribe) {
+            drawText("🔒 subscribed to a channel " + data.channel);
+          } else if (data.pub) {
+            drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.pub, null, 2));
+          } else {
+            drawText("😟 unsupported push type " + JSON.stringify(data));
+          }
+        }
+
+        const container = document.getElementById('messages');
+
+        function drawText(text) {
+          let e = document.createElement('li');
+          e.innerHTML = [
+            (new Date()).toLocaleString('en-UK'),
+            ' ' + text
+          ].join('\n');
+          container.insertBefore(e, container.firstChild);
+        }
+
+        window.addEventListener('click', function () {
+          // Every click changes status of subscription fetching backend endpoints
+          // with current client ID.
+          if (unsubscribed) {
+            fetch('http://' +baseURL + '/subscribe?client=' + clientID);
+          } else {
+            fetch('http://' +baseURL + '/unsubscribe?client=' + clientID);
+          }
+          unsubscribed = !unsubscribed;
+        });
+      });
+    </script>
+</head>
+<body>
+<ul id="messages"></ul>
+</body>
+</html>
