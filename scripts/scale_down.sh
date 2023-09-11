@@ -1,7 +1,8 @@
+kubectl scale deployment -n tx-blaster-service tx-blaster --replicas 0
+
 kubectl scale deployment -n miner1 miner1 --replicas 0
 kubectl scale deployment -n miner2 miner2 --replicas 0
 kubectl scale deployment -n miner3 miner3 --replicas 0
-kubectl scale deployment -n tx-blaster-service tx-blaster --replicas 0
 kubectl scale deployment -n coinbase-service coinbase --replicas 0
 kubectl scale deployment -n blockchain-service blockchain --replicas 0
 kubectl scale deployment -n blockassembly-service blockassembly --replicas 0
