@@ -23,6 +23,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -261,16 +262,8 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return &emptypb.Empty{}, err
+		return &emptypb.Empty{}, fmt.Errorf("failed to parse transaction from bytes: %s", err.Error())
 	}
-
-	// TODO should we store the extended bytes of transactions in our store?
-	if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
-		prometheusInvalidTransactions.Inc()
-		return &emptypb.Empty{}, err
-	}
-
-	// u.logger.Debugf("received transaction on propagation GRPC server: %s", btTx.TxID())
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
@@ -282,20 +275,30 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
 
-	// if !util.IsExtended(btTx) {
-	// 	extendSpan := tracing.Start(traceSpan.Ctx, "PropagationServer:ExtendTransaction")
-	// 	err = ExtendTransaction(extendSpan.Ctx, btTx, u.txStore)
-	// 	if err != nil {
-	// 		prometheusInvalidTransactions.Inc()
-	// 		return &emptypb.Empty{}, err
-	// 	}
-	// 	extendSpan.Finish()
-	// }
+	// save and validate the transaction in parallel
+	g, ctx := errgroup.WithContext(traceSpan.Ctx)
 
-	if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
-		// send REJECT message to peer if invalid tx
-		u.logger.Errorf("received invalid transaction: %s", err.Error())
-		prometheusInvalidTransactions.Inc()
+	g.Go(func() error {
+		if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+			prometheusInvalidTransactions.Inc()
+			// should we fail if the transaction doesn't get saved?
+			return err
+		}
+
+		return nil
+	})
+
+	g.Go(func() error {
+		if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
+			// send REJECT message to peer if invalid tx
+			u.logger.Errorf("received invalid transaction: %s", err.Error())
+			prometheusInvalidTransactions.Inc()
+			return err
+		}
+		return nil
+	})
+
+	if err = g.Wait(); err != nil {
 		return &emptypb.Empty{}, err
 	}
 
