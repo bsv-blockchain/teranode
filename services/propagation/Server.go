@@ -23,7 +23,6 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -275,30 +274,16 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
 
-	// save and validate the transaction in parallel
-	g, ctx := errgroup.WithContext(traceSpan.Ctx)
-
-	g.Go(func() error {
+	go func() {
 		if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
-			prometheusInvalidTransactions.Inc()
-			// should we fail if the transaction doesn't get saved?
-			return err
+			u.logger.Errorf("failed to save transaction %s: %s", btTx.String(), err.Error())
 		}
+	}()
 
-		return nil
-	})
-
-	g.Go(func() error {
-		if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
-			// send REJECT message to peer if invalid tx
-			u.logger.Errorf("received invalid transaction: %s", err.Error())
-			prometheusInvalidTransactions.Inc()
-			return err
-		}
-		return nil
-	})
-
-	if err = g.Wait(); err != nil {
+	if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
+		// TODO send REJECT message to peers if invalid tx
+		u.logger.Errorf("received invalid transaction: %s", err.Error())
+		prometheusInvalidTransactions.Inc()
 		return &emptypb.Empty{}, err
 	}
 
