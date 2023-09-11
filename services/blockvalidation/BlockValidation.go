@@ -108,6 +108,10 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 		return fmt.Errorf("failed to store block [%w]", err)
 	}
 
+	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+		u.logger.Errorf("failed to store coinbase transaction [%w]", err)
+	}
+
 	return nil
 }
 

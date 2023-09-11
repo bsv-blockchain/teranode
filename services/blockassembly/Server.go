@@ -121,7 +121,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	newSubtreeChan := make(chan *util.Subtree)
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.txMetaStore, ba.utxoStore, ba.txStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.txMetaStore, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	// start the new subtree listener in the background
 	go func() {
@@ -396,6 +396,11 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
+	}
+
+	err = ba.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+	if err != nil {
+		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
 	}
 
 	// update the subtree TTLs

@@ -32,7 +32,6 @@ type BlockAssembler struct {
 	logger           utils.Logger
 	txMetaClient     txmetastore.Store
 	utxoStore        utxostore.Interface
-	txStore          blob.Store
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
@@ -49,7 +48,7 @@ type BlockAssembler struct {
 }
 
 func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmetastore.Store, utxoStore utxostore.Interface,
-	txStore blob.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	maxBlockReorg, _ := gocore.Config().GetInt("block_assembler_max_block_reorg", 100)
 	maxBlockCatchup, _ := gocore.Config().GetInt("block_assembler_max_block_catchup", 100)
@@ -58,7 +57,6 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 		logger:            logger,
 		txMetaClient:      txMetaClient,
 		utxoStore:         utxoStore,
-		txStore:           txStore,
 		subtreeStore:      subtreeStore,
 		blockchainClient:  blockchainClient,
 		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
@@ -130,12 +128,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					} else {
 						if block, err = b.blockchainClient.GetBlock(ctx, header.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
-							continue
-						}
-
-						err = b.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
-						if err != nil {
-							b.logger.Errorf("[BlockAssembler] error storing coinbase tx in tx store: %v", err)
 							continue
 						}
 
