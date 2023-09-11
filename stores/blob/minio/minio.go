@@ -82,8 +82,17 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...opti
 
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
 	bufReader := bytes.NewReader(value)
+
+	// Set the object lock mode and retention period
+	mode := "GOVERNANCE"                                 // or "COMPLIANCE". Governance allows for deletion/edit, compliance does not
+	retainUntilDate := time.Now().Add(120 * time.Minute) // todo fix this to be read from the opts or passed in signature
+
 	objectOptions := minio.PutObjectOptions{
 		ContentType: "application/octet-stream",
+		UserMetadata: map[string]string{
+			"x-amz-object-lock-mode":              mode,
+			"x-amz-object-lock-retain-until-date": retainUntilDate.Format(time.RFC3339),
+		},
 	}
 
 	setOptions := options.NewSetOptions(opts...)

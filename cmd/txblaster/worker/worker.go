@@ -582,10 +582,11 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 	g, ctx := errgroup.WithContext(traceSpan.Ctx)
 
 	for addr, propagationServer := range w.propagationServers {
+		localAddr := addr // Create a local copy
 		p := propagationServer
 
 		g.Go(func() error {
-			return w.sendToPropagationServer(ctx, p, addr, txExtendedBytes)
+			return w.sendToPropagationServer(ctx, p, localAddr, txExtendedBytes) // Use localAddr here
 		})
 	}
 
