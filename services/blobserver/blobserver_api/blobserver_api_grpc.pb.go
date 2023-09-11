@@ -25,6 +25,7 @@ const (
 	BlobServerAPI_GetBlockHeader_FullMethodName     = "/blobserver_api.BlobServerAPI/GetBlockHeader"
 	BlobServerAPI_GetBlockHeaders_FullMethodName    = "/blobserver_api.BlobServerAPI/GetBlockHeaders"
 	BlobServerAPI_GetBestBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBestBlockHeader"
+	BlobServerAPI_GetNodes_FullMethodName           = "/blobserver_api.BlobServerAPI/GetNodes"
 	BlobServerAPI_Subscribe_FullMethodName          = "/blobserver_api.BlobServerAPI/Subscribe"
 )
 
@@ -38,6 +39,7 @@ type BlobServerAPIClient interface {
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error)
+	GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetNodesResponse, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
@@ -94,6 +96,15 @@ func (c *blobServerAPIClient) GetBestBlockHeader(ctx context.Context, in *emptyp
 	return out, nil
 }
 
+func (c *blobServerAPIClient) GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetNodesResponse, error) {
+	out := new(GetNodesResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_GetNodes_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blobServerAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error) {
 	stream, err := c.cc.NewStream(ctx, &BlobServerAPI_ServiceDesc.Streams[0], BlobServerAPI_Subscribe_FullMethodName, opts...)
 	if err != nil {
@@ -136,6 +147,7 @@ type BlobServerAPIServer interface {
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error)
+	GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error)
 	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
@@ -158,6 +170,9 @@ func (UnimplementedBlobServerAPIServer) GetBlockHeaders(context.Context, *GetBlo
 }
 func (UnimplementedBlobServerAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBestBlockHeader not implemented")
+}
+func (UnimplementedBlobServerAPIServer) GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNodes not implemented")
 }
 func (UnimplementedBlobServerAPIServer) Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
@@ -265,6 +280,24 @@ func _BlobServerAPI_GetBestBlockHeader_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlobServerAPI_GetNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).GetNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_GetNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).GetNodes(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -312,6 +345,10 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBestBlockHeader",
 			Handler:    _BlobServerAPI_GetBestBlockHeader_Handler,
+		},
+		{
+			MethodName: "GetNodes",
+			Handler:    _BlobServerAPI_GetNodes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

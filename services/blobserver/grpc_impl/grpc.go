@@ -32,6 +32,7 @@ type subscriber struct {
 type GRPC struct {
 	blobserver_api.UnimplementedBlobServerAPIServer
 	logger            utils.Logger
+	getPeers          func() []string
 	repository        *repository.Repository
 	grpcServer        *grpc.Server
 	blockchainClient  blockchain.ClientI
@@ -83,11 +84,12 @@ func init() {
 	baseURL = u.String()
 }
 
-func New(logger utils.Logger, repo *repository.Repository) (*GRPC, error) {
+func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
 	// TODO: change logger name
 	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
 	g := &GRPC{
 		logger:            logger,
+		getPeers:          getPeers,
 		repository:        repo,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),
@@ -282,6 +284,12 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobs
 	return &blobserver_api.BestBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
 		Height:      height,
+	}, nil
+}
+
+func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.GetNodesResponse, error) {
+	return &blobserver_api.GetNodesResponse{
+		Nodes: g.getPeers(),
 	}, nil
 }
 

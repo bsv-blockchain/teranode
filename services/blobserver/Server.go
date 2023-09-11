@@ -73,7 +73,13 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if grpcOk {
-		v.grpcServer, err = grpc_impl.New(v.logger, repo)
+		v.grpcServer, err = grpc_impl.New(v.logger, repo, func() []string {
+			var peers []string
+			for k := range v.peers {
+				peers = append(peers, k)
+			}
+			return peers
+		})
 		if err != nil {
 			return fmt.Errorf("error creating grpc server: %s", err)
 		}
