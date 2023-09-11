@@ -226,13 +226,13 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		}
 
 		go func() {
+			s.logger.Infof("BootstrapServer HTTPS service listening on %s", addr)
 			err := s.e.StartTLS(addr, certFile, keyFile)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Errorf("[BootstrapServer] HTTP (impl) service error: %s", err)
 			}
 		}()
 
-		s.logger.Infof("BootstrapServer HTTP service listening on %s", addr)
 		<-ctx.Done()
 		s.logger.Infof("[BootstrapServer] HTTP (impl) service shutting down")
 		err := s.e.Shutdown(ctx)
