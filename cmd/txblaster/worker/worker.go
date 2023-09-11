@@ -114,7 +114,7 @@ type Worker struct {
 	privateKey           *bec.PrivateKey
 	address              string
 	rateLimiter          *rate.Limiter
-	propagationServers   []PropagationServer
+	propagationServers   map[string]PropagationServer
 	kafkaProducer        sarama.SyncProducer
 	kafkaTopic           string
 	ipv6MulticastConn    *net.UDPConn
@@ -132,7 +132,7 @@ func NewWorker(
 	satoshisPerOutput uint64,
 	coinbasePrivKey string,
 	rateLimiter *rate.Limiter,
-	propagationServers []propagation_api.PropagationAPIClient,
+	propagationServers map[string]propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -152,9 +152,9 @@ func NewWorker(
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	propServers := make([]PropagationServer, len(propagationServers))
-	for i, p := range propagationServers {
-		propServers[i] = PropagationServer{
+	propServers := make(map[string]PropagationServer, len(propagationServers))
+	for addr, p := range propagationServers {
+		propServers[addr] = PropagationServer{
 			client: p,
 		}
 	}
@@ -574,7 +574,6 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	traceSpan.SetTag("progname", "txblaster")
 	traceSpan.SetTag("txid", txID)
-
 	traceSpan.SetTag("transport", "grpc")
 
 	btTx, _ := bt.NewTxFromBytes(txExtendedBytes)
@@ -582,18 +581,11 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 
 	g, ctx := errgroup.WithContext(traceSpan.Ctx)
 
-	for _, propagationServer := range w.propagationServers {
+	for addr, propagationServer := range w.propagationServers {
 		p := propagationServer
 
 		g.Go(func() error {
-			_, err := p.client.Set(ctx, &propagation_api.SetRequest{
-				Tx: txExtendedBytes,
-			})
-			now := time.Now()
-			if p.lastError == nil || now.Sub(*p.lastError) > time.Second*10 {
-				p.lastError = &now
-			}
-			return err
+			return w.sendToPropagationServer(ctx, p, addr, txExtendedBytes)
 		})
 	}
 
@@ -612,4 +604,21 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 	}
 
 	return nil
+}
+
+func (w *Worker) sendToPropagationServer(ctx context.Context, p PropagationServer, address string, txExtendedBytes []byte) error {
+	traceSpan := tracing.Start(ctx, "txBlaster:sendTransaction:sendToPropagationServer")
+	defer traceSpan.Finish()
+
+	traceSpan.SetTag("server", address)
+
+	_, err := p.client.Set(traceSpan.Ctx, &propagation_api.SetRequest{
+		Tx: txExtendedBytes,
+	})
+	now := time.Now()
+	if p.lastError == nil || now.Sub(*p.lastError) > time.Second*10 {
+		p.lastError = &now
+	}
+
+	return err
 }
