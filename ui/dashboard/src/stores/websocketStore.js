@@ -45,7 +45,7 @@ export function connectToWebSocket(blobServerHTTPAddress) {
 
   socket.onmessage = async (event) => {
     try {
-      const data = await event.data.text()
+      const data = await event.data
       const json = JSON.parse(data)
 
       updateFn(json)

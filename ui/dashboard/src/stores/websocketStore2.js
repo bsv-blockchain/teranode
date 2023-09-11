@@ -9,7 +9,7 @@ export function connectToWebSocket2() {
 
   socket.onmessage = async (event) => {
     try {
-      const data = await event.data.text()
+      const data = await event.data
       const json = JSON.parse(data)
 
       console.log('Websocket2', json)
