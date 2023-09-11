@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,31 +143,43 @@ func (s *Server) Start(ctx context.Context) (err error) {
 			return
 		}
 
-		certFile, found := gocore.Config().Get("server_certFile")
-		if !found {
-			s.logger.Errorf("server_certFile is required for HTTPS")
-			return
+		mode := "HTTPS"
+		if strings.HasPrefix(addr, "localhost:") {
+			mode = "HTTP"
 		}
 
-		keyFile, found := gocore.Config().Get("server_keyFile")
-		if !found {
-			s.logger.Errorf("server_keyFile is required for HTTPS")
-			return
-		}
+		s.logger.Infof("BootstrapServer %s service listening on %s", mode, addr)
 
-		go func() {
-			s.logger.Infof("BootstrapServer HTTPS service listening on %s", addr)
-			err := s.e.StartTLS(addr, certFile, keyFile)
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				s.logger.Errorf("[BootstrapServer] HTTP (impl) service error: %s", err)
+		var err error
+
+		if mode == "HTTP" {
+			err = s.e.Start(addr)
+		} else {
+			certFile, found := gocore.Config().Get("server_certFile")
+			if !found {
+				s.logger.Errorf("server_certFile is required for HTTPS")
+				return
 			}
-		}()
+
+			keyFile, found := gocore.Config().Get("server_keyFile")
+			if !found {
+				s.logger.Errorf("server_keyFile is required for HTTPS")
+				return
+			}
+
+			err = s.e.StartTLS(addr, certFile, keyFile)
+		}
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Errorf("[BootstrapServer] %s (impl) service error: %s", mode, err)
+		}
 
 		<-ctx.Done()
-		s.logger.Infof("[BootstrapServer] HTTP (impl) service shutting down")
-		err := s.e.Shutdown(ctx)
+
+		s.logger.Infof("[BootstrapServer] %s (impl) service shutting down", mode)
+		err = s.e.Shutdown(ctx)
 		if err != nil {
-			s.logger.Errorf("[BootstrapServer] HTTP (impl) service shutdown error: %s", err)
+			s.logger.Errorf("[BootstrapServer] %s (impl) service shutdown error: %s", mode, err)
 		}
 	}()
 

@@ -2,10 +2,11 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"net/http"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"golang.org/x/net/websocket"
 )
 
 type discoveryMsg struct {
@@ -17,6 +18,14 @@ type discoveryMsg struct {
 	Ip                    string    `json:"ip"`
 	Name                  string    `json:"name"`
 }
+
+var (
+	upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+)
 
 func (s *Server) HandleWebSocket() func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
@@ -66,25 +75,25 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 	}()
 
 	return func(c echo.Context) error {
-
 		ch := make(chan []byte)
 
-		websocket.Handler(func(ws *websocket.Conn) {
-			defer ws.Close()
+		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+		if err != nil {
+			return err
+		}
+		defer ws.Close()
 
-			newClientCh <- ch
+		newClientCh <- ch
 
-			for data := range ch {
-				// Write
-				err := websocket.Message.Send(ws, data)
-				if err != nil {
-					deadClientCh <- ch
-					close(ch)
-					s.logger.Errorf("Failed to Send WS message: %w", err)
-					break
-				}
+		for data := range ch {
+			// Write
+			err := ws.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				deadClientCh <- ch
+				s.logger.Errorf("Failed to Send WS message: %w", err)
+				break
 			}
-		}).ServeHTTP(c.Response(), c.Request())
+		}
 
 		return nil
 	}

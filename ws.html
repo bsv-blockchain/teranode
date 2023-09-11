@@ -4,8 +4,9 @@
     <title>WebSocket Example</title>
 </head>
 <body>
+    <h1>WebSocket Example</h1>
     <script>
-        const socket = new WebSocket('wss://m1.ubsv.dev:8099/ws');
+        const socket = new WebSocket('ws://localhost:8099/ws')
 
         // Connection opened
         socket.addEventListener('open', (event) => {
