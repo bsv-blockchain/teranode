@@ -21,7 +21,7 @@ func TestWorker_fireTransactions(t *testing.T) {
 		satoshisPerOutput    uint64
 		privateKey           *bec.PrivateKey
 		rateLimiter          *rate.Limiter
-		propagationServers   []PropagationServer
+		propagationServers   map[string]PropagationServer
 		kafkaProducer        sarama.SyncProducer
 		kafkaTopic           string
 		printProgress        uint64

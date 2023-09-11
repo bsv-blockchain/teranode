@@ -303,7 +303,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		p2p.TestLogger{},
 		items.txMetaStore,
 		items.utxoStore,
-		items.txStore,
 		items.blobStore,
 		items.blockchainClient,
 		items.newSubtreeChan,
