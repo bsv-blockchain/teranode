@@ -51,7 +51,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification)
 					BaseURL: notification.BaseUrl,
 				}, "", "  ")
 				if err != nil {
-					h.logger.Errorf("Error marshaling notification: %W", err)
+					h.logger.Errorf("Error marshaling notification: %w", err)
 					continue
 				}
 

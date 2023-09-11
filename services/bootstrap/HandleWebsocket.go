@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
@@ -38,6 +39,32 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 			case newClient := <-newClientCh:
 				clientChannels[newClient] = struct{}{}
 
+				// Send this newClient all of the existing subscribers
+				s.mu.RLock()
+
+				for _, sub := range s.subscribers {
+					dm := &discoveryMsg{
+						Type:                  bootstrap_api.Type_ADD.String(),
+						ConnectedAt:           sub.ConnectedAt.AsTime(),
+						BlobServerGRPCAddress: sub.BlobServerGRPCAddress,
+						BlobServerHTTPAddress: sub.BlobServerHTTPAddress,
+						Source:                sub.Source,
+						Ip:                    sub.Ip,
+						Name:                  sub.Name,
+					}
+
+					data, err := json.MarshalIndent(dm, "", "  ")
+					if err != nil {
+						s.mu.RUnlock()
+						s.logger.Errorf("Error marshaling notification: %s", err)
+						continue
+					}
+
+					newClient <- data
+				}
+
+				s.mu.RUnlock()
+
 			case deadClient := <-deadClientCh:
 				delete(clientChannels, deadClient)
 
@@ -63,7 +90,7 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 
 				data, err := json.MarshalIndent(dm, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %W", err)
+					s.logger.Errorf("Error marshaling notification: %w", err)
 					continue
 				}
 
