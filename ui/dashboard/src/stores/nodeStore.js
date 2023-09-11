@@ -33,7 +33,6 @@ export const selectedNode = (() => {
     },
   }
 })()
-
 export async function getNodes() {
   try {
     error.set('')
