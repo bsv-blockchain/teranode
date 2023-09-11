@@ -1,7 +1,5 @@
 <script>
-  import { nodes, loading, error } from '@stores/nodeStore.js'
-
-  import Spinner from '@components/Spinner.svelte'
+  import { nodes, error } from '@stores/nodeStore.js'
 
   function humanTime(time) {
     let diff = new Date().getTime() - new Date(time).getTime()
@@ -62,9 +60,6 @@
       <p>Error fetching nodes: {$error}</p>
     {:else if $nodes.length === 0}
       <p>No nodes connected</p>
-      {#if $loading}
-        <Spinner />
-      {/if}
     {:else}
       <table class="table">
         <tbody>
