@@ -283,7 +283,7 @@ func main() {
 	if startUtxoStore {
 		sm.AddService("UTXOStoreServer", utxo.New(
 			gocore.Log("utxo"),
-			getUtxoStore(ctx, logger),
+			getUtxoMemoryStore(),
 		))
 	}
 
