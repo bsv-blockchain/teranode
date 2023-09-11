@@ -15,7 +15,7 @@ dev:
 dev-go:
 	# Run go project
 	trap 'kill %1 %2' SIGINT; \
-	go run main.go
+	go run .
 
 .PHONY: dev-node
 dev-node:
