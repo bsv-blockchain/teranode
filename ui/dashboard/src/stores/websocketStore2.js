@@ -1,6 +1,8 @@
 export function connectToWebSocket2(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
-  const wsUrl = `${url.protocol === "http:" ? "ws":"wss"}://${url.hostname}:8099/ws`
+  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${
+    url.hostname
+  }:8099/ws`
 
   let socket = new WebSocket(wsUrl)
 
