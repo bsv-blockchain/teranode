@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -146,7 +145,7 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		}
 
 		mode := "HTTPS"
-		if strings.HasPrefix(addr, "localhost:") {
+		if level, _ := gocore.Config().GetInt("securityLevel", 0); level == 0 {
 			mode = "HTTP"
 		}
 

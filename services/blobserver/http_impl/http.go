@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
@@ -106,7 +105,7 @@ func (h *HTTP) Init(_ context.Context) error {
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	mode := "HTTPS"
-	if strings.HasPrefix(addr, "localhost:") {
+	if level, _ := gocore.Config().GetInt("securityLevel", 0); level == 0 {
 		mode = "HTTP"
 	}
 
