@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store'
-import { nodes } from './nodeStore'
+import { nodes, decorateNodesWithHeaders } from './nodeStore'
 
 export const lastUpdated = writable(new Date())
 
@@ -54,6 +54,8 @@ export function connectToWebSocket(blobServerHTTPAddress) {
     try {
       const data = await event.data
       const json = JSON.parse(data)
+
+      console.log('Websocket1', json)
 
       if (json.type === 'ADD') {
         await decorateNodesWithHeaders(json)
