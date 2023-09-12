@@ -287,9 +287,17 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 			return nil, fmt.Errorf("error filling initial inputs: %v", err)
 		}
 
+		timeStart := time.Now()
+
 		if err = w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes()); err != nil {
 			return nil, fmt.Errorf("error sending initial transaction: %v", err)
 		}
+
+		// increment prometheus counter
+		prometheusProcessedTransactions.Inc()
+		prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
+		prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+		w.totalTransactions.Add(1)
 
 		w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
 		for idx, output := range tx.Outputs {
