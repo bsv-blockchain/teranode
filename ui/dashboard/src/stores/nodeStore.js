@@ -100,7 +100,7 @@ function timeout(ms) {
   )
 }
 
-async function decorateNodesWithHeaders(nodesData) {
+export async function decorateNodesWithHeaders(nodesData) {
   await Promise.all(
     nodesData.map(async (node) => {
       if (node.blobServerHTTPAddress) {
