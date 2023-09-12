@@ -217,12 +217,26 @@ func main() {
 	}
 
 	var err error
-	var validatorClient *validator.Client
+	var validatorClient validator.Interface
 
 	if startBlockValidation || startPropagation {
-		validatorClient, err = validator.NewClient(ctx, logger)
-		if err != nil {
-			logger.Fatalf("error creating validator client: %v", err)
+		localValidator := gocore.Config().GetBool("useLocalValidator", false)
+		if localValidator {
+			logger.Infof("[Validator] Using local validator")
+			validatorClient, err = validator.New(ctx,
+				logger,
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+			)
+			if err != nil {
+				logger.Fatalf("could not create validator [%w]", err)
+			}
+
+		} else {
+			validatorClient, err = validator.NewClient(ctx, logger)
+			if err != nil {
+				logger.Fatalf("error creating validator client: %v", err)
+			}
 		}
 	}
 

@@ -66,7 +66,7 @@ type Server struct {
 	subtreeStore     blob.Store
 	txStore          blob.Store
 	txMetaStore      txmeta_store.Store
-	validatorClient  *validator.Client
+	validatorClient  validator.Interface
 
 	blockFoundCh        chan processBlockFound
 	catchupCh           chan processBlockCatchup
@@ -88,7 +88,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient *validator.Client) *Server {
+	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
 
 	bVal := &Server{
 		utxoStore:            utxoStore,

@@ -80,7 +80,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, validatorClient *validator.Client) *PropagationServer {
+func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
 	return &PropagationServer{
 		logger:    logger,
 		txStore:   txStore,
@@ -277,6 +277,8 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	go func() {
 		if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
 			u.logger.Errorf("failed to save transaction %s: %s", btTx.String(), err.Error())
+			// TODO make this resilient to errors
+			// write it to secondary store (Kafka, Badger) and retry?
 		}
 	}()
 
