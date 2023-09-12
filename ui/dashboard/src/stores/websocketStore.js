@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store'
+import { nodes } from './nodeStore'
 
 export const lastUpdated = writable(new Date())
 
@@ -53,6 +54,14 @@ export function connectToWebSocket(blobServerHTTPAddress) {
     try {
       const data = await event.data
       const json = JSON.parse(data)
+
+      if (json.type === 'ADD') {
+        await decorateNodesWithHeaders(json)
+
+        nodesData = get(nodes)
+        nodesData = nodesData.concat(json)
+        nodes.set(nodesData)
+      }
 
       updateFn(json)
     } catch (error) {
