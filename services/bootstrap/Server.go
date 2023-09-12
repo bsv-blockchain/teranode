@@ -123,7 +123,9 @@ func (s *Server) Start(ctx context.Context) (err error) {
 					close(ch)
 				}
 
-				s.grpc.GracefulStop()
+				if s.grpc != nil {
+					s.grpc.GracefulStop()
+				}
 				// s.grpc.Stop()
 
 				return // returning not to leak the goroutine

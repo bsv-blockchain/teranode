@@ -69,9 +69,7 @@ func (c *Client) WithBlobServerHttpAddress(addr string) *Client {
 
 func (c *Client) Start(ctx context.Context) error {
 	bootstrap_grpcAddress, _ := gocore.Config().Get("bootstrap_grpcAddress")
-	conn, err := util.GetGRPCClient(ctx, bootstrap_grpcAddress, &util.ConnectionOptions{
-		SecurityLevel: 1,
-	})
+	conn, err := util.GetGRPCClient(ctx, bootstrap_grpcAddress, &util.ConnectionOptions{})
 	if err != nil {
 		return err
 	}

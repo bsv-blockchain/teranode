@@ -36,7 +36,7 @@
 
     addSubscriber(getNodes)
 
-    connectToWebSocket2()
+    connectToWebSocket2($selectedNode)
   })
 </script>
 

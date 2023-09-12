@@ -1,5 +1,6 @@
-export function connectToWebSocket2() {
-  const wsUrl = new URL('wss://bootstrap.scaling.ubsv.dev:8099/ws')
+export function connectToWebSocket2(blobServerHTTPAddress) {
+  const url = new URL(blobServerHTTPAddress)
+  const wsUrl = `${url.protocol === "http:" ? "ws":"wss"}://${url.hostname}:8099/ws`
 
   let socket = new WebSocket(wsUrl)
 
