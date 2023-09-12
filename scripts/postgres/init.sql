@@ -67,3 +67,13 @@ DATABASE coinbase
   WITH OWNER = coinbase
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
+
+CREATE ROLE coinbase_allinone LOGIN
+  PASSWORD 'coinbase_allinone'
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+grant coinbase_allinone to postgres;
+CREATE
+DATABASE coinbase_allinone
+  WITH OWNER = coinbase_allinone
+  ENCODING = 'UTF8'
+  CONNECTION LIMIT = -1;

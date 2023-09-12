@@ -1,5 +1,5 @@
 export function connectToWebSocket2() {
-  const wsUrl = new URL('wss://bootstrap.ubsv.dev:8099/ws')
+  const wsUrl = new URL('wss://bootstrap.scaling.ubsv.dev:8099/ws')
 
   let socket = new WebSocket(wsUrl)
 
