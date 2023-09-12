@@ -21,6 +21,7 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -147,7 +148,8 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					continue
 				}
 
-				if err = ba.subtreeStore.Set(ctx,
+				// TODO context was being canceled, is this hiding a different problem?
+				if err = ba.subtreeStore.Set(context.Background(),
 					subtree.RootHash()[:],
 					subtreeBytes,
 					options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
@@ -408,17 +410,26 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
 
-	err = ba.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+	// TODO context was being canceled, is this hiding a different problem?
+	err = ba.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
 	if err != nil {
 		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
 	}
 
+	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	callerSpan := opentracing.SpanFromContext(ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
 	// update the subtree TTLs
-	for _, subtree := range block.Subtrees {
-		err = ba.subtreeStore.SetTTL(ctx, subtree[:], 0)
-		if err != nil {
-			ba.logger.Errorf("failed to update subtree TTL: %w", err)
-		}
+	for _, subtreeHash := range block.Subtrees {
+		go func(subtreeHashBytes []byte) {
+			span, spanCtx := opentracing.StartSpanFromContext(setCtx, "BlockAssembly:SubmitMiningSolution:Subtree")
+			defer span.Finish()
+			err = ba.subtreeStore.SetTTL(spanCtx, subtreeHashBytes, 0)
+			if err != nil {
+				ba.logger.Errorf("failed to update subtree TTL: %w", err)
+			}
+		}(subtreeHash[:])
 	}
 
 	// remove job, we have already mined a block with it
