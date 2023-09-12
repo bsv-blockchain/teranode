@@ -117,7 +117,7 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 			err := ws.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				deadClientCh <- ch
-				s.logger.Errorf("Failed to Send WS message: %w", err)
+				s.logger.Errorf("Failed to Send Discovery WS message: %v", err)
 				break
 			}
 		}

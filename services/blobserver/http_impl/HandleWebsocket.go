@@ -78,7 +78,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification)
 			err := ws.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				deadClientCh <- ch
-				h.logger.Errorf("Failed to Send WS message: %w", err)
+				h.logger.Errorf("Failed to Send notification WS message: %v", err)
 				break
 			}
 		}
