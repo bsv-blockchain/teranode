@@ -50,7 +50,7 @@ export async function getNodes() {
           protocol = 'ws:'
         }
 
-        const wsUrl = `${protocol}//${url.hostname}:8099/ws`
+        const wsUrl = `${protocol}//${url.hostname}:8090/ws`
 
         let socket = new WebSocket(wsUrl)
 
