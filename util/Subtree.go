@@ -107,13 +107,13 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64)
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
-	binary.LittleEndian.PutUint64(st.feeBytes, fee)
-	st.feeHashBytes = append(node[:], st.feeBytes[:]...)
-	if len(st.Nodes) == 0 {
-		st.FeeHash = chainhash.HashH(st.feeHashBytes)
-	} else {
-		st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
-	}
+	//binary.LittleEndian.PutUint64(st.feeBytes, fee)
+	//st.feeHashBytes = append(node[:], st.feeBytes[:]...)
+	//if len(st.Nodes) == 0 {
+	//	st.FeeHash = chainhash.HashH(st.feeHashBytes)
+	//} else {
+	//	st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
+	//}
 
 	st.Nodes = append(st.Nodes, SubtreeNode{
 		Hash:        node,
