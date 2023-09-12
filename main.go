@@ -229,7 +229,7 @@ func main() {
 				getTxMetaStore(logger),
 			)
 			if err != nil {
-				logger.Fatalf("could not create validator [%w]", err)
+				logger.Fatalf("could not create validator [%v]", err)
 			}
 
 		} else {
