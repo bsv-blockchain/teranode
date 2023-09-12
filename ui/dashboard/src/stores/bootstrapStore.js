@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store'
+import { writable, get } from 'svelte/store'
 import { nodes, decorateNodesWithHeaders } from './nodeStore'
 
 export const lastUpdated = writable(new Date())
@@ -15,12 +15,12 @@ export function removeSubscriber(fn) {
   updateFns = updateFns.filter((f) => f !== fn)
 }
 
-const updateFn = debounce((json) => {
+const updateFn = (json) => {
   lastUpdated.set(new Date())
   updateFns.forEach((fn) => fn(json))
-}, 1000)
+}
 
-export function connectToWebSocket(blobServerHTTPAddress) {
+export function connectToBootstrap(blobServerHTTPAddress) {
   if (typeof WebSocket === 'undefined') {
     return
   }
@@ -37,11 +37,13 @@ export function connectToWebSocket(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
 
   // In a url x.scaling.ubsv.dev, replace x with bootstrap
+  let host = url.hostname
+
   const parts = url.hostname.split('.')
-  const host = 'bootstrap.' + parts.slice(1).join('.')
-  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${
-    host
-  }:8099/ws`
+  if (parts.length > 1) {
+    host = 'bootstrap.' + parts.slice(1).join('.')
+  }
+  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${host}:8099/ws`
 
   let socket = new WebSocket(wsUrl)
 
@@ -60,7 +62,7 @@ export function connectToWebSocket(blobServerHTTPAddress) {
       if (json.type === 'ADD') {
         await decorateNodesWithHeaders(json)
 
-        nodesData = get(nodes)
+        let nodesData = get(nodes)
         nodesData = nodesData.concat(json)
         nodes.set(nodesData)
       }
@@ -82,19 +84,5 @@ export function connectToWebSocket(blobServerHTTPAddress) {
       console.log(`WebSocket connection closed by client (${wsUrl})`)
       socket.close()
     }
-  }
-}
-
-function debounce(func, delay) {
-  let timeoutId
-
-  return function () {
-    clearTimeout(timeoutId)
-    const context = this
-    const args = arguments
-
-    timeoutId = setTimeout(() => {
-      func.apply(context, args)
-    }, delay)
   }
 }

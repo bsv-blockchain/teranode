@@ -6,11 +6,10 @@
     selectedNode,
     loading,
     lastUpdated,
-    getNodes,
   } from '@stores/nodeStore.js'
 
-  import { connectToWebSocket, addSubscriber } from '@stores/websocketStore.js'
-  import { connectToWebSocket2 } from '@stores/websocketStore2.js'
+  import { connectToBootstrap, addSubscriber } from '@stores/bootstrapStore.js'
+  import { connectToBlobServer } from '@stores/nodeStore.js'
 
   let age = 0
   let cancel = null
@@ -31,12 +30,11 @@
   // Get the nodes on mount
 
   onMount(async () => {
-    await getNodes()
-    connectToWebSocket($selectedNode)
+    connectToBootstrap($selectedNode)
 
-    addSubscriber(getNodes)
+    // addSubscriber(getNodes)
 
-    connectToWebSocket2($selectedNode)
+    connectToBlobServer($selectedNode)
   })
 </script>
 
@@ -100,7 +98,7 @@
         <div class="select">
           <select
             bind:value={$selectedNode}
-            on:change={() => connectToWebSocket($selectedNode)}
+            on:change={() => connectToBootstrap($selectedNode)}
           >
             <option disabled>Select a URL</option>
             {#each $nodes as node (node.blobServerHTTPAddress)}

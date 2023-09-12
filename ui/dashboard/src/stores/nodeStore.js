@@ -36,60 +36,32 @@ export const selectedNode = (() => {
   }
 })()
 
-export async function getNodes() {
-  try {
-    error.set('')
-    loading.set(true)
+export function connectToBlobServer(blobServerHTTPAddress) {
+  const url = new URL(blobServerHTTPAddress)
+  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${
+    url.hostname
+  }:8090/ws`
 
-    if (!import.meta.env.SSR) {
-      // Extract the domain from the URL of this page
-      if (window && window.location) {
-        const url = new URL(window.location.href)
-        let protocol = 'wss:'
-        if (url.protocol === 'http:') {
-          protocol = 'ws:'
-        }
+  let socket = new WebSocket(wsUrl)
 
-        const wsUrl = `${protocol}//${url.hostname}:8090/ws`
+  socket.onopen = () => {
+    console.log(`WebSocket2 connection opened to ${wsUrl}`)
+  }
 
-        let socket = new WebSocket(wsUrl)
+  socket.onmessage = async (event) => {
+    try {
+      const data = await event.data
+      const json = JSON.parse(data)
 
-        socket.onopen = () => {
-          console.log(`WebSocket2 connection opened to ${wsUrl}`)
-        }
-
-        socket.onmessage = async (event) => {
-          try {
-            const data = await event.data
-            const json = JSON.parse(data)
-
-            console.log('Websocket2', json)
-
-            if (json.type === 'ADD') {
-              await decorateNodesWithHeaders(json)
-
-              let nodesData = get(nodes)
-              nodesData = nodesData.concat(json)
-              nodesData = nodesData.sort((a, b) => a.name.localeCompare(b.name))
-
-              nodes.set(nodesData)
-              lastUpdated.set(new Date())
-            }
-          } catch (error) {
-            console.error('Error2 parsing WebSocket data:', error)
-          }
-        }
-
-        socket.onclose = () => {
-          console.log(`WebSocket2 connection closed by server (${wsUrl})`)
-          socket = null
-        }
-      }
+      console.log('Websocket2', json)
+    } catch (error) {
+      console.error('Error2 parsing WebSocket data:', error)
     }
-  } catch (err) {
-    console.error('Error fetching nodes:', err.message)
-  } finally {
-    loading.set(false)
+  }
+
+  socket.onclose = () => {
+    console.log(`WebSocket2 connection closed by server (${wsUrl})`)
+    socket = null
   }
 }
 
@@ -134,11 +106,6 @@ async function getBestBlockHeader(address) {
 
   return await response.json()
 }
-
-// Create a IEFE to start the websocket connection
-;(async () => {
-  await getNodes()
-})()
 
 // Save the selected node to local storage
 function saveSelectedNodeToLocalStorage(nodeId) {

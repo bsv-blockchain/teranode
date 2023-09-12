@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { addSubscriber, removeSubscriber } from '@stores/websocketStore.js'
+  import { addSubscriber, removeSubscriber } from '@stores/bootstrapStore.js'
   import { notifications } from '@stores/listenerStore.js'
 
   onMount(() => {

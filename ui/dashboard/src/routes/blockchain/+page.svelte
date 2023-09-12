@@ -1,7 +1,7 @@
 <script>
   import BlocksTable from '@components/BlocksTable.svelte'
   import { selectedNode } from '@stores/nodeStore.js'
-  import { lastUpdated } from '@stores/websocketStore.js'
+  import { lastUpdated } from '@stores/bootstrapStore.js'
 
   let blocks = []
   let error = ''
