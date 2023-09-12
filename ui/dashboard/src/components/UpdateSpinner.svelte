@@ -7,10 +7,7 @@
   $: updateFunction = updateFunc || function () {}
 </script>
 
-<div
-  class="overlay"
-  title="When enabled the app will use the BlobServer at localhost:8099"
->
+<div class="overlay">
   <button
     class="spinner-button"
     style="--spinner-size: {size};"

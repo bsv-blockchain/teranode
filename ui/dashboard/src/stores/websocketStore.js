@@ -34,8 +34,12 @@ export function connectToWebSocket(blobServerHTTPAddress) {
   }
 
   const url = new URL(blobServerHTTPAddress)
+
+  // In a url x.scaling.ubsv.dev, replace x with bootstrap
+  const parts = url.hostname.split('.')
+  const host = 'bootstrap' + parts.slice(1).join('.')
   const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${
-    url.hostname
+    host
   }:8099/ws`
 
   let socket = new WebSocket(wsUrl)
