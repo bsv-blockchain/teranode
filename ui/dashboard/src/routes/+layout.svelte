@@ -6,10 +6,10 @@
     selectedNode,
     loading,
     lastUpdated,
+    connectToBlobServer,
   } from '@stores/nodeStore.js'
 
   import { connectToBootstrap, addSubscriber } from '@stores/bootstrapStore.js'
-  import { connectToBlobServer } from '@stores/nodeStore.js'
 
   let age = 0
   let cancel = null
@@ -32,7 +32,9 @@
   onMount(async () => {
     connectToBootstrap($selectedNode)
 
-    // addSubscriber(getNodes)
+    addSubscriber(function (data) {
+      console.log(data)
+    })
 
     connectToBlobServer($selectedNode)
   })
