@@ -77,6 +77,10 @@ func (b *BlockAssembler) SetMaxBlockCatchup(maxBlockCatchup int) {
 	b.maxBlockCatchup = maxBlockCatchup
 }
 
+func (b *BlockAssembler) TxCount() uint64 {
+	return b.subtreeProcessor.TxCount()
+}
+
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	var err error
 

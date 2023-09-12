@@ -33,6 +33,7 @@ import (
 var (
 	prometheusBlockAssemblyAddTx          prometheus.Counter
 	prometheusBlockAssemblySubtreeCreated prometheus.Counter
+	prometheusBlockAssemblyTransactions   prometheus.Gauge
 	prometheusTxMetaGetDuration           prometheus.Histogram
 	prometheusUtxoStoreDuration           prometheus.Histogram
 	prometheusSubtreeAddToChannelDuration prometheus.Histogram
@@ -52,6 +53,13 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "blockassembly_subtree_created",
 			Help: "Number of subtrees created in the block assembly service",
+		},
+	)
+
+	prometheusBlockAssemblyTransactions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "blockassembly_transactions",
+			Help: "Number of transactions currently in the block assembler subtree processor",
 		},
 	)
 
@@ -264,6 +272,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	if err = ba.blockAssembler.AddTx(ctx, txHash); err != nil {
 		return nil, err
 	}
+
+	prometheusBlockAssemblyTransactions.Set(float64(ba.blockAssembler.TxCount()))
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
