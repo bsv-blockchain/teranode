@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/minio/minio-go/v7/pkg/lifecycle"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -53,18 +52,6 @@ func New(minioURL *url.URL) (*Minio, error) {
 		tempTTL = true
 	}
 
-	// Define a Lifecycle configuration with a rule to expire (TTL) objects with a specific prefix after 30 days
-	lc := lifecycle.NewConfiguration()
-	rule := lifecycle.Rule{
-		ID:     "expire-rule",
-		Status: "Enabled",
-		Prefix: "temp/", // Objects with the prefix 'temp/' will have this rule applied
-		Expiration: lifecycle.Expiration{
-			Days: lifecycle.ExpirationDays(1), // TTL set for 1 day
-		},
-	}
-	lc.Rules = []lifecycle.Rule{rule}
-
 	err = client.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{
 		Region:        location,
 		ObjectLocking: objectLocking,
@@ -78,11 +65,22 @@ func New(minioURL *url.URL) (*Minio, error) {
 		}
 	}
 
-	// Set the lifecycle configuration on the bucket
-	err = client.SetBucketLifecycle(context.Background(), bucketName, lc)
-	if err != nil {
-		return nil, fmt.Errorf("error setting bucket lifecycle: %v", err)
-	}
+	// Define a Lifecycle configuration with a rule to expire (TTL) objects with a specific prefix after 30 days
+	//lc := lifecycle.NewConfiguration()
+	//lc.Rules = []lifecycle.Rule{{
+	//	ID:     "expire-rule",
+	//	Status: "Enabled",
+	//	Prefix: "temp/", // Objects with the prefix 'temp/' will have this rule applied
+	//	Expiration: lifecycle.Expiration{
+	//		Days: lifecycle.ExpirationDays(1), // TTL set for 1 day
+	//	},
+	//}}
+	//
+	//// Set the lifecycle configuration on the bucket
+	//err = client.SetBucketLifecycle(context.Background(), bucketName, lc)
+	//if err != nil {
+	//	return nil, fmt.Errorf("error setting bucket lifecycle: %v", err)
+	//}
 
 	return &Minio{
 		client:     client,

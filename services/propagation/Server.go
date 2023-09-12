@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/wire"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -274,9 +275,14 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
 
+	// decouple the tracing context to not cancel the context when the tx is being saved in the background
+	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 	go func() {
-		if err = u.txStore.Set(traceSpan.Ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
-			u.logger.Errorf("failed to save transaction %s: %s", btTx.String(), err.Error())
+		span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
+		defer span.Finish()
+		if err = u.txStore.Set(spanCtx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+			u.logger.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
 			// TODO make this resilient to errors
 			// write it to secondary store (Kafka, Badger) and retry?
 		}
