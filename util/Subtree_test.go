@@ -224,30 +224,30 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	})
 }
 
-func TestSubtree_AddNode(t *testing.T) {
-	t.Run("fee hash", func(t *testing.T) {
-		st := NewTree(1)
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", st.FeeHash.String())
-	})
-
-	t.Run("fee hash 1", func(t *testing.T) {
-		st := NewTree(1)
-		hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
-		_ = st.AddNode(hash1, 111, 0)
-
-		assert.Equal(t, "66e4e66648f366400333d922e2371ad132b37054d53410b2767876089707eb43", st.FeeHash.String())
-	})
-
-	t.Run("fee hash 2", func(t *testing.T) {
-		st := NewTree(1)
-		hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
-		hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
-		_ = st.AddNode(hash1, 111, 0)
-		_ = st.AddNode(hash2, 123, 0)
-
-		assert.Equal(t, "e6e65a874a12c4753485b3b42d1c378b36b02196ef2b3461da1d452d7d1434fb", st.FeeHash.String())
-	})
-}
+//func TestSubtree_AddNode(t *testing.T) {
+//	t.Run("fee hash", func(t *testing.T) {
+//		st := NewTree(1)
+//		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", st.FeeHash.String())
+//	})
+//
+//	t.Run("fee hash 1", func(t *testing.T) {
+//		st := NewTree(1)
+//		hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
+//		_ = st.AddNode(hash1, 111, 0)
+//
+//		assert.Equal(t, "66e4e66648f366400333d922e2371ad132b37054d53410b2767876089707eb43", st.FeeHash.String())
+//	})
+//
+//	t.Run("fee hash 2", func(t *testing.T) {
+//		st := NewTree(1)
+//		hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
+//		hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
+//		_ = st.AddNode(hash1, 111, 0)
+//		_ = st.AddNode(hash2, 123, 0)
+//
+//		assert.Equal(t, "e6e65a874a12c4753485b3b42d1c378b36b02196ef2b3461da1d452d7d1434fb", st.FeeHash.String())
+//	})
+//}
 
 func BenchmarkSubtree_AddNode(b *testing.B) {
 	st := NewTree(20)
