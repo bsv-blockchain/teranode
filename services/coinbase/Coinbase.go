@@ -193,7 +193,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_spendable ON coinbase_utxos (spendable, address, reserved_at);`); err != nil {
+	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_block_spendable ON coinbase_utxos (block_id, spendable, address, reserved_at, id);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
 	}
@@ -361,7 +361,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 					WHERE b.id != cb.id
 				)
 				SELECT id FROM ChainBlocks
-				WHERE height <= (SELECT height - 100 FROM LongestChainTip)
+				WHERE height < (SELECT height - 100 FROM LongestChainTip)
 				LIMIT 100
 			)
 			ORDER BY height DESC
