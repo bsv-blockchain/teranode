@@ -1,19 +1,20 @@
 <script>
   import { onMount } from 'svelte'
-  import { addSubscriber, selectedNode } from '@stores/bootstrapStore.js'
-  import { blocks, isFirstMount } from '@stores/chainStore.js'
+  import { addSubscriber } from '@stores/nodeStore.js'
+  import { selectedNode } from '@stores/bootstrapStore.js'
+  import { blocks } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
 
   onMount(() => {
-    if ($isFirstMount) {
-      isFirstMount.set(false)
+    // if ($isFirstMount) {
+    //   isFirstMount.set(false)
 
-      console.log('adding subscriber')
-      addSubscriber(update)
-    }
+    console.log('adding subscriber')
+    addSubscriber(update)
+    // }
 
     drawTree($blocks)
     // return () => {

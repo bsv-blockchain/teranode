@@ -32,9 +32,9 @@
   onMount(async () => {
     connectToBootstrap($selectedNode)
 
-    addSubscriber(function (data) {
-      console.log('layout', data)
-    })
+    // addSubscriber(function (data) {
+    //   console.log('layout', data)
+    // })
 
     connectToBlobServer($selectedNode)
   })
