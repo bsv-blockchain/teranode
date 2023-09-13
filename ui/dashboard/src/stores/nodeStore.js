@@ -57,14 +57,13 @@ export function connectToBlobServer(blobServerHTTPAddress) {
       console.log('BlobserverWS', json)
 
       if (json.type === 'Block') {
-        debugger
         // Get the node from the list of nodes
-        const headers = getNodeHeaders(json.base_url)
+        const headers = await getNodeHeaders(json.base_url)
 
         // Update the node with the new block
         const nodesData = get(nodes)
         const index = nodesData.findIndex(
-          (node) => node.base_url === json.base_url
+          (node) => node.blobServerHTTPAddress === json.base_url
         )
 
         nodesData[index].headers = headers
