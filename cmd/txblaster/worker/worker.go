@@ -501,7 +501,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 	} else {
 		retries := 0
 		maxRetries, _ := gocore.Config().GetInt("txblaster_maxRetries", 3)
-		retrySleep, _ := gocore.Config().GetInt("txblaster_retrySleep", 100)
+		retrySleep, _ := gocore.Config().GetInt("txblaster_retrySleep", 500)
 		for {
 			// decouple the tracing context to not contaminate the main context, but retain the tracing
 			callerSpan := opentracing.SpanFromContext(ctx)
@@ -514,14 +514,14 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 			err := w.sendTransaction(spanCtx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
 			if err != nil {
 				if retries < maxRetries {
-					w.logger.Debugf("failed to send transaction, retrying %d: %v", retries, err)
+					w.logger.Warnf("failed to send transaction, retrying %d: %v", retries, err)
 					retries++
 					time.Sleep(time.Duration(retrySleep*retries) * time.Millisecond)
 					continue
 				} else {
 					// get a new utxo and restart
+					w.logger.Errorf("failed to send transaction, max retries reached, restarting: %v", err)
 					go func() {
-						w.logger.Infof("restarting worker with new utxo")
 						if _, err = w.startWithCoinbaseTracker(ctx); err != nil {
 							w.logger.Errorf("failed to get new utxo: %v", err)
 						}
