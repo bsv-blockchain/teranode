@@ -50,6 +50,14 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 			panic(err)
 		}
 
+		_, height, err := blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+		} else {
+			logger.Debugf("[UTXOStore] setting block height to %d", height)
+			_ = utxoStore.SetBlockHeight(height)
+		}
+
 		logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
 		go func() {
 			var height uint32

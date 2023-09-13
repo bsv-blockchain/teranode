@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net/url"
 	"time"
@@ -130,6 +129,7 @@ func New(u *url.URL) (*Store, error) {
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
+	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight = blockHeight
 	return nil
 }
@@ -321,7 +321,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	bin := aerospike.NewBin("txid", txID.CloneBytes())
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
-		log.Printf("AEROSPIKE: error in aerospike spend PutBins: %v", err)
+		s.logger.Errorf("AEROSPIKE: error in aerospike spend PutBins: %v", err)
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			s.logger.Debugf("utxo %s is not spendable in block %d: %s", hash.String(), s.blockHeight, err.Error())
@@ -331,6 +331,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		}
 
 		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			s.logger.Debugf("utxo %s was not found: %s", hash.String(), err.Error())
 			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil
@@ -355,6 +356,8 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 				if err != nil {
 					return nil, fmt.Errorf("chainhash error: %w", err)
 				}
+
+				s.logger.Debugf("utxo %s was spent: %s", hash.String(), err.Error())
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: spendingTxHash,
