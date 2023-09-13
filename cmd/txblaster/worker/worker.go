@@ -499,7 +499,7 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 		}
 	} else {
 		retries := 0
-		maxRetries, _ := gocore.Config().GetInt("txblaster_maxRetries", 10)
+		maxRetries, _ := gocore.Config().GetInt("txblaster_maxRetries", 3)
 		retrySleep, _ := gocore.Config().GetInt("txblaster_retrySleep", 100)
 		for {
 			err := w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
@@ -507,20 +507,15 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 				if retries < maxRetries {
 					w.logger.Debugf("failed to send transaction, retrying %d: %v", retries, err)
 					retries++
-					time.Sleep(time.Duration(retrySleep) * time.Millisecond)
+					time.Sleep(time.Duration(retrySleep*retries) * time.Millisecond)
 					continue
 				}
+				//	if retries exceeded silently drop the transaction
 				prometheusInvalidTransactions.Inc()
-				return err
+				w.logger.Errorf("failed to send transaction, retries exceeded: %v", err)
+				return nil //todo find root cause of problem: for now skip this transaction as it cannot be processed
 			}
-			// get a new utxo and restart
-			go func() {
-				w.logger.Infof("restarting worker with new utxo")
-				if _, err = w.startWithCoinbaseTracker(ctx); err != nil {
-					w.logger.Errorf("failed to get new utxo: %v", err)
-				}
-			}()
-			return nil
+			break
 		}
 	}
 
