@@ -498,10 +498,22 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 			return err
 		}
 	} else {
-		err := w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return err
+		retries := 0
+		maxRetries, _ := gocore.Config().GetInt("txblaster_maxRetries", 10)
+		retrySleep, _ := gocore.Config().GetInt("txblaster_retrySleep", 100)
+		for {
+			err := w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
+			if err != nil {
+				if retries < maxRetries {
+					w.logger.Errorf("failed to send transaction, retrying %d: %v", retries, err)
+					retries++
+					time.Sleep(time.Duration(retrySleep) * time.Millisecond)
+					continue
+				}
+				prometheusInvalidTransactions.Inc()
+				return err
+			}
+			break
 		}
 	}
 
@@ -517,9 +529,6 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 
 	// w.logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
-	// wait for 100 milliseconds before sending the utxo to the channel
-	// this allows the parent to be processed, which should happen withing 100ms
-	time.Sleep(100 * time.Millisecond)
 	w.utxoChan <- &bt.UTXO{
 		TxIDHash:      tx.TxIDChainHash(),
 		Vout:          0,
