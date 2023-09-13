@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store'
 import { getNodeHeader } from '@stores/bootstrapStore.js'
+import { nodes } from '@stores/bootstrapStore.js'
 
 // Create writable stores
 export const lastUpdated = writable(new Date())
