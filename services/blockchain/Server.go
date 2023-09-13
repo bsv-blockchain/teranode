@@ -105,8 +105,9 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			case notification := <-b.notifications:
 				b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
 				for sub := range b.subscribers {
+					b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
 					go func(s subscriber) {
-						//b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+						b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
 						if err := s.subscription.Send(notification); err != nil {
 							b.deadSubscriptions <- s
 						}

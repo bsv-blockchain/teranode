@@ -45,7 +45,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 		if err != nil {
 			panic(err)
 		}
-		blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "Validator")
+		blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "UTXOStore")
 		if err != nil {
 			panic(err)
 		}
