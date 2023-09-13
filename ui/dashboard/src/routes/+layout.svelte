@@ -11,6 +11,16 @@
 
   import { connectToBootstrap, addSubscriber } from '@stores/bootstrapStore.js'
 
+  let isActive = false
+
+  function toggleNavbar() {
+    isActive = !isActive
+  }
+
+  function handleNavbarItemClick() {
+    isActive = false
+  }
+
   let age = 0
   let cancel = null
 
@@ -88,13 +98,15 @@
     aria-label="menu"
     aria-expanded="false"
     data-target="navbarBasicExample"
+    on:click={toggleNavbar}
+    class:is-active={isActive}
   >
     <span aria-hidden="true" />
     <span aria-hidden="true" />
     <span aria-hidden="true" />
   </a>
 
-  <div id="navbarBasicExample" class="navbar-menu">
+  <div id="navbarBasicExample" class="navbar-menu" class:is-active={isActive}>
     <div class="navbar-start">
       <div class="navbar-item">
         <div class="select">
@@ -112,12 +124,26 @@
         </div>
       </div>
 
-      <a class="navbar-item" href="/viewer"> Viewer </a>
-      <a class="navbar-item" href="/txviewer"> UTXOInspector </a>
-      <!-- <a class="navbar-item" href="/blocks"> Blocks </a> -->
-      <a class="navbar-item" href="/blockchain"> Blockchain </a>
-      <a class="navbar-item" href="/listener"> Listener </a>
-      <a class="navbar-item" href="/chain"> Chain </a>
+      <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
+        Viewer
+      </a>
+      <a class="navbar-item" href="/txviewer" on:click={handleNavbarItemClick}>
+        UTXOInspector
+      </a>
+      <!-- <a class="navbar-item" href="/blocks" on:click={handleNavbarItemClick}> Blocks </a> -->
+      <a
+        class="navbar-item"
+        href="/blockchain"
+        on:click={handleNavbarItemClick}
+      >
+        Blockchain
+      </a>
+      <a class="navbar-item" href="/listener" on:click={handleNavbarItemClick}>
+        Listener
+      </a>
+      <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
+        Chain
+      </a>
     </div>
 
     <div class="navbar-end">
