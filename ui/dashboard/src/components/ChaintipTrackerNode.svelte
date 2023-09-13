@@ -28,4 +28,16 @@
   .right {
     text-align: right;
   }
+
+  @media (max-width: 600px) {
+    tr {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: repeat(2, auto);
+    }
+
+    td {
+      grid-column: span 1;
+    }
+  }
 </style>

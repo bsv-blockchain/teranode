@@ -58,4 +58,16 @@
   .card-content .table tr:nth-child(even) {
     background-color: #f9f9f9; /* Zebra-striping for even rows */
   }
+
+  @media (max-width: 600px) {
+    .table tr {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: repeat(2, auto);
+    }
+
+    .table th {
+      grid-column: span 1;
+    }
+  }
 </style>
