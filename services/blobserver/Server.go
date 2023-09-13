@@ -124,7 +124,17 @@ func (v *Server) Start(ctx context.Context) error {
 
 		// TODO - This may need to be moved to a separate location in the code
 		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
-		blobServerHttpAddress, _ := gocore.Config().Get("blobserver_httpAddress")
+
+		blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
+		securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+
+		if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
+			blobServerHttpAddressURL.Scheme = "https"
+			v.logger.Warnf("blobserver_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+		} else if blobServerHttpAddressURL.Scheme == "https" && securityLevel == 0 {
+			blobServerHttpAddressURL.Scheme = "http"
+			v.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+		}
 
 		blobServerClientName, _ := gocore.Config().Get("blobserver_clientName")
 
@@ -174,7 +184,7 @@ func (v *Server) Start(ctx context.Context) error {
 						v.logger.Errorf("[BlobServer] error validating block from %s: %s", p.BlobServerHttpAddress, err)
 					}
 				}
-			}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddress)
+			}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddressURL.String())
 
 			return bootstrapClient.Start(ctx)
 		})
