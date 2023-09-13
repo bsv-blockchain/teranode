@@ -65,6 +65,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 							logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 							continue
 						}
+						logger.Debugf("[UTXOStore] setting block height to %d", height)
 						_ = utxoStore.SetBlockHeight(height)
 					}
 				}

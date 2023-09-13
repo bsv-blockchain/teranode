@@ -17,6 +17,8 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -104,6 +106,7 @@ func init() {
 type Store struct {
 	client      *aerospike.Client
 	namespace   string
+	logger      utils.Logger
 	blockHeight uint32
 }
 
@@ -117,9 +120,11 @@ func New(u *url.URL) (*Store, error) {
 		return nil, err
 	}
 
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	return &Store{
 		client:      client,
 		namespace:   namespace,
+		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
 		blockHeight: 0,
 	}, nil
 }
@@ -319,6 +324,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		log.Printf("AEROSPIKE: error in aerospike spend PutBins: %v", err)
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
+			s.logger.Debugf("utxo %s is not spendable in block %d: %s", hash.String(), s.blockHeight, err.Error())
 			return &utxostore.UTXOResponse{
 				Status: int(utxostore_api.Status_LOCK_TIME),
 			}, nil
