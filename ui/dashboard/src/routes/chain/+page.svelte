@@ -29,7 +29,7 @@
     // Add the new block to the end of the list unless it already exists
     if ($blocks.find((block) => block.hash === data.hash)) return
 
-    const b = [...$blocks]
+    let b = [...$blocks]
 
     // Now fetch the block header
     const url = $selectedNode + '/header/' + data.hash + '/json'
@@ -42,7 +42,7 @@
 
         // Slice off all but the last 30 blocks
         if (b.length > 30) {
-          b.splice(b.length - 30)
+          b = b.slice(-30)
         }
 
         blocks.set([...b, json])
