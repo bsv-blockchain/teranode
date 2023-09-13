@@ -46,7 +46,7 @@ export function connectToBlobServer(blobServerHTTPAddress) {
         const header = await getNodeHeader(json.base_url)
 
         // Update the node with the new block
-        const nodesData = get(nodes)
+        let nodesData = get(nodes)
         const index = nodesData.findIndex(
           (node) => node.blobServerHTTPAddress === json.base_url
         )
