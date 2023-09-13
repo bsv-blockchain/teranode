@@ -96,7 +96,7 @@ async function decorateNodesWithHeaders(node) {
     try {
       const header = await Promise.race([
         getBestBlockHeader(node.blobServerHTTPAddress),
-        timeout(30000),
+        timeout(1000),
       ])
       node.header = header || { error: 'timeout' }
     } catch (err) {
