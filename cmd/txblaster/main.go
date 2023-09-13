@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
+	"google.golang.org/grpc/resolver"
 )
 
 var logger utils.Logger
@@ -197,6 +198,12 @@ func main() {
 	propagationGrpcAddresses, ok := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	if !ok {
 		panic("no propagation_grpcAddresses setting found")
+	}
+
+	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+	if grpcResolver == "k8s" {
+		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		resolver.SetDefaultScheme("k8s")
 	}
 
 	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
