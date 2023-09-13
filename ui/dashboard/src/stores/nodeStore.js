@@ -1,4 +1,5 @@
 import { writable, get } from 'svelte/store'
+import { getNodeHeaders }  from '@stores/bootstrapStore.js'
 
 // Create writable stores
 export const nodes = writable([])
@@ -45,7 +46,7 @@ export function connectToBlobServer(blobServerHTTPAddress) {
   let socket = new WebSocket(wsUrl)
 
   socket.onopen = () => {
-    console.log(`WebSocket2 connection opened to ${wsUrl}`)
+    console.log(`BlobserverWS connection opened to ${wsUrl}`)
   }
 
   socket.onmessage = async (event) => {
@@ -53,19 +54,30 @@ export function connectToBlobServer(blobServerHTTPAddress) {
       const data = await event.data
       const json = JSON.parse(data)
 
-      console.log('Websocket2', json)
+      console.log('BlobserverWS', json)
 
-      if (json.type === 'ADD') {
-        nodes.update((nodes) => [...nodes, json])
+      if (json.type === 'Block') {
+        debugger
+        // Get the node from the list of nodes
+        const headers = getNodeHeaders(json.base_url)
+
+        // Update the node with the new block
+        const nodesData = get(nodes)
+        const index = nodesData.findIndex(
+          (node) => node.base_url === json.base_url
+        )
+
+        nodesData[index].headers = headers
+        nodes.set(nodesData)
       }
 
     } catch (error) {
-      console.error('Error2 parsing WebSocket data:', error)
+      console.error('BlobserverWS: Error parsing WebSocket data:', error)
     }
   }
 
   socket.onclose = () => {
-    console.log(`WebSocket2 connection closed by server (${wsUrl})`)
+    console.log(`BlobserverWS connection closed by server (${wsUrl})`)
     socket = null
   }
 }

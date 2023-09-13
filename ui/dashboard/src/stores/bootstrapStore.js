@@ -48,7 +48,7 @@ export function connectToBootstrap(blobServerHTTPAddress) {
   let socket = new WebSocket(wsUrl)
 
   socket.onopen = () => {
-    console.log(`WebSocket connection opened to ${wsUrl}`)
+    console.log(`BootstrapWS connection opened to ${wsUrl}`)
     lastUpdated.set(new Date())
   }
 
@@ -59,9 +59,10 @@ export function connectToBootstrap(blobServerHTTPAddress) {
 
 
       if (json.type === 'ADD') {
-        await decorateNodesWithHeaders(json)
+        const headers = await getNodeHeaders(json.blobServerHTTPAddress)
+        json.header = headers
 
-        console.log('Websocket1', json)
+        console.log('BootstrapWS', json)
         let nodesData = get(nodes)
         if (nodesData.find((node) => node.id === json.id)) {
           nodesData = nodesData.filter((node) => node.id !== json.id)
@@ -73,38 +74,38 @@ export function connectToBootstrap(blobServerHTTPAddress) {
 
       updateFn(json)
     } catch (error) {
-      console.error('Error parsing WebSocket data:', error)
+      console.error('BootstrapWS: Error parsing WebSocket data:', error)
     }
   }
 
   socket.onclose = () => {
-    console.log(`WebSocket connection closed by server (${wsUrl})`)
+    console.log(`BootstrapWS connection closed by server (${wsUrl})`)
     socket = null
     // Reconnect logic can be added here if needed
   }
 
   cancelFunction = () => {
     if (socket) {
-      console.log(`WebSocket connection closed by client (${wsUrl})`)
+      console.log(`BootstrapWS connection closed by client (${wsUrl})`)
       socket.close()
     }
   }
 }
 
-async function decorateNodesWithHeaders(node) {
-  if (node.blobServerHTTPAddress) {
+export async function getNodeHeaders(address) {
+  if (address) {
     try {
       const header = await Promise.race([
-        getBestBlockHeader(node.blobServerHTTPAddress),
+        getBestBlockHeader(address),
         timeout(1000),
       ])
-      node.header = header || { error: 'timeout' }
+      return header || { error: 'timeout' }
     } catch (err) {
       const error = `Error fetching header for node ${node.blobServerHTTPAddress}: ${err.message}`
-      node.header = { error }
+      return {error}
     }
   } else {
-    node.header = {}
+    return {}
   }
 }
 
