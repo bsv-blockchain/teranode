@@ -347,24 +347,19 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 
 		UPDATE coinbase_utxos
 		SET spendable = true
-		WHERE block_id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE id = (SELECT id FROM LongestChainTip)
-					UNION ALL
-					SELECT b.id, b.parent_id, b.height
-					FROM blocks b
-					JOIN ChainBlocks cb ON b.id = cb.parent_id
-					WHERE b.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-				WHERE height < (SELECT height - 100 FROM LongestChainTip)
-				LIMIT 100
+		WHERE spendable = false AND block_id IN (
+			WITH RECURSIVE ChainBlocks AS (
+				SELECT id, parent_id, height
+				FROM blocks
+				WHERE id = (SELECT id FROM LongestChainTip)
+				UNION ALL
+				SELECT b.id, b.parent_id, b.height
+				FROM blocks b
+				JOIN ChainBlocks cb ON b.id = cb.parent_id
+				WHERE b.id != cb.id
 			)
-			ORDER BY height DESC
+			SELECT id FROM ChainBlocks
+			WHERE height < (SELECT height - 100 FROM LongestChainTip)
 		)
 	`
 	if _, err := c.db.ExecContext(ctx, q); err != nil {
