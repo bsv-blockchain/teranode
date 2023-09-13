@@ -22,6 +22,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -502,20 +503,35 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 		maxRetries, _ := gocore.Config().GetInt("txblaster_maxRetries", 3)
 		retrySleep, _ := gocore.Config().GetInt("txblaster_retrySleep", 100)
 		for {
-			err := w.sendTransaction(ctx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
+			// decouple the tracing context to not contaminate the main context, but retain the tracing
+			callerSpan := opentracing.SpanFromContext(ctx)
+			setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+			_, spanCtx := opentracing.StartSpanFromContext(setCtx, "TxBlaster:RetryTx")
+
+			spanCtx = context.WithValue(spanCtx, "txid", tx.TxIDChainHash().String())
+			spanCtx = context.WithValue(spanCtx, "retry", retries)
+
+			err := w.sendTransaction(spanCtx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
 			if err != nil {
 				if retries < maxRetries {
 					w.logger.Debugf("failed to send transaction, retrying %d: %v", retries, err)
 					retries++
 					time.Sleep(time.Duration(retrySleep*retries) * time.Millisecond)
 					continue
+				} else {
+					// get a new utxo and restart
+					go func() {
+						w.logger.Infof("restarting worker with new utxo")
+						if _, err = w.startWithCoinbaseTracker(ctx); err != nil {
+							w.logger.Errorf("failed to get new utxo: %v", err)
+						}
+					}()
+					return nil
 				}
-				//	if retries exceeded silently drop the transaction
-				prometheusInvalidTransactions.Inc()
-				w.logger.Errorf("failed to send transaction, retries exceeded: %v", err)
-				return nil //todo find root cause of problem: for now skip this transaction as it cannot be processed
+			} else {
+				//w.logger.Debugf("sent transaction %s", tx.TxIDChainHash().String())
+				break
 			}
-			break
 		}
 	}
 
