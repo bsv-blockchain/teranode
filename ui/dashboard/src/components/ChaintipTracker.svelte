@@ -1,5 +1,5 @@
 <script>
-  import { nodes, error } from '@stores/nodeStore.js'
+  import { nodes } from '@stores/bootstrapStore.js'
   import Node from './ChaintipTrackerNode.svelte'
 </script>
 
@@ -8,29 +8,25 @@
     <p class="card-header-title">Chaintip tracker</p>
   </header>
   <div class="card-content">
-    {#if $error}
-      <p>{$error}</p>
-    {:else}
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Source</th>
-            <th>Name</th>
-            <th>Address</th>
-            <th class="right">Height</th>
-            <th>Latest hash</th>
-            <th>Previous hash</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each $nodes as node (node.ip && node.hash)}
-            {#if node.blobServerHTTPAddress}
-              <Node {node} />
-            {/if}
-          {/each}
-        </tbody>
-      </table>
-    {/if}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th class="right">Height</th>
+          <th>Latest hash</th>
+          <th>Previous hash</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each $nodes as node (node.ip && node.hash)}
+          {#if node.blobServerHTTPAddress}
+            <Node {node} />
+          {/if}
+        {/each}
+      </tbody>
+    </table>
   </div>
   <!-- <footer class="card-footer">
 		<a class="card-footer-item">Action 1</a>

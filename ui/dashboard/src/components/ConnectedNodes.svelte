@@ -1,5 +1,5 @@
 <script>
-  import { nodes, error } from '@stores/nodeStore.js'
+  import { nodes } from '@stores/bootstrapStore.js'
   import ConnectedAge from '@components/ConnectedAge.svelte'
 </script>
 
@@ -8,9 +8,7 @@
     <p class="card-header-title">Connected nodes</p>
   </header>
   <div class="card-content">
-    {#if $error}
-      <p>Error fetching nodes: {$error}</p>
-    {:else if $nodes.length === 0}
+    {#if $nodes.length === 0}
       <p>No nodes connected</p>
     {:else}
       <table class="table">

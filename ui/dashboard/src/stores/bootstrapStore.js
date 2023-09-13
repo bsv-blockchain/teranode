@@ -1,7 +1,8 @@
 import { writable, get } from 'svelte/store'
-import { nodes } from './nodeStore'
 
 export const lastUpdated = writable(new Date())
+export const nodes = writable([])
+
 
 let cancelFunction = null
 
@@ -19,6 +20,27 @@ const updateFn = (json) => {
   lastUpdated.set(new Date())
   updateFns.forEach((fn) => fn(json))
 }
+
+export const selectedNode = writable("", (set) => {
+  const storedValue = loadSelectedNodeFromLocalStorage();
+  if(storedValue) {
+    set(storedValue);
+  }
+
+  return set;
+});
+
+selectedNode.subscribe((value) => {
+  saveSelectedNodeToLocalStorage(value);
+});
+
+    // if (!import.meta.env.SSR) {
+    //   // Extract the node id from the URL
+    //   if (window && window.location) {
+    //     const url = new URL(window.location.href)
+    //     savedSelectedNode = `${url.protocol}//${url.hostname}:${url.port}`
+    //   }
+
 
 export function connectToBootstrap(blobServerHTTPAddress) {
   if (typeof WebSocket === 'undefined') {
@@ -63,10 +85,9 @@ export function connectToBootstrap(blobServerHTTPAddress) {
 
         console.log('BootstrapWS', json)
         let nodesData = get(nodes)
-        if (nodesData.find((node) => node.id === json.id)) {
-          nodesData = nodesData.filter((node) => node.id !== json.id)
+        if (!nodesData.find((node) => node.ip === json.ip)) {
+          nodesData.push(json)
         }
-        nodesData.push(json)
 
         nodes.set(nodesData)
       }
@@ -129,4 +150,18 @@ function timeout(ms) {
   return new Promise((resolve, reject) =>
     setTimeout(() => reject(new Error('Promise timed out')), ms)
   )
+}
+
+// Save the selected node to local storage
+function saveSelectedNodeToLocalStorage(nodeId) {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('selectedNode', nodeId)
+  }
+}
+
+// Load the selected node from local storage
+function loadSelectedNodeFromLocalStorage() {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('selectedNode')
+  }
 }

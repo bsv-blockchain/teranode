@@ -2,40 +2,24 @@ import { writable, get } from 'svelte/store'
 import { getNodeHeader } from '@stores/bootstrapStore.js'
 
 // Create writable stores
-export const nodes = writable([])
 export const lastUpdated = writable(new Date())
 export const loading = writable(false)
-export const error = writable('')
 
-// Create writable store for selectedNode with local storage handling
-export const selectedNode = (() => {
-  let savedSelectedNode = loadSelectedNodeFromLocalStorage()
-  // if the saveSelectedNode does not exist in our list or nodes, calculate it from the url.location
-  if (
-    !(
-      savedSelectedNode &&
-      get(nodes).find((node) => node.id === savedSelectedNode)
-    )
-  ) {
-    if (!import.meta.env.SSR) {
-      // Extract the node id from the URL
-      if (window && window.location) {
-        const url = new URL(window.location.href)
-        savedSelectedNode = `${url.protocol}//${url.hostname}:${url.port}`
-      }
-    }
-  }
+let updateFns = []
 
-  const { subscribe, set } = writable(savedSelectedNode)
+export function addSubscriber(fn) {
+  updateFns.push(fn)
+}
 
-  return {
-    subscribe,
-    set: (newValue) => {
-      saveSelectedNodeToLocalStorage(newValue)
-      set(newValue)
-    },
-  }
-})()
+export function removeSubscriber(fn) {
+  updateFns = updateFns.filter((f) => f !== fn)
+}
+
+const updateFn = (json) => {
+  lastUpdated.set(new Date())
+  updateFns.forEach((fn) => fn(json))
+}
+
 
 export function connectToBlobServer(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
@@ -69,6 +53,9 @@ export function connectToBlobServer(blobServerHTTPAddress) {
         nodesData[index].header = header
         nodes.set(nodesData)
       }
+
+      updateFn(json)
+
     } catch (error) {
       console.error('BlobserverWS: Error parsing WebSocket data:', error)
     }
@@ -82,19 +69,5 @@ export function connectToBlobServer(blobServerHTTPAddress) {
        connectToBlobServer(blobServerHTTPAddress)
     }, 5000); // Adjust the delay as necessary
 
-  }
-}
-
-// Save the selected node to local storage
-function saveSelectedNodeToLocalStorage(nodeId) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('selectedNode', nodeId)
-  }
-}
-
-// Load the selected node from local storage
-function loadSelectedNodeFromLocalStorage() {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('selectedNode')
   }
 }

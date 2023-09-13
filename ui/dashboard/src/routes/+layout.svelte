@@ -1,9 +1,9 @@
 <script>
   import { onMount } from 'svelte'
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
+  import { nodes, selectedNode } from '@stores/bootstrapStore.js'
+
   import {
-    nodes,
-    selectedNode,
     loading,
     lastUpdated,
     connectToBlobServer,

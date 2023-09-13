@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { nodes } from '@stores/nodeStore.js'
+import { nodes } from '@stores/bootstrapStore.js'
 
 export const blocks = writable([])
 export const error = writable('')

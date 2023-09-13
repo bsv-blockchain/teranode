@@ -1,5 +1,5 @@
 <script>
-  import { selectedNode } from '@stores/nodeStore.js'
+  import { selectedNode } from '@stores/bootstrapStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
