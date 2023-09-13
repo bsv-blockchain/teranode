@@ -517,6 +517,9 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 
 	// w.logger.Debugf("sending utxo with txid %s which is spending %s, vout: %d", tx.TxID(), u.TxIDStr(), u.Vout)
 
+	// wait for 100 milliseconds before sending the utxo to the channel
+	// this allows the parent to be processed, which should happen withing 100ms
+	time.Sleep(100 * time.Millisecond)
 	w.utxoChan <- &bt.UTXO{
 		TxIDHash:      tx.TxIDChainHash(),
 		Vout:          0,
