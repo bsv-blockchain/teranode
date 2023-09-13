@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { nodes, decorateNodesWithHeaders } from './nodeStore'
+import { nodes } from './nodeStore'
 
 export const lastUpdated = writable(new Date())
 
@@ -57,13 +57,17 @@ export function connectToBootstrap(blobServerHTTPAddress) {
       const data = await event.data
       const json = JSON.parse(data)
 
-      console.log('Websocket1', json)
 
       if (json.type === 'ADD') {
         await decorateNodesWithHeaders(json)
 
+        console.log('Websocket1', json)
         let nodesData = get(nodes)
-        nodesData = nodesData.concat(json)
+        if (nodesData.find((node) => node.id === json.id)) {
+          nodesData = nodesData.filter((node) => node.id !== json.id)
+        }
+        nodesData.push(json)
+
         nodes.set(nodesData)
       }
 
@@ -85,4 +89,39 @@ export function connectToBootstrap(blobServerHTTPAddress) {
       socket.close()
     }
   }
+}
+
+async function decorateNodesWithHeaders(node) {
+  if (node.blobServerHTTPAddress) {
+    try {
+      const header = await Promise.race([
+        getBestBlockHeader(node.blobServerHTTPAddress),
+        timeout(30000),
+      ])
+      node.header = header || { error: 'timeout' }
+    } catch (err) {
+      const error = `Error fetching header for node ${node.blobServerHTTPAddress}: ${err.message}`
+      node.header = { error }
+    }
+  } else {
+    node.header = {}
+  }
+}
+
+async function getBestBlockHeader(address) {
+  const url = `${address}/bestblockheader/json`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! Status: ${response.status}`)
+  }
+
+  return await response.json()
+}
+
+// Promise to resolve after a certain time for timeout handling
+function timeout(ms) {
+  return new Promise((resolve, reject) =>
+    setTimeout(() => reject(new Error('Promise timed out')), ms)
+  )
 }

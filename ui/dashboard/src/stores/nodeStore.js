@@ -54,6 +54,11 @@ export function connectToBlobServer(blobServerHTTPAddress) {
       const json = JSON.parse(data)
 
       console.log('Websocket2', json)
+
+      if (json.type === 'ADD') {
+        nodes.update((nodes) => [...nodes, json])
+      }
+
     } catch (error) {
       console.error('Error2 parsing WebSocket data:', error)
     }
@@ -72,40 +77,6 @@ function timeout(ms) {
   )
 }
 
-export async function decorateNodesWithHeaders(nodesData) {
-  await Promise.all(
-    nodesData.map(async (node) => {
-      if (node.blobServerHTTPAddress) {
-        try {
-          const header = await Promise.race([
-            getBestBlockHeader(node.blobServerHTTPAddress),
-            timeout(1000),
-          ])
-          node.header = header || { error: 'timeout' }
-        } catch (error) {
-          console.error(
-            `Error fetching header for node ${node.blobServerHTTPAddress}:`,
-            error.message
-          )
-          node.header = { error: 'timeout' }
-        }
-      } else {
-        node.header = {}
-      }
-    })
-  )
-}
-
-async function getBestBlockHeader(address) {
-  const url = `${address}/bestblockheader/json`
-  const response = await fetch(url)
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! Status: ${response.status}`)
-  }
-
-  return await response.json()
-}
 
 // Save the selected node to local storage
 function saveSelectedNodeToLocalStorage(nodeId) {

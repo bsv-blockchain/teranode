@@ -33,7 +33,7 @@
     connectToBootstrap($selectedNode)
 
     addSubscriber(function (data) {
-      console.log(data)
+      console.log('layout', data)
     })
 
     connectToBlobServer($selectedNode)
