@@ -28,7 +28,7 @@ type serviceClient struct {
 }
 
 func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, error) {
-	logger.Infof("[k8s] newInClusterClient called with namespace: %s", namespace)
+	logger.Debugf("[k8s] newInClusterClient called with namespace: %s", namespace)
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
@@ -65,7 +65,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 }
 
 func (s *serviceClient) Watch(ctx context.Context, host string) (<-chan watch.Event, chan struct{}, error) {
-	s.logger.Infof("[k8s] Watch called with host: %s", host)
+	s.logger.Debugf("[k8s] Watch called with host: %s", host)
 	ev := make(chan watch.Event)
 
 	watchList := cache.NewListWatchFromClient(s.k8s.CoreV1().RESTClient(), "endpoints", s.namespace, fields.OneTermEqualSelector("metadata.name", host))
