@@ -81,6 +81,17 @@ export function connectToBootstrap(blobServerHTTPAddress) {
           nodesData.push(json)
         }
 
+        // sort the nodesData by name
+        nodesData = nodesData.sort((a, b) => {
+          if (a.name < b.name) {
+            return -1
+          } else if (a.name > b.name) {
+            return 1
+          } else {
+            return 0
+          }
+        })
+
         nodes.set(nodesData)
       }
 
