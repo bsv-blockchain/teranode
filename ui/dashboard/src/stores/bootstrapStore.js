@@ -81,6 +81,11 @@ export function connectToBootstrap(blobServerHTTPAddress) {
     console.log(`BootstrapWS connection closed by server (${wsUrl})`)
     socket = null
     // Reconnect logic can be added here if needed
+
+    setTimeout(() => {
+      connectToBootstrap(blobServerHTTPAddress);
+    }, 5000); // Adjust the delay as necessary
+
   }
 
   cancelFunction = () => {

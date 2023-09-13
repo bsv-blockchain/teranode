@@ -77,6 +77,11 @@ export function connectToBlobServer(blobServerHTTPAddress) {
   socket.onclose = () => {
     console.log(`BlobserverWS connection closed by server (${wsUrl})`)
     socket = null
+
+    setTimeout(() => {
+       connectToBlobServer(blobServerHTTPAddress)
+    }, 5000); // Adjust the delay as necessary
+
   }
 }
 
