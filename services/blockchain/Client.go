@@ -30,20 +30,39 @@ type BestBlockHeader struct {
 }
 
 func NewClient(ctx context.Context) (ClientI, error) {
+	logger := gocore.Log("blkcC")
+
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
 		return nil, fmt.Errorf("no blockchain_grpcAddress setting found")
 	}
-	baConn, err := util.GetGRPCClient(ctx, blockchainGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
-	})
-	if err != nil {
-		return nil, err
+
+	var err error
+	var baConn *grpc.ClientConn
+	// retry a few times to connect to the blockchain service
+	retries := 0
+	maxRetries := 5
+	for {
+		baConn, err = util.GetGRPCClient(ctx, blockchainGrpcAddress, &util.ConnectionOptions{
+			MaxRetries: 3,
+		})
+		if err != nil {
+			if retries < maxRetries {
+				logger.Errorf("[Blockchain] failed to connect to blockchain service, retrying %d: %v", retries, err)
+				retries++
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			logger.Errorf("[Blockchain] failed to connect to blockchain service, retried %d times: %v", maxRetries, err)
+			return nil, err
+		}
+		break
 	}
 
 	return &Client{
 		client:  blockchain_api.NewBlockchainAPIClient(baConn),
-		logger:  gocore.Log("blkcC"),
+		logger:  logger,
 		running: true,
 		conn:    baConn,
 	}, nil
