@@ -22,24 +22,16 @@ const updateFn = (json) => {
 }
 
 export const selectedNode = writable("", (set) => {
-  const storedValue = loadSelectedNodeFromLocalStorage();
-  if(storedValue) {
-    set(storedValue);
+  if (!import.meta.env.SSR  && window && window.location) {
+    const url = new URL(window.location.href)
+    set(`${url.protocol}//${url.hostname}:${url.port}`)
   }
 
   return set;
 });
 
-selectedNode.subscribe((value) => {
-  saveSelectedNodeToLocalStorage(value);
-});
 
-    // if (!import.meta.env.SSR) {
-    //   // Extract the node id from the URL
-    //   if (window && window.location) {
-    //     const url = new URL(window.location.href)
-    //     savedSelectedNode = `${url.protocol}//${url.hostname}:${url.port}`
-    //   }
+
 
 
 export function connectToBootstrap(blobServerHTTPAddress) {
@@ -153,15 +145,3 @@ function timeout(ms) {
 }
 
 // Save the selected node to local storage
-function saveSelectedNodeToLocalStorage(nodeId) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('selectedNode', nodeId)
-  }
-}
-
-// Load the selected node from local storage
-function loadSelectedNodeFromLocalStorage() {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('selectedNode')
-  }
-}

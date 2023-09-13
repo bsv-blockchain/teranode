@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { addSubscriber, selectedNode } from '@stores/nodeStore.js'
+  import { addSubscriber, selectedNode } from '@stores/bootstrapStore.js'
   import { blocks, isFirstMount } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
