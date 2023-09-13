@@ -23,7 +23,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each $nodes as node (node.ip)}
+          {#each $nodes as node (node.ip && node.hash)}
             {#if node.blobServerHTTPAddress}
               <Node {node} />
             {/if}

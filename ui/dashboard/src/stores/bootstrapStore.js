@@ -57,10 +57,9 @@ export function connectToBootstrap(blobServerHTTPAddress) {
       const data = await event.data
       const json = JSON.parse(data)
 
-
       if (json.type === 'ADD') {
-        const headers = await getNodeHeaders(json.blobServerHTTPAddress)
-        json.header = headers
+        const header = await getNodeHeader(json.blobServerHTTPAddress)
+        json.header = header
 
         console.log('BootstrapWS', json)
         let nodesData = get(nodes)
@@ -92,7 +91,7 @@ export function connectToBootstrap(blobServerHTTPAddress) {
   }
 }
 
-export async function getNodeHeaders(address) {
+export async function getNodeHeader(address) {
   if (address) {
     try {
       const header = await Promise.race([
@@ -101,8 +100,8 @@ export async function getNodeHeaders(address) {
       ])
       return header || { error: 'timeout' }
     } catch (err) {
-      const error = `Error fetching header for node ${node.blobServerHTTPAddress}: ${err.message}`
-      return {error}
+      const error = `Error fetching header for node ${address}: ${err.message}`
+      return { error }
     }
   } else {
     return {}

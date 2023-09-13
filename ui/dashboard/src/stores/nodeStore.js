@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { getNodeHeaders }  from '@stores/bootstrapStore.js'
+import { getNodeHeader } from '@stores/bootstrapStore.js'
 
 // Create writable stores
 export const nodes = writable([])
@@ -58,7 +58,7 @@ export function connectToBlobServer(blobServerHTTPAddress) {
 
       if (json.type === 'Block') {
         // Get the node from the list of nodes
-        const headers = await getNodeHeaders(json.base_url)
+        const header = await getNodeHeader(json.base_url)
 
         // Update the node with the new block
         const nodesData = get(nodes)
@@ -66,10 +66,9 @@ export function connectToBlobServer(blobServerHTTPAddress) {
           (node) => node.blobServerHTTPAddress === json.base_url
         )
 
-        nodesData[index].headers = headers
+        nodesData[index].header = header
         nodes.set(nodesData)
       }
-
     } catch (error) {
       console.error('BlobserverWS: Error parsing WebSocket data:', error)
     }
@@ -80,14 +79,6 @@ export function connectToBlobServer(blobServerHTTPAddress) {
     socket = null
   }
 }
-
-// Promise to resolve after a certain time for timeout handling
-function timeout(ms) {
-  return new Promise((resolve, reject) =>
-    setTimeout(() => reject(new Error('Promise timed out')), ms)
-  )
-}
-
 
 // Save the selected node to local storage
 function saveSelectedNodeToLocalStorage(nodeId) {
