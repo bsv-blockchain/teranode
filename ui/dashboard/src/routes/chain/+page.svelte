@@ -121,15 +121,17 @@
     node
       .append('circle')
       .attr('r', 10)
+      .attr('fill', (d) => stringToColor(d.data.miner)) // add this line to derive color from the "miner" value
       .append('title')
-      .text((d) => d.data.miner)
+      .text((d) => d.data.name + '\n' + d.data.miner)
+
     node
       .append('text')
       .attr('dy', 30)
       .attr('x', -15)
-      .style('text-anchor', (d) => (d.children ? 'start' : 'start'))
-      // .text((d) => d.data.name.substring(0, 6));
+      .style('text-anchor', 'start')
       .text((d) => d.data.height)
+
     node.on('click', (event, d) => {
       handleClick(d.data)
     })
@@ -148,6 +150,7 @@
         nodeMap[item.hash] = {
           name: item.hash,
           height: item.height,
+          miner: item.miner.split('/')[1],
           children: [],
         }
       }
@@ -164,6 +167,7 @@
         nodeMap[item.previousblockhash] = {
           name: item.previousblockhash,
           height: item.height - 1, // Assuming the height of parent is always current height - 1
+          miner: 'ROOT',
           children: [],
         }
       }
@@ -180,6 +184,18 @@
     )
 
     return rootNode || {}
+  }
+
+  function stringToColor(str) {
+    if (str === 'ROOT') return '#000000'
+
+    let hash = 0
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash)
+    }
+
+    const hue = hash % 360
+    return `hsl(${hue}, 100%, 50%)`
   }
 </script>
 
@@ -213,8 +229,6 @@
   }
 
   :global(.node circle) {
-    fill: #999;
-    stroke: #555;
     stroke-width: 2px;
     cursor: pointer;
   }
