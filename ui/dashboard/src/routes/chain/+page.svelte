@@ -122,7 +122,7 @@
       .append('circle')
       .attr('r', 10)
       .append('title')
-      .text((d) => d.data.name)
+      .text((d) => d.data.miner)
     node
       .append('text')
       .attr('dy', 30)

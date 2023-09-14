@@ -16,7 +16,7 @@ type ClientI interface {
 	GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error)
 	GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error)
-	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error)
+	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error)
 	Subscribe(ctx context.Context, source string) (chan *model.Notification, error)
 	GetState(ctx context.Context, key string) ([]byte, error)

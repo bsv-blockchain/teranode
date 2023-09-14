@@ -172,20 +172,27 @@ func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uin
 	return header, resp.Height, nil
 }
 
-func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
-	return header, resp.Height, nil
+	meta := &model.BlockHeaderMeta{
+		Height:      resp.Height,
+		TxCount:     resp.TxCount,
+		SizeInBytes: resp.SizeInBytes,
+		Miner:       resp.Miner,
+	}
+
+	return header, meta, nil
 }
 
 func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {

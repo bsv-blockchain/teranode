@@ -57,6 +57,13 @@ var (
 		HashMerkleRoot: merkleRoot,
 		Bits:           bits,
 	}
+
+	GenesisBlockHeaderMeta = &BlockHeaderMeta{
+		Height:      0,
+		TxCount:     1,
+		SizeInBytes: 285,
+		Miner:       "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks",
+	}
 )
 
 func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
@@ -73,14 +80,16 @@ func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 		return nil, fmt.Errorf("error creating merkle root hash from bytes: %s", err.Error())
 	}
 
-	return &BlockHeader{
+	bh := &BlockHeader{
 		Version:        binary.LittleEndian.Uint32(headerBytes[:4]),
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: hashMerkleRoot,
 		Timestamp:      binary.LittleEndian.Uint32(headerBytes[68:72]),
 		Bits:           NewNBitFromSlice(headerBytes[72:76]),
 		Nonce:          binary.LittleEndian.Uint32(headerBytes[76:]),
-	}, nil
+	}
+
+	return bh, nil
 }
 
 func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {

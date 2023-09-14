@@ -24,9 +24,9 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 		}
 
 		var header *model.BlockHeader
-		var blockHeight uint32
+		var meta *model.BlockHeaderMeta
 
-		header, blockHeight, err = h.repository.GetBlockHeader(c.Request().Context(), hash)
+		header, meta, err = h.repository.GetBlockHeader(c.Request().Context(), hash)
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -45,8 +45,11 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 		case JSON:
 			headerResponse := &blockHeaderResponse{
 				BlockHeader: header,
-				Height:      blockHeight,
 				Hash:        header.String(),
+				Height:      meta.Height,
+				TxCount:     meta.TxCount,
+				SizeInBytes: meta.SizeInBytes,
+				Miner:       meta.Miner,
 			}
 			return c.JSONPretty(200, headerResponse, "  ")
 		default:

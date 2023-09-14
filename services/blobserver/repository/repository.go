@@ -62,14 +62,14 @@ func (r *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*mode
 	return nil, errors.New("not implemented")
 }
 
-func (r *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+func (r *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	r.logger.Debugf("[Repository] GetBlockHeader: %s", hash.String())
-	blockHeaders, height, err := r.BlockchainClient.GetBlockHeader(ctx, hash)
+	blockHeader, blockHeaderMeta, err := r.BlockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
-	return blockHeaders, height, nil
+	return blockHeader, blockHeaderMeta, nil
 }
 
 func (r *Repository) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {

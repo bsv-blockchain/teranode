@@ -264,14 +264,17 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		return nil, err
 	}
 
-	blockHeader, height, err := b.store.GetBlockHeader(ctx, hash)
+	blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
-		Height:      height,
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
 	}, nil
 }
 

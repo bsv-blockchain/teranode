@@ -67,13 +67,13 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 	t.Run("block hash - block 1", func(t *testing.T) {
 		hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 		hashMerkleRoot, _ := chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
-		nbits := NewNBitFromString("1d00ffff")
+		nBits := NewNBitFromString("1d00ffff")
 		blockHeader := &BlockHeader{
 			Version:        1,
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
 			Timestamp:      1231469665,
-			Bits:           nbits,
+			Bits:           nBits,
 			Nonce:          2573394689,
 		}
 

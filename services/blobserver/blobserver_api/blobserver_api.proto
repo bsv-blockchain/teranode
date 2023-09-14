@@ -61,6 +61,9 @@ message GetBlockHeaderRequest {
 message GetBlockHeaderResponse {
   bytes blockHeader = 1;
   uint32 height = 2;
+  uint64 tx_count = 3;
+  uint64 size_in_bytes = 4;
+  string miner = 5;
 }
 
 // swagger:model GetBlockHeadersRequest
