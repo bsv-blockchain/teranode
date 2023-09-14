@@ -12,7 +12,7 @@
     }
   })
 
-  function update(json) {
+  async function update(json) {
     console.log(`received notification: ${JSON.stringify(json)}`)
     // Add the new notification to the end of the list
     notifications.set([...$notifications, json])

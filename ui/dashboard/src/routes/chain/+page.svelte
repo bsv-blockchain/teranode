@@ -2,19 +2,19 @@
   import { onMount } from 'svelte'
   import { addSubscriber } from '@stores/nodeStore.js'
   import { selectedNode } from '@stores/bootstrapStore.js'
-  import { blocks } from '@stores/chainStore.js'
+  import { blocks, isFirstMount } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
 
   onMount(() => {
-    // if ($isFirstMount) {
-    //   isFirstMount.set(false)
+    if ($isFirstMount) {
+      isFirstMount.set(false)
 
-    console.log('adding subscriber')
-    addSubscriber(update)
-    // }
+      console.log('adding subscriber')
+      addSubscriber(update)
+    }
 
     drawTree($blocks)
     // return () => {
@@ -23,7 +23,7 @@
     // }
   })
 
-  function update(data) {
+  async function update(data) {
     if (data.type !== 'Block') return
 
     // Add the new block to the end of the list unless it already exists
@@ -34,21 +34,28 @@
     // Now fetch the block header
     const url = $selectedNode + '/header/' + data.hash + '/json'
 
-    fetch(url)
-      .then((res) => res.json())
-      .then((json) => {
-        console.log(`got block ${json.height}`)
-        // Add the new block to the end of the list and remove the first block if the list is too long
+    try {
+      const res = await fetch(url)
+      if (!res.ok) {
+        throw new Error(`HTTP error! Status: ${res.status}`)
+      }
 
-        // Slice off all but the last 30 blocks
-        if (b.length > 30) {
-          b = b.slice(-30)
-        }
+      const json = await res.json()
 
-        blocks.set([...b, json])
+      console.log(`got block ${json.height}`)
+      // Add the new block to the end of the list and remove the first block if the list is too long
 
-        drawTree($blocks)
-      })
+      // Slice off all but the last 30 blocks
+      if (b.length > 30) {
+        b = b.slice(-30)
+      }
+
+      blocks.set([...b, json])
+
+      drawTree($blocks)
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   function drawTree(blocks) {

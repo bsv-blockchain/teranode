@@ -18,7 +18,7 @@ export function removeSubscriber(fn) {
 
 const updateFn = (json) => {
   lastUpdated.set(new Date())
-  updateFns.forEach((fn) => fn(json))
+  updateFns.forEach(async (fn) => await fn(json))
 }
 
 
