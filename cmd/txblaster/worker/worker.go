@@ -41,6 +41,17 @@ var (
 	prometheusTransactionErrors     *prometheus.CounterVec
 )
 
+// Create type to avoid collisions with context.withSpan
+// ContextKey type
+type ContextKey int
+
+// ContextAccountIDKey constant
+const (
+	ContextDetails ContextKey = iota
+	ContextTxid
+	ContextRetry
+)
+
 func init() {
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -508,8 +519,8 @@ func (w *Worker) fireTransaction(ctx context.Context, u *bt.UTXO, keySet *extra.
 			setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 			_, spanCtx := opentracing.StartSpanFromContext(setCtx, "TxBlaster:RetryTx")
 
-			spanCtx = context.WithValue(spanCtx, "txid", tx.TxIDChainHash().String())
-			spanCtx = context.WithValue(spanCtx, "retry", retries)
+			spanCtx = context.WithValue(spanCtx, ContextTxid, tx.TxIDChainHash().String())
+			spanCtx = context.WithValue(spanCtx, ContextRetry, retries)
 
 			err := w.sendTransaction(spanCtx, tx.TxIDChainHash().String(), tx.ExtendedBytes())
 			if err != nil {

@@ -65,7 +65,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				Source: c.source,
 			})
 			if err != nil {
-				c.logger.Errorf("could not subscribe to blobserver: %v", err)
+				c.logger.Errorf("could not subscribe to blobserver at %s: %v", c.address, err)
 				time.Sleep(10 * time.Second)
 				continue
 			}

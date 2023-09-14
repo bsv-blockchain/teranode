@@ -58,14 +58,18 @@ func init() {
 			logger.Panicf("Failed to get public IP address: %v", err)
 		}
 
-		blobServerPort, _ := gocore.Config().GetInt("blobserver_port")
+		blobServerPort, _ := gocore.Config().GetInt("blobserver_http_port")
 		if blobServerPort == 0 {
-			logger.Panic("blobserver_port is not set")
+			logger.Panic("blobserver_http_port is not set")
 		}
 
 		scheme := "http"
 		if logLevel > 0 {
 			scheme = "https"
+			blobServerPort, _ = gocore.Config().GetInt("blobserver_https_port")
+			if blobServerPort == 0 {
+				logger.Panic("blobserver_https_port is not set")
+			}
 		}
 
 		u, err = url.ParseRequestURI(fmt.Sprintf("%s://%s:%d", scheme, remoteAddress, blobServerPort))
