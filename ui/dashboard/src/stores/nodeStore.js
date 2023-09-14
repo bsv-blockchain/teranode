@@ -1,6 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { getNodeHeader } from '@stores/bootstrapStore.js'
-import { nodes } from '@stores/bootstrapStore.js'
+import { nodes, getNodeHeader } from '@stores/bootstrapStore.js'
 
 // Create writable stores
 export const lastUpdated = writable(new Date())
@@ -20,7 +19,6 @@ const updateFn = (json) => {
   lastUpdated.set(new Date())
   updateFns.forEach(async (fn) => await fn(json))
 }
-
 
 export function connectToBlobServer(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
@@ -68,7 +66,6 @@ export function connectToBlobServer(blobServerHTTPAddress) {
       }
 
       updateFn(json)
-
     } catch (error) {
       console.error('BlobserverWS: Error parsing WebSocket data:', error)
     }
@@ -79,8 +76,7 @@ export function connectToBlobServer(blobServerHTTPAddress) {
     socket = null
 
     setTimeout(() => {
-       connectToBlobServer(blobServerHTTPAddress)
-    }, 5000); // Adjust the delay as necessary
-
+      connectToBlobServer(blobServerHTTPAddress)
+    }, 5000) // Adjust the delay as necessary
   }
 }

@@ -1,15 +1,17 @@
 <script>
   import { onMount } from 'svelte'
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
-  import { nodes, selectedNode } from '@stores/bootstrapStore.js'
+  import {
+    nodes,
+    connectToBootstrap,
+    selectedNode,
+  } from '@stores/bootstrapStore.js'
 
   import {
     loading,
     lastUpdated,
     connectToBlobServer,
   } from '@stores/nodeStore.js'
-
-  import { connectToBootstrap, addSubscriber } from '@stores/bootstrapStore.js'
 
   let isActive = false
 

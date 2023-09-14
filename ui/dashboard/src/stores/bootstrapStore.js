@@ -3,7 +3,6 @@ import { writable, get } from 'svelte/store'
 export const lastUpdated = writable(new Date())
 export const nodes = writable([])
 
-
 let cancelFunction = null
 
 let updateFns = []
@@ -21,18 +20,18 @@ const updateFn = (json) => {
   updateFns.forEach((fn) => fn(json))
 }
 
-export const selectedNode = writable("", (set) => {
-  if (!import.meta.env.SSR  && window && window.location) {
+export const selectedNode = writable('', (set) => {
+  if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
-    set(`${url.protocol}//${url.hostname}:${url.port}`)
+    if (url.port === '') {
+      set(`${url.protocol}//${url.hostname}`)
+    } else {
+      set(`${url.protocol}//${url.hostname}:${url.port}`)
+    }
   }
 
-  return set;
-});
-
-
-
-
+  return set
+})
 
 export function connectToBootstrap(blobServerHTTPAddress) {
   if (typeof WebSocket === 'undefined') {
@@ -107,9 +106,8 @@ export function connectToBootstrap(blobServerHTTPAddress) {
     // Reconnect logic can be added here if needed
 
     setTimeout(() => {
-      connectToBootstrap(blobServerHTTPAddress);
-    }, 5000); // Adjust the delay as necessary
-
+      connectToBootstrap(blobServerHTTPAddress)
+    }, 5000) // Adjust the delay as necessary
   }
 
   cancelFunction = () => {
