@@ -103,6 +103,7 @@ func init() {
 }
 
 type Store struct {
+	u           *url.URL
 	client      *aerospike.Client
 	namespace   string
 	logger      utils.Logger
@@ -121,6 +122,7 @@ func New(u *url.URL) (*Store, error) {
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	return &Store{
+		u:           u,
 		client:      client,
 		namespace:   namespace,
 		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
@@ -132,6 +134,59 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight = blockHeight
 	return nil
+}
+
+func (s *Store) Health(ctx context.Context) (int, string, error) {
+	/* As written by one of the Aerospike developers, Go contexts are not supported:
+
+	The Aerospike Go Client is a high performance library that supports hundreds of thousands
+	of transactions per second per instance. Context support would require us to spawn a new
+	goroutine for every request, adding significant overhead to the scheduler and GC.
+
+	I am convinced that most users would benchmark their code with the context support and
+	decide against using it after noticing the incurred penalties.
+
+	Therefore we will extract the Deadline from the context and use it as a timeout for the
+	operation.
+	*/
+
+	var timeout time.Duration
+
+	deadline, ok := ctx.Deadline()
+	if ok {
+		timeout = time.Until(deadline)
+	}
+
+	writePolicy := aerospike.NewWritePolicy(0, 0)
+	if timeout > 0 {
+		writePolicy.TotalTimeout = timeout
+	}
+
+	details := fmt.Sprintf("url: %s, namespace: %s", s.u.String(), s.namespace)
+
+	// Trying to put and get a record to test the connection
+	key, err := aerospike.NewKey("test", "set", "key")
+	if err != nil {
+		return -1, details, err
+	}
+
+	bin := aerospike.NewBin("bin", "value")
+	err = s.client.PutBins(writePolicy, key, bin)
+	if err != nil {
+		return -2, details, err
+	}
+
+	policy := aerospike.NewPolicy()
+	if timeout > 0 {
+		policy.TotalTimeout = timeout
+	}
+
+	_, err = s.client.Get(policy, key)
+	if err != nil {
+		return -3, details, err
+	}
+
+	return 0, details, nil
 }
 
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {

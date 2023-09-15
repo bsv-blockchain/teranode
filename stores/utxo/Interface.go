@@ -17,6 +17,7 @@ type BatchResponse struct {
 }
 
 type Interface interface {
+	Health(ctx context.Context) (int, string, error)
 	Get(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
 	Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*UTXOResponse, error)
 	BatchStore(ctx context.Context, hash []*chainhash.Hash) (*BatchResponse, error)

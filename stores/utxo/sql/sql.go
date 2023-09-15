@@ -141,6 +141,17 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	return nil
 }
 
+func (s *Store) Health(ctx context.Context) (int, string, error) {
+	details := fmt.Sprintf("SQL Engine is %s", s.engine)
+
+	var num int
+	err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&num)
+	if err != nil {
+		return -1, details, err
+	}
+	return 0, details, nil
+}
+
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	prometheusUtxoGet.Inc()
 

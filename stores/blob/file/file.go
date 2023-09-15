@@ -34,6 +34,10 @@ func New(dir string) (*File, error) {
 	return fileStore, nil
 }
 
+func (s *File) Health(ctx context.Context) (int, string, error) {
+	return 0, "File Store", nil
+}
+
 func (s *File) Close(_ context.Context) error {
 	// noop
 	return nil

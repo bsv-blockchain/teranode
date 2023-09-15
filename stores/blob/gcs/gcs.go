@@ -38,6 +38,15 @@ func New(bucketName string) (*GCS, error) {
 	return gcs, nil
 }
 
+func (g *GCS) Health(ctx context.Context) (int, string, error) {
+	_, err := g.Exists(ctx, []byte("Health"))
+	if err != nil {
+		return -1, "GCS Store", err
+	}
+
+	return 0, "GCS Store", nil
+}
+
 func (g *GCS) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {

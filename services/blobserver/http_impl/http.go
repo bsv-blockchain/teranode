@@ -54,8 +54,14 @@ func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *
 	}
 
 	e.GET("/health", func(c echo.Context) error {
+		_, details, err := repo.Health(c.Request().Context())
 		logger.Debugf("[BlobServer_http] Health check")
-		return c.String(http.StatusOK, "OK")
+
+		if err != nil {
+			return c.String(http.StatusInternalServerError, details)
+		}
+
+		return c.String(http.StatusOK, details)
 	})
 
 	e.GET("/tx/:hash", h.GetTransaction(BINARY_STREAM))

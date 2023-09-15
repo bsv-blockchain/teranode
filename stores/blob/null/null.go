@@ -23,6 +23,10 @@ func New() (*Null, error) {
 	}, nil
 }
 
+func (n *Null) Health(ctx context.Context) (int, string, error) {
+	return 0, "Null Store", nil
+}
+
 func (n *Null) Close(_ context.Context) error {
 	return nil
 }

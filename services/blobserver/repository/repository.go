@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -35,6 +36,41 @@ func NewRepository(ctx context.Context, logger utils.Logger, utxoStore utxo.Inte
 		TxStore:          TxStore,
 		SubtreeStore:     SubtreeStore,
 	}, nil
+}
+
+func (r *Repository) Health(ctx context.Context) (int, string, error) {
+	var sb strings.Builder
+	errs := make([]error, 0)
+
+	code, details, err := r.TxStore.Health(ctx)
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("TxStore: BAD %d - %q: %v\n", code, details, err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("TxStore: GOOD %d - %q\n", code, details))
+	}
+
+	code, details, err = r.UtxoStore.Health(ctx)
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("UTXOStore: BAD %d - %q: %v\n", code, details, err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("UTXOStore: GOOD %d - %q\n", code, details))
+	}
+
+	code, details, err = r.SubtreeStore.Health(ctx)
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("SubtreeStore: BAD %d - %q: %v\n", code, details, err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("SubtreeStore: GOOD %d - %q\n", code, details))
+	}
+
+	if len(errs) > 0 {
+		return -1, sb.String(), errors.New("Health errors occurred")
+	}
+
+	return 0, sb.String(), nil
 }
 
 func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {

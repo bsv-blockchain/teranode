@@ -19,6 +19,10 @@ import (
 
 type NullStore struct{}
 
+func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
+	return 0, "Null Store", nil
+}
+
 func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
 	return nil, nil
 }

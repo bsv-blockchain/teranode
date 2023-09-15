@@ -8,6 +8,7 @@ import (
 )
 
 type Store interface {
+	Health(ctx context.Context) (int, string, error)
 	Exists(ctx context.Context, key []byte) (bool, error)
 	Get(ctx context.Context, key []byte) ([]byte, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error

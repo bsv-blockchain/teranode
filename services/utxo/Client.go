@@ -6,6 +6,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Store struct {
@@ -24,6 +25,15 @@ func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 func (s *Store) SetBlockHeight(height uint32) error {
 	s.BlockHeight = height
 	return nil
+}
+
+func (s *Store) Health(ctx context.Context) (int, string, error) {
+	resp, err := s.db.Health(ctx, &emptypb.Empty{})
+	if err != nil {
+		return -1, resp.Details, err
+	}
+
+	return 0, resp.Details, nil
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {

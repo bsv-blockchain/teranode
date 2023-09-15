@@ -33,6 +33,10 @@ func (m *SplitByHash) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *SplitByHash) Health(ctx context.Context) (int, string, error) {
+	return 0, "SplitByHash Store", nil
+}
+
 func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	memMap := m.m[[1]byte{hash[0]}]
 

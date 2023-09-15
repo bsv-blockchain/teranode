@@ -67,6 +67,15 @@ func New(s3URL *url.URL) (*S3, error) {
 	return s, nil
 }
 
+func (g *S3) Health(ctx context.Context) (int, string, error) {
+	_, err := g.Exists(ctx, []byte("Health"))
+	if err != nil {
+		return -1, "Minio Store", err
+	}
+
+	return 0, "Minio Store", nil
+}
+
 func (g *S3) generateKey(key []byte) *string {
 	var reverseHexEncodedKey = utils.ReverseAndHexEncodeSlice(key)
 	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))

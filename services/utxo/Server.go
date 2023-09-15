@@ -131,6 +131,7 @@ func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.
 
 	return &utxostore_api.HealthResponse{
 		Ok:        true,
+		Details:   "GRPC Store",
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }

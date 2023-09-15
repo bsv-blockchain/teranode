@@ -33,6 +33,10 @@ func (m *SwissMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *SwissMap) Health(ctx context.Context) (int, string, error) {
+	return 0, "SwissMap Store", nil
+}
+
 func (m *SwissMap) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

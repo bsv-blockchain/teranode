@@ -38,6 +38,10 @@ func (m *Memory) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *Memory) Health(ctx context.Context) (int, string, error) {
+	return 0, "Memory Store", nil
+}
+
 func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

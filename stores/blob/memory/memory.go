@@ -21,6 +21,10 @@ func New() *Memory {
 	}
 }
 
+func (m *Memory) Health(ctx context.Context) (int, string, error) {
+	return 0, "Memory Store", nil
+}
+
 func (m *Memory) Close(_ context.Context) error {
 	// noop
 	return nil

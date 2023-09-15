@@ -90,6 +90,15 @@ func New(minioURL *url.URL) (*Minio, error) {
 	}, nil
 }
 
+func (m *Minio) Health(ctx context.Context) (int, string, error) {
+	_, err := m.Exists(ctx, []byte("Health"))
+	if err != nil {
+		return -1, "Minio Store", err
+	}
+
+	return 0, "Minio Store", nil
+}
+
 func (m *Minio) Close(ctx context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {

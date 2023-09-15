@@ -73,6 +73,15 @@ func New(dir string) (*Badger, error) {
 	return badgerStore, nil
 }
 
+func (s *Badger) Health(ctx context.Context) (int, string, error) {
+	_, err := s.Exists(ctx, []byte("health"))
+	if err != nil {
+		return -1, "Badger Store", err
+	}
+
+	return 0, "Badger Store", nil
+}
+
 func (s *Badger) Close(ctx context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {

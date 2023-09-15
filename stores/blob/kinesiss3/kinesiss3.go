@@ -73,6 +73,15 @@ func (g *KinesisS3) generateKey(key []byte) *string {
 	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
 }
 
+func (g *KinesisS3) Health(ctx context.Context) (int, string, error) {
+	_, err := g.Exists(ctx, []byte("Health"))
+	if err != nil {
+		return -1, "KinesisS3 Store", err
+	}
+
+	return 0, "KinesisS3 Store", nil
+}
+
 func (g *KinesisS3) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {

@@ -44,6 +44,10 @@ func (m *XsyncMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *XsyncMap) Health(ctx context.Context) (int, string, error) {
+	return 0, "XsyncMap Store", nil
+}
+
 func (m *XsyncMap) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	if utxo, ok := m.m.Load(*hash); ok {
 		if utxo.Hash == nil {
