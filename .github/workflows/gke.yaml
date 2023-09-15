@@ -136,7 +136,7 @@ jobs:
               FILE_NAME="${file%%.*}"
 
               # Run kubectl commands
-              kubectl rollout status -f "$file"
+              kubectl rollout status -f "$file"  --timeout=120s
           done
 
 
