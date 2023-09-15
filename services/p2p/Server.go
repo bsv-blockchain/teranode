@@ -50,8 +50,16 @@ func NewServer(logger utils.Logger) *Server {
 			panic(err)
 		}
 	}
+	p2pIp, ok := gocore.Config().Get("p2p_ip")
+	if !ok {
+		panic("p2p_ip not set in config")
+	}
+	p2pPort, ok := gocore.Config().Get("p2p_port")
+	if !ok {
+		panic("p2p_port not set in config")
+	}
 
-	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"), libp2p.Identity(*pk))
+	h, err := libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", p2pIp, p2pPort)), libp2p.Identity(*pk))
 	if err != nil {
 		panic(err)
 	}
