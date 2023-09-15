@@ -1,11 +1,12 @@
 import { writable, get } from 'svelte/store'
 import { nodes, getNodeHeader } from '@stores/bootstrapStore.js'
+import { onMessage } from '@stores/chainStore.js'
 
 // Create writable stores
 export const lastUpdated = writable(new Date())
 export const loading = writable(false)
 
-let updateFns = []
+let updateFns = [onMessage]
 
 export function addSubscriber(fn) {
   updateFns.push(fn)

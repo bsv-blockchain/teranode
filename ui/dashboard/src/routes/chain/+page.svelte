@@ -1,64 +1,19 @@
 <script>
-  import { onMount } from 'svelte'
-  import { addSubscriber } from '@stores/nodeStore.js'
-  import { selectedNode } from '@stores/bootstrapStore.js'
-  import { blocks, isFirstMount } from '@stores/chainStore.js'
+  import { blocks } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
 
-  onMount(() => {
-    if ($isFirstMount) {
-      isFirstMount.set(false)
-
-      console.log('adding subscriber')
-      addSubscriber(update)
-    }
-
-    drawTree($blocks)
-    // return () => {
-    //   console.log('removing subscriber')
-    //   removeSubscriber(update)
-    // }
-  })
-
-  async function update(data) {
-    if (data.type !== 'Block') return
-
-    // Add the new block to the end of the list unless it already exists
-    if ($blocks.find((block) => block.hash === data.hash)) return
-
-    let b = [...$blocks]
-
-    // Now fetch the block header
-    const url = $selectedNode + '/header/' + data.hash + '/json'
-
-    try {
-      const res = await fetch(url)
-      if (!res.ok) {
-        throw new Error(`HTTP error! Status: ${res.status}`)
-      }
-
-      const json = await res.json()
-
-      console.log(`got block ${json.height}`)
-      // Add the new block to the end of the list and remove the first block if the list is too long
-
-      // Slice off all but the last 30 blocks
-      if (b.length > 30) {
-        b = b.slice(-30)
-      }
-
-      blocks.set([...b, json])
-
+  $: {
+    if ($blocks) {
       drawTree($blocks)
-    } catch (err) {
-      console.error(err)
     }
   }
 
   function drawTree(blocks) {
+    if (import.meta.env.SSR) return
+
     const width = 600
     const height = 400
 
@@ -68,7 +23,7 @@
     // Remove previous SVG content
     d3.select('#tree').select('svg').remove()
 
-    const svg = d3
+    const svg = window.d3
       .select('#tree')
       .append('svg')
       .attr('width', '100%')

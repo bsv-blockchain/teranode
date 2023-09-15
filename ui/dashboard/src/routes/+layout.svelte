@@ -39,15 +39,8 @@
     }, 500)
   }
 
-  // Get the nodes on mount
-
   onMount(async () => {
     connectToBootstrap($selectedNode)
-
-    // addSubscriber(function (data) {
-    //   console.log('layout', data)
-    // })
-
     connectToBlobServer($selectedNode)
   })
 </script>

@@ -26,6 +26,7 @@ export const selectedNode = writable('', (set) => {
     if (url.host === 'localhost:5174') {
       url.protocol = 'https:'
       url.host = 'miner1.allinone.ubsv.dev'
+      url.port = ''
     }
     if (url.port === '') {
       set(`${url.protocol}//${url.hostname}`)
