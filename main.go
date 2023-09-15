@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/miner"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
@@ -80,6 +81,7 @@ func main() {
 	startBlobServer := shouldStart("BlobServer")
 	startCoinbase := shouldStart("Coinbase")
 	startBootstrap := shouldStart("Bootstrap")
+	startP2P := shouldStart("P2P")
 	help := shouldStart("help")
 
 	if help ||
@@ -93,6 +95,7 @@ func main() {
 			!startSeeder &&
 			!startMiner &&
 			!startBootstrap &&
+			!startP2P &&
 			!startBlobServer &&
 			!startCoinbase) {
 		fmt.Println("usage: main [options]")
@@ -133,6 +136,9 @@ func main() {
 		fmt.Println("")
 		fmt.Println("    -bootstrap=<1|0>")
 		fmt.Println("          whether to start the bootstrap server")
+		fmt.Println("")
+		fmt.Println("    -p2p=<1|0>")
+		fmt.Println("          whether to start the p2p server")
 		fmt.Println("")
 		fmt.Println("    -tracer=<1|0>")
 		fmt.Println("          whether to start the Jaeger tracer (default=false)")
@@ -321,6 +327,13 @@ func main() {
 			getUtxoStore(ctx, logger),
 			getTxStore(),
 			getSubtreeStore(),
+		))
+	}
+
+	// p2p server
+	if startP2P {
+		sm.AddService("P2P", p2p.NewServer(
+			gocore.Log("P2P"),
 		))
 	}
 
