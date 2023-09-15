@@ -239,7 +239,6 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string) {
 	s.logger.Debugf("Peer discovery complete")
 	s.logger.Debugf("connected to %d peers\n", len(s.host.Network().Peers()))
 	s.logger.Debugf("peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
-
 }
 
 func handleBlockchainMessage(s network.Stream) {
@@ -250,5 +249,7 @@ func handleBlockchainMessage(s network.Stream) {
 		return
 	}
 	s.Close()
-	log.Printf("Received block topic message: %s", string(buf))
+	if len(buf) > 0 {
+		log.Printf("Received block topic message: %s", string(buf))
+	}
 }
