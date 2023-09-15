@@ -23,9 +23,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -176,9 +176,9 @@ func main() {
 		// defer closeTracer()
 		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 
-		_, closer, err := utils.InitGlobalTracer(serviceName)
+		_, closer, err := util.InitGlobalTracer(serviceName)
 		if err != nil {
-			logger.Fatalf("failed to initialize tracer: %v", err)
+			logger.Warnf("failed to initialize tracer: %v", err)
 		}
 		defer closer.Close()
 	}

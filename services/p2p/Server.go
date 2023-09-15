@@ -245,7 +245,7 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string) {
 func handleBlockchainMessage(s network.Stream) {
 	buf, err := io.ReadAll(s)
 	if err != nil {
-		s.Reset()
+		_ = s.Reset()
 		log.Println(err)
 		return
 	}

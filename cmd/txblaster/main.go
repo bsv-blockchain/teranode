@@ -187,7 +187,7 @@ func main() {
 	if gocore.Config().GetBool("use_open_tracing", true) {
 		logger.Infof("Starting open tracing")
 		// closeTracer := tracing.InitOtelTracer()
-		_, closer, err := utils.InitGlobalTracer("tx-blaster")
+		_, closer, err := util.InitGlobalTracer("tx-blaster")
 		if err != nil {
 			panic(err)
 		}
