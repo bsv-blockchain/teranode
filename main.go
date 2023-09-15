@@ -180,7 +180,9 @@ func main() {
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}
-		defer closer.Close()
+		if closer != nil {
+			defer closer.Close()
+		}
 	}
 
 	sm, ctx := servicemanager.NewServiceManager()
