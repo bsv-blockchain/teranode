@@ -162,9 +162,9 @@ func main() {
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
-						_, ok := transactionMap[*node.Hash]
+						previousBlockHash, ok := transactionMap[*node.Hash]
 						if ok {
-							logger.Errorf("transaction %s already exists in subtree %s in block %s", node, subtreeHash, block.Hash())
+							logger.Errorf("transaction %s already exists in block %s", node.Hash, previousBlockHash)
 						} else {
 							transactionMap[*node.Hash] = *block.Hash()
 						}
@@ -184,9 +184,11 @@ func main() {
 						for _, input := range btTx.Inputs {
 							// the input tx id (parent tx) should already be in the transaction map
 							inputHash := chainhash.Hash(input.PreviousTxID())
-							_, ok = transactionMap[inputHash]
-							if !ok {
-								logger.Errorf("the parent %s does not appear before the transaction %s", inputHash, node.Hash.String())
+							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
+								_, ok = transactionMap[inputHash]
+								if !ok {
+									logger.Errorf("the parent %s does not appear before the transaction %s", inputHash, node.Hash.String())
+								}
 							}
 						}
 
