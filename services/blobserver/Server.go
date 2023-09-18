@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blobserver/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -67,7 +68,12 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("no blobserver_grpcListenAddress or blobserver_httpListenAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(ctx, v.logger, v.utxoStore, v.txStore, v.subtreeStore)
+	blockchainClient, err := blockchain.NewClient(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating blockchain client: %s", err)
+	}
+
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}
