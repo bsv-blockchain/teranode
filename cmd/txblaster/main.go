@@ -49,6 +49,7 @@ var ipv6MulticastConn *net.UDPConn
 var coinbasePrivKey string
 var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 var totalTransactions atomic.Uint64
+var startTime time.Time
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
@@ -259,6 +260,7 @@ func main() {
 		}()
 	}
 
+	startTime = time.Now()
 	for i := 0; i < *workers; i++ {
 		i := i
 		g.Go(func() error {
@@ -279,6 +281,7 @@ func main() {
 				printProgress,
 				logIdsFile,
 				&totalTransactions,
+				&startTime,
 			)
 			if err != nil {
 				return err

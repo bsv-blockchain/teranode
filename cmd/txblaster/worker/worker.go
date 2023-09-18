@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -41,8 +42,8 @@ var (
 	prometheusTransactionErrors     *prometheus.CounterVec
 )
 
-// Create type to avoid collisions with context.withSpan
 // ContextKey type
+// Create type to avoid collisions with context.withSpan
 type ContextKey int
 
 // ContextAccountIDKey constant
@@ -135,6 +136,7 @@ type Worker struct {
 	logIdsCh             chan string
 	coinbaseClient       coinbase.ClientI
 	totalTransactions    *atomic.Uint64
+	globalStartTime      *time.Time
 }
 
 func NewWorker(
@@ -152,6 +154,7 @@ func NewWorker(
 	printProgress uint64,
 	logIdsCh chan string,
 	totalTransactions *atomic.Uint64,
+	globalStartTime *time.Time,
 ) (*Worker, error) {
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
@@ -188,6 +191,7 @@ func NewWorker(
 		printProgress:        printProgress,
 		logIdsCh:             logIdsCh,
 		totalTransactions:    totalTransactions,
+		globalStartTime:      globalStartTime,
 	}, nil
 }
 
@@ -587,11 +591,11 @@ func (w *Worker) publishToKafka(producer sarama.SyncProducer, topic string, txID
 	counterLoad := counter.Add(1)
 	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
 		txPs := float64(0)
-		ts := time.Since(w.startTime).Seconds()
+		ts := time.Since(*w.globalStartTime).Seconds()
 		if ts > 0 {
 			txPs = float64(counterLoad) / ts
 		}
-		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(w.startTime).Seconds(), int(txPs))
+		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
 	}
 
 	return nil
@@ -607,11 +611,11 @@ func (w *Worker) sendOnIpv6Multicast(conn *net.UDPConn, IDBytes []byte, txExtend
 	counterLoad := counter.Add(1)
 	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
 		txPs := float64(0)
-		ts := time.Since(w.startTime).Seconds()
+		ts := time.Since(*w.globalStartTime).Seconds()
 		if ts > 0 {
 			txPs = float64(counterLoad) / ts
 		}
-		fmt.Printf("Time for %d transactions to ipv6: %.2fs (%d tx/s)\r", counterLoad, time.Since(w.startTime).Seconds(), int(txPs))
+		fmt.Printf("Time for %d transactions to ipv6: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
 	}
 
 	return nil
@@ -646,11 +650,11 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 	counterLoad := counter.Add(1)
 	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
 		txPs := float64(0)
-		ts := time.Since(w.startTime).Seconds()
+		ts := time.Since(*w.globalStartTime).Seconds()
 		if ts > 0 {
 			txPs = float64(counterLoad) / ts
 		}
-		fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(w.startTime).Seconds(), int(txPs))
+		fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
 	}
 
 	return nil
