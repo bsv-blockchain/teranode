@@ -101,6 +101,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
+				close(b.miningCandidateCh)
+				close(b.blockchainSubscriptionCh)
 				return
 
 			case responseCh := <-b.miningCandidateCh:
@@ -291,7 +293,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	responseCh := make(chan *miningCandidateResponse)
-	b.miningCandidateCh <- responseCh
+	utils.SafeSend(b.miningCandidateCh, responseCh)
 	response := <-responseCh
 
 	return response.miningCandidate, response.subtrees, response.err

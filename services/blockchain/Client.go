@@ -270,10 +270,10 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 					continue
 				}
 
-				ch <- &model.Notification{
+				utils.SafeSend(ch, &model.Notification{
 					Type: resp.Type,
 					Hash: hash,
-				}
+				})
 			}
 		}
 	}()
