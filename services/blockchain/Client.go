@@ -39,18 +39,29 @@ func NewClient(ctx context.Context) (ClientI, error) {
 
 	var err error
 	var baConn *grpc.ClientConn
+	var baClient blockchain_api.BlockchainAPIClient
+
 	// retry a few times to connect to the blockchain service
+	maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries", 3)
+	retrySleep, _ := gocore.Config().GetInt("blockchain_retrySleep", 1000)
+
 	retries := 0
-	maxRetries := 5
 	for {
 		baConn, err = util.GetGRPCClient(ctx, blockchainGrpcAddress, &util.ConnectionOptions{
 			MaxRetries: 3,
 		})
 		if err != nil {
+			return nil, fmt.Errorf("failed to init blockchain service connection: %v", err)
+		}
+
+		baClient = blockchain_api.NewBlockchainAPIClient(baConn)
+
+		_, err = baClient.Health(ctx, &emptypb.Empty{})
+		if err != nil {
 			if retries < maxRetries {
-				logger.Errorf("[Blockchain] failed to connect to blockchain service, retrying %d: %v", retries, err)
 				retries++
-				time.Sleep(2 * time.Second)
+				logger.Warnf("[Blockchain] failed to connect to blockchain service, retrying %d: %v", retries, err)
+				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
 				continue
 			}
 
@@ -61,7 +72,7 @@ func NewClient(ctx context.Context) (ClientI, error) {
 	}
 
 	return &Client{
-		client:  blockchain_api.NewBlockchainAPIClient(baConn),
+		client:  baClient,
 		logger:  logger,
 		running: true,
 		conn:    baConn,
