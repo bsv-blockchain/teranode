@@ -28,7 +28,9 @@ func NewClient(ctx context.Context) (*Client, error) {
 		return nil, fmt.Errorf("no coinbase_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, coinbaseGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		return nil, err
@@ -44,7 +46,9 @@ func NewClient(ctx context.Context) (*Client, error) {
 
 func NewClientWithAddress(ctx context.Context, logger utils.Logger, address string) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-		MaxRetries: 3,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		return nil, err

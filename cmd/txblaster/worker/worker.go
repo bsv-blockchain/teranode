@@ -367,9 +367,9 @@ func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
 	seederServers := make([]seeder_api.SeederAPIClient, 0)
 	for _, seederGrpcAddress := range seederGrpcAddresses {
 		sConn, err := util.GetGRPCClient(ctx, seederGrpcAddress, &util.ConnectionOptions{
-			OpenTracing:   gocore.Config().GetBool("use_open_tracing", true),
-			SecurityLevel: 1,
-			MaxRetries:    3,
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+			MaxRetries:  3,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to seeder server: %v", err)

@@ -22,6 +22,7 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	txmeta_grpcAddress, _ := gocore.Config().Get("txmeta_grpcAddress")
 	conn, err := util.GetGRPCClient(ctx, txmeta_grpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 		MaxRetries:  3,
 	})
 	if err != nil {
