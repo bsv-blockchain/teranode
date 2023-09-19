@@ -13,7 +13,7 @@
     {:else}
       <table class="table">
         <tbody>
-          {#each $nodes as node (node.ip)}
+          {#each $nodes as node (node.name)}
             <tr>
               <td>{node.blobServerHTTPAddress || 'anonymous'}</td>
               <td>{node.source}</td>
