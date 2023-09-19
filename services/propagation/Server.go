@@ -278,15 +278,12 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
 	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	go func() {
-		span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
-		defer span.Finish()
-		if err = u.txStore.Set(spanCtx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
-			u.logger.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
-			// TODO make this resilient to errors
-			// write it to secondary store (Kafka, Badger) and retry?
-		}
-	}()
+
+	//go func() {
+	if err = u.storeTransaction(setCtx, btTx); err != nil {
+		u.logger.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
+	}
+	//}()
 
 	if err = u.validator.Validate(traceSpan.Ctx, btTx); err != nil {
 		// TODO send REJECT message to peers if invalid tx
@@ -300,4 +297,17 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &emptypb.Empty{}, nil
+}
+
+func (u *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.Tx) error {
+	span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
+	defer span.Finish()
+
+	if err := u.txStore.Set(spanCtx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+		// TODO make this resilient to errors
+		// write it to secondary store (Kafka, Badger) and retry?
+		return err
+	}
+
+	return nil
 }
