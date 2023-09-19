@@ -19,6 +19,11 @@ var (
 	genesisScript = "04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73"
 )
 
+type BlockSubtree struct {
+	Block   chainhash.Hash
+	Subtree chainhash.Hash
+}
+
 func main() {
 	_ = os.Chdir("../../")
 
@@ -101,7 +106,7 @@ func main() {
 
 	logger.Debugf("block headers are valid")
 
-	transactionMap := make(map[chainhash.Hash]chainhash.Hash)
+	transactionMap := make(map[chainhash.Hash]BlockSubtree)
 
 	logger.Infof("checking blocks / subtrees")
 	var block *model.Block
@@ -136,7 +141,7 @@ func main() {
 			}
 
 			// add the coinbase to the map
-			transactionMap[*block.CoinbaseTx.TxIDChainHash()] = *block.Hash()
+			transactionMap[*block.CoinbaseTx.TxIDChainHash()] = BlockSubtree{Block: *block.Hash()}
 
 			// check subtrees
 			var subtreeBytes []byte
@@ -162,11 +167,12 @@ func main() {
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
-						previousBlockHash, ok := transactionMap[*node.Hash]
+						previousBlockSubtree, ok := transactionMap[*node.Hash]
 						if ok {
-							logger.Errorf("transaction %s already exists in block %s", node.Hash, previousBlockHash)
+							logger.Debugf("current subtree %s in block %s", subtreeHash, block.Hash())
+							logger.Errorf("transaction %s already exists in subtree %s in block %s", node.Hash, previousBlockSubtree.Subtree, previousBlockSubtree.Block)
 						} else {
-							transactionMap[*node.Hash] = *block.Hash()
+							transactionMap[*node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
 						}
 
 						tx, err = txStore.Get(ctx, node.Hash[:])
