@@ -11,6 +11,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -29,7 +30,9 @@ type BestBlockHeader struct {
 
 func NewClient(ctx context.Context, logger utils.Logger, address string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-		MaxRetries: 3,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		return nil, err

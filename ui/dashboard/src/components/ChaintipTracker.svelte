@@ -20,7 +20,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each $nodes as node (node.ip)}
+        {#each $nodes as node (node.name)}
           {#if node.blobServerHTTPAddress}
             <Node {node} />
           {/if}

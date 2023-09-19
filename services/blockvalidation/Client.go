@@ -19,7 +19,9 @@ func NewClient(ctx context.Context) *Client {
 		panic("no blockvalidation_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		panic(err)

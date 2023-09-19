@@ -38,6 +38,10 @@ build-tx-blaster:
 build-status:
 	go build -o status.run ./cmd/status/
 
+.PHONY: build-aerospiketest
+build-aerospiketest:
+	go build -o aerospiketest.run ./cmd/aerospiketest/
+
 .PHONY: build-dashboard
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
@@ -64,9 +68,8 @@ gen:
 	--proto_path=. \
 	--go_out=. \
 	--go_opt=paths=source_relative \
+	--chainhash_out=. \
 	model/model.proto
-
-# --chainhash_out=. \
 
 	protoc \
 	--proto_path=. \
@@ -194,5 +197,5 @@ install:
 	$(MAKE) install-lint
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-	pip install pre-commit
+	brew install pre-commit
 	pre-commit install

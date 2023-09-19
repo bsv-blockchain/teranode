@@ -358,6 +358,9 @@ func main() {
 		}
 	}
 
+	// start prometheus metrics
+	util.RegisterPrometheusMetrics()
+
 	// start http health check server
 	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -48,7 +48,9 @@ func NewClient(ctx context.Context) (ClientI, error) {
 	retries := 0
 	for {
 		baConn, err = util.GetGRPCClient(ctx, blockchainGrpcAddress, &util.ConnectionOptions{
-			MaxRetries: 3,
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+			MaxRetries:  3,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to init blockchain service connection: %v", err)
@@ -81,7 +83,9 @@ func NewClient(ctx context.Context) (ClientI, error) {
 
 func NewClientWithAddress(ctx context.Context, logger utils.Logger, address string) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-		MaxRetries: 3,
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
 	})
 	if err != nil {
 		return nil, err
@@ -101,7 +105,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
-		SubtreeHashes:    make([][]byte, 0),
+		SubtreeHashes:    make([][]byte, 0, len(block.Subtrees)),
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 	}
