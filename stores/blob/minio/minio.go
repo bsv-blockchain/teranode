@@ -197,26 +197,33 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	objectName := utils.ReverseAndHexEncodeSlice(hash)
 	object, err := m.client.GetObject(ctx, m.bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
-		errResponse := minio.ToErrorResponse(err)
-		if m.tempTTL && errResponse.Code == "NoSuchKey" {
-			// look for the temp object
-			object, err = m.client.GetObject(ctx, m.bucketName, "temp/"+objectName, minio.GetObjectOptions{})
-			if err != nil {
-				traceSpan.RecordError(err)
-				return nil, fmt.Errorf("failed to get minio data: %w", err)
-			}
-		} else {
-			traceSpan.RecordError(err)
-			return nil, fmt.Errorf("failed to get minio data: %w", err)
-		}
+		traceSpan.RecordError(err)
+		return nil, fmt.Errorf("failed to get minio data: %w", err)
 	}
 	defer object.Close()
 
 	var b []byte
 	b, err = io.ReadAll(object)
 	if err != nil && err != io.EOF {
-		traceSpan.RecordError(err)
-		return nil, fmt.Errorf("failed to read minio data: %w", err)
+		errResponse := minio.ToErrorResponse(err)
+		if m.tempTTL && errResponse.Code == "NoSuchKey" {
+			// look for the temp object
+			object, err = m.client.GetObject(ctx, m.bucketName, "temp/"+objectName, minio.GetObjectOptions{})
+			if err != nil {
+				traceSpan.RecordError(err)
+				return nil, fmt.Errorf("failed to get minio temp data: %w", err)
+			}
+			defer object.Close()
+
+			b, err = io.ReadAll(object)
+			if err != nil && err != io.EOF {
+				traceSpan.RecordError(err)
+				return nil, fmt.Errorf("failed to read minio temp data: %w", err)
+			}
+		} else {
+			traceSpan.RecordError(err)
+			return nil, fmt.Errorf("failed to read minio data: %w", err)
+		}
 	}
 
 	return b, err
