@@ -14,6 +14,7 @@ import (
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
+	prometheus_golang "github.com/prometheus/client_golang/prometheus"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -179,6 +180,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	return conn, nil
 }
 
+var prometheusIsRegistered = false
+var prometheusMetrics = prometheus.NewServerMetrics()
+
 func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
@@ -207,7 +211,6 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	}
 
 	if connectionOptions.Prometheus {
-		prometheusMetrics := prometheus.NewServerMetrics()
 		opts = append(
 			opts,
 			grpc.ChainUnaryInterceptor(prometheusMetrics.UnaryServerInterceptor()),
@@ -222,7 +225,20 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 
 	opts = append(opts, grpc.Creds(tlsCredentials))
 
-	return grpc.NewServer(opts...), nil
+	server := grpc.NewServer(opts...)
+
+	if connectionOptions.Prometheus && prometheusMetrics != nil {
+		prometheusMetrics.InitializeMetrics(server)
+	}
+
+	return server, nil
+}
+
+func RegisterPrometheusMetrics() {
+	if !prometheusIsRegistered {
+		prometheus_golang.MustRegister(prometheusMetrics)
+		prometheusIsRegistered = true
+	}
 }
 
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
