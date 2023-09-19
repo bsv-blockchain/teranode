@@ -101,7 +101,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
-		SubtreeHashes:    make([][]byte, 0),
+		SubtreeHashes:    make([][]byte, 0, len(block.Subtrees)),
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 	}
