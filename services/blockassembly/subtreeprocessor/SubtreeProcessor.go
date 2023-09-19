@@ -15,6 +15,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 type txIDAndFee struct {
@@ -345,10 +346,9 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
 
-	// TODO fix this check
-	//if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
-	//	return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
-	//}
+	if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
+		return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
+	}
 
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
@@ -388,7 +388,9 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// clear the transaction ids from all the subtrees of the block that are left over
 	var transactionMap *util.SplitSwissMap
 	if len(blockSubtreesMap) > 0 {
-		transactionMap = stp.createTransactionMap(ctx, blockSubtreesMap)
+		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
+			return fmt.Errorf("error creating transaction map: %s", err.Error())
+		}
 	}
 
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
@@ -486,6 +488,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 
 		return fmt.Errorf("error storing utxo (%s): %w", utxoHash, err)
 	}
+
 	return nil
 }
 
@@ -525,40 +528,40 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 	return &remainderSubtreeNodes
 }
 
-func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) *util.SplitSwissMap {
+func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (*util.SplitSwissMap, error) {
 	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(ctx)
 
 	// get all the subtrees from the block that we have not yet cleaned out
 	for subtreeHash := range blockSubtreesMap {
-		wg.Add(1)
-		go func(st chainhash.Hash) {
-			defer wg.Done()
-
+		st := subtreeHash
+		g.Go(func() error {
 			stp.logger.Infof("getting subtree: %s", st.String())
 			subtreeBytes, err := stp.subtreeStore.Get(ctx, st[:])
 			var subtree *util.Subtree
 			if err != nil {
-				stp.logger.Errorf("error getting subtree: %s", err.Error())
-				return
+				return fmt.Errorf("error getting subtree: %s", err.Error())
 			}
 
 			subtree = &util.Subtree{}
 			err = subtree.Deserialize(subtreeBytes)
 			if err != nil {
-				stp.logger.Errorf("error deserializing subtree: %s", err.Error())
-				return
+				return fmt.Errorf("error deserializing subtree: %s", err.Error())
 			}
 
 			for _, node := range subtree.Nodes {
 				_ = transactionMap.Put(*node.Hash)
 			}
-		}(subtreeHash)
+
+			return nil
+		})
 	}
 
-	wg.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("error getting subtrees: %s", err.Error())
+	}
 
-	return transactionMap
+	return transactionMap, nil
 }
