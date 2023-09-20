@@ -355,6 +355,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
+	coinbaseId := block.CoinbaseTx.TxIDChainHash()
 	err := stp.processCoinbaseUtxos(ctx, block)
 	if err != nil {
 		return err
@@ -430,8 +431,13 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	// remainderTxHashes is from early trees, so they need to be added before the current subtree nodes
 	if remainderTxHashes != nil {
-		for _, node := range *remainderTxHashes {
+		for idx, node := range *remainderTxHashes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+				if coinbaseId.IsEqual(node.Hash) {
+					// this is the coinbase transaction, we need to skip it
+					stp.logger.Warnf("skipping coinbase transaction: %s, %d", node.Hash.String(), idx)
+					continue
+				}
 				stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, skipNotification)
 			}
 		}

@@ -288,13 +288,18 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
 		for i, subtree := range job.Subtrees {
+			// the job subtree hash needs to be stored for the block, before the coinbase is replaced in the first
+			// subtree, which changes the id of the subtree
 			jobSubtreeHashes[i] = subtree.RootHash()
 
-			subtreesInJob[i] = subtree
 			if i == 0 {
+				subtreesInJob[i] = subtree.Duplicate()
 				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0, uint64(coinbaseTx.Size()))
+			} else {
+				subtreesInJob[i] = subtree
 			}
-			rootHash := subtree.RootHash()
+
+			rootHash := subtreesInJob[i].RootHash()
 			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 
 			transactionCount += uint64(subtree.Length())
