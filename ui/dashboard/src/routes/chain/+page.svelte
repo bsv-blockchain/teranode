@@ -1,9 +1,16 @@
 <script>
+  import { onMount } from 'svelte'
   import { blocks } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
+
+  onMount(() => {
+    if ($blocks) {
+      drawTree($blocks)
+    }
+  })
 
   $: {
     if ($blocks) {
@@ -142,15 +149,15 @@
   }
 
   function stringToColor(str) {
-    if (str === 'ROOT') return '#000000'
-
+    const colors = ['green', 'red', 'blue', 'orange', 'magenta', '#33FFFF']
     let hash = 0
+
     for (let i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash)
+      hash += str.charCodeAt(i)
     }
 
-    const hue = hash % 360
-    return `hsl(${hue}, 100%, 50%)`
+    const index = hash % colors.length
+    return colors[index]
   }
 </script>
 
