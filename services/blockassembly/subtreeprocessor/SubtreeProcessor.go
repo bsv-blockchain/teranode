@@ -240,8 +240,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		if err != nil {
 			return err
 		}
-		// we must set the current block header for moveUpBlock to work
-		stp.currentBlockHeader = block.Header
 	}
 
 	for idx, block := range moveUpBlocks {
@@ -250,8 +248,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		if err != nil {
 			return err
 		}
-		// we must set the current block header for moveUpBlock to work
-		stp.currentBlockHeader = block.Header
 	}
 
 	stp.setTxCount()
@@ -276,6 +272,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
+
+	// TODO add check for the correct parent block
 
 	// reset the subtree processor
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
@@ -334,6 +332,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	for _, node := range lastIncompleteSubtree.Nodes {
 		stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, true)
 	}
+
+	// we must set the current block header
+	stp.currentBlockHeader = block.Header
 
 	return nil
 }
@@ -436,6 +437,9 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	}
 
 	stp.setTxCount()
+
+	// set the current block header
+	stp.currentBlockHeader = block.Header
 
 	return nil
 }
