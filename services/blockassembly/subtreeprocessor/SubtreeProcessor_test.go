@@ -11,7 +11,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
 	"github.com/ordishs/go-utils"
@@ -23,6 +25,7 @@ var (
 
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+	coinbaseTx, _   = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1a03a403002f746572616e6f64652f9f9fba46d5a08a6be11ddb2dffffffff0a0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac00000000")
 
 	prevBlockHeader = &model.BlockHeader{
 		Version:        1,
@@ -240,8 +243,9 @@ func TestMoveUpBlock(t *testing.T) {
 	defer close(waitCh)
 
 	subtreeStore, _ := null.New()
+	utxosStore := memory.New(true)
 
-	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -277,6 +281,7 @@ func TestMoveUpBlock(t *testing.T) {
 			stp.chainedSubtrees[0].RootHash(),
 			stp.chainedSubtrees[1].RootHash(),
 		},
+		CoinbaseTx: coinbaseTx,
 	})
 	require.NoError(t, err)
 	//wg.Wait()
@@ -316,7 +321,10 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
+	subtreeStore, _ := null.New()
+	utxosStore := memory.New(true)
+
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -353,6 +361,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 			stp.chainedSubtrees[0].RootHash(),
 			stp.chainedSubtrees[1].RootHash(),
 		},
+		CoinbaseTx: coinbaseTx,
 	})
 	wg.Wait()
 	require.NoError(t, err)
@@ -390,7 +399,10 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
+	subtreeStore, _ := null.New()
+	utxosStore := memory.New(true)
+
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -427,6 +439,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 			stp.chainedSubtrees[0].RootHash(),
 			stp.chainedSubtrees[1].RootHash(),
 		},
+		CoinbaseTx: coinbaseTx,
 	})
 	wg.Wait()
 	require.NoError(t, err)
