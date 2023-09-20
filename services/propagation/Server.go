@@ -22,50 +22,16 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
-	prometheusProcessedTransactions prometheus.Counter
-	prometheusInvalidTransactions   prometheus.Counter
-	prometheusTransactionDuration   prometheus.Histogram
-	prometheusTransactionSize       prometheus.Histogram
-
 	// ipv6 multicast constants
 	maxDatagramSize = 512 //100 * 1024 * 1024
 	ipv6Port        = 9999
 )
-
-func init() {
-	prometheusProcessedTransactions = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "propagation_processed_transactions",
-			Help: "Number of transactions processed by the propagation service",
-		},
-	)
-	prometheusInvalidTransactions = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "propagation_invalid_transactions",
-			Help: "Number of transactions found invalid by the propagation service",
-		},
-	)
-	prometheusTransactionDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Name: "propagation_transactions_duration",
-			Help: "Duration of transaction processing by the propagation service",
-		},
-	)
-	prometheusTransactionSize = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Name: "propagation_transactions_size",
-			Help: "Size of transactions processed by the propagation service",
-		},
-	)
-}
 
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
@@ -82,6 +48,8 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
+	initPrometheusMetrics()
+
 	return &PropagationServer{
 		logger:    logger,
 		txStore:   txStore,
@@ -95,7 +63,6 @@ func (u *PropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (u *PropagationServer) Start(ctx context.Context) (err error) {
-
 	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
 	if ok {
 		err = u.StartUDP6Listeners(ctx, ipv6Addresses)
@@ -237,6 +204,7 @@ func (u *PropagationServer) Stop(_ context.Context) error {
 }
 
 func (u *PropagationServer) Health(_ context.Context, _ *emptypb.Empty) (*propagation_api.HealthResponse, error) {
+	prometheusHealth.Inc()
 	return &propagation_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -244,6 +212,8 @@ func (u *PropagationServer) Health(_ context.Context, _ *emptypb.Empty) (*propag
 }
 
 func (u *PropagationServer) Get(ctx context.Context, req *propagation_api.GetRequest) (*propagation_api.GetResponse, error) {
+	prometheusGetTransaction.Inc()
+
 	tx, err := u.txStore.Get(ctx, req.Txid)
 	if err != nil {
 		return nil, err
@@ -255,6 +225,7 @@ func (u *PropagationServer) Get(ctx context.Context, req *propagation_api.GetReq
 }
 
 func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetRequest) (*emptypb.Empty, error) {
+	prometheusProcessedTransactions.Inc()
 	traceSpan := tracing.Start(ctx, "PropagationServer:Set")
 	defer traceSpan.Finish()
 
@@ -292,7 +263,6 @@ func (u *PropagationServer) Set(ctx context.Context, req *propagation_api.SetReq
 		return &emptypb.Empty{}, err
 	}
 
-	prometheusProcessedTransactions.Inc()
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 

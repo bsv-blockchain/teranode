@@ -11,46 +11,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var (
-	prometheusTxMetaHealth   prometheus.Counter
-	prometheusTxMetaSet      prometheus.Counter
-	prometheusTxMetaSetMined prometheus.Counter
-	prometheusTxMetaGet      prometheus.Counter
-)
-
-func init() {
-	prometheusTxMetaHealth = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "txmeta_health",
-			Help: "Number of calls done to txmeta health",
-		},
-	)
-	prometheusTxMetaSet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "txmeta_set",
-			Help: "Number of calls done to txmeta set",
-		},
-	)
-	prometheusTxMetaSetMined = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "txmeta_set_mined",
-			Help: "Number of calls done to txmeta set mined",
-		},
-	)
-	prometheusTxMetaGet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "txmeta_get",
-			Help: "Number of calls done to txmeta get",
-		},
-	)
-}
 
 // Server type carries the logger within it
 type Server struct {
@@ -62,6 +26,7 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txMetaStoreURL *url.URL) *Server {
+	initPrometheusMetrics()
 	return &Server{
 		logger:         logger,
 		txMetaStoreURL: txMetaStoreURL,
@@ -203,6 +168,7 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 }
 
 func (u *Server) Delete(ctx context.Context, request *txmeta_api.DeleteRequest) (*txmeta_api.DeleteResponse, error) {
+	prometheusTxMetaDelete.Inc()
 	//TODO implement me
 	panic("implement me")
 }

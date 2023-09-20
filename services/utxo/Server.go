@@ -11,74 +11,10 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var (
-	prometheusUtxoGet   prometheus.Counter
-	prometheusUtxoStore prometheus.Counter
-	// prometheusUtxoReStore    prometheus.Counter
-	// prometheusUtxoStoreSpent prometheus.Counter
-	prometheusUtxoSpend prometheus.Counter
-	// prometheusUtxoReSpend    prometheus.Counter
-	// prometheusUtxoSpendSpent prometheus.Counter
-	prometheusUtxoReset prometheus.Counter
-)
-
-func init() {
-	prometheusUtxoGet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_get",
-			Help: "Number of utxo get calls done to utxostore",
-		},
-	)
-	prometheusUtxoStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_store",
-			Help: "Number of utxo store calls done to utxostore",
-		},
-	)
-	//prometheusUtxoStoreSpent = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "utxostore_utxo_store_spent",
-	//		Help: "Number of utxo store calls that were already spent to utxostore",
-	//	},
-	//)
-	//prometheusUtxoReStore = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "utxostore_utxo_restore",
-	//		Help: "Number of utxo restore calls done to utxostore",
-	//	},
-	//)
-	prometheusUtxoSpend = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_spend",
-			Help: "Number of utxo spend calls done to utxostore",
-		},
-	)
-	//prometheusUtxoReSpend = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "utxostore_utxo_respend",
-	//		Help: "Number of utxo respend calls done to utxostore",
-	//	},
-	//)
-	//prometheusUtxoSpendSpent = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "utxostore_utxo_spend_spent",
-	//		Help: "Number of utxo spend calls that were already spent done to utxostore",
-	//	},
-	//)
-	prometheusUtxoReset = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "utxostore_utxo_reset",
-			Help: "Number of utxo reset calls done to utxostore",
-		},
-	)
-}
 
 // UTXOStore type carries the logger within it
 type UTXOStore struct {
@@ -94,6 +30,8 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, s utxostore.Interface, opts ...Options) *UTXOStore {
+	initPrometheusMetrics()
+
 	if len(opts) > 0 {
 		for _, opt := range opts {
 			opt(s)

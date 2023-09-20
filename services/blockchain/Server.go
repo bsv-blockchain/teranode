@@ -13,25 +13,10 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var (
-	prometheusBlockchainAddBlock prometheus.Counter
-)
-
-func init() {
-	prometheusBlockchainAddBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "blockchain_add_block",
-			Help: "Number of blocks added to the blockchain service",
-		},
-	)
-}
 
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer
@@ -61,6 +46,8 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger) (*Blockchain, error) {
+	initPrometheusMetrics()
+
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {
 		return nil, err
@@ -143,6 +130,8 @@ func (b *Blockchain) Stop(_ context.Context) error {
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	prometheusBlockchainHealth.Inc()
+
 	return &blockchain_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -150,6 +139,8 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
+	prometheusBlockchainAddBlock.Inc()
+
 	header, err := model.NewBlockHeaderFromBytes(request.Header)
 	if err != nil {
 		return nil, err
@@ -183,8 +174,6 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
-	prometheusBlockchainAddBlock.Inc()
-
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),
@@ -194,6 +183,8 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
+	prometheusBlockchainGetBlock.Inc()
+
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -220,6 +211,8 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
+	prometheusBlockchainGetLastNBlocks.Inc()
+
 	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks)
 	if err != nil {
 		return nil, err
@@ -231,6 +224,8 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
+	prometheusBlockchainGetBlockExists.Inc()
+
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -247,6 +242,8 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
+	prometheusBlockchainGetBestBlockHeader.Inc()
+
 	chainTip, height, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
@@ -259,6 +256,8 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 }
 
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
+	prometheusBlockchainGetBlockHeader.Inc()
+
 	hash, err := chainhash.NewHash(req.BlockHash)
 	if err != nil {
 		return nil, err
@@ -279,6 +278,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 }
 
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	prometheusBlockchainGetBlockHeaders.Inc()
+
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
 		return nil, err
@@ -301,6 +302,8 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
+	prometheusBlockchainSubscribe.Inc()
+
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 
@@ -324,6 +327,8 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
+	prometheusBlockchainGetState.Inc()
+
 	data, err := b.store.GetState(ctx, req.Key)
 	if err != nil {
 		return nil, err
@@ -335,6 +340,8 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
+	prometheusBlockchainSetState.Inc()
+
 	err := b.store.SetState(ctx, req.Key, req.Data)
 	if err != nil {
 		return nil, err
@@ -343,7 +350,9 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	return &emptypb.Empty{}, nil
 }
 
-func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
+func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
+	prometheusBlockchainSendNotification.Inc()
+
 	b.notifications <- req
 
 	return &emptypb.Empty{}, nil

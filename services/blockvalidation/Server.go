@@ -20,32 +20,10 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var (
-	prometheusBlockValidationBlockFound   prometheus.Counter
-	prometheusBlockValidationSubtreeFound prometheus.Counter
-)
-
-func init() {
-	prometheusBlockValidationBlockFound = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "blockvalidation_block_found",
-			Help: "Number of blocks found",
-		},
-	)
-	prometheusBlockValidationSubtreeFound = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "blockvalidation_subtree_found",
-			Help: "Number of subtrees found",
-		},
-	)
-}
 
 type processBlockFound struct {
 	hash    *chainhash.Hash
@@ -89,6 +67,8 @@ func Enabled() bool {
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
 	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
+
+	initPrometheusMetrics()
 
 	bVal := &Server{
 		utxoStore:            utxoStore,
@@ -351,6 +331,9 @@ LOOP:
 }
 
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
+	prometheusBlockValidationSubtreeFound.Inc()
+	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
+
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
@@ -361,9 +344,6 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	}
 	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
 	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
-
-	prometheusBlockValidationSubtreeFound.Inc()
-	u.logger.Infof("processing subtree found [%s]", subtreeHash.String())
 
 	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {
