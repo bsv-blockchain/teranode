@@ -461,13 +461,13 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		if output.Satoshis > 0 {
 			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 			if err != nil {
-				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %w", err)
+				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %v", err)
 				success = false
 				break
 			}
 
 			if resp, err = stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
+				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %v", resp, err)
 				success = false
 				break
 			}
