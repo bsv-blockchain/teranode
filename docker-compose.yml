@@ -28,7 +28,7 @@ services:
       - postgres
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
   tx-blaster:
@@ -38,7 +38,7 @@ services:
       - postgres
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
       tx_blaster_profilerAddr: ":9092"
@@ -51,7 +51,7 @@ services:
       - postgres
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-1:8090"
@@ -73,7 +73,7 @@ services:
       - postgres
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-2:8090"
@@ -96,7 +96,7 @@ services:
       - postgres
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
       blobserver_httpAddress: "http://ubsv-3:8090"
