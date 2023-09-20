@@ -27,6 +27,7 @@ const (
 )
 
 func NewMiner(ctx context.Context) *Miner {
+	initPrometheusMetrics()
 	return &Miner{
 		logger:              gocore.Log("miner"),
 		blockAssemblyClient: blockassembly.NewClient(ctx),
@@ -81,6 +82,8 @@ func (m *Miner) Stop(ctx context.Context) error {
 }
 
 func (m *Miner) mine(ctx context.Context) error {
+	timeStart := time.Now()
+
 	// wait is simulating a high difficulty
 	waitSeconds, _ := gocore.Config().GetInt("miner_waitSeconds", 30)
 
@@ -126,10 +129,14 @@ func (m *Miner) mine(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
 	m.logger.Debugf(solution.Stringify())
+
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
 		return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
 	}
+
+	prometheusBlockMined.Inc()
+	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return nil
 }

@@ -1,9 +1,16 @@
 <script>
+  import { onMount } from 'svelte'
   import { blocks } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
+
+  onMount(() => {
+    if ($blocks) {
+      drawTree($blocks)
+    }
+  })
 
   $: {
     if ($blocks) {
@@ -73,22 +80,32 @@
       )
       .attr('transform', (d) => 'translate(' + d.y + ',' + d.x + ')')
 
-    node
-      .append('circle')
-      .attr('r', 10)
-      .attr('fill', (d) => stringToColor(d.data.miner)) // add this line to derive color from the "miner" value
-      .append('title')
-      .text((d) => d.data.name + '\n' + d.data.miner)
+    node.each(function (d, i) {
+      if (i === 0) {
+        d3.select(this)
+          .append('rect')
+          .attr('width', 5)
+          .attr('height', 5)
+          .attr('fill', 'black')
+      } else {
+        node
+          .append('circle')
+          .attr('r', 10)
+          .attr('fill', (d) => stringToColor(d.data.miner)) // add this line to derive color from the "miner" value
+          .append('title')
+          .text((d) => d.data.name + '\n' + d.data.miner)
 
-    node
-      .append('text')
-      .attr('dy', 30)
-      .attr('x', -15)
-      .style('text-anchor', 'start')
-      .text((d) => d.data.height)
+        node
+          .append('text')
+          .attr('dy', 30)
+          .attr('x', -15)
+          .style('text-anchor', 'start')
+          .text((d) => d.data.height)
 
-    node.on('click', (event, d) => {
-      handleClick(d.data)
+        node.on('click', (event, d) => {
+          handleClick(d.data)
+        })
+      }
     })
   }
 
@@ -144,13 +161,15 @@
   function stringToColor(str) {
     if (str === 'ROOT') return '#000000'
 
+    const colors = ['green', 'red', 'blue', 'orange', 'magenta', '#33FFFF']
     let hash = 0
+
     for (let i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash)
+      hash += str.charCodeAt(i)
     }
 
-    const hue = hash % 360
-    return `hsl(${hue}, 100%, 50%)`
+    const index = hash % colors.length
+    return colors[index]
   }
 </script>
 

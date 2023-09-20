@@ -24,67 +24,14 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
-	prometheusBlockAssemblyAddTx          prometheus.Counter
-	prometheusBlockAssemblySubtreeCreated prometheus.Counter
-	prometheusBlockAssemblyTransactions   prometheus.Gauge
-	prometheusTxMetaGetDuration           prometheus.Histogram
-	prometheusUtxoStoreDuration           prometheus.Histogram
-	prometheusSubtreeAddToChannelDuration prometheus.Histogram
-
 	jobTTL = 10 * time.Minute
 )
-
-func init() {
-	prometheusBlockAssemblyAddTx = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "blockassembly_add_tx",
-			Help: "Number of txs added to the blockassembly service",
-		},
-	)
-
-	prometheusBlockAssemblySubtreeCreated = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "blockassembly_subtree_created",
-			Help: "Number of subtrees created in the block assembly service",
-		},
-	)
-
-	prometheusBlockAssemblyTransactions = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "blockassembly_transactions",
-			Help: "Number of transactions currently in the block assembler subtree processor",
-		},
-	)
-
-	prometheusTxMetaGetDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Name: "blockassembly_tx_meta_get_duration",
-			Help: "Duration of reading tx meta data from txmeta store",
-		},
-	)
-
-	prometheusUtxoStoreDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Name: "blockassembly_utxo_store_duration",
-			Help: "Duration of storing new utxos by BlockAssembly",
-		},
-	)
-
-	prometheusSubtreeAddToChannelDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Name: "blockassembly_add_tx_to_channel_duration",
-			Help: "Duration of writing tx to subtree processor channel",
-		},
-	)
-}
 
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
@@ -108,6 +55,9 @@ func Enabled() bool {
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store,
 	subtreeStore blob.Store) *BlockAssembly {
+
+	// initialize Prometheus metrics, singleton, will only happen once
+	initPrometheusMetrics()
 
 	ba := &BlockAssembly{
 		logger:       logger,
@@ -258,6 +208,8 @@ func (ba *BlockAssembly) Stop(_ context.Context) error {
 }
 
 func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassembly_api.HealthResponse, error) {
+	prometheusBlockAssemblyHealth.Inc()
+
 	return &blockassembly_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -265,6 +217,8 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockasse
 }
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
+	prometheusBlockAssemblyAddTx.Inc()
+
 	// Look up the new utxos for this txHash, add them to the utxostore, and add the tx to the subtree builder...
 	txHash, err := chainhash.NewHash(req.Txid)
 	if err != nil {
@@ -283,6 +237,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*model.MiningCandidate, error) {
+	prometheusBlockAssemblyGetMiningCandidate.Inc()
+
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, err
@@ -299,6 +255,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	prometheusBlockAssemblySubmitMiningSolution.Inc()
 	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %x", req.Id)
 
 	storeId, err := chainhash.NewHash(req.Id[:])
@@ -331,13 +288,18 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
 		for i, subtree := range job.Subtrees {
+			// the job subtree hash needs to be stored for the block, before the coinbase is replaced in the first
+			// subtree, which changes the id of the subtree
 			jobSubtreeHashes[i] = subtree.RootHash()
 
-			subtreesInJob[i] = subtree
 			if i == 0 {
+				subtreesInJob[i] = subtree.Duplicate()
 				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0, uint64(coinbaseTx.Size()))
+			} else {
+				subtreesInJob[i] = subtree
 			}
-			rootHash := subtree.RootHash()
+
+			rootHash := subtreesInJob[i].RootHash()
 			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 
 			transactionCount += uint64(subtree.Length())

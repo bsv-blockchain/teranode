@@ -43,6 +43,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger) *Server {
+	initPrometheusMetrics()
 	return &Server{
 		logger: logger,
 	}
@@ -93,6 +94,7 @@ func (s *Server) Stop(_ context.Context) error {
 }
 
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
+	prometheusHealth.Inc()
 	return &coinbase_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -100,6 +102,7 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.Heal
 }
 
 func (s *Server) GetUtxo(ctx context.Context, req *coinbase_api.GetUtxoRequest) (*coinbase_api.Utxo, error) {
+	prometheusGetUtxo.Inc()
 	utxo, err := s.coinbase.ReserveUtxo(ctx, req.Address)
 	if err != nil {
 		return nil, err
@@ -114,6 +117,7 @@ func (s *Server) GetUtxo(ctx context.Context, req *coinbase_api.GetUtxoRequest) 
 }
 
 func (s *Server) MarkUtxoSpent(ctx context.Context, req *coinbase_api.MarkUtxoSpentRequest) (*emptypb.Empty, error) {
+	prometheusMarkUtxoSpent.Inc()
 	previousTxID, err := chainhash.NewHash(req.TxId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse previous tx id: %w", err)

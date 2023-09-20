@@ -23,10 +23,10 @@ const updateFn = (json) => {
 export const selectedNode = writable('', (set) => {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
-    if (url.host === 'localhost:5174') {
-      url.protocol = 'https:'
-      url.host = 'miner1.allinone.ubsv.dev'
-      url.port = ''
+    if (url.host.includes('localhost:517')) {
+      url.protocol = 'http:'
+      url.host = 'localhost'
+      url.port = '8090'
     }
     if (url.port === '') {
       set(`${url.protocol}//${url.hostname}`)

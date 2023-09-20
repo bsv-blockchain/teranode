@@ -19,10 +19,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var (
-	baseURL string
-)
-
 type subscriber struct {
 	subscription blobserver_api.BlobServerAPI_SubscribeServer
 	source       string
@@ -32,6 +28,7 @@ type subscriber struct {
 type GRPC struct {
 	blobserver_api.UnimplementedBlobServerAPIServer
 	logger            utils.Logger
+	baseURL           string
 	getPeers          func() []string
 	repository        *repository.Repository
 	grpcServer        *grpc.Server
@@ -42,57 +39,50 @@ type GRPC struct {
 	notifications     chan *blobserver_api.Notification
 }
 
-func init() {
-	logger := gocore.Log("GRPC")
-
-	logLevel, _ := gocore.Config().GetInt("logLevel", 0)
+func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
+	initPrometheusMetrics()
 
 	u, err, found := gocore.Config().GetURL("blobserver_httpAddress")
 	if err != nil {
-		logger.Panicf("blobserver_httpAddress is not a valid URL: %v", err)
+		logger.Fatalf("blobserver_httpAddress is not a valid URL: %v", err)
 	}
 
 	if !found {
 		remoteAddress, err := utils.GetPublicIPAddress()
 		if err != nil {
-			logger.Panicf("Failed to get public IP address: %v", err)
+			logger.Fatalf("Failed to get public IP address: %v", err)
 		}
 
 		blobServerPort, _ := gocore.Config().GetInt("blobserver_http_port")
 		if blobServerPort == 0 {
-			logger.Panic("blobserver_http_port is not set")
+			logger.Fatalf("blobserver_http_port is not set")
 		}
 
 		scheme := "http"
-		if logLevel > 0 {
+		if logger.LogLevel() > 0 {
 			scheme = "https"
 			blobServerPort, _ = gocore.Config().GetInt("blobserver_https_port")
 			if blobServerPort == 0 {
-				logger.Panic("blobserver_https_port is not set")
+				logger.Fatalf("blobserver_https_port is not set")
 			}
 		}
 
 		u, err = url.ParseRequestURI(fmt.Sprintf("%s://%s:%d", scheme, remoteAddress, blobServerPort))
 		if err != nil {
-			logger.Panicf("Failed to parse url: %v", err)
+			logger.Fatalf("Failed to parse url: %v", err)
 		}
 
 		// Warn if there is a mismatch between log level and scheme
-		if logLevel == 0 && u.Scheme != "http" {
+		if logger.LogLevel() == 0 && u.Scheme != "http" {
 			logger.Warnf("blobserver_httpAddress scheme is not http, but logLevel is set to 0.")
 		} else if u.Scheme != "https" {
-			logger.Warnf("blobserver_httpAddress scheme is not https, but logLevel is set to %d.", logLevel)
+			logger.Warnf("blobserver_httpAddress scheme is not https, but logLevel is set to %d.", logger.LogLevel())
 		}
 	}
 
-	baseURL = u.String()
-}
-
-func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
-	// TODO: change logger name
-	//logger := gocore.Log("b_grpc", logger.GetLogLevel())
 	g := &GRPC{
 		logger:            logger,
+		baseURL:           u.String(),
 		getPeers:          getPeers,
 		repository:        repo,
 		newSubscriptions:  make(chan subscriber, 10),
@@ -139,7 +129,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 				g.notifications <- &blobserver_api.Notification{
 					Type:    blobserver_api.Type(notification.Type),
 					Hash:    notification.Hash[:],
-					BaseUrl: baseURL,
+					BaseUrl: g.baseURL,
 				}
 			}
 		}
@@ -193,6 +183,7 @@ func (g *GRPC) Stop(ctx context.Context) error {
 }
 
 func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
+	prometheusBlobServerGRPCHealth.Inc()
 	g.logger.Debugf("[BlobServer_grpc] Health check")
 
 	return &blobserver_api.HealthResponse{
@@ -202,6 +193,8 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 }
 
 func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockRequest) (*blobserver_api.GetBlockResponse, error) {
+	prometheusBlobServerGRPCGetBlock.Inc()
+
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -244,6 +237,8 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 		return nil, err
 	}
 
+	prometheusBlobServerGRPCGetBlockHeader.Inc()
+
 	return &blobserver_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
 		Height:      meta.Height,
@@ -251,6 +246,8 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 }
 
 func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlockHeadersRequest) (*blobserver_api.GetBlockHeadersResponse, error) {
+	prometheusBlobServerGRPCGetBlockHeaders.Inc()
+
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
 		return nil, err
@@ -281,6 +278,8 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlock
 }
 
 func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.BestBlockHeaderResponse, error) {
+	prometheusBlobServerGRPCGetBestBlockHeader.Inc()
+
 	blockHeader, height, err := g.repository.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
@@ -293,12 +292,15 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobs
 }
 
 func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.GetNodesResponse, error) {
+	prometheusBlobServerGRPCGetNodes.Inc()
+
 	return &blobserver_api.GetNodesResponse{
 		Nodes: g.getPeers(),
 	}, nil
 }
 
 func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
+	prometheusBlobServerGRPCSubscribe.Inc()
 	g.logger.Debugf("[BlobServer_grpc] Subscribe: %s", req.Source)
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.

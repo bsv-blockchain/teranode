@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -24,9 +25,9 @@ func New(logger utils.Logger, transactionCount int) *Direct {
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = false
-	policy.ConnectionQueueSize = 1024
-	policy.MaxErrorRate = 0
+	policy.LimitConnectionsToQueueSize = true
+	policy.ConnectionQueueSize = 10240
+	// policy.MaxErrorRate = 0
 
 	host := &aerospike.Host{
 		Name: "192.168.20.214",
@@ -67,6 +68,8 @@ func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spender
 		policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 		// policy.RecordExistsAction = aerospike.CREATE_ONLY
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+		policy.TotalTimeout = 30 * time.Second
+
 		policy.SendKey = true
 
 		for i := 0; i < s.transactionCount; i++ {
@@ -137,6 +140,7 @@ func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *c
 		}()
 
 		policy := util.GetAerospikeWritePolicy(0, 0)
+		policy.TotalTimeout = 30 * time.Second
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 		for hash := range deleteCh {

@@ -68,6 +68,26 @@ func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
 	return subtree, nil
 }
 
+func (st *Subtree) Duplicate() *Subtree {
+	newSubtree := &Subtree{
+		Height:           st.Height,
+		Fees:             st.Fees,
+		SizeInBytes:      st.SizeInBytes,
+		FeeHash:          st.FeeHash,
+		Nodes:            make([]SubtreeNode, len(st.Nodes)),
+		ConflictingNodes: make([]*chainhash.Hash, len(st.ConflictingNodes)),
+		rootHash:         st.rootHash,
+		treeSize:         st.treeSize,
+		feeBytes:         make([]byte, 8),
+		feeHashBytes:     make([]byte, 40),
+	}
+
+	copy(newSubtree.Nodes, st.Nodes)
+	copy(newSubtree.ConflictingNodes, st.ConflictingNodes)
+
+	return newSubtree
+}
+
 func (st *Subtree) Size() int {
 	return cap(st.Nodes)
 }

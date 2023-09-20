@@ -147,11 +147,15 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	}
 
 	if connectionOptions.Prometheus {
-		prometheusMetrics := prometheus.NewClientMetrics()
+		prometheusClientMetrics := prometheus.NewClientMetrics(
+			prometheus.WithClientStreamSendHistogram(),
+			prometheus.WithClientStreamRecvHistogram(),
+			prometheus.WithClientHandlingTimeHistogram(),
+		)
 		opts = append(
 			opts,
-			grpc.WithChainUnaryInterceptor(prometheusMetrics.UnaryClientInterceptor()),
-			grpc.WithChainStreamInterceptor(prometheusMetrics.StreamClientInterceptor()),
+			grpc.WithChainUnaryInterceptor(prometheusClientMetrics.UnaryClientInterceptor()),
+			grpc.WithChainStreamInterceptor(prometheusClientMetrics.StreamClientInterceptor()),
 		)
 	}
 
@@ -181,7 +185,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 }
 
 var prometheusIsRegistered = false
-var prometheusMetrics = prometheus.NewServerMetrics()
+var prometheusMetrics = prometheus.NewServerMetrics(
+	prometheus.WithServerHandlingTimeHistogram(),
+)
 
 func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	var opts []grpc.ServerOption

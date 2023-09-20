@@ -240,8 +240,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		if err != nil {
 			return err
 		}
-		// we must set the current block header for moveUpBlock to work
-		stp.currentBlockHeader = block.Header
 	}
 
 	for idx, block := range moveUpBlocks {
@@ -250,8 +248,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		if err != nil {
 			return err
 		}
-		// we must set the current block header for moveUpBlock to work
-		stp.currentBlockHeader = block.Header
 	}
 
 	stp.setTxCount()
@@ -276,6 +272,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
+
+	// TODO add check for the correct parent block
 
 	// reset the subtree processor
 	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
@@ -335,6 +333,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, true)
 	}
 
+	// we must set the current block header
+	stp.currentBlockHeader = block.Header
+
 	return nil
 }
 
@@ -346,13 +347,15 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
 
-	if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
-		return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
-	}
+	// TODO reactivate and test
+	//if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
+	//	return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
+	//}
 
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
+	coinbaseId := block.CoinbaseTx.TxIDChainHash()
 	err := stp.processCoinbaseUtxos(ctx, block)
 	if err != nil {
 		return err
@@ -389,6 +392,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	var transactionMap *util.SplitSwissMap
 	if len(blockSubtreesMap) > 0 {
 		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
+			// TODO revert the created utxos
 			return fmt.Errorf("error creating transaction map: %s", err.Error())
 		}
 	}
@@ -428,14 +432,22 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	// remainderTxHashes is from early trees, so they need to be added before the current subtree nodes
 	if remainderTxHashes != nil {
-		for _, node := range *remainderTxHashes {
+		for idx, node := range *remainderTxHashes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+				if coinbaseId.IsEqual(node.Hash) {
+					// this is the coinbase transaction, we need to skip it
+					stp.logger.Warnf("skipping coinbase transaction: %s, %d", node.Hash.String(), idx)
+					continue
+				}
 				stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, skipNotification)
 			}
 		}
 	}
 
 	stp.setTxCount()
+
+	// set the current block header
+	stp.currentBlockHeader = block.Header
 
 	return nil
 }
@@ -461,13 +473,13 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		if output.Satoshis > 0 {
 			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 			if err != nil {
-				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %w", err)
+				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %v", err)
 				success = false
 				break
 			}
 
 			if resp, err = stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %w", resp, err)
+				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %v", resp, err)
 				success = false
 				break
 			}

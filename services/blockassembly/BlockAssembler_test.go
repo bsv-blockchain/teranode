@@ -62,6 +62,8 @@ var (
 
 func TestBlockAssembly_AddTx(t *testing.T) {
 	t.Run("AddTx", func(t *testing.T) {
+		initPrometheusMetrics()
+
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)

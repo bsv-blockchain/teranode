@@ -56,7 +56,7 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 
 	hash := header.Hash()
 
-	timestamp := time.Unix(int64(header.Timestamp), 0)
+	timestamp := time.Unix(int64(header.Timestamp), 0).UTC()
 
 	miner, err := escapeJSON(bi.Miner)
 	if err != nil {

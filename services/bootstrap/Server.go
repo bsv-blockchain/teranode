@@ -38,6 +38,7 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger) *Server {
+	initPrometheusMetrics()
 	return &Server{
 		logger:      logger,
 		subscribers: make(map[chan *bootstrap_api.Notification]*bootstrap_api.Info),
@@ -200,6 +201,7 @@ func (s *Server) Stop(_ context.Context) error {
 }
 
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.HealthResponse, error) {
+	prometheusHealth.Inc()
 	return &bootstrap_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -208,6 +210,7 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.Hea
 
 // Connect Subscribe to this service and receive updates whenever a peer is added or removed
 func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.BootstrapAPI_ConnectServer) error {
+	prometheusConnect.Inc()
 	p, _ := peer.FromContext(stream.Context())
 	info.Ip = p.Addr.String()
 
@@ -284,6 +287,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 }
 
 func (s *Server) GetNodes(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.NodeList, error) {
+	prometheusGetNodes.Inc()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -299,6 +303,7 @@ func (s *Server) GetNodes(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.N
 }
 
 func (s *Server) BroadcastNotification(notification *bootstrap_api.Notification) {
+	prometheusBroadcastNotification.Inc()
 	defer func() {
 		_ = recover()
 	}()
