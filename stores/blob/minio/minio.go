@@ -162,10 +162,10 @@ func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) erro
 	if m.tempTTL {
 		if _, err := m.client.CopyObject(ctx, minio.CopyDestOptions{
 			Bucket: m.bucketName,
-			Object: "temp/" + objectName,
+			Object: objectName,
 		}, minio.CopySrcOptions{
 			Bucket: m.bucketName,
-			Object: objectName,
+			Object: "temp/" + objectName,
 		}); err != nil {
 			traceSpan.RecordError(err)
 			return fmt.Errorf("failed to copy minio data: %w", err)
