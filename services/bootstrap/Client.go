@@ -112,6 +112,7 @@ func (c *Client) Start(ctx context.Context) error {
 				for {
 					resp, err = stream.Recv()
 					if err != nil {
+						c.logger.Errorf("Could not receive from bootstrap server: %v. Retry in 1 second", err)
 						time.Sleep(1 * time.Second)
 						break
 					}
