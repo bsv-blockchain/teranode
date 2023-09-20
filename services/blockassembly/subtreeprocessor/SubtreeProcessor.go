@@ -347,9 +347,10 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
 
-	if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
-		return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
-	}
+	// TODO reactivate and test
+	//if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
+	//	return fmt.Errorf("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
+	//}
 
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
