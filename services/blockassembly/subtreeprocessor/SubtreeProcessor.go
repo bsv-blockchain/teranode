@@ -392,6 +392,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	var transactionMap *util.SplitSwissMap
 	if len(blockSubtreesMap) > 0 {
 		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
+			// TODO revert the created utxos
 			return fmt.Errorf("error creating transaction map: %s", err.Error())
 		}
 	}

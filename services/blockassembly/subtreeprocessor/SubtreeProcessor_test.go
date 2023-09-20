@@ -477,7 +477,10 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	waitCh := make(chan struct{})
 	defer close(waitCh)
 
-	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
+	subtreeStore, _ := null.New()
+	utxosStore := memory.New(true)
+
+	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -515,6 +518,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 			stp.chainedSubtrees[0].RootHash(),
 			stp.chainedSubtrees[1].RootHash(),
 		},
+		CoinbaseTx: coinbaseTx,
 	})
 	wg.Wait()
 	time.Sleep(1 * time.Second)

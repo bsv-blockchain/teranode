@@ -46,6 +46,8 @@ func Enabled() bool {
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
+	initPrometheusMetrics()
+
 	return &Server{
 		logger:      logger,
 		utxoStore:   utxoStore,
