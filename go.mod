@@ -15,7 +15,6 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
-	github.com/holiman/uint256 v1.2.2
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/lib/pq v1.10.7
@@ -27,17 +26,13 @@ require (
 	github.com/libsv/go-bt/v2 v2.2.2
 	github.com/libsv/go-p2p v0.1.3
 	github.com/minio/minio-go/v7 v7.0.52
-	github.com/neo4j/neo4j-go-driver/v4 v4.4.7
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.83
 	github.com/ordishs/go-utils v1.0.50
 	github.com/ordishs/gocore v1.0.44
-	github.com/ordishs/verifysignature v1.0.7
-	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
-	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.8.4
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.42.0
@@ -84,7 +79,6 @@ require (
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/elastic/gosigar v0.14.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.9.0 // indirect
-	github.com/felixge/fgprof v0.9.3 // indirect
 	github.com/flynn/noise v1.0.0 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
 	github.com/getkin/kin-openapi v0.103.0 // indirect
@@ -201,6 +195,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
