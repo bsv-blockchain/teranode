@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 
@@ -31,6 +32,7 @@ var (
 	storerCounterCh  = make(chan int)
 	spenderCounterCh = make(chan int)
 	deleterCounterCh = make(chan int)
+	shutdownOnce     sync.Once
 )
 
 func main() {
@@ -66,14 +68,14 @@ func main() {
 		logger.Infof("Received signal, stopping...")
 		cancelFunc() // cancel the contexts
 
-		wait()
+		shutdown()
 
-		os.Exit(0)
+		os.Exit(1)
 	}()
 
-	counterWorker("storer", wgCounters, storerCounterCh)
-	counterWorker("spender", wgCounters, spenderCounterCh)
-	counterWorker("deleter", wgCounters, deleterCounterCh)
+	counterWorker("Stored ", wgCounters, storerCounterCh)
+	counterWorker("Spent  ", wgCounters, spenderCounterCh)
+	counterWorker("Deleted", wgCounters, deleterCounterCh)
 
 	for i := 0; i < workers; i++ {
 		strategy.Deleter(ctx, wgDeleters, deleterCh, deleterCounterCh)
@@ -81,9 +83,38 @@ func main() {
 		strategy.Storer(ctx, i, wgStorers, spenderCh, storerCounterCh)
 	}
 
-	wait()
+	shutdown()
 
 	logger.Infof("Finished.")
+	// os.Exit(0)
+}
+
+func shutdown() {
+	shutdownOnce.Do(func() {
+		// Wait for the storers to finish
+		wgStorers.Wait()
+
+		// Close the spender channel
+		logger.Infof("Closing spender channel")
+		close(spenderCh)
+
+		wgSpenders.Wait()
+
+		// Close the deleter channel
+		logger.Infof("Closing deleter channel")
+		close(deleterCh)
+
+		// Wait for the spender to finish
+		wgDeleters.Wait()
+
+		// Close the counters
+		close(storerCounterCh)
+		close(spenderCounterCh)
+		close(deleterCounterCh)
+
+		// Close the finished channel
+		wgCounters.Wait()
+	})
 }
 
 func counterWorker(name string, wg *sync.WaitGroup, counterCh chan int) {
@@ -98,32 +129,21 @@ func counterWorker(name string, wg *sync.WaitGroup, counterCh chan int) {
 			counter += count
 		}
 
-		logger.Infof("%s count: %d", name, counter)
+		// Log the final count with the number formatted with comma separators
+
+		logger.Infof("%s: %s", name, commaSeparatedInt(counter))
+
 	}()
 }
 
-func wait() {
-	// Wait for the storers to finish
-	wgStorers.Wait()
+func commaSeparatedInt(i int) string {
+	// Convert int to string
+	s := strconv.Itoa(i)
 
-	// Close the spender channel
-	logger.Infof("Closing spender channel")
-	close(spenderCh)
+	// Format the string with comma separators
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
 
-	wgSpenders.Wait()
-
-	// Close the deleter channel
-	logger.Infof("Closing deleter channel")
-	close(deleterCh)
-
-	// Wait for the spender to finish
-	wgDeleters.Wait()
-
-	// Close the counters
-	close(storerCounterCh)
-	close(spenderCounterCh)
-	close(deleterCounterCh)
-
-	// Close the finished channel
-	wgCounters.Wait()
+	return s
 }
