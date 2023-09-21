@@ -126,10 +126,7 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 
 // GetAerospikeReadPolicy creates a new Aerospike read policy with the provided options applied. Used to manage
 // default connection parameters
-// If no options are provided, the policy will use the default values:
-//   - TotalTimeout:     50 milliseconds
-//   - SocketTimeout:    50 milliseconds
-//   - MaxRetries:       1
+// If no options are provided, the policy will use the default values
 func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
 	readPolicy.MaxRetries = 1
@@ -168,9 +165,7 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied. Used to manage
 // default connection parameters
-// If no options are provided, the policy will use the default values:
-//   - TotalTimeout:     50 milliseconds
-//   - SocketTimeout:    25 milliseconds
+// If no options are provided, the policy will use the default values
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
 
