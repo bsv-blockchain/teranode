@@ -266,7 +266,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 		b.currentChainMapMu.RUnlock()
 	}
 
-	prometheusBlockAssemblerTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startTime).Seconds())
 
 	startTime = time.Now()
 
@@ -278,13 +278,13 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 		}
 	}
 
-	prometheusBlockAssemblerUtxoStoreDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startTime).Seconds())
 
 	startTime = time.Now()
 
 	b.subtreeProcessor.Add(*txHash, txMetadata.Fee, txMetadata.SizeInBytes)
 
-	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }
@@ -390,7 +390,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error doing reorg: %w", err)
 	}
 
-	prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerReorgDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }

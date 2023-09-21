@@ -341,7 +341,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// we must set the current block header
 	stp.currentBlockHeader = block.Header
 
-	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }
@@ -458,7 +458,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// set the current block header
 	stp.currentBlockHeader = block.Header
 
-	prometheusSubtreeProcessorMoveUpBlockDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusSubtreeProcessorMoveUpBlockDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }
@@ -515,7 +515,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("error storing utxo (%s): %w", utxoHash, err)
 	}
 
-	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }
@@ -594,7 +594,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 		return nil, fmt.Errorf("error getting subtrees: %s", err.Error())
 	}
 
-	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(time.Since(startTime).Seconds())
 
 	return transactionMap, nil
 }

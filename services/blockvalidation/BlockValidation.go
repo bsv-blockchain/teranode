@@ -321,7 +321,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		return nil, fmt.Errorf("failed to get tx meta [%s]", err.Error())
 	}
 
-	prometheusBlockValidationBlessMissingTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockValidationBlessMissingTransactionDuration.Observe(time.Since(startTime).Seconds())
 
 	return txMeta, nil
 }
