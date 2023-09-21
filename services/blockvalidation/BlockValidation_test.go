@@ -26,6 +26,8 @@ var (
 
 func TestBlockValidation_validateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
+		initPrometheusMetrics()
+
 		txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 		defer deferFunc()
 
@@ -57,6 +59,8 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 
 func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
+		initPrometheusMetrics()
+
 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
 		defer deferFunc()
 
