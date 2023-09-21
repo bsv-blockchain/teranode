@@ -53,7 +53,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblyAddTxDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "add_tx_duration",
+			Name:      "add_tx_duration_v2",
 			Help:      "Duration of AddTx in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -70,7 +70,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblyGetMiningCandidateDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "get_mining_candidate_duration",
+			Name:      "get_mining_candidate_duration_v2",
 			Help:      "Duration of GetMiningCandidate in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -87,7 +87,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblySubmitMiningSolutionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "submit_mining_solution_duration",
+			Name:      "submit_mining_solution_duration_v2",
 			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -128,7 +128,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "tx_meta_get_duration",
+			Name:      "tx_meta_get_duration_v2",
 			Help:      "Duration of reading tx meta data from txmeta store in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -137,7 +137,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerUtxoStoreDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "utxo_store_duration",
+			Name:      "utxo_store_duration_v2",
 			Help:      "Duration of storing new utxos by block assembler",
 		},
 	)
@@ -145,7 +145,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerSubtreeAddToChannelDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "add_tx_to_channel_duration",
+			Name:      "add_tx_to_channel_duration_v2",
 			Help:      "Duration of writing tx to subtree processor channel by block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -162,7 +162,7 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerReorgDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "reorg_duration",
+			Name:      "reorg_duration_v2",
 			Help:      "Duration of reorg in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},

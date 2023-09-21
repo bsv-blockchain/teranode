@@ -35,7 +35,7 @@ func initPrometheusMetrics() {
 	prometheusSubtreeProcessorMoveUpBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "move_up_duration",
+			Name:      "move_up_duration_v2",
 			Help:      "Duration of moving up block in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -52,7 +52,7 @@ func initPrometheusMetrics() {
 	prometheusSubtreeProcessorMoveDownBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "move_down_duration",
+			Name:      "move_down_duration_v2",
 			Help:      "Duration of moving down block in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -69,7 +69,7 @@ func initPrometheusMetrics() {
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "process_coinbase_tx_duration",
+			Name:      "process_coinbase_tx_duration_v2",
 			Help:      "Duration of processing coinbase tx in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
@@ -86,7 +86,7 @@ func initPrometheusMetrics() {
 	prometheusSubtreeProcessorCreateTransactionMapDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "transaction_map_duration",
+			Name:      "transaction_map_duration_v2",
 			Help:      "Duration of creating transaction map in block assembler",
 			Buckets:   util.MetricsBuckets,
 		},
