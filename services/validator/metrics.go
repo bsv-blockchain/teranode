@@ -30,28 +30,28 @@ func initPrometheusMetrics() {
 	prometheusProcessedTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "validator",
-			Name:      "validator_processed_transactions",
+			Name:      "processed_transactions",
 			Help:      "Number of transactions processed by the validator service",
 		},
 	)
 	prometheusInvalidTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "validator",
-			Name:      "validator_invalid_transactions",
+			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the validator service",
 		},
 	)
 	prometheusTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_transactions_duration",
+			Name:      "transactions_duration",
 			Help:      "Duration of transaction processing by the validator service",
 		},
 	)
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_transactions_size",
+			Name:      "transactions_size",
 			Help:      "Size of transactions processed by the validator service",
 		},
 	)

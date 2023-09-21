@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -54,6 +55,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "add_tx_duration",
 			Help:      "Duration of AddTx in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -70,6 +72,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "get_mining_candidate_duration",
 			Help:      "Duration of GetMiningCandidate in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -86,6 +89,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "submit_mining_solution_duration",
 			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -126,6 +130,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "tx_meta_get_duration",
 			Help:      "Duration of reading tx meta data from txmeta store in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -142,6 +147,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "add_tx_to_channel_duration",
 			Help:      "Duration of writing tx to subtree processor channel by block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -158,6 +164,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "reorg_duration",
 			Help:      "Duration of reorg in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 

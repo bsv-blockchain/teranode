@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -36,6 +37,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "move_up_duration",
 			Help:      "Duration of moving up block in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -52,6 +54,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "move_down_duration",
 			Help:      "Duration of moving down block in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -68,6 +71,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "process_coinbase_tx_duration",
 			Help:      "Duration of processing coinbase tx in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
@@ -84,6 +88,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "transaction_map_duration",
 			Help:      "Duration of creating transaction map in block assembler",
+			Buckets:   util.MetricsBuckets,
 		},
 	)
 
