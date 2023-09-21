@@ -14,7 +14,7 @@ import (
 
 var availableDatabases = map[string]func(url *url.URL) (utxostore.Interface, error){}
 
-func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, source string) (utxostore.Interface, error) {
+func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxostore.Interface, error) {
 
 	var port int
 	var err error
@@ -40,45 +40,52 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 			return nil, err
 		}
 
-		// get the latest block height to compare against lock time utxos
-		blockchainClient, err = blockchain.NewClient(ctx)
-		if err != nil {
-			panic(err)
-		}
-		blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "UTXOStore")
-		if err != nil {
-			panic(err)
+		startBlockchain := true
+		if len(startBlockchainListener) > 0 {
+			startBlockchain = startBlockchainListener[0]
 		}
 
-		_, height, err := blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
-		} else {
-			logger.Debugf("[UTXOStore] setting block height to %d", height)
-			_ = utxoStore.SetBlockHeight(height)
-		}
+		if startBlockchain {
+			// get the latest block height to compare against lock time utxos
+			blockchainClient, err = blockchain.NewClient(ctx)
+			if err != nil {
+				panic(err)
+			}
+			blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "UTXOStore")
+			if err != nil {
+				panic(err)
+			}
 
-		logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
-		go func() {
-			var height uint32
-			for {
-				select {
-				case <-ctx.Done():
-					logger.Infof("[UTXOStore] shutting down block height subscription for: %s", source)
-					return
-				case notification := <-blockchainSubscriptionCh:
-					if notification.Type == model.NotificationType_Block {
-						_, height, err = blockchainClient.GetBestBlockHeader(ctx)
-						if err != nil {
-							logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
-							continue
+			_, height, err := blockchainClient.GetBestBlockHeader(ctx)
+			if err != nil {
+				logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+			} else {
+				logger.Debugf("[UTXOStore] setting block height to %d", height)
+				_ = utxoStore.SetBlockHeight(height)
+			}
+
+			logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
+			go func() {
+				var height uint32
+				for {
+					select {
+					case <-ctx.Done():
+						logger.Infof("[UTXOStore] shutting down block height subscription for: %s", source)
+						return
+					case notification := <-blockchainSubscriptionCh:
+						if notification.Type == model.NotificationType_Block {
+							_, height, err = blockchainClient.GetBestBlockHeader(ctx)
+							if err != nil {
+								logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+								continue
+							}
+							logger.Debugf("[UTXOStore] setting block height to %d", height)
+							_ = utxoStore.SetBlockHeight(height)
 						}
-						logger.Debugf("[UTXOStore] setting block height to %d", height)
-						_ = utxoStore.SetBlockHeight(height)
 					}
 				}
-			}
-		}()
+			}()
+		}
 
 		return utxoStore, nil
 	}

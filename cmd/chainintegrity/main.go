@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -73,6 +75,18 @@ func main() {
 		panic(err)
 	}
 
+	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("utxostore config not found")
+	}
+	utxoStore, err := validator_utxostore.NewStore(context.Background(), logger, utxoStoreURL, "main", false)
+	if err != nil {
+		panic(err)
+	}
+
 	// ------------------------------------------------------------------------------------------------
 	// start the actual tests
 	// ------------------------------------------------------------------------------------------------
@@ -112,6 +126,7 @@ func main() {
 	var block *model.Block
 	var height uint32
 	var coinbaseHeight uint32
+	missingParents := make(map[chainhash.Hash]BlockSubtree)
 
 	// range through the block headers in reverse order, oldest first
 	for i := len(blockHeaders) - 1; i >= 0; i-- {
@@ -128,9 +143,30 @@ func main() {
 
 		if block.CoinbaseTx == nil || !block.CoinbaseTx.IsCoinbase() {
 			logger.Errorf("block %s does not have a valid coinbase transaction", block.Hash())
+		} else {
+			logger.Debugf("block %s has a valid coinbase transaction: %s", block.Hash(), block.CoinbaseTx.TxIDChainHash())
 		}
 
 		if block.CoinbaseTx.Inputs[0].UnlockingScript.String() != genesisScript {
+			// check that all coinbase utxos were created
+			for vout, output := range block.CoinbaseTx.Outputs {
+				utxoHash, err := util.UTXOHashFromOutput(block.CoinbaseTx.TxIDChainHash(), output, uint32(vout))
+				if err != nil {
+					logger.Errorf("failed to get utxo hash for output %d in coinbase %s: %s", vout, block.CoinbaseTx.TxIDChainHash(), err)
+					continue
+				}
+				utxo, err := utxoStore.Get(ctx, utxoHash)
+				if err != nil {
+					logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
+					continue
+				}
+				if utxo == nil {
+					logger.Errorf("utxo %s does not exist in utxo store", utxoHash)
+				} else {
+					logger.Debugf("coinbase vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", vout, utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+				}
+			}
+
 			coinbaseHeight, err = util.ExtractCoinbaseHeight(block.CoinbaseTx)
 			if err != nil {
 				logger.Errorf("failed to extract coinbase height from block coinbase %s: %s", block.Hash(), err)
@@ -167,6 +203,9 @@ func main() {
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
+						logger.Debugf("checking transaction %s", node.Hash)
+
+						// check that the transaction does not already exist in another block
 						previousBlockSubtree, ok := transactionMap[*node.Hash]
 						if ok {
 							logger.Debugf("current subtree %s in block %s", subtreeHash, block.Hash())
@@ -175,11 +214,13 @@ func main() {
 							transactionMap[*node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
 						}
 
+						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
 							logger.Errorf("failed to get transaction %s from tx store: %s", node, err)
 							continue
 						}
+
 						btTx, err = bt.NewTxFromBytes(tx)
 						if err != nil {
 							logger.Errorf("failed to parse transaction %s from tx store: %s", node, err)
@@ -193,8 +234,29 @@ func main() {
 							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
 								_, ok = transactionMap[inputHash]
 								if !ok {
-									logger.Errorf("the parent %s does not appear before the transaction %s", inputHash, node.Hash.String())
+									missingParents[inputHash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
+									logger.Errorf("the parent %s does not appear before the transaction %s, in block %s, subtree %s", inputHash, node.Hash.String(), block.Hash(), subtreeHash)
 								}
+							}
+						}
+
+						// check outputs in utxo store
+						var utxoHash *chainhash.Hash
+						for vout, output := range btTx.Outputs {
+							utxoHash, err = util.UTXOHashFromOutput(btTx.TxIDChainHash(), output, uint32(vout))
+							if err != nil {
+								logger.Errorf("failed to get utxo hash for output %d in transaction %s: %s", vout, btTx.TxIDChainHash(), err)
+								continue
+							}
+							utxo, err := utxoStore.Get(ctx, utxoHash)
+							if err != nil {
+								logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
+								continue
+							}
+							if utxo == nil {
+								logger.Errorf("utxo %s does not exist in utxo store", utxoHash)
+							} else {
+								logger.Debugf("transaction %s vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), vout, utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 							}
 						}
 
@@ -206,6 +268,12 @@ func main() {
 								continue
 							}
 							subtreeFees += fees
+						}
+
+						// check whether this transaction was missing before and write out info if it was
+						if blockOfChild, ok := missingParents[*node.Hash]; ok {
+							logger.Warnf("found missing parent %s in block %s, subtree %s", node.Hash, block.Hash(), subtreeHash)
+							logger.Warnf("-- child was in block %s, subtree %s", blockOfChild.Block, blockOfChild.Subtree)
 						}
 					}
 				}

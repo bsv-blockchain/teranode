@@ -418,11 +418,11 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		r := make([]util.SubtreeNode, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
 		remainderTxHashes = &r
 
-		*remainderTxHashes = append(*remainderTxHashes, lastIncompleteSubtree.Nodes...)
-
 		for _, subtree := range chainedSubtrees {
 			*remainderTxHashes = append(*remainderTxHashes, subtree.Nodes...)
 		}
+
+		*remainderTxHashes = append(*remainderTxHashes, lastIncompleteSubtree.Nodes...)
 	}
 
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
