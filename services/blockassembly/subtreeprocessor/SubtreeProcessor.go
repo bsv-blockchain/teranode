@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -64,6 +65,8 @@ var (
 
 func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
 	newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+
+	initPrometheusMetrics()
 
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
@@ -269,6 +272,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	if block == nil {
 		return errors.New("you must pass in a block to moveDownBlock")
 	}
+	startTime := time.Now()
+	prometheusSubtreeProcessorMoveDownBlock.Inc()
 
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
@@ -336,6 +341,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// we must set the current block header
 	stp.currentBlockHeader = block.Header
 
+	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(float64(time.Since(startTime).Microseconds()))
+
 	return nil
 }
 
@@ -346,6 +353,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	if block == nil {
 		return errors.New("you must pass in a block to moveUpBlock")
 	}
+	startTime := time.Now()
+	prometheusSubtreeProcessorMoveUpBlock.Inc()
 
 	// TODO reactivate and test
 	//if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
@@ -449,10 +458,15 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// set the current block header
 	stp.currentBlockHeader = block.Header
 
+	prometheusSubtreeProcessorMoveUpBlockDuration.Observe(float64(time.Since(startTime).Microseconds()))
+
 	return nil
 }
 
 func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
+	startTime := time.Now()
+	prometheusSubtreeProcessorProcessCoinbaseTx.Inc()
+
 	if block == nil || block.CoinbaseTx == nil {
 		log.Printf("********************************************* block or coinbase is nil")
 		return nil
@@ -473,13 +487,13 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		if output.Satoshis > 0 {
 			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 			if err != nil {
-				stp.logger.Errorf("[BlockAssembler] error creating utxo hash: %v", err)
+				stp.logger.Errorf("[SubtreeProcessor] error creating utxo hash: %v", err)
 				success = false
 				break
 			}
 
 			if resp, err = stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-				stp.logger.Errorf("[BlockAssembler] error storing utxo (%v): %v", resp, err)
+				stp.logger.Errorf("[SubtreeProcessor] error storing utxo (%v): %v", resp, err)
 				success = false
 				break
 			}
@@ -494,12 +508,14 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		for _, utxoHash = range utxoHashes {
 			_, err = stp.utxoStore.Delete(ctx, utxoHash)
 			if err != nil {
-				stp.logger.Errorf("[BlockAssembler] error reverting utxo (%s): %w", utxoHash, err)
+				stp.logger.Errorf("[SubtreeProcessor] error reverting utxo (%s): %w", utxoHash, err)
 			}
 		}
 
 		return fmt.Errorf("error storing utxo (%s): %w", utxoHash, err)
 	}
+
+	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return nil
 }
@@ -541,6 +557,9 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 }
 
 func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (*util.SplitSwissMap, error) {
+	startTime := time.Now()
+	prometheusSubtreeProcessorCreateTransactionMap.Inc()
+
 	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
@@ -574,6 +593,8 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	if err := g.Wait(); err != nil {
 		return nil, fmt.Errorf("error getting subtrees: %s", err.Error())
 	}
+
+	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return transactionMap, nil
 }

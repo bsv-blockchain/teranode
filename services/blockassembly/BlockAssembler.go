@@ -244,6 +244,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 }
 
 func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) error {
+	prometheusBlockAssemblerAddTx.Inc()
 	startTime := time.Now()
 
 	txMetadata, err := b.txMetaClient.Get(ctx, txHash)
@@ -265,7 +266,7 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 		b.currentChainMapMu.RUnlock()
 	}
 
-	prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	startTime = time.Now()
 
@@ -277,15 +278,13 @@ func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) erro
 		}
 	}
 
-	prometheusUtxoStoreDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblerUtxoStoreDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	startTime = time.Now()
 
 	b.subtreeProcessor.Add(*txHash, txMetadata.Fee, txMetadata.SizeInBytes)
 
-	prometheusSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
-
-	prometheusBlockAssemblyAddTx.Inc()
+	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return nil
 }
@@ -300,6 +299,7 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 }
 
 func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
+	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
 	if b.bestBlockHeader == nil {
 		return nil, nil, fmt.Errorf("best block header is not available")
@@ -369,6 +369,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 }
 
 func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader) error {
+	startTime := time.Now()
+	prometheusBlockAssemblerReorg.Inc()
 
 	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
 	if err != nil {
@@ -387,6 +389,8 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	if err = b.subtreeProcessor.Reorg(moveDownBlocks, moveUpBlocks); err != nil {
 		return fmt.Errorf("error doing reorg: %w", err)
 	}
+
+	prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return nil
 }

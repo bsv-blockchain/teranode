@@ -91,7 +91,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				ba.logger.Infof("Stopping subtree listener")
 				return
 			case subtree := <-newSubtreeChan:
-				prometheusBlockAssemblySubtreeCreated.Inc()
+				prometheusBlockAssemblerSubtreeCreated.Inc()
 
 				if subtreeBytes, err = subtree.Serialize(); err != nil {
 					ba.logger.Errorf("Failed to serialize subtree [%s]", err)
@@ -217,6 +217,7 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockasse
 }
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
+	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
 
 	// Look up the new utxos for this txHash, add them to the utxostore, and add the tx to the subtree builder...
@@ -229,7 +230,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	prometheusBlockAssemblyTransactions.Set(float64(ba.blockAssembler.TxCount()))
+	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+	prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
@@ -237,6 +239,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*model.MiningCandidate, error) {
+	startTime := time.Now()
 	prometheusBlockAssemblyGetMiningCandidate.Inc()
 
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
@@ -251,10 +254,14 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		MiningCandidate: miningCandidate,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
+	prometheusBlockAssemblyGetMiningCandidateDuration.Observe(float64(time.Since(startTime).Microseconds()))
+
 	return miningCandidate, nil
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	startTime := time.Now()
+
 	prometheusBlockAssemblySubmitMiningSolution.Inc()
 	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %x", req.Id)
 
@@ -396,6 +403,8 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	// remove job, we have already mined a block with it
 	ba.jobStore.Delete(*storeId)
+
+	prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
