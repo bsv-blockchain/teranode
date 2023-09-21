@@ -236,6 +236,25 @@ func main() {
 								if !ok {
 									missingParents[inputHash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
 									logger.Errorf("the parent %s does not appear before the transaction %s, in block %s, subtree %s", inputHash, node.Hash.String(), block.Hash(), subtreeHash)
+								} else {
+									// check that parent inputs are marked as spent by this tx in the utxo store
+									utxoHash, err := util.UTXOHashFromInput(input)
+									if err != nil {
+										logger.Errorf("failed to get utxo hash for parent tx input %s in transaction %s: %s", input, btTx.TxIDChainHash(), err)
+										continue
+									}
+									utxo, err := utxoStore.Get(ctx, utxoHash)
+									if err != nil {
+										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)
+										continue
+									}
+									if utxo == nil {
+										logger.Errorf("parent utxo %s does not exist in utxo store", utxoHash)
+									} else if !utxo.SpendingTxID.IsEqual(btTx.TxIDChainHash()) {
+										logger.Errorf("parent utxo %s is not marked as spent by transaction %s", utxoHash, btTx.TxIDChainHash())
+									} else {
+										logger.Debugf("transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+									}
 								}
 							}
 						}
