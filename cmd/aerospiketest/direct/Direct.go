@@ -2,6 +2,7 @@ package direct
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -18,9 +19,10 @@ type Direct struct {
 	client           *aerospike.Client
 	namespace        string
 	transactionCount int
+	timeout          time.Duration
 }
 
-func New(logger utils.Logger, transactionCount int) *Direct {
+func New(logger utils.Logger, transactionCount int, timeoutStr string) *Direct {
 	policy := aerospike.NewClientPolicy()
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
@@ -43,9 +45,18 @@ func New(logger utils.Logger, transactionCount int) *Direct {
 		panic(err)
 	}
 
+	var timeout time.Duration
+	if timeoutStr != "" {
+		var err error
+		if timeout, err = time.ParseDuration(timeoutStr); err != nil {
+			logger.Fatalf("invalid timeout: %v", err)
+		}
+	}
+
 	return &Direct{
 		logger:           logger,
 		transactionCount: transactionCount,
+		timeout:          timeout,
 		client:           client,
 		namespace:        "utxostore",
 	}
@@ -64,12 +75,15 @@ func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spender
 		}()
 
 		// logger.Infof("Start storer %d...", id)
+		var options []util.AerospikeWritePolicyOptions
 
-		policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
-		// policy.RecordExistsAction = aerospike.CREATE_ONLY
+		if s.timeout > 0 {
+			options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+		}
+
+		policy := util.GetAerospikeWritePolicy(0, math.MaxUint32, options...)
+		policy.RecordExistsAction = aerospike.CREATE_ONLY
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-		policy.TotalTimeout = 30 * time.Second
-
 		policy.SendKey = true
 
 		for i := 0; i < s.transactionCount; i++ {
@@ -85,6 +99,10 @@ func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spender
 				if err != nil {
 					s.logger.Errorf("stored failed to create key: %v", err)
 					return
+				}
+
+				if _, err := s.client.Delete(policy, key); err != nil {
+					s.logger.Errorf("stored failed to delete: %v", err)
 				}
 
 				bins := []*aerospike.Bin{
@@ -110,6 +128,11 @@ func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spender
 func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int) {
 	wg.Add(1)
 
+	spendingTxHash, err := chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
+	if err != nil {
+		panic(err)
+	}
+
 	go func() {
 		defer wg.Done()
 
@@ -119,9 +142,71 @@ func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *
 			counterCh <- counter
 		}()
 
+		options := make([]util.AerospikeWritePolicyOptions, 0)
+
+		if s.timeout > 0 {
+			options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+		}
+
+		policy := util.GetAerospikeWritePolicy(1, 0, options...)
+		policy.RecordExistsAction = aerospike.UPDATE_ONLY
+		policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+
 		for hash := range spenderCh {
-			counter++
-			// Do nothing but delete the hash
+			key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
+			if err != nil {
+				s.logger.Warnf("spend failed to create key: %v\n", err)
+			}
+
+			policy.FilterExpression = aerospike.ExpOr(
+				// anything below the block height is spendable, including 0
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(1)),
+
+				aerospike.ExpAnd(
+					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+					// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+					// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+					// and not the block time itself.
+					aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				),
+			)
+
+			bin := aerospike.NewBin("txid", spendingTxHash.CloneBytes())
+			err = s.client.PutBins(policy, key, bin)
+			if err != nil {
+				s.logger.Warnf("spend failed to put bins: %v\n", err)
+
+				if errors.Is(err, aerospike.ErrFilteredOut) {
+					s.logger.Warnf("spend failed: locktime: %v\n", err)
+				}
+
+				if errors.Is(err, aerospike.ErrKeyNotFound) {
+					s.logger.Warnf("spend failed: not found: %v\n", err)
+				}
+
+				// check whether we had the same value set as before
+				value, err := s.client.Get(nil, key, "txid")
+				if err != nil {
+					s.logger.Warnf("spend failed: check: %v\n", err)
+				} else {
+
+					valueBytes, ok := value.Bins["txid"].([]byte)
+					if ok && len(valueBytes) == 32 {
+						if [32]byte(valueBytes) == *spendingTxHash {
+							counter++
+						} else {
+							_, err := chainhash.NewHash(valueBytes)
+							if err != nil {
+								s.logger.Warnf("spend failed: bad hash: %v\n", err)
+							}
+						}
+					}
+				}
+			} else {
+				counter++
+			}
+
 			deleterCh <- hash
 		}
 	}()
@@ -139,7 +224,13 @@ func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *c
 			counterCh <- counter
 		}()
 
-		policy := util.GetAerospikeWritePolicy(0, 0)
+		var options []util.AerospikeWritePolicyOptions
+
+		if s.timeout > 0 {
+			options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+		}
+
+		policy := util.GetAerospikeWritePolicy(0, 0, options...)
 		policy.TotalTimeout = 30 * time.Second
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

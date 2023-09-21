@@ -54,22 +54,34 @@ func init() {
 
 type Store struct {
 	client    *aerospike.Client
+	timeout   time.Duration
 	namespace string
 }
 
-func New(url *url.URL) (*Store, error) {
+func New(u *url.URL) (*Store, error) {
 	asl.Logger.SetLevel(asl.DEBUG)
 
-	namespace := url.Path[1:]
+	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(url)
+	client, err := util.GetAerospikeClient(u)
 	if err != nil {
 		return nil, err
+	}
+
+	var timeout time.Duration
+
+	timeoutValue := u.Query().Get("timeout")
+	if timeoutValue != "" {
+		var err error
+		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
+			timeout = 0
+		}
 	}
 
 	return &Store{
 		client:    client,
 		namespace: namespace,
+		timeout:   timeout,
 	}, nil
 }
 
@@ -83,7 +95,13 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 
 	var value *aerospike.Record
 
-	readPolicy := util.GetAerospikeReadPolicy()
+	options := make([]util.AerospikeReadPolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeout(s.timeout))
+	}
+
+	readPolicy := util.GetAerospikeReadPolicy(options...)
 	value, aeroErr = s.client.Get(readPolicy, key)
 	if aeroErr != nil {
 		return nil, aeroErr
@@ -157,7 +175,13 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
 	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	options := make([]util.AerospikeWritePolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+	}
+
+	policy := util.GetAerospikeWritePolicy(0, 0, options...)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

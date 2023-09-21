@@ -108,6 +108,7 @@ type Store struct {
 	namespace   string
 	logger      utils.Logger
 	blockHeight uint32
+	timeout     time.Duration
 }
 
 func New(u *url.URL) (*Store, error) {
@@ -120,13 +121,25 @@ func New(u *url.URL) (*Store, error) {
 		return nil, err
 	}
 
+	var timeout time.Duration
+
+	timeoutValue := u.Query().Get("timeout")
+	if timeoutValue != "" {
+		var err error
+		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
+			timeout = 0
+		}
+	}
+
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+
 	return &Store{
 		u:           u,
 		client:      client,
 		namespace:   namespace,
 		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
 		blockHeight: 0,
+		timeout:     timeout,
 	}, nil
 }
 
@@ -199,7 +212,15 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 		return nil, aErr
 	}
 
-	value, aErr := s.client.Get(nil, key, "txid", "locktime")
+	options := make([]util.AerospikeReadPolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeout(s.timeout))
+	}
+
+	policy := util.GetAerospikeReadPolicy(options...)
+
+	value, aErr := s.client.Get(policy, key, "txid", "locktime")
 	if aErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		if aErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
@@ -240,7 +261,14 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXORes
 }
 
 func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	options := make([]util.AerospikeWritePolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+	}
+
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32, options...)
+
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	policy.SendKey = true
@@ -349,7 +377,14 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 	}
 
 	//expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
-	policy := util.GetAerospikeWritePolicy(1, 0)
+
+	options := make([]util.AerospikeWritePolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+	}
+
+	policy := util.GetAerospikeWritePolicy(1, 0, options...)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
@@ -431,7 +466,15 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 }
 
 func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := util.GetAerospikeWritePolicy(2, 0)
+	readOptions := make([]util.AerospikeReadPolicyOptions, 0)
+	writeOptions := make([]util.AerospikeWritePolicyOptions, 0)
+
+	if s.timeout > 0 {
+		readOptions = append(readOptions, util.WithTotalTimeout(s.timeout))
+		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
+	}
+
+	policy := util.GetAerospikeWritePolicy(2, 0, writeOptions...)
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -442,7 +485,7 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 		return nil, err
 	}
 
-	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "locktime")
+	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(readOptions...), key, "locktime")
 	if getErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", err.Error()).Inc()
 		fmt.Printf("ERROR panic in aerospike get key: %v\n", err)
@@ -466,7 +509,13 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 }
 
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	options := make([]util.AerospikeWritePolicyOptions, 0)
+
+	if s.timeout > 0 {
+		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+	}
+
+	policy := util.GetAerospikeWritePolicy(0, 0, options...)
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])

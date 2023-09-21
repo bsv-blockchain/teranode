@@ -16,10 +16,17 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type Strategy interface {
+	Storer(ctx context.Context, id int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int)
+	Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int)
+	Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int)
+}
+
 var (
 	logger       = gocore.Log("test")
 	workers      int
 	transactions int
+	timeoutStr   string
 	aslLogger    bool
 	strategyStr  string
 
@@ -39,8 +46,10 @@ func main() {
 
 	flag.IntVar(&transactions, "transactions", 100, "number of transactions to process")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
+	flag.StringVar(&timeoutStr, "timeout", "", "timeout for aerospike")
 	flag.BoolVar(&aslLogger, "asl_logger", false, "enable aerospike logger")
-	flag.StringVar(&strategyStr, "strategy", "direct1", "strategy to use [ubsv, direct]")
+	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, direct]")
+
 	flag.Parse()
 
 	if aslLogger {
@@ -51,9 +60,9 @@ func main() {
 
 	switch strategyStr {
 	case "direct":
-		strategy = direct.New(logger, transactions/workers)
+		strategy = direct.New(logger, transactions/workers, timeoutStr)
 	case "ubsv":
-		strategy = ubsv.New(logger, transactions/workers)
+		strategy = ubsv.New(logger, transactions/workers, timeoutStr)
 	default:
 		logger.Fatalf("unknown strategy")
 	}

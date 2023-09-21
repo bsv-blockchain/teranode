@@ -19,15 +19,21 @@ type Ubsv struct {
 	store            utxostore.Interface
 }
 
-func New(logger utils.Logger, transactionCount int) *Ubsv {
-	storeUrl, _ := url.Parse("aerospike://192.168.20.214:3000/utxostore")
+func New(logger utils.Logger, transactionCount int, timeout string) *Ubsv {
+	urlStr := "aerospike://192.168.20.214:3000/utxostore"
+	if timeout != "" {
+		urlStr += "?timeout=" + timeout
+	}
+	storeUrl, _ := url.Parse(urlStr)
 	store, err := aerospike.New(storeUrl)
 	if err != nil {
 		panic(err)
 	}
 
 	return &Ubsv{
-		store: store,
+		store:            store,
+		transactionCount: transactionCount,
+		logger:           logger,
 	}
 }
 
@@ -66,11 +72,12 @@ func (s *Ubsv) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spenderCh
 
 				if resp.Status != 0 {
 					s.logger.Warnf("store failed: status=%d\n", resp.Status)
-				} else {
-					spenderCh <- &hash
+					return
 				}
 
 				counter++
+
+				spenderCh <- &hash
 			}
 		}
 
