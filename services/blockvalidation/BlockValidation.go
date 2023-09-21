@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -48,7 +49,10 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 	return bv
 }
 
-func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, baseUrl string) error {
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
+	timeStart := time.Now()
+	prometheusBlockValidationValidateBlock.Inc()
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	var sizeInBytes uint64
@@ -112,10 +116,14 @@ func (u *BlockValidation) BlockFound(ctx context.Context, block *model.Block, ba
 		u.logger.Errorf("failed to store coinbase transaction [%w]", err)
 	}
 
+	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
 	return nil
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+	timeStart := time.Now()
+	prometheusBlockValidationValidateSubtree.Inc()
 	u.logger.Infof("validating subtree [%s]", subtreeHash.String())
 
 	// get subtree from store
@@ -241,6 +249,8 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("failed to store subtree"), err)
 	}
 
+	prometheusBlockValidationValidateSubtreeDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
 	return nil
 }
 
@@ -249,6 +259,9 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	if baseUrl == "" {
 		return nil, fmt.Errorf("baseUrl for transaction is empty [%s]", txHash.String())
 	}
+
+	startTime := time.Now()
+	prometheusBlockValidationBlessMissingTransaction.Inc()
 
 	alreadyHaveTransaction := true
 	txBytes, err := u.txStore.Get(ctx, txHash[:])
@@ -307,6 +320,8 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tx meta [%s]", err.Error())
 	}
+
+	prometheusBlockValidationBlessMissingTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()))
 
 	return txMeta, nil
 }

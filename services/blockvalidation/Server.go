@@ -140,6 +140,8 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {
+	prometheusBlockValidationHealth.Inc()
+
 	return &blockvalidation_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
@@ -147,7 +149,9 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
+	timeStart := time.Now()
 	prometheusBlockValidationBlockFound.Inc()
+
 	if u.catchingUp.Load() {
 		return &emptypb.Empty{}, nil
 	}
@@ -175,10 +179,13 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		}
 	}()
 
+	prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
 	return &emptypb.Empty{}, nil
 }
 
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
+	timeStart := time.Now()
 	u.logger.Infof("processing block found [%s]", hash.String())
 
 	// first check if the block exists, it might have already been processed
@@ -215,10 +222,12 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 
 	// validate the block
-	err = u.blockValidation.BlockFound(ctx, block, baseUrl)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
+
+	prometheusBlockValidationProcessBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return nil
 }
@@ -262,6 +271,9 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+	timeStart := time.Now()
+	prometheusBlockValidationCatchup.Inc()
+
 	u.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
 	u.catchingUp.Store(true)
 	defer func() {
@@ -322,16 +334,20 @@ LOOP:
 			return errors.Join(fmt.Errorf("failed to get block [%s] [%v]", blockHeader.String(), err))
 		}
 
-		if err = u.blockValidation.BlockFound(ctx, block, baseURL); err != nil {
+		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL); err != nil {
 			return errors.Join(fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err))
 		}
 	}
+
+	prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return nil
 }
 
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
+	timeStart := time.Now()
 	prometheusBlockValidationSubtreeFound.Inc()
+
 	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
 
 	subtreeHash, err := chainhash.NewHash(req.Hash)
@@ -386,6 +402,8 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 			return
 		}
 	}()
+
+	prometheusBlockValidationSubtreeFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &emptypb.Empty{}, nil
 }
