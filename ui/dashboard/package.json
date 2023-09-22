@@ -22,5 +22,7 @@
     "vite": "^4.3.0"
   },
   "type": "module",
-  "dependencies": {}
+  "dependencies": {
+    "@sentry/sveltekit": "^7.70.0"
+  }
 }

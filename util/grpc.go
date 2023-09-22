@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -50,6 +51,12 @@ func StartGRPCServer(ctx context.Context, l utils.Logger, serviceName string, re
 	reflection.Register(grpcServer)
 
 	gocore.SetAddress(address)
+
+	if securityLevel == 0 {
+		servicemanager.AddListenerInfo(fmt.Sprintf("%s GRPC listening on %s", serviceName, address))
+	} else {
+		servicemanager.AddListenerInfo(fmt.Sprintf("%s GRPCS listening on %s", serviceName, address))
+	}
 
 	lis, err := net.Listen("tcp", address)
 	if err != nil {

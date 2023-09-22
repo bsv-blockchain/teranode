@@ -139,6 +139,9 @@
       <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
         Chain
       </a>
+      <a class="navbar-item" href="/metrics" on:click={handleNavbarItemClick}>
+        Metrics
+      </a>
     </div>
 
     <div class="navbar-end">

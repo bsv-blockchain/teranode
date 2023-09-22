@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
@@ -155,7 +157,9 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		var err error
 
 		if mode == "HTTP" {
+			servicemanager.AddListenerInfo(fmt.Sprintf("Bootstrap HTTP listening on %s", addr))
 			err = s.e.Start(addr)
+
 		} else {
 			certFile, found := gocore.Config().Get("server_certFile")
 			if !found {
@@ -169,6 +173,7 @@ func (s *Server) Start(ctx context.Context) (err error) {
 				return
 			}
 
+			servicemanager.AddListenerInfo(fmt.Sprintf("Bootstrap HTTPS listening on %s", addr))
 			err = s.e.StartTLS(addr, certFile, keyFile)
 		}
 

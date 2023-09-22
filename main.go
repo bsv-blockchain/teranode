@@ -159,6 +159,7 @@ func main() {
 	go func() {
 		statisticsServerAddr, found := gocore.Config().Get("gocore_stats_addr")
 		if found {
+			servicemanager.AddListenerInfo(fmt.Sprintf("StatsServer HTTP listening on %s", statisticsServerAddr))
 			gocore.StartStatsServer(statisticsServerAddr)
 		}
 	}()

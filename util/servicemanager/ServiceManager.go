@@ -2,8 +2,12 @@ package servicemanager
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +21,11 @@ type serviceWrapper struct {
 	instance Service
 }
 
+var (
+	mu        sync.RWMutex
+	listeners []string = make([]string, 0)
+)
+
 type ServiceManager struct {
 	services   []serviceWrapper
 	logger     utils.Logger
@@ -27,12 +36,39 @@ type ServiceManager struct {
 func NewServiceManager() (*ServiceManager, context.Context) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
+	logger := gocore.Log("sm")
+
+	http.HandleFunc("/services", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		_ = json.NewEncoder(w).Encode(GetListenerInfos())
+	})
+
 	return &ServiceManager{
 		services:   make([]serviceWrapper, 0),
-		logger:     gocore.Log("sm"),
+		logger:     logger,
 		ctx:        ctx,
 		cancelFunc: cancelFunc,
 	}, ctx
+}
+
+func AddListenerInfo(name string) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	listeners = append(listeners, name)
+}
+
+func GetListenerInfos() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	// Sort the listeners
+	sortedListeners := make([]string, len(listeners))
+	copy(sortedListeners, listeners)
+	sort.Strings(sortedListeners)
+
+	return sortedListeners
 }
 
 func (sm *ServiceManager) AddService(name string, service Service) {

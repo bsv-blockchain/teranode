@@ -3,11 +3,13 @@ package http_impl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
+	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
@@ -124,6 +126,7 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	var err error
 
 	if mode == "HTTP" {
+		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTP listening on %s", addr))
 		err = h.e.Start(addr)
 
 	} else {
@@ -137,6 +140,7 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 			return errors.New("server_keyFile is required for HTTPS")
 		}
 
+		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTPS listening on %s", addr))
 		err = h.e.StartTLS(addr, certFile, keyFile)
 	}
 
