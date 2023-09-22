@@ -161,7 +161,23 @@
   function stringToColor(str) {
     if (str === 'ROOT') return '#000000'
 
-    const colors = ['green', 'red', 'blue', 'orange', 'magenta', '#33FFFF']
+    const colors = [
+      'green',
+      'red',
+      'blue',
+      'magenta',
+      'aqua',
+      'black',
+      'fuchsia',
+      'gray',
+      'lime',
+      'maroon',
+      'navy',
+      'olive',
+      'purple',
+      'teal',
+      'yellow',
+    ]
     let hash = 0
 
     for (let i = 0; i < str.length; i++) {

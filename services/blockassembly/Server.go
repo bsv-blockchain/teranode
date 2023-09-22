@@ -231,7 +231,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-	prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
@@ -254,7 +254,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empt
 		MiningCandidate: miningCandidate,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
-	prometheusBlockAssemblyGetMiningCandidateDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
 
 	return miningCandidate, nil
 }
@@ -404,7 +404,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// remove job, we have already mined a block with it
 	ba.jobStore.Delete(*storeId)
 
-	prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(startTime).Microseconds()))
+	prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(time.Since(startTime).Seconds())
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
