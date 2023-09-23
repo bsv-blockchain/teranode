@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"storj.io/drpc/drpcmux"
+	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -133,6 +136,37 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockassembly_kafkaBrokers")
 	if err == nil && ok {
 		ba.startKafkaListener(ctx, kafkaBrokersURL)
+	}
+
+	// Experimental DRPC server - to test throughput at scale
+	drpcAddress, ok := gocore.Config().Get("blockassembly_drpcListenAddress")
+	if ok {
+		ba.logger.Infof("Starting DRPC server on %s", drpcAddress)
+		m := drpcmux.New()
+		// register the proto-specific methods on the mux
+		err = blockassembly_api.DRPCRegisterBlockAssemblyAPI(m, ba)
+		if err != nil {
+			ba.logger.Errorf("failed to register DRPC service: %v", err)
+		}
+		// create the drpc server
+		s := drpcserver.New(m)
+
+		// listen on a tcp socket
+		var lis net.Listener
+		lis, err = net.Listen("tcp", drpcAddress)
+		if err != nil {
+			return err
+		}
+
+		// run the server
+		// N.B.: if you want TLS, you need to wrap the net.Listener with
+		// TLS before passing to Serve here.
+		go func() {
+			err = s.Serve(ctx, lis)
+			if err != nil {
+				ba.logger.Errorf("failed to serve drpc: %v", err)
+			}
+		}()
 	}
 
 	// this will block
@@ -401,8 +435,9 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		}(subtreeHash[:])
 	}
 
-	// remove job, we have already mined a block with it
-	ba.jobStore.Delete(*storeId)
+	// remove jobs, we have already mined a block
+	// if we don't do this, all the subtrees will never be removed from memory
+	ba.jobStore.DeleteAll()
 
 	prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(time.Since(startTime).Seconds())
 

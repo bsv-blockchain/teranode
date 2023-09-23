@@ -34,7 +34,7 @@ type Validator struct {
 }
 
 func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
-	ba := blockassembly.NewClient(ctx)
+	ba := blockassembly.NewClient(ctx, logger)
 
 	validator := &Validator{
 		logger:         logger,

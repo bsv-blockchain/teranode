@@ -28,9 +28,11 @@ const (
 
 func NewMiner(ctx context.Context) *Miner {
 	initPrometheusMetrics()
+
+	logger := gocore.Log("miner")
 	return &Miner{
-		logger:              gocore.Log("miner"),
-		blockAssemblyClient: blockassembly.NewClient(ctx),
+		logger:              logger,
+		blockAssemblyClient: blockassembly.NewClient(ctx, logger),
 	}
 }
 

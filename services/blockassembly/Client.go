@@ -2,24 +2,31 @@ package blockassembly
 
 import (
 	"context"
+	"net"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
-	db blockassembly_api.BlockAssemblyAPIClient
+	client     blockassembly_api.BlockAssemblyAPIClient
+	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
+	logger     utils.Logger
 }
 
-func NewClient(ctx context.Context) *Client {
+func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		panic("no blockassembly_grpcAddress setting found")
 	}
+
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -29,8 +36,36 @@ func NewClient(ctx context.Context) *Client {
 		panic(err)
 	}
 
-	return &Client{
-		db: blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+	client := &Client{
+		client: blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		logger: logger,
+	}
+
+	// Connect to experimental DRPC server if configured
+	go client.connectDRPC()
+
+	return client
+}
+
+func (s Client) connectDRPC() {
+	func() {
+		err := recover()
+		if err != nil {
+			s.logger.Errorf("Error connecting to blockassembly DRPC: %s", err)
+		}
+	}()
+
+	blockAssemblyDrpcAddress, ok := gocore.Config().Get("blockassembly_drpcAddress")
+	if ok {
+		s.logger.Infof("Using DRPC connection to blockassembly")
+		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+		rawconn, err := net.Dial("tcp", blockAssemblyDrpcAddress)
+		if err != nil {
+			s.logger.Errorf("Error connecting to blockassembly: %s", err)
+		}
+		conn := drpcconn.New(rawconn)
+		s.drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
+		s.logger.Infof("Connected to blockassembly DRPC server")
 	}
 }
 
@@ -39,8 +74,14 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 		Txid: hash[:],
 	}
 
-	if _, err := s.db.AddTx(ctx, req); err != nil {
-		return false, err
+	if s.drpcClient != nil {
+		if _, err := s.drpcClient.AddTx(ctx, req); err != nil {
+			return false, err
+		}
+	} else {
+		if _, err := s.client.AddTx(ctx, req); err != nil {
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -49,7 +90,14 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
 	req := &emptypb.Empty{}
 
-	res, err := s.db.GetMiningCandidate(ctx, req)
+	var err error
+	var res *model.MiningCandidate
+
+	if s.drpcClient != nil {
+		res, err = s.drpcClient.GetMiningCandidate(ctx, req)
+	} else {
+		res, err = s.client.GetMiningCandidate(ctx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -58,13 +106,24 @@ func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate,
 }
 
 func (s Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
-	_, err := s.db.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
-		Id:         solution.Id,
-		Nonce:      solution.Nonce,
-		CoinbaseTx: solution.Coinbase,
-		Time:       solution.Time,
-		Version:    solution.Version,
-	})
+	var err error
+	if s.drpcClient != nil {
+		_, err = s.drpcClient.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
+			Id:         solution.Id,
+			Nonce:      solution.Nonce,
+			CoinbaseTx: solution.Coinbase,
+			Time:       solution.Time,
+			Version:    solution.Version,
+		})
+	} else {
+		_, err = s.client.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
+			Id:         solution.Id,
+			Nonce:      solution.Nonce,
+			CoinbaseTx: solution.Coinbase,
+			Time:       solution.Time,
+			Version:    solution.Version,
+		})
+	}
 	if err != nil {
 		return err
 	}

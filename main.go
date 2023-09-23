@@ -208,12 +208,12 @@ func main() {
 		// outside of the service manager. This is because the blockchain service
 		// needs to be running before the other services start.
 
-		if err := blockchainService.Init(ctx); err != nil {
+		if err = blockchainService.Init(ctx); err != nil {
 			panic(err)
 		}
 
 		go func() {
-			if err := blockchainService.Start(ctx); err != nil {
+			if err = blockchainService.Start(ctx); err != nil {
 				panic(err)
 			}
 		}()
@@ -224,28 +224,6 @@ func main() {
 	}
 
 	var err error
-	var validatorClient validator.Interface
-
-	if startBlockValidation || startPropagation {
-		localValidator := gocore.Config().GetBool("useLocalValidator", false)
-		if localValidator {
-			logger.Infof("[Validator] Using local validator")
-			validatorClient, err = validator.New(ctx,
-				logger,
-				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
-			)
-			if err != nil {
-				logger.Fatalf("could not create validator [%v]", err)
-			}
-
-		} else {
-			validatorClient, err = validator.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("error creating validator client: %v", err)
-			}
-		}
-	}
 
 	// txmeta store
 	if startTxMetaStore {
@@ -272,6 +250,28 @@ func main() {
 				getTxMetaStore(logger),
 				getSubtreeStore(),
 			))
+		}
+	}
+
+	var validatorClient validator.Interface
+	if startBlockValidation || startPropagation {
+		localValidator := gocore.Config().GetBool("useLocalValidator", false)
+		if localValidator {
+			logger.Infof("[Validator] Using local validator")
+			validatorClient, err = validator.New(ctx,
+				logger,
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+			)
+			if err != nil {
+				logger.Fatalf("could not create validator [%v]", err)
+			}
+
+		} else {
+			validatorClient, err = validator.NewClient(ctx, logger)
+			if err != nil {
+				logger.Fatalf("error creating validator client: %v", err)
+			}
 		}
 	}
 
