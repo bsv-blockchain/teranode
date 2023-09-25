@@ -1,4 +1,16 @@
 @startuml overview
+actor Propagation
+database txStore
+actor Validator
+database txMetaStore
+actor BlockAssembler
+actor SubtreeProcessor
+database utxoStore
+database subtreeStore
+Actor Blockchain
+database blockchainStore
+actor Miner
+
 Propagation --> txStore: grpc:Set(tx)
 Propagation -> Validator: grpc:ValidateTransaction(tx)
 
@@ -6,7 +18,7 @@ Validator --> txMetaStore: grpc:Create(txMeta)
 Validator -> BlockAssembler: grpc:AddTx(tx)
 
 BlockAssembler --> txMetaStore: grpc:Get(txMeta)
-BlockAssembler --> SubtreeProcessor: Add(tx)
+BlockAssembler -> SubtreeProcessor: Add(tx)
 SubtreeProcessor --> utxoStore: Store(tx)
 
 Miner -> BlockAssembler : grpc:getMiningCandidate()
@@ -14,15 +26,16 @@ Miner -> Miner : randomDelay()
 Miner -> BlockAssembler : grpc:SubmitMiningSolution(solution))
 
 BlockAssembler -> Blockchain : grpc:AddBlock(block)
-BlockAssembler -> txStore : grpc:Set(tx)
+BlockAssembler --> txStore : grpc:Set(tx)
 BlockAssembler --> subtreeStore : SetTTL(hash)
-Blockchain --> BlockchainStore : StoreBlock(block)
+Blockchain --> blockchainStore : StoreBlock(block)
 Blockchain -> BlockAssembler : grpc:SendNotification(block)
 BlockAssembler -> Blockchain : grpc:GetBestBlockHeader()
 BlockAssembler -> BlockAssembler : (if-new-block)
 BlockAssembler -> Blockchain : grpc:GetBlock(hash)
 BlockAssembler -> SubtreeProcessor : grpc:MoveUpBlock(block)
 BlockAssembler -> Blockchain : grpc:SetState(block)
-Blockchain --> BlockchainStore : SetState(block)
+Blockchain --> blockchainStore : SetState(block)
+
 
 @enduml
