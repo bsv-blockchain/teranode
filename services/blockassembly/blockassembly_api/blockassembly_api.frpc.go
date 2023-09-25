@@ -5,11 +5,13 @@ package blockassembly_api
 
 import (
 	"errors"
-	"github.com/loopholelabs/polyglot"
 	"net"
+
+	"github.com/loopholelabs/polyglot"
 
 	"context"
 	"crypto/tls"
+
 	"github.com/loopholelabs/frisbee-go"
 	"github.com/loopholelabs/frisbee-go/pkg/packet"
 	"github.com/rs/zerolog"
@@ -18,7 +20,7 @@ import (
 )
 
 var (
-	NilDecode = errors.New("cannot decode into a nil root struct")
+	ErrNilDecode = errors.New("cannot decode into a nil root struct")
 )
 
 type BlockassemblyApiEmptyMessage struct {
@@ -48,7 +50,7 @@ func (x *BlockassemblyApiEmptyMessage) Encode(b *polyglot.Buffer) {
 
 func (x *BlockassemblyApiEmptyMessage) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -104,7 +106,7 @@ func (x *BlockassemblyApiHealthResponse) Encode(b *polyglot.Buffer) {
 
 func (x *BlockassemblyApiHealthResponse) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -171,7 +173,7 @@ func (x *BlockassemblyApiNewChaintipAndHeightRequest) Encode(b *polyglot.Buffer)
 
 func (x *BlockassemblyApiNewChaintipAndHeightRequest) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -233,7 +235,7 @@ func (x *BlockassemblyApiAddTxRequest) Encode(b *polyglot.Buffer) {
 
 func (x *BlockassemblyApiAddTxRequest) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -291,7 +293,7 @@ func (x *BlockassemblyApiAddTxResponse) Encode(b *polyglot.Buffer) {
 
 func (x *BlockassemblyApiAddTxResponse) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -353,7 +355,7 @@ func (x *BlockassemblyApiSubmitMiningSolutionRequest) Encode(b *polyglot.Buffer)
 
 func (x *BlockassemblyApiSubmitMiningSolutionRequest) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -427,7 +429,7 @@ func (x *BlockassemblyApiSubmitMiningSolutionResponse) Encode(b *polyglot.Buffer
 
 func (x *BlockassemblyApiSubmitMiningSolutionResponse) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -463,7 +465,9 @@ type BlockAssemblyAPI interface {
 	SubmitMiningSolution(context.Context, *BlockassemblyApiSubmitMiningSolutionRequest) (*BlockassemblyApiSubmitMiningSolutionResponse, error)
 }
 
-const connectionContextKey int = 1000
+type contextKey int
+
+const connectionContextKey contextKey = 1000
 
 func SetErrorFlag(flags uint8, error bool) uint8 {
 	return flags | 0x2

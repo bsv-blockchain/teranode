@@ -222,12 +222,10 @@ func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) err
 	}()
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			err = s.Shutdown()
-			if err != nil {
-				ba.logger.Errorf("failed to shutdown frpc server: %v", err)
-			}
+		<-ctx.Done()
+		err = s.Shutdown()
+		if err != nil {
+			ba.logger.Errorf("failed to shutdown frpc server: %v", err)
 		}
 	}()
 
