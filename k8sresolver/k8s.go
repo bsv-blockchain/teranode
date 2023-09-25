@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -22,9 +24,11 @@ type serviceEndpointResolver interface {
 }
 
 type serviceClient struct {
-	k8s       kubernetes.Interface
-	namespace string
-	logger    utils.Logger
+	k8s          kubernetes.Interface
+	namespace    string
+	logger       utils.Logger
+	resolveTTL   time.Duration
+	resolveCache *ttlcache.Cache[string, []string]
 }
 
 func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, error) {
@@ -39,16 +43,27 @@ func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, 
 		return nil, fmt.Errorf("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
 	}
 
+	resolveTTL, _ := gocore.Config().GetInt("k8s_resolver_ttl", 10)
+
 	return &serviceClient{
-		k8s:       clientset,
-		namespace: namespace,
-		logger:    logger,
+		k8s:          clientset,
+		namespace:    namespace,
+		logger:       logger,
+		resolveTTL:   time.Duration(resolveTTL) * time.Second,
+		resolveCache: ttlcache.New[string, []string](),
 	}, nil
 }
 
 func (s *serviceClient) Resolve(ctx context.Context, host string, port string) ([]string, error) {
+	cacheKey := host + ":" + port
+	cachedEps := s.resolveCache.Get(cacheKey)
+	if cachedEps != nil {
+		s.logger.Debugf("[k8s] Resolve returning cached eps for host: %s, port: %s", host, port)
+		return cachedEps.Value(), nil
+	}
+
 	s.logger.Debugf("[k8s] Resolve called with host: %s, port: %s", host, port)
-	eps := []string{}
+	eps := make([]string, 0)
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
 	if err != nil {
@@ -61,10 +76,14 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 		}
 	}
 
+	if s.resolveTTL > 0 {
+		_ = s.resolveCache.Set(cacheKey, eps, s.resolveTTL)
+	}
+
 	return eps, nil
 }
 
-func (s *serviceClient) Watch(ctx context.Context, host string) (<-chan watch.Event, chan struct{}, error) {
+func (s *serviceClient) Watch(_ context.Context, host string) (<-chan watch.Event, chan struct{}, error) {
 	s.logger.Debugf("[k8s] Watch called with host: %s", host)
 	ev := make(chan watch.Event)
 
