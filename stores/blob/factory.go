@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
+	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
 )
 
 func NewStore(storeUrl *url.URL) (store Store, err error) {
@@ -33,6 +34,11 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		store, err = badger.New("." + storeUrl.Path) // relative
 		if err != nil {
 			return nil, fmt.Errorf("error creating badger block store: %v", err)
+		}
+	case "postgres", "sqlite", "sqlitememory":
+		store, err = sql.New(storeUrl)
+		if err != nil {
+			return nil, fmt.Errorf("error creating sql block store: %v", err)
 		}
 	case "gcs":
 		store, err = gcs.New(strings.Replace(storeUrl.Path, "/", "", 1))

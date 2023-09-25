@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 	// not supported in memory store yet
-	return nil
+	return errors.New("TTL is not supported in a memory store")
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {
