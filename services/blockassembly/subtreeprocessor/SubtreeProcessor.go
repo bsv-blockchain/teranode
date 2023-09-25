@@ -152,6 +152,8 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 }
 
 func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64, sizeInBytes uint64, skipNotification ...bool) {
+	prometheusSubtreeProcessorAddTx.Inc()
+
 	err := stp.currentSubtree.AddNode(&txID, fee, sizeInBytes)
 	if err != nil {
 		panic(err)

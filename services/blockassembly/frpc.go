@@ -24,22 +24,32 @@ func (f *fRPC_BlockAssembly) NewChaintipAndHeight(ctx context.Context, request *
 	panic("implement me")
 }
 
-func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, request *blockassembly_api.BlockassemblyApiAddTxRequest) (*blockassembly_api.BlockassemblyApiAddTxResponse, error) {
+func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (*blockassembly_api.BlockassemblyApiAddTxResponse, error) {
 	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
+	defer func() {
+		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+	}()
 
-	// Look up the new utxos for this txHash, add them to the utxostore, and add the tx to the subtree builder...
-	txHash, err := chainhash.NewHash(request.Txid)
+	txHash, err := chainhash.NewHash(req.Txid)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = f.ba.blockAssembler.AddTx(ctx, txHash); err != nil {
+	txMetadata, err := f.ba.getTxMeta(ctx, txHash)
+	if err != nil {
 		return nil, err
 	}
 
-	prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
-	prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+	if err = f.ba.blockAssembler.AddTx(txHash, txMetadata.Fee, txMetadata.SizeInBytes); err != nil {
+		return nil, err
+	}
+
+	err = f.ba.storeUtxos(ctx, txMetadata.UtxoHashes, txMetadata.LockTime)
+	if err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.BlockassemblyApiAddTxResponse{
 		Ok: true,

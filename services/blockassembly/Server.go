@@ -306,23 +306,81 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
 	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
+	defer func() {
+		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+	}()
 
-	// Look up the new utxos for this txHash, add them to the utxostore, and add the tx to the subtree builder...
 	txHash, err := chainhash.NewHash(req.Txid)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = ba.blockAssembler.AddTx(ctx, txHash); err != nil {
+	txMetadata, err := ba.getTxMeta(ctx, txHash)
+	if err != nil {
 		return nil, err
 	}
 
-	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-	prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+	if err = ba.blockAssembler.AddTx(txHash, txMetadata.Fee, txMetadata.SizeInBytes); err != nil {
+		return nil, err
+	}
+
+	err = ba.storeUtxos(ctx, txMetadata.UtxoHashes, txMetadata.LockTime)
+	if err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.AddTxResponse{
 		Ok: true,
 	}, nil
+}
+
+func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash.Hash, locktime uint32) error {
+	startUtxoTime := time.Now()
+	defer func() {
+		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
+	}()
+
+	// Add all the utxo hashes to the utxostore
+	// TODO what to do if this fails and the utxo table is not updated?
+	//   It's a bit of a chicken and egg thing. We cannot store the utxos before they have been added to the block
+	//   assembly, but we also cannot remove the hash from the block assembly if this fails.
+	var resp *utxostore.UTXOResponse
+	var err error
+	for _, hash := range utxoHashes {
+		if resp, err = ba.utxoStore.Store(ctx, hash, locktime); err != nil {
+			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
+		}
+	}
+
+	return nil
+}
+
+func (ba *BlockAssembly) getTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
+	startMetaTime := time.Now()
+	defer func() {
+		prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startMetaTime).Seconds())
+	}()
+
+	txMetadata, err := ba.txMetaStore.Get(ctx, txHash)
+	if err != nil {
+		return nil, err
+	}
+
+	currentChainMap := ba.blockAssembler.GetCurrentChainMap()
+
+	// looking this up here and adding to the subtree processor, might create a situation where a transaction
+	// that was in a block from a competing miner, is added to the subtree processor when it shouldn't
+	if len(txMetadata.BlockHashes) > 0 {
+		for _, hash := range txMetadata.BlockHashes {
+			if _, ok := currentChainMap[*hash]; ok {
+				// the tx is already in a block on our chain, nothing to do
+				return nil, fmt.Errorf("tx already in a block on the active chain: %s", hash)
+			}
+		}
+	}
+
+	return txMetadata, nil
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {

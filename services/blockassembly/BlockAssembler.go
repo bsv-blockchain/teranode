@@ -239,50 +239,22 @@ func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
 	return nil
 }
 
+func (b *BlockAssembler) GetCurrentChainMap() map[chainhash.Hash]uint32 {
+	b.currentChainMapMu.RLock()
+	defer b.currentChainMapMu.RUnlock()
+
+	return b.currentChainMap
+}
+
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(ctx context.Context, txHash *chainhash.Hash) error {
-	prometheusBlockAssemblerAddTx.Inc()
+func (b *BlockAssembler) AddTx(txHash *chainhash.Hash, fee, size uint64) error {
 	startTime := time.Now()
+	prometheusBlockAssemblerAddTx.Inc()
 
-	txMetadata, err := b.txMetaClient.Get(ctx, txHash)
-	if err != nil {
-		return err
-	}
-
-	// looking this up here and adding to the subtree processor, might create a situation where a transaction
-	// that was in a block from a competing miner, is added to the subtree processor when it shouldn't
-	// TODO should this be done in the subtree processor?
-	if len(txMetadata.BlockHashes) > 0 {
-		b.currentChainMapMu.RLock()
-		for _, hash := range txMetadata.BlockHashes {
-			if _, ok := b.currentChainMap[*hash]; ok {
-				// the tx is already in a block on our chain, nothing to do
-				return fmt.Errorf("tx already in a block on the active chain: %s", hash)
-			}
-		}
-		b.currentChainMapMu.RUnlock()
-	}
-
-	prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startTime).Seconds())
-
-	startTime = time.Now()
-
-	// Add all the utxo hashes to the utxostore
-	var resp *utxostore.UTXOResponse
-	for _, hash := range txMetadata.UtxoHashes {
-		if resp, err = b.utxoStore.Store(ctx, hash, txMetadata.LockTime); err != nil {
-			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
-		}
-	}
-
-	prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startTime).Seconds())
-
-	startTime = time.Now()
-
-	b.subtreeProcessor.Add(*txHash, txMetadata.Fee, txMetadata.SizeInBytes)
+	b.subtreeProcessor.Add(*txHash, fee, size)
 
 	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(time.Since(startTime).Seconds())
 
