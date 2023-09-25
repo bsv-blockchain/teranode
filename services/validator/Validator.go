@@ -23,14 +23,15 @@ import (
 )
 
 type Validator struct {
-	logger          utils.Logger
-	store           utxostore.Interface
-	blockAssembler  blockassembly.Store
-	txMetaStore     txmeta.Store
-	kafkaProducer   sarama.SyncProducer
-	kafkaTopic      string
-	kafkaPartitions int
-	saveInParallel  bool
+	logger                utils.Logger
+	utxoStore             utxostore.Interface
+	blockAssembler        blockassembly.Store
+	txMetaStore           txmeta.Store
+	kafkaProducer         sarama.SyncProducer
+	kafkaTopic            string
+	kafkaPartitions       int
+	saveInParallel        bool
+	blockAssemblyDisabled bool
 }
 
 func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
@@ -38,11 +39,13 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 
 	validator := &Validator{
 		logger:         logger,
-		store:          store,
+		utxoStore:      store,
 		blockAssembler: ba,
 		txMetaStore:    txMetaStore,
 		saveInParallel: true,
 	}
+
+	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
 
 	kafkaURL, _, found := gocore.Config().GetURL("blockassembly_kafkaBrokers")
 	if found {
@@ -104,7 +107,20 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		return err
 	}
 
-	// register transaction in tx status store
+	if v.blockAssemblyDisabled {
+		// block assembly is disabled, which means we are running in non-mining mode
+		// we must create the new utxos in the utxo utxoStore and will stop processing after that
+		for _, hash := range utxoHashes {
+			if _, err = v.utxoStore.Store(ctx, hash, tx.LockTime); err != nil {
+				v.reverseSpends(reservedUtxos, traceSpan)
+				return fmt.Errorf("error storing utxo: %v", err)
+			}
+		}
+
+		return nil
+	}
+
+	// register transaction in tx status utxoStore
 	if err = v.registerTxInMetaStore(ctx, traceSpan, tx, fees, parentTxHashes, utxoHashes, reservedUtxos); err != nil {
 		return err
 	}
@@ -120,7 +136,7 @@ func (v *Validator) registerTxInMetaStore(ctx context.Context, traceSpan tracing
 		}
 
 		v.reverseSpends(reservedUtxos, traceSpan)
-		return fmt.Errorf("error sending tx %s to tx meta store: %v", tx.TxIDChainHash().String(), err)
+		return fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	return nil
@@ -164,7 +180,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*chainhash.
 		}
 
 		// TODO Should we be doing this in a batch?
-		utxoResponse, err = v.store.Spend(utxoSpan.Ctx, hash, txIDChainHash)
+		utxoResponse, err = v.utxoStore.Spend(utxoSpan.Ctx, hash, txIDChainHash)
 		if err != nil {
 			utxoSpan.RecordError(err)
 			break
@@ -244,7 +260,7 @@ func (v *Validator) reverseSpends(reservedUtxos []*chainhash.Hash, traceSpan tra
 	defer func() { reverseUtxoSpan.Finish() }()
 
 	for _, hash := range reservedUtxos {
-		if _, errReset := v.store.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
+		if _, errReset := v.utxoStore.Reset(reverseUtxoSpan.Ctx, hash); errReset != nil {
 			reverseUtxoSpan.RecordError(errReset)
 			v.logger.Errorf("error resetting utxo %s: %v", hash.String(), errReset)
 		}
