@@ -4,24 +4,26 @@ option go_package = ".;blockassembly_api";
 
 package blockassembly_api;
 
-import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "model/model.proto";
 
 service BlockAssemblyAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc Health (EmptyMessage) returns (HealthResponse) {}
   rpc NewChaintipAndHeight(NewChaintipAndHeightRequest) returns (google.protobuf.Empty) {}
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
-  rpc GetMiningCandidate (google.protobuf.Empty) returns (model.MiningCandidate) {}
+  rpc GetMiningCandidate (EmptyMessage) returns (model.MiningCandidate) {}
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
 }
+
+// swagger:model EmptyMessage
+message EmptyMessage {}
 
 // swagger:model HealthResponse
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  uint32 timestamp = 3; // unix timestamp
 }
 
 // swagger:model NewChaintipAndHeightRequest

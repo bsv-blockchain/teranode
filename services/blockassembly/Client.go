@@ -11,13 +11,13 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
 	client     blockassembly_api.BlockAssemblyAPIClient
 	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
+	frpcClient *blockassembly_api.Client
 	logger     utils.Logger
 }
 
@@ -44,6 +44,10 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	// Connect to experimental DRPC server if configured
 	go client.connectDRPC()
 
+	// Connect to experimental fRPC server if configured
+	// fRPC has only been implemented for AddTx / Store
+	go client.connectFRPC()
+
 	return client
 }
 
@@ -69,12 +73,45 @@ func (s Client) connectDRPC() {
 	}
 }
 
+func (s Client) connectFRPC() {
+	func() {
+		err := recover()
+		if err != nil {
+			s.logger.Errorf("Error connecting to blockassembly fRPC: %s", err)
+		}
+	}()
+
+	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
+	if ok {
+		s.logger.Infof("Using fRPC connection to blockassembly")
+		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+
+		client, err := blockassembly_api.NewClient(nil, nil)
+		if err != nil {
+			s.logger.Errorf("error creating new fRPC client in blockassembly: %s", err)
+		}
+
+		err = client.Connect(blockAssemblyFRPCAddress)
+		if err != nil {
+			s.logger.Errorf("error connecting to fRPC server in blockassembly: %s", err)
+		} else {
+			s.frpcClient = client
+		}
+	}
+}
+
 func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
 		Txid: hash[:],
 	}
 
-	if s.drpcClient != nil {
+	if s.frpcClient != nil {
+		if _, err := s.frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
+			Txid: hash[:],
+		}); err != nil {
+			return false, err
+		}
+	} else if s.drpcClient != nil {
 		if _, err := s.drpcClient.AddTx(ctx, req); err != nil {
 			return false, err
 		}
@@ -88,7 +125,7 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 }
 
 func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
-	req := &emptypb.Empty{}
+	req := &blockassembly_api.EmptyMessage{}
 
 	var err error
 	var res *model.MiningCandidate

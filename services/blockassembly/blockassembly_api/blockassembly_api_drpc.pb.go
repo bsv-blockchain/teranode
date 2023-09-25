@@ -40,10 +40,10 @@ func (drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_a
 type DRPCBlockAssemblyAPIClient interface {
 	DRPCConn() drpc.Conn
 
-	Health(ctx context.Context, in *emptypb.Empty) (*HealthResponse, error)
+	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
 	AddTx(ctx context.Context, in *AddTxRequest) (*AddTxResponse, error)
-	GetMiningCandidate(ctx context.Context, in *emptypb.Empty) (*model.MiningCandidate, error)
+	GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 }
 
@@ -57,7 +57,7 @@ func NewDRPCBlockAssemblyAPIClient(cc drpc.Conn) DRPCBlockAssemblyAPIClient {
 
 func (c *drpcBlockAssemblyAPIClient) DRPCConn() drpc.Conn { return c.cc }
 
-func (c *drpcBlockAssemblyAPIClient) Health(ctx context.Context, in *emptypb.Empty) (*HealthResponse, error) {
+func (c *drpcBlockAssemblyAPIClient) Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/Health", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
 	if err != nil {
@@ -84,7 +84,7 @@ func (c *drpcBlockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest
 	return out, nil
 }
 
-func (c *drpcBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *emptypb.Empty) (*model.MiningCandidate, error) {
+func (c *drpcBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error) {
 	out := new(model.MiningCandidate)
 	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
 	if err != nil {
@@ -103,16 +103,16 @@ func (c *drpcBlockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, i
 }
 
 type DRPCBlockAssemblyAPIServer interface {
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
-	GetMiningCandidate(context.Context, *emptypb.Empty) (*model.MiningCandidate, error)
+	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 }
 
 type DRPCBlockAssemblyAPIUnimplementedServer struct{}
 
-func (s *DRPCBlockAssemblyAPIUnimplementedServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -124,7 +124,7 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) AddTx(context.Context, *AddTxR
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
-func (s *DRPCBlockAssemblyAPIUnimplementedServer) GetMiningCandidate(context.Context, *emptypb.Empty) (*model.MiningCandidate, error) {
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -144,7 +144,7 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 				return srv.(DRPCBlockAssemblyAPIServer).
 					Health(
 						ctx,
-						in1.(*emptypb.Empty),
+						in1.(*EmptyMessage),
 					)
 			}, DRPCBlockAssemblyAPIServer.Health, true
 	case 1:
@@ -171,7 +171,7 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 				return srv.(DRPCBlockAssemblyAPIServer).
 					GetMiningCandidate(
 						ctx,
-						in1.(*emptypb.Empty),
+						in1.(*EmptyMessage),
 					)
 			}, DRPCBlockAssemblyAPIServer.GetMiningCandidate, true
 	case 4:

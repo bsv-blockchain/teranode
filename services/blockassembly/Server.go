@@ -26,8 +26,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"storj.io/drpc/drpcmux"
 	"storj.io/drpc/drpcserver"
 )
@@ -141,32 +139,19 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	// Experimental DRPC server - to test throughput at scale
 	drpcAddress, ok := gocore.Config().Get("blockassembly_drpcListenAddress")
 	if ok {
-		ba.logger.Infof("Starting DRPC server on %s", drpcAddress)
-		m := drpcmux.New()
-		// register the proto-specific methods on the mux
-		err = blockassembly_api.DRPCRegisterBlockAssemblyAPI(m, ba)
+		err = ba.drpcServer(ctx, drpcAddress)
 		if err != nil {
-			ba.logger.Errorf("failed to register DRPC service: %v", err)
+			ba.logger.Errorf("failed to start DRPC server: %v", err)
 		}
-		// create the drpc server
-		s := drpcserver.New(m)
+	}
 
-		// listen on a tcp socket
-		var lis net.Listener
-		lis, err = net.Listen("tcp", drpcAddress)
+	// Experimental fRPC server - to test throughput at scale
+	frpcAddress, ok := gocore.Config().Get("blockassembly_frpcListenAddress")
+	if ok {
+		err = ba.frpcServer(ctx, frpcAddress)
 		if err != nil {
-			return err
+			ba.logger.Errorf("failed to start fRPC server: %v", err)
 		}
-
-		// run the server
-		// N.B.: if you want TLS, you need to wrap the net.Listener with
-		// TLS before passing to Serve here.
-		go func() {
-			err = s.Serve(ctx, lis)
-			if err != nil {
-				ba.logger.Errorf("failed to serve drpc: %v", err)
-			}
-		}()
 	}
 
 	// this will block
@@ -175,6 +160,76 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (ba *BlockAssembly) drpcServer(ctx context.Context, drpcAddress string) error {
+	ba.logger.Infof("Starting DRPC server on %s", drpcAddress)
+	m := drpcmux.New()
+	// register the proto-specific methods on the mux
+	err := blockassembly_api.DRPCRegisterBlockAssemblyAPI(m, ba)
+	if err != nil {
+		return fmt.Errorf("failed to register DRPC service: %v", err)
+	}
+	// create the drpc server
+	s := drpcserver.New(m)
+
+	// listen on a tcp socket
+	var lis net.Listener
+	lis, err = net.Listen("tcp", drpcAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen on drpc server: %v", err)
+	}
+
+	// run the server
+	// N.B.: if you want TLS, you need to wrap the net.Listener with
+	// TLS before passing to Serve here.
+	go func() {
+		err = s.Serve(ctx, lis)
+		if err != nil {
+			ba.logger.Errorf("failed to serve drpc: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) error {
+	ba.logger.Infof("Starting fRPC server on %s", frpcAddress)
+
+	frpcBa := &fRPC_BlockAssembly{
+		ba: ba,
+	}
+
+	s, err := blockassembly_api.NewServer(frpcBa, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create fRPC server: %v", err)
+	}
+
+	concurrency, ok := gocore.Config().GetInt("blockassembly_frpcConcurrency")
+	if ok {
+		ba.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
+		s.SetConcurrency(uint64(concurrency))
+	}
+
+	// run the server
+	go func() {
+		err = s.Start(frpcAddress)
+		if err != nil {
+			ba.logger.Errorf("failed to serve frpc: %v", err)
+		}
+	}()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			err = s.Shutdown()
+			if err != nil {
+				ba.logger.Errorf("failed to shutdown frpc server: %v", err)
+			}
+		}
+	}()
 
 	return nil
 }
@@ -241,12 +296,12 @@ func (ba *BlockAssembly) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ba *BlockAssembly) Health(_ context.Context, _ *emptypb.Empty) (*blockassembly_api.HealthResponse, error) {
+func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
 	prometheusBlockAssemblyHealth.Inc()
 
 	return &blockassembly_api.HealthResponse{
 		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: uint32(time.Now().Unix()),
 	}, nil
 }
 
@@ -272,7 +327,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
-func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *emptypb.Empty) (*model.MiningCandidate, error) {
+func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {
 	startTime := time.Now()
 	prometheusBlockAssemblyGetMiningCandidate.Inc()
 
