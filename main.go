@@ -282,12 +282,18 @@ func main() {
 	if startPropagation {
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
-			if err := sm.AddService("PropagationServer", propagation.New(
-				gocore.Log("prop"),
-				getTxStore(),
-				validatorClient,
-			)); err != nil {
-				panic(err)
+			if gocore.Config().GetBool("propagation_use_dumb", false) {
+				if err := sm.AddService("PropagationServer", propagation.NewDumbPropagationServer()); err != nil {
+					panic(err)
+				}
+			} else {
+				if err := sm.AddService("PropagationServer", propagation.New(
+					gocore.Log("prop"),
+					getTxStore(),
+					validatorClient,
+				)); err != nil {
+					panic(err)
+				}
 			}
 		}
 	}

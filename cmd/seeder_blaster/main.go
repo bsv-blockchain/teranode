@@ -139,7 +139,7 @@ func main() {
 		panic(err)
 	}
 
-	if _, err := propagator.Set(ctx, &propagation_api.SetRequest{
+	if _, err := propagator.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 		Tx: tx.ExtendedBytes(),
 	}); err != nil {
 		panic(err)

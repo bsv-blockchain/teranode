@@ -665,7 +665,7 @@ func (w *Worker) sendToPropagationServer(ctx context.Context, p PropagationServe
 
 	traceSpan.SetTag("server", address)
 
-	_, err := p.client.Set(traceSpan.Ctx, &propagation_api.SetRequest{
+	_, err := p.client.ProcessTransaction(traceSpan.Ctx, &propagation_api.ProcessTransactionRequest{
 		Tx: txExtendedBytes,
 	})
 	now := time.Now()

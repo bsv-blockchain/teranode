@@ -10,8 +10,7 @@ import "google/protobuf/empty.proto";
 service PropagationAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc Get (GetRequest) returns (GetResponse) {}
-  rpc Set (SetRequest) returns (google.protobuf.Empty) {}
+  rpc ProcessTransaction (ProcessTransactionRequest) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse
@@ -31,7 +30,7 @@ message GetResponse {
   bytes tx = 1;
 }
 
-// swagger:model SetRequest
-message SetRequest {
+// swagger:model ProcessTransactionRequest
+message ProcessTransactionRequest {
   bytes tx = 1;
 }

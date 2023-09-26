@@ -7,7 +7,6 @@ import (
 
 var (
 	prometheusHealth                prometheus.Counter
-	prometheusGetTransaction        prometheus.Counter
 	prometheusProcessedTransactions prometheus.Counter
 	prometheusInvalidTransactions   prometheus.Counter
 	prometheusTransactionDuration   prometheus.Histogram
@@ -26,13 +25,6 @@ func initPrometheusMetrics() {
 			Namespace: "propagation",
 			Name:      "health",
 			Help:      "Number of calls to the health endpoint of the propagation service",
-		},
-	)
-	prometheusGetTransaction = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "propagation",
-			Name:      "get_transaction",
-			Help:      "Number of calls to the GetTransaction endpoint of the propagation service",
 		},
 	)
 	prometheusProcessedTransactions = promauto.NewCounter(

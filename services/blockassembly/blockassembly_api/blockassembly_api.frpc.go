@@ -5,13 +5,11 @@ package blockassembly_api
 
 import (
 	"errors"
-	"net"
-
 	"github.com/loopholelabs/polyglot"
+	"net"
 
 	"context"
 	"crypto/tls"
-
 	"github.com/loopholelabs/frisbee-go"
 	"github.com/loopholelabs/frisbee-go/pkg/packet"
 	"github.com/rs/zerolog"
@@ -466,7 +464,6 @@ type BlockAssemblyAPI interface {
 }
 
 type contextKey int
-
 const connectionContextKey contextKey = 1000
 
 func SetErrorFlag(flags uint8, error bool) uint8 {

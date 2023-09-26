@@ -68,8 +68,9 @@ gen:
 	--proto_path=. \
 	--go_out=. \
 	--go_opt=paths=source_relative \
-	--chainhash_out=. \
 	model/model.proto
+
+	# --chainhash_out=. \
 
 	protoc \
 	--proto_path=. \
