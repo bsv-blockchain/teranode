@@ -28,6 +28,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sercand/kuberesolver/v5"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/resolver"
@@ -206,6 +207,9 @@ func main() {
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
 		resolver.SetDefaultScheme("k8s")
+	} else if grpcResolver == "kubernetes" {
+		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
+		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
 	propagationServers := make(map[string]propagation_api.PropagationAPIClient)

@@ -10,6 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -23,6 +24,9 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
 		resolver.SetDefaultScheme("k8s")
+	} else if grpcResolver == "kubernetes" {
+		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
+		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
 	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")

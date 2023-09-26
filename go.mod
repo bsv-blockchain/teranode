@@ -84,6 +84,7 @@ require (
 	github.com/emicklei/go-restful/v3 v3.9.0 // indirect
 	github.com/flynn/noise v1.0.0 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
+	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/getkin/kin-openapi v0.103.0 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -198,6 +199,7 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.5.0 // indirect
+	github.com/sercand/kuberesolver/v5 v5.1.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect

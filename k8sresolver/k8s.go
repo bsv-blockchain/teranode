@@ -56,7 +56,7 @@ func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, 
 
 func (s *serviceClient) Resolve(ctx context.Context, host string, port string) ([]string, error) {
 	cacheKey := host + ":" + port
-	cachedEps := s.resolveCache.Get(cacheKey)
+	cachedEps := s.resolveCache.Get(cacheKey, ttlcache.WithDisableTouchOnHit[string, []string]())
 	if cachedEps != nil {
 		s.logger.Debugf("[k8s] Resolve returning cached eps for host: %s, port: %s", host, port)
 		return cachedEps.Value(), nil
