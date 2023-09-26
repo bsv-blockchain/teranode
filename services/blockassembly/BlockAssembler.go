@@ -289,6 +289,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight + 1)
 
 	// Get the hash of the last subtree in the list...
+	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))

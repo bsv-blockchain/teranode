@@ -36,6 +36,7 @@ const progname = "ubsv"
 // // Version & commit strings injected at build with -ldflags -X...
 var version string
 var commit string
+var appCount int
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
@@ -52,22 +53,7 @@ func main() {
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	// sentry
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
-		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
-		if err != nil {
-			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
-		}
-
-		if err = sentry.Init(sentry.ClientOptions{
-			Dsn: sentryDns,
-			// Set TracesSampleRate to 1.0 to capture 100% of transactions for performance monitoring.
-			// We recommend adjusting this value in production,
-			TracesSampleRate: tracesSampleRate,
-		}); err != nil {
-			logger.Fatalf("sentry.Init: %s", err)
-		}
-	}
+	startSentry(logger)
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -84,65 +70,8 @@ func main() {
 	startP2P := shouldStart("P2P")
 	help := shouldStart("help")
 
-	if help ||
-		(!startBlockchain &&
-			!startBlockAssembly &&
-			!startBlockValidation &&
-			!startValidator &&
-			!startUtxoStore &&
-			!startTxMetaStore &&
-			!startPropagation &&
-			!startSeeder &&
-			!startMiner &&
-			!startBootstrap &&
-			!startP2P &&
-			!startBlobServer &&
-			!startCoinbase) {
-		fmt.Println("usage: main [options]")
-		fmt.Println("where options are:")
-		fmt.Println("")
-		fmt.Println("    -blockchain=<1|0>")
-		fmt.Println("          whether to start the blockchain service")
-		fmt.Println("")
-		fmt.Println("    -blockassembly=<1|0>")
-		fmt.Println("          whether to start the blockassembly service")
-		fmt.Println("")
-		fmt.Println("    -blockvalidation=<1|0>")
-		fmt.Println("          whether to start the blockvalidation service")
-		fmt.Println("")
-		fmt.Println("    -validator=<1|0>")
-		fmt.Println("          whether to start the validator service")
-		fmt.Println("")
-		fmt.Println("    -utxostore=<1|0>")
-		fmt.Println("          whether to start the utxo store service")
-		fmt.Println("")
-		fmt.Println("    -txmeta=<1|0>")
-		fmt.Println("          whether to start the tx meta store")
-		fmt.Println("")
-		fmt.Println("    -propagation=<1|0>")
-		fmt.Println("          whether to start the propagation service")
-		fmt.Println("")
-		fmt.Println("    -seeder=<1|0>")
-		fmt.Println("          whether to start the seeder service")
-		fmt.Println("")
-		fmt.Println("    -miner=<1|0>")
-		fmt.Println("          whether to start the miner service")
-		fmt.Println("")
-		fmt.Println("    -blobserver=<1|0>")
-		fmt.Println("          whether to start the blob server")
-		fmt.Println("")
-		fmt.Println("    -coinbase=<1|0>")
-		fmt.Println("          whether to start the coinbase server")
-		fmt.Println("")
-		fmt.Println("    -bootstrap=<1|0>")
-		fmt.Println("          whether to start the bootstrap server")
-		fmt.Println("")
-		fmt.Println("    -p2p=<1|0>")
-		fmt.Println("          whether to start the p2p server")
-		fmt.Println("")
-		fmt.Println("    -tracer=<1|0>")
-		fmt.Println("          whether to start the Jaeger tracer (default=false)")
-		fmt.Println("")
+	if help || appCount == 0 {
+		printUsage()
 		return
 	}
 
@@ -188,14 +117,8 @@ func main() {
 
 	sm, ctx := servicemanager.NewServiceManager()
 
-	// bootstrap server
-	if startBootstrap {
-		sm.AddService("Bootstrap", bootstrap.NewServer(
-			gocore.Log("bootS"),
-		))
-	}
-
 	var blockchainService *blockchain.Blockchain
+
 	// blockchain service needs to start first !
 	if startBlockchain {
 		var err error
@@ -204,23 +127,18 @@ func main() {
 			panic(err)
 		}
 
-		// TODO - for a temporary period, we will start the blockchain service
-		// outside of the service manager. This is because the blockchain service
-		// needs to be running before the other services start.
-
-		if err = blockchainService.Init(ctx); err != nil {
+		if err := sm.AddService("BlockChainService", blockchainService); err != nil {
 			panic(err)
 		}
+	}
 
-		go func() {
-			if err = blockchainService.Start(ctx); err != nil {
-				panic(err)
-			}
-		}()
-
-		time.Sleep(3 * time.Second)
-
-		//sm.AddService("BlockChainService", blockchainService)
+	// bootstrap server
+	if startBootstrap {
+		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
+			gocore.Log("bootS"),
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	var err error
@@ -234,22 +152,26 @@ func main() {
 		if txMetaStoreURL.Scheme != "memory" {
 			panic("txmeta grpc server only supports memory store")
 		}
-		sm.AddService("TxMetaStore", txmeta.New(
+		if err := sm.AddService("TxMetaStore", txmeta.New(
 			gocore.Log("txsts"),
 			txMetaStoreURL,
-		))
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			sm.AddService("BlockAssembly", blockassembly.New(
+			if err := sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bass"),
 				getTxStore(),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
 				getSubtreeStore(),
-			))
+			)); err != nil {
+				panic(err)
+			}
 		}
 	}
 
@@ -278,84 +200,102 @@ func main() {
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
-			sm.AddService("Block Validation", blockvalidation.New(
+			if err := sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
 				getUtxoStore(ctx, logger),
 				getSubtreeStore(),
 				getTxStore(),
 				getTxMetaStore(logger),
 				validatorClient,
-			))
+			)); err != nil {
+				panic(err)
+			}
 		}
 	}
 
 	// validator
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
-			sm.AddService("Validator", validator.NewServer(
+			if err := sm.AddService("Validator", validator.NewServer(
 				gocore.Log("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
-			))
+			)); err != nil {
+				panic(err)
+			}
 		}
 	}
 
 	// utxo store server
 	if startUtxoStore {
-		sm.AddService("UTXOStoreServer", utxo.New(
+		if err := sm.AddService("UTXOStoreServer", utxo.New(
 			gocore.Log("utxo"),
 			getUtxoMemoryStore(),
-		))
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// seeder
 	if startSeeder {
 		_, found := gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
-			sm.AddService("Seeder", seeder.NewServer(
+			if err := sm.AddService("Seeder", seeder.NewServer(
 				gocore.Log("seed"),
-			))
+			)); err != nil {
+				panic(err)
+			}
 		}
-	}
-
-	// miner
-	if startMiner {
-		sm.AddService("miner", miner.NewMiner(ctx))
 	}
 
 	// blob server
 	if startBlobServer {
-		sm.AddService("BlobServer", blobserver.NewServer(
+		if err := sm.AddService("BlobServer", blobserver.NewServer(
 			gocore.Log("blob"),
 			getUtxoStore(ctx, logger),
 			getTxStore(),
 			getSubtreeStore(),
-		))
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// p2p server
 	if startP2P {
-		sm.AddService("P2P", p2p.NewServer(
+		if err := sm.AddService("P2P", p2p.NewServer(
 			gocore.Log("P2P"),
-		))
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// coinbase tracker server
 	if startCoinbase {
-		sm.AddService("Coinbase", coinbase.New(
+		if err := sm.AddService("Coinbase", coinbase.New(
 			gocore.Log("coinB"),
-		))
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// propagation
 	if startPropagation {
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
-			sm.AddService("PropagationServer", propagation.New(
+			if err := sm.AddService("PropagationServer", propagation.New(
 				gocore.Log("prop"),
 				getTxStore(),
 				validatorClient,
-			))
+			)); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	// miner
+	if startMiner {
+		if err := sm.AddService("miner", miner.NewMiner(ctx)); err != nil {
+			panic(err)
 		}
 	}
 
@@ -368,20 +308,12 @@ func main() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	if err = sm.StartAllAndWait(); err != nil {
-		logger.Errorf("failed to start all services: %v", err)
+	if err = sm.Wait(); err != nil {
+		logger.Errorf("services failed: %v", err)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
-	// TODO - As blockchain service is being started manually, we need to stop it manually
-	if blockchainService != nil {
-		logger.Infof("stopping blockchain service")
-		if err := blockchainService.Stop(shutdownCtx); err != nil {
-			logger.Errorf("failed to stop blockchain service: %v", err)
-		}
-	}
 
 	//
 	// close all the stores
@@ -398,12 +330,31 @@ func main() {
 	}
 }
 
+func startSentry(logger *gocore.Logger) {
+	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
+		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
+		if err != nil {
+			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
+		}
+
+		if err = sentry.Init(sentry.ClientOptions{
+			Dsn: sentryDns,
+
+			TracesSampleRate: tracesSampleRate,
+		}); err != nil {
+			logger.Fatalf("sentry.Init: %s", err)
+		}
+	}
+}
+
 func shouldStart(app string) bool {
 
 	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
 	for _, cmd := range os.Args[1:] {
 		if cmd == cmdArg {
+			appCount++
 			return true
 		}
 	}
@@ -419,5 +370,58 @@ func shouldStart(app string) bool {
 	// If the app was not specified on the command line, see if it is enabled in the config
 	varArg := fmt.Sprintf("start%s", app)
 
-	return gocore.Config().GetBool(varArg)
+	b := gocore.Config().GetBool(varArg)
+	if b {
+		appCount++
+	}
+
+	return b
+}
+
+func printUsage() {
+	fmt.Println("usage: main [options]")
+	fmt.Println("where options are:")
+	fmt.Println("")
+	fmt.Println("    -blockchain=<1|0>")
+	fmt.Println("          whether to start the blockchain service")
+	fmt.Println("")
+	fmt.Println("    -blockassembly=<1|0>")
+	fmt.Println("          whether to start the blockassembly service")
+	fmt.Println("")
+	fmt.Println("    -blockvalidation=<1|0>")
+	fmt.Println("          whether to start the blockvalidation service")
+	fmt.Println("")
+	fmt.Println("    -validator=<1|0>")
+	fmt.Println("          whether to start the validator service")
+	fmt.Println("")
+	fmt.Println("    -utxostore=<1|0>")
+	fmt.Println("          whether to start the utxo store service")
+	fmt.Println("")
+	fmt.Println("    -txmeta=<1|0>")
+	fmt.Println("          whether to start the tx meta store")
+	fmt.Println("")
+	fmt.Println("    -propagation=<1|0>")
+	fmt.Println("          whether to start the propagation service")
+	fmt.Println("")
+	fmt.Println("    -seeder=<1|0>")
+	fmt.Println("          whether to start the seeder service")
+	fmt.Println("")
+	fmt.Println("    -miner=<1|0>")
+	fmt.Println("          whether to start the miner service")
+	fmt.Println("")
+	fmt.Println("    -blobserver=<1|0>")
+	fmt.Println("          whether to start the blob server")
+	fmt.Println("")
+	fmt.Println("    -coinbase=<1|0>")
+	fmt.Println("          whether to start the coinbase server")
+	fmt.Println("")
+	fmt.Println("    -bootstrap=<1|0>")
+	fmt.Println("          whether to start the bootstrap server")
+	fmt.Println("")
+	fmt.Println("    -p2p=<1|0>")
+	fmt.Println("          whether to start the p2p server")
+	fmt.Println("")
+	fmt.Println("    -tracer=<1|0>")
+	fmt.Println("          whether to start the Jaeger tracer (default=false)")
+	fmt.Println("")
 }
