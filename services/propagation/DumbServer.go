@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -14,6 +15,7 @@ import (
 
 // PropagationServer type carries the logger within it
 type DumbPropagationServer struct {
+	logger utils.Logger
 	propagation_api.UnsafePropagationAPIServer
 }
 
@@ -21,7 +23,13 @@ type DumbPropagationServer struct {
 func NewDumbPropagationServer() *DumbPropagationServer {
 	initPrometheusMetrics()
 
-	return &DumbPropagationServer{}
+	logger := gocore.Log("dumbPS")
+
+	logger.Warnf("Using DumbPropagationServer (for testing only)")
+
+	return &DumbPropagationServer{
+		logger: logger,
+	}
 }
 
 func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
@@ -30,9 +38,8 @@ func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
-	logger := gocore.Log("dumbPS")
 	// this will block
-	if err = util.StartGRPCServer(ctx, logger, "propagation", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}); err != nil {
 		return err
