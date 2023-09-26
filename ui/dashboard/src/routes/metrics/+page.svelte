@@ -9,8 +9,12 @@
 </div>
 
 <style>
+  :root {
+    --navbar-height: 52px; /* Define the custom property */
+  }
+
   .full {
     width: 100%;
-    height: 100vh;
+    height: calc(100vh - var(--navbar-height));
   }
 </style>
