@@ -86,6 +86,7 @@ func main() {
 	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
+	bufferSize := flag.Int("buffer", -1, "buffer size for txs chan")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
 	seeder := flag.Bool("seeder", false, "Whether to use the seeder")
 	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
@@ -283,6 +284,7 @@ func main() {
 				logIdsFile,
 				&totalTransactions,
 				&startTime,
+				*bufferSize,
 			)
 			if err != nil {
 				return err

@@ -154,6 +154,7 @@ func NewWorker(
 	logIdsCh chan string,
 	totalTransactions *atomic.Uint64,
 	globalStartTime *time.Time,
+	bufferSize int,
 ) (*Worker, error) {
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
@@ -173,9 +174,14 @@ func NewWorker(
 		}
 	}
 
+	if bufferSize < 0 {
+		bufferSize = numberOfOutputs * 2
+	}
+	logger.Infof("Utxo channel buffer size is %d", bufferSize)
+
 	return &Worker{
 		logger:               logger,
-		utxoChan:             make(chan *bt.UTXO, numberOfOutputs*2),
+		utxoChan:             make(chan *bt.UTXO, bufferSize),
 		numberOfOutputs:      numberOfOutputs,
 		numberOfTransactions: numberOfTransactions,
 		satoshisPerOutput:    satoshisPerOutput,
