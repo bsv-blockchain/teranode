@@ -24,7 +24,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-build: build-dashboard build-ubsv build-status build-tx-blaster
+build: build-dashboard build-ubsv build-status build-tx-blaster build-dumb-blaster
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard
@@ -33,6 +33,10 @@ build-ubsv: build-dashboard
 .PHONY: build-tx-blaster
 build-tx-blaster:
 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
+
+.PHONY: build-dumb-blaster
+build-dumb-blaster:
+	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o dumbblaster.run ./cmd/dumb_blaster/
 
 .PHONY: build-status
 build-status:
