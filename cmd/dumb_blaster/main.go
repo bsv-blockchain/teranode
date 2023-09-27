@@ -72,9 +72,12 @@ func init() {
 
 	}()
 
+	prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+	log.Printf("Using prometheus grpc metrics: %v", prom)
+
 	propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
-		Prometheus: gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		Prometheus: prom,
 		MaxRetries: 3,
 	})
 	if err != nil {

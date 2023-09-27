@@ -198,30 +198,36 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 
 	opts = append(opts, grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize))
 
+	// Interceptors.  The order may be important here.
+	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
+	streamInterceptors := make([]grpc.StreamServerInterceptor, 0)
+
 	if connectionOptions.OpenTelemetry {
-		opts = append(
-			opts,
-			grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
-			grpc.ChainStreamInterceptor(otelgrpc.StreamServerInterceptor()),
-		)
+		unaryInterceptors = append(unaryInterceptors, otelgrpc.UnaryServerInterceptor())
+		streamInterceptors = append(streamInterceptors, otelgrpc.StreamServerInterceptor())
 	}
 
 	if connectionOptions.OpenTracing {
 		if opentracing.IsGlobalTracerRegistered() {
 			tracer := opentracing.GlobalTracer()
-			opts = append(opts, grpc.ChainUnaryInterceptor(otgrpc.OpenTracingServerInterceptor(tracer)))
-			opts = append(opts, grpc.ChainStreamInterceptor(otgrpc.OpenTracingStreamServerInterceptor(tracer)))
+			unaryInterceptors = append(unaryInterceptors, otgrpc.OpenTracingServerInterceptor(tracer))
+			streamInterceptors = append(streamInterceptors, otgrpc.OpenTracingStreamServerInterceptor(tracer))
 		} else {
 			return nil, errors.New("no global tracer set")
 		}
 	}
 
 	if connectionOptions.Prometheus {
-		opts = append(
-			opts,
-			grpc.ChainUnaryInterceptor(prometheusMetrics.UnaryServerInterceptor()),
-			grpc.ChainStreamInterceptor(prometheusMetrics.StreamServerInterceptor()),
-		)
+		unaryInterceptors = append(unaryInterceptors, prometheusMetrics.UnaryServerInterceptor())
+		streamInterceptors = append(streamInterceptors, prometheusMetrics.StreamServerInterceptor())
+	}
+
+	if len(unaryInterceptors) > 0 {
+		opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
+	}
+
+	if len(streamInterceptors) > 0 {
+		opts = append(opts, grpc.ChainStreamInterceptor(streamInterceptors...))
 	}
 
 	tlsCredentials, err := loadTLSCredentials(connectionOptions, true)
@@ -240,11 +246,13 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	return server, nil
 }
 
-func RegisterPrometheusMetrics() {
+func RegisterPrometheusMetrics() *prometheus.ServerMetrics {
 	if !prometheusIsRegistered {
 		prometheus_golang.MustRegister(prometheusMetrics)
 		prometheusIsRegistered = true
 	}
+
+	return prometheusMetrics
 }
 
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
