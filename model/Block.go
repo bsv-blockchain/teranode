@@ -363,10 +363,8 @@ func (b *Block) checkDuplicateTransactions() error {
 
 func (b *Block) GetSubtrees(subtreeStore blob.Store) ([]*util.Subtree, error) {
 	startTime := time.Now()
-	b.subtreeSlicesMu.RLock()
 	defer func() {
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
-		b.subtreeSlicesMu.Unlock()
 	}()
 
 	if len(b.subtreeSlices) == 0 {
