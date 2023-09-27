@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
+
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -124,23 +126,20 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
 
+	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0)
+	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0)
+
 	if connectionOptions.OpenTelemetry {
-		opts = append(
-			opts,
-			grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
-			grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
-		)
+		unaryClientInterceptors = append(unaryClientInterceptors, otelgrpc.UnaryClientInterceptor())
+		streamClientInterceptors = append(streamClientInterceptors, otelgrpc.StreamClientInterceptor())
 	}
 
 	if connectionOptions.OpenTracing {
 		if opentracing.IsGlobalTracerRegistered() {
 			tracer := opentracing.GlobalTracer()
 
-			opts = append(
-				opts,
-				grpc.WithChainUnaryInterceptor(otgrpc.OpenTracingClientInterceptor(tracer)),
-				grpc.WithChainStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer)),
-			)
+			unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
+			streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
 		} else {
 			return nil, errors.New("no global tracer set")
 		}
@@ -152,11 +151,20 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 			prometheus.WithClientStreamRecvHistogram(),
 			prometheus.WithClientHandlingTimeHistogram(),
 		)
-		opts = append(
-			opts,
-			grpc.WithChainUnaryInterceptor(prometheusClientMetrics.UnaryClientInterceptor()),
-			grpc.WithChainStreamInterceptor(prometheusClientMetrics.StreamClientInterceptor()),
-		)
+		unaryClientInterceptors = append(unaryClientInterceptors, prometheusClientMetrics.UnaryClientInterceptor())
+		streamClientInterceptors = append(streamClientInterceptors, prometheusClientMetrics.StreamClientInterceptor())
+	}
+
+	// Add GRPC metrics
+	unaryClientInterceptors = append(unaryClientInterceptors, grpc_prometheus.UnaryClientInterceptor)
+	streamClientInterceptors = append(streamClientInterceptors, grpc_prometheus.StreamClientInterceptor)
+
+	if len(unaryClientInterceptors) > 0 {
+		opts = append(opts, grpc.WithChainUnaryInterceptor(unaryClientInterceptors...))
+	}
+
+	if len(streamClientInterceptors) > 0 {
+		opts = append(opts, grpc.WithChainStreamInterceptor(streamClientInterceptors...))
 	}
 
 	if connectionOptions.Credentials != nil {

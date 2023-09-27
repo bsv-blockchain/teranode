@@ -14,6 +14,7 @@ require (
 	github.com/dolthub/swiss v0.1.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0
+	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/jarcoal/httpmock v1.3.1
 	github.com/jellydator/ttlcache/v3 v3.0.1
@@ -36,6 +37,7 @@ require (
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
 	github.com/rs/zerolog v1.30.0
+	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/stretchr/testify v1.8.4
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.42.0
@@ -199,7 +201,6 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.5.0 // indirect
-	github.com/sercand/kuberesolver/v5 v5.1.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
