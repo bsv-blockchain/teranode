@@ -84,8 +84,8 @@ func InitGlobalTracer(serviceName string) (opentracing.Tracer, io.Closer, error)
 	}
 
 	cfg.ServiceName = serviceName
-	cfg.Sampler.Type = jaeger.SamplerTypeConst
-	cfg.Sampler.Param = 100
+	cfg.Sampler.Type = jaeger.SamplerTypeProbabilistic
+	cfg.Sampler.Param = 0.01
 
 	var tracer opentracing.Tracer
 	var closer io.Closer
