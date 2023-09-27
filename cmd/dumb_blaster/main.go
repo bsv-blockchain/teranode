@@ -6,9 +6,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/bitcoin-sv/ubsv/native"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -19,6 +23,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -49,6 +54,24 @@ func init() {
 		},
 	)
 
+	httpAddr, ok := gocore.Config().Get("tx_blaster_profilerAddr")
+	if !ok {
+		log.Printf("Profiler address not set, defaulting to localhost:6060")
+		httpAddr = "localhost:6060"
+	}
+
+	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
+	if ok && prometheusEndpoint != "" {
+		http.Handle(prometheusEndpoint, promhttp.Handler())
+		log.Printf("Prometheus metrics available at http://%s%s", httpAddr, prometheusEndpoint)
+	}
+
+	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
+	go func() {
+		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
+
+	}()
+
 	propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
 		Prometheus: gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -77,11 +100,17 @@ func main() {
 
 		for range time.NewTicker(5 * time.Second).C {
 			elapsed := time.Since(start)
-			fmt.Printf("TPS: %s\n", FormatFloat(float64(counter.Swap(0))/float64(elapsed.Milliseconds())*1000))
+			log.Printf("TPS: %s\n", FormatFloat(float64(counter.Swap(0))/float64(elapsed.Milliseconds())*1000))
 
 			start = time.Now()
 		}
 	}()
+
+	if broadcast {
+		log.Printf("Starting %d broadcasting worker(s)", workerCount)
+	} else {
+		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
+	}
 
 	for i := 0; i < workerCount; i++ {
 		go worker()
