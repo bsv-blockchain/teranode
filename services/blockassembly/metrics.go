@@ -14,6 +14,8 @@ var (
 	prometheusBlockAssemblyGetMiningCandidateDuration   prometheus.Histogram
 	prometheusBlockAssemblySubmitMiningSolution         prometheus.Counter
 	prometheusBlockAssemblySubmitMiningSolutionDuration prometheus.Histogram
+	prometheusBlockAssemblyUpdateSubtreesTTL            prometheus.Histogram
+	prometheusBlockAssemblyUpdateTxMinedStatus          prometheus.Histogram
 
 	// in BlockAssembler
 	prometheusBlockAssemblerAddTx                       prometheus.Counter
@@ -89,6 +91,24 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "submit_mining_solution_duration_v2",
 			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockAssemblyUpdateSubtreesTTL = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockassembly",
+			Name:      "update_subtrees_ttl_duration",
+			Help:      "Duration of updating subtrees TTL in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockAssemblyUpdateTxMinedStatus = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockassembly",
+			Name:      "update_tx_mined_status_duration",
+			Help:      "Duration of updating tx mined status in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
 		},
 	)

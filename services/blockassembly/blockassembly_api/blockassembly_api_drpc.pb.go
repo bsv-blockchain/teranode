@@ -10,7 +10,6 @@ import (
 	model "github.com/bitcoin-sv/ubsv/model"
 	protojson "google.golang.org/protobuf/encoding/protojson"
 	proto "google.golang.org/protobuf/proto"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	drpc "storj.io/drpc"
 	drpcerr "storj.io/drpc/drpcerr"
 )
@@ -41,7 +40,7 @@ type DRPCBlockAssemblyAPIClient interface {
 	DRPCConn() drpc.Conn
 
 	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
-	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
+	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest) (*AddTxResponse, error)
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -66,8 +65,8 @@ func (c *drpcBlockAssemblyAPIClient) Health(ctx context.Context, in *EmptyMessag
 	return out, nil
 }
 
-func (c *drpcBlockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
-	out := new(emptypb.Empty)
+func (c *drpcBlockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
 	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
 	if err != nil {
 		return nil, err
@@ -104,7 +103,7 @@ func (c *drpcBlockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, i
 
 type DRPCBlockAssemblyAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
-	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
+	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -116,7 +115,7 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) Health(context.Context, *Empty
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
-func (s *DRPCBlockAssemblyAPIUnimplementedServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -210,14 +209,14 @@ func (x *drpcBlockAssemblyAPI_HealthStream) SendAndClose(m *HealthResponse) erro
 
 type DRPCBlockAssemblyAPI_NewChaintipAndHeightStream interface {
 	drpc.Stream
-	SendAndClose(*emptypb.Empty) error
+	SendAndClose(*EmptyMessage) error
 }
 
 type drpcBlockAssemblyAPI_NewChaintipAndHeightStream struct {
 	drpc.Stream
 }
 
-func (x *drpcBlockAssemblyAPI_NewChaintipAndHeightStream) SendAndClose(m *emptypb.Empty) error {
+func (x *drpcBlockAssemblyAPI_NewChaintipAndHeightStream) SendAndClose(m *EmptyMessage) error {
 	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -110,6 +111,19 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// if valid, store the block
 	if err = u.blockchainClient.AddBlock(ctx, block); err != nil {
 		return fmt.Errorf("failed to store block [%w]", err)
+	}
+
+	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
+	subtrees, err := block.GetSubtrees(u.subtreeStore)
+	if err != nil {
+		return fmt.Errorf("failed to get subtrees from block [%w]", err)
+	}
+
+	// add the transactions in this block to the txMeta block hashes
+	if err = blockassembly.UpdateTxMinedStatus(ctx, u.txMetaStore, subtrees, block.Header); err != nil {
+		// TODO this should be a fatal error, but for now we just log it
+		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+		u.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 	}
 
 	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {

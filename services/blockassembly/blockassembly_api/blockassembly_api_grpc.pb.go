@@ -12,7 +12,6 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -34,7 +33,7 @@ const (
 type BlockAssemblyAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
-	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
@@ -57,8 +56,8 @@ func (c *blockAssemblyAPIClient) Health(ctx context.Context, in *EmptyMessage, o
 	return out, nil
 }
 
-func (c *blockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	out := new(emptypb.Empty)
+func (c *blockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -99,7 +98,7 @@ func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *S
 type BlockAssemblyAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
-	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error)
+	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -113,7 +112,7 @@ type UnimplementedBlockAssemblyAPIServer struct {
 func (UnimplementedBlockAssemblyAPIServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*emptypb.Empty, error) {
+func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NewChaintipAndHeight not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {

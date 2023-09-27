@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -25,6 +26,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"storj.io/drpc/drpcmux"
 	"storj.io/drpc/drpcserver"
@@ -305,8 +307,11 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
 	startTime := time.Now()
+	traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
+
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
+		traceSpan.Finish()
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
@@ -321,9 +326,11 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
+	addTxSpan, _ := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:addTx")
 	if err = ba.blockAssembler.AddTx(txHash, txMetadata.Fee, txMetadata.SizeInBytes); err != nil {
 		return nil, err
 	}
+	addTxSpan.Finish()
 
 	err = ba.storeUtxos(ctx, txMetadata.UtxoHashes, txMetadata.LockTime)
 	if err != nil {
@@ -337,7 +344,9 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash.Hash, locktime uint32) error {
 	startUtxoTime := time.Now()
+	utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")
 	defer func() {
+		utxoSpan.Finish()
 		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
 	}()
 
@@ -348,7 +357,7 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash
 	var resp *utxostore.UTXOResponse
 	var err error
 	for _, hash := range utxoHashes {
-		if resp, err = ba.utxoStore.Store(ctx, hash, locktime); err != nil {
+		if resp, err = ba.utxoStore.Store(utxoSpanCtx, hash, locktime); err != nil {
 			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
 		}
 	}
@@ -358,11 +367,13 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash
 
 func (ba *BlockAssembly) getTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
 	startMetaTime := time.Now()
+	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {
+		txMetaSpan.Finish()
 		prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startMetaTime).Seconds())
 	}()
 
-	txMetadata, err := ba.txMetaStore.Get(ctx, txHash)
+	txMetadata, err := ba.txMetaStore.Get(txMetaSpanCtx, txHash)
 	if err != nil {
 		return nil, err
 	}
@@ -534,16 +545,15 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
-	// update the subtree TTLs
-	for _, subtreeHash := range block.Subtrees {
-		go func(subtreeHashBytes []byte) {
-			span, spanCtx := opentracing.StartSpanFromContext(setCtx, "BlockAssembly:SubmitMiningSolution:Subtree")
-			defer span.Finish()
-			err = ba.subtreeStore.SetTTL(spanCtx, subtreeHashBytes, 0)
-			if err != nil {
-				ba.logger.Errorf("failed to update subtree TTL: %w", err)
-			}
-		}(subtreeHash[:])
+	if err = ba.updateSubtreesTTL(setCtx, block); err != nil {
+		ba.logger.Errorf("failed to update subtrees TTL: %w", err)
+	}
+
+	// add the transactions in this block to the txMeta block hashes
+	if err = UpdateTxMinedStatus(ctx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
+		// TODO this should be a fatal error, but for now we just log it
+		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+		ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 	}
 
 	// remove jobs, we have already mined a block
@@ -555,4 +565,49 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
 	}, nil
+}
+
+func (ba *BlockAssembly) updateSubtreesTTL(setCtx context.Context, block *model.Block) (err error) {
+	starTime := time.Now()
+	span, spanCtx := opentracing.StartSpanFromContext(setCtx, "BlockAssembly:SubmitMiningSolution:updateSubtreesTTL")
+	defer func() {
+		span.Finish()
+		prometheusBlockAssemblyUpdateSubtreesTTL.Observe(time.Since(starTime).Seconds())
+	}()
+
+	// update the subtree TTLs
+	for _, subtreeHash := range block.Subtrees {
+		go func(subtreeHashBytes []byte) {
+			err = ba.subtreeStore.SetTTL(spanCtx, subtreeHashBytes, 0)
+			if err != nil {
+				ba.logger.Errorf("failed to update subtree TTL: %w", err)
+			}
+		}(subtreeHash[:])
+	}
+
+	return nil
+}
+
+func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *model.BlockHeader) error {
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockAssemblyUpdateTxMinedStatus.Observe(time.Since(startTime).Seconds())
+	}()
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for _, subtree := range subtrees {
+		nodes := subtree.Nodes
+		g.Go(func() error {
+			for _, node := range nodes {
+				if err := txMetaStore.SetMined(gCtx, node.Hash, blockHeader.Hash()); err != nil {
+					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
+				}
+			}
+
+			return nil
+		})
+	}
+
+	return nil
 }
