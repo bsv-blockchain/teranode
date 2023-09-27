@@ -271,7 +271,6 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32)
 
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	policy.SendKey = true
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
@@ -460,6 +459,13 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 
 	prometheusUtxoSpend.Inc()
 
+	// delete the spend after 1 minutes
+	// this allows someone to send the same transaction again, without triggering an error, in a 1-minute window
+	policy = util.GetAerospikeWritePolicy(0, 0, options...)
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy.Expiration = 60
+	err = s.client.Touch(policy, key)
+
 	return &utxostore.UTXOResponse{
 		Status: int(utxostore_api.Status_OK),
 	}, nil
@@ -508,7 +514,7 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 	return s.Store(ctx, hash, uint32(nLockTime))
 }
 
-func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
