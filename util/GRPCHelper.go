@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
@@ -194,7 +195,6 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	return conn, nil
 }
 
-var prometheusIsRegistered = false
 var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
@@ -256,13 +256,12 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	return server, nil
 }
 
-func RegisterPrometheusMetrics() *prometheus.ServerMetrics {
-	if !prometheusIsRegistered {
-		prometheus_golang.MustRegister(prometheusMetrics)
-		prometheusIsRegistered = true
-	}
+var once sync.Once
 
-	return prometheusMetrics
+func RegisterPrometheusMetrics() {
+	once.Do(func() {
+		_ = prometheus_golang.Register(prometheusMetrics)
+	})
 }
 
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
