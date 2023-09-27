@@ -17,19 +17,37 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var (
-	incompleteTx, _ = bt.NewTxFromString("010000000000000000ef0193a35408b6068499e0d5abd799d3e827d9bfe70c9b75ebe209c91d25072326510000000000ffffffff00e1f505000000001976a914c0a3c167a28cabb9fbb495affa0761e6e74ac60d88ac02404b4c00000000001976a91404ff367be719efa79d76e4416ffb072cd53b208888acde94a905000000001976a91404d03f746652cfcb6cb55119ab473a045137d26588ac00000000")
-	w               *wif.WIF
-	counter         atomic.Int64
-	workerCount     int
-	broadcast       bool
-	client          propagation_api.PropagationAPIClient
+	incompleteTx, _                 = bt.NewTxFromString("010000000000000000ef0193a35408b6068499e0d5abd799d3e827d9bfe70c9b75ebe209c91d25072326510000000000ffffffff00e1f505000000001976a914c0a3c167a28cabb9fbb495affa0761e6e74ac60d88ac02404b4c00000000001976a91404ff367be719efa79d76e4416ffb072cd53b208888acde94a905000000001976a91404d03f746652cfcb6cb55119ab473a045137d26588ac00000000")
+	w                               *wif.WIF
+	counter                         atomic.Int64
+	prometheusWorkers               prometheus.Gauge
+	prometheusProcessedTransactions prometheus.Counter
+	workerCount                     int
+	broadcast                       bool
+	client                          propagation_api.PropagationAPIClient
 )
 
 func init() {
 	unlocker.InjectExternalSignerFn(native.SignMessage)
+
+	prometheusWorkers = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "tx_blaster_workers",
+			Help: "Number of workers running",
+		},
+	)
+
+	prometheusProcessedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_processed_transactions",
+			Help: "Number of transactions processed by the tx blaster",
+		},
+	)
 
 	propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
@@ -73,6 +91,11 @@ func main() {
 }
 
 func worker() {
+	prometheusWorkers.Inc()
+	defer func() {
+		prometheusWorkers.Dec()
+	}()
+
 	for {
 		// Create a new transaction
 		tx := incompleteTx.Clone()
@@ -88,6 +111,7 @@ func worker() {
 			}
 		}
 
+		prometheusProcessedTransactions.Inc()
 		counter.Add(1)
 	}
 }
