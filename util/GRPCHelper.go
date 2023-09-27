@@ -73,7 +73,9 @@ func init() {
 
 func InitGlobalTracer(serviceName string) (opentracing.Tracer, io.Closer, error) {
 	if opentracing.IsGlobalTracerRegistered() {
-		return nil, nil, errors.New("global tracer already registered")
+		// TODO ipfs/go-log registers a tracer in its init() function() :-S
+		//      so we cannot check this here and must overwrite it
+		//return nil, nil, errors.New("global tracer already registered")
 	}
 
 	cfg, err := config.FromEnv()
