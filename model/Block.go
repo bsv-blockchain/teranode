@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -14,7 +15,65 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/sync/errgroup"
 )
+
+var (
+	prometheusBlockFromBytes              prometheus.Histogram
+	prometheusBlockValid                  prometheus.Histogram
+	prometheusBlockCheckMerkleRoot        prometheus.Histogram
+	prometheusBlockGetSubtrees            prometheus.Histogram
+	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
+)
+
+func init() {
+	prometheusBlockFromBytes = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "block",
+			Name:      "from_bytes",
+			Help:      "Duration of BlockFromBytes",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockValid = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "block",
+			Name:      "valid",
+			Help:      "Duration of Block.Valid",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockCheckMerkleRoot = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "block",
+			Name:      "check_merkle_root",
+			Help:      "Duration of Block.CheckMerkleRoot",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockGetSubtrees = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "block",
+			Name:      "get_subtrees",
+			Help:      "Duration of Block.GetSubtrees",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockGetAndValidateSubtrees = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "block",
+			Name:      "get_and_validate_subtrees",
+			Help:      "Duration of Block.GetAndValidateSubtrees",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+}
 
 type Block struct {
 	Header           *BlockHeader      `json:"header"`
@@ -24,10 +83,11 @@ type Block struct {
 	Subtrees         []*chainhash.Hash `json:"subtrees"`
 
 	// local
-	hash          *chainhash.Hash
-	subtreeLength uint64
-	subtreeSlices []*util.Subtree
-	txMap         *util.SplitSwissMapUint64
+	hash            *chainhash.Hash
+	subtreeLength   uint64
+	subtreeSlices   []*util.Subtree
+	subtreeSlicesMu sync.RWMutex
+	txMap           *util.SplitSwissMapUint64
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
@@ -42,7 +102,9 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 }
 
 func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
+	startTime := time.Now()
 	defer func() {
+		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
 		if r := recover(); r != nil {
 			fmt.Println("Recovered in NewBlockFromBytes", r)
 		}
@@ -122,6 +184,11 @@ func (b *Block) String() string {
 }
 
 func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, currentChain []*BlockHeader) (bool, error) {
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockValid.Observe(time.Since(startTime).Seconds())
+	}()
+
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, err := b.Header.HasMetTargetDifficulty()
 	if !headerValid {
@@ -239,6 +306,7 @@ func (b *Block) checkDuplicateTransactions() error {
 	return nil
 }
 
+// TODO this needs to be checked !!!
 // func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChain []*BlockHeader) error {
 // 	if b.txMap == nil {
 // 		return fmt.Errorf("txMap is nil, cannot check transaction order")
@@ -293,34 +361,74 @@ func (b *Block) checkDuplicateTransactions() error {
 // 	return nil
 // }
 
+func (b *Block) GetSubtrees(subtreeStore blob.Store) ([]*util.Subtree, error) {
+	startTime := time.Now()
+	b.subtreeSlicesMu.RLock()
+	defer func() {
+		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
+		b.subtreeSlicesMu.Unlock()
+	}()
+
+	if len(b.subtreeSlices) == 0 {
+		// get the subtree slices from the subtree store
+		if err := b.GetAndValidateSubtrees(context.Background(), subtreeStore); err != nil {
+			return nil, err
+		}
+	}
+
+	return b.subtreeSlices, nil
+}
+
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockGetAndValidateSubtrees.Observe(time.Since(startTime).Seconds())
+	}()
+
+	b.subtreeSlicesMu.Lock()
+	defer func() {
+		b.subtreeSlicesMu.Unlock()
+	}()
+
 	b.subtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 
 	var subtreeSize int
 	var subtreeBytes []byte
 	var err error
+
+	g, gCtx := errgroup.WithContext(ctx)
 	for i, subtreeHash := range b.Subtrees {
-		subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:])
-		if err != nil {
-			return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
-		}
-
-		subtree := &util.Subtree{}
-		err = subtree.Deserialize(subtreeBytes)
-		if err != nil {
-			return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
-		}
-
-		if i == 0 {
-			subtreeSize = subtree.Length()
-		} else {
-			// all subtrees need to be the same size as the first tree, except the last one
-			if subtree.Length() != subtreeSize && i != len(b.Subtrees)-1 {
-				return fmt.Errorf("subtree %d has length %d, expected %d", i, subtree.Length(), subtreeSize)
+		i := i
+		subtreeHash := subtreeHash
+		g.Go(func() error {
+			subtreeBytes, err = subtreeStore.Get(gCtx, subtreeHash[:])
+			if err != nil {
+				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 			}
-		}
 
-		b.subtreeSlices[i] = subtree
+			subtree := &util.Subtree{}
+			err = subtree.Deserialize(subtreeBytes)
+			if err != nil {
+				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+			}
+
+			if i == 0 {
+				subtreeSize = subtree.Length()
+			} else {
+				// all subtrees need to be the same size as the first tree, except the last one
+				if subtree.Length() != subtreeSize && i != len(b.Subtrees)-1 {
+					return fmt.Errorf("subtree %d has length %d, expected %d", i, subtree.Length(), subtreeSize)
+				}
+			}
+
+			b.subtreeSlices[i] = subtree
+
+			return nil
+		})
+
+		if err = g.Wait(); err != nil {
+			return fmt.Errorf("failed to get and validate subtrees: %v", err)
+		}
 	}
 
 	// TODO something with conflicts
@@ -332,6 +440,11 @@ func (b *Block) CheckMerkleRoot() (err error) {
 	if len(b.Subtrees) != len(b.subtreeSlices) {
 		return fmt.Errorf("number of subtrees does not match number of subtree slices")
 	}
+
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockCheckMerkleRoot.Observe(time.Since(startTime).Seconds())
+	}()
 
 	hashes := make([]*chainhash.Hash, len(b.Subtrees))
 	for i, subtree := range b.subtreeSlices {
