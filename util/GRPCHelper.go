@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
@@ -71,11 +72,11 @@ func init() {
 }
 
 func InitGlobalTracer(serviceName string) (opentracing.Tracer, io.Closer, error) {
-	if opentracing.IsGlobalTracerRegistered() {
-		// TODO ipfs/go-log registers a tracer in its init() function() :-S
-		//      so we cannot check this here and must overwrite it
-		//return nil, nil, errors.New("global tracer already registered")
-	}
+	// TODO ipfs/go-log registers a tracer in its init() function() :-S
+	// if opentracing.IsGlobalTracerRegistered() {
+	//      so we cannot check this here and must overwrite it
+	//return nil, nil, errors.New("global tracer already registered")
+	// }
 
 	cfg, err := config.FromEnv()
 	if err != nil {
@@ -155,6 +156,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 		unaryClientInterceptors = append(unaryClientInterceptors, prometheusClientMetrics.UnaryClientInterceptor())
 		streamClientInterceptors = append(streamClientInterceptors, prometheusClientMetrics.StreamClientInterceptor())
+
 		prometheusRegisterClientOnce.Do(func() {
 			prometheus_golang.MustRegister(prometheusClientMetrics)
 		})
@@ -193,7 +195,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	return conn, nil
 }
 
-var prometheusIsRegistered = false
+var prometheusRegisterServerOnce sync.Once
+var prometheusRegisterClientOnce sync.Once
+
 var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
@@ -255,13 +259,10 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	return server, nil
 }
 
-func RegisterPrometheusMetrics() *prometheus.ServerMetrics {
-	if !prometheusIsRegistered {
+func RegisterPrometheusMetrics() {
+	prometheusRegisterServerOnce.Do(func() {
 		prometheus_golang.MustRegister(prometheusMetrics)
-		prometheusIsRegistered = true
-	}
-
-	return prometheusMetrics
+	})
 }
 
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
