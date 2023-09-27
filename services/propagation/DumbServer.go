@@ -13,8 +13,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // PropagationServer type carries the logger within it
@@ -69,18 +67,18 @@ func (ps *DumbPropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ps *DumbPropagationServer) Health(_ context.Context, _ *emptypb.Empty) (*propagation_api.HealthResponse, error) {
+func (ps *DumbPropagationServer) Health(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	prometheusHealth.Inc()
 	return &propagation_api.HealthResponse{
 		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: uint32(time.Now().Unix()),
 	}, nil
 }
 
-func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*emptypb.Empty, error) {
+func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	prometheusProcessedTransactions.Inc()
 
-	return &emptypb.Empty{}, nil
+	return &propagation_api.EmptyMessage{}, nil
 }
 
 func (ps *DumbPropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
