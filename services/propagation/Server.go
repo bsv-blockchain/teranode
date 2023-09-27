@@ -24,6 +24,8 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"storj.io/drpc/drpcmux"
+	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -83,12 +85,99 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
+	// Experimental DRPC server - to test throughput at scale
+	drpcAddress, ok := gocore.Config().Get("propagation_drpcListenAddress")
+	if ok {
+		err = ps.drpcServer(ctx, drpcAddress)
+		if err != nil {
+			ps.logger.Errorf("failed to start DRPC server: %v", err)
+		}
+	}
+
+	// Experimental fRPC server - to test throughput at scale
+	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
+	if ok {
+		err = ps.frpcServer(ctx, frpcAddress)
+		if err != nil {
+			ps.logger.Errorf("failed to start fRPC server: %v", err)
+		}
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (ps *PropagationServer) drpcServer(ctx context.Context, drpcAddress string) error {
+	ps.logger.Infof("Starting DRPC server on %s", drpcAddress)
+	m := drpcmux.New()
+
+	// register the proto-specific methods on the mux
+	err := propagation_api.DRPCRegisterPropagationAPI(m, ps)
+	if err != nil {
+		return fmt.Errorf("failed to register DRPC service: %v", err)
+	}
+	// create the drpc server
+	s := drpcserver.New(m)
+
+	// listen on a tcp socket
+	var lis net.Listener
+	lis, err = net.Listen("tcp", drpcAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen on drpc server: %v", err)
+	}
+
+	// run the server
+	// N.B.: if you want TLS, you need to wrap the net.Listener with
+	// TLS before passing to Serve here.
+	go func() {
+		err = s.Serve(ctx, lis)
+		if err != nil {
+			ps.logger.Errorf("failed to serve drpc: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (ps *PropagationServer) frpcServer(ctx context.Context, frpcAddress string) error {
+	ps.logger.Infof("Starting fRPC server on %s", frpcAddress)
+
+	frpcBa := &fRPC_Propagation{
+		ps: ps,
+	}
+
+	s, err := propagation_api.NewServer(frpcBa, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create fRPC server: %v", err)
+	}
+
+	concurrency, ok := gocore.Config().GetInt("propagation_frpcConcurrency")
+	if ok {
+		ps.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
+		s.SetConcurrency(uint64(concurrency))
+	}
+
+	// run the server
+	go func() {
+		err = s.Start(frpcAddress)
+		if err != nil {
+			ps.logger.Errorf("failed to serve frpc: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		err = s.Shutdown()
+		if err != nil {
+			ps.logger.Errorf("failed to shutdown frpc server: %v", err)
+		}
+	}()
 
 	return nil
 }

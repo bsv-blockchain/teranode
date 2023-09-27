@@ -112,8 +112,9 @@ type Ipv6MulticastMsg struct {
 }
 
 type PropagationServer struct {
-	client    propagation_api.PropagationAPIClient
-	lastError *time.Time
+	extra.PropagationServer
+	lastError   error
+	lastErrorAt *time.Time
 }
 
 type Worker struct {
@@ -145,7 +146,7 @@ func NewWorker(
 	satoshisPerOutput uint64,
 	coinbasePrivKey string,
 	rateLimiter *rate.Limiter,
-	propagationServers map[string]propagation_api.PropagationAPIClient,
+	propagationServers map[string]extra.PropagationServer,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -170,7 +171,7 @@ func NewWorker(
 	propServers := make(map[string]PropagationServer, len(propagationServers))
 	for addr, p := range propagationServers {
 		propServers[addr] = PropagationServer{
-			client: p,
+			PropagationServer: p,
 		}
 	}
 
@@ -670,13 +671,25 @@ func (w *Worker) sendToPropagationServer(ctx context.Context, p PropagationServe
 	defer traceSpan.Finish()
 
 	traceSpan.SetTag("server", address)
+	var err error
 
-	_, err := p.client.ProcessTransaction(traceSpan.Ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: txExtendedBytes,
-	})
+	if p.FRPC != nil {
+		_, err = p.FRPC.PropagationAPI.ProcessTransaction(traceSpan.Ctx, &propagation_api.PropagationApiProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+	} else if p.DRPC != nil {
+		_, err = p.DRPC.ProcessTransaction(traceSpan.Ctx, &propagation_api.ProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+	} else {
+		_, err = p.GRPC.ProcessTransaction(traceSpan.Ctx, &propagation_api.ProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+	}
 	now := time.Now()
-	if p.lastError == nil || now.Sub(*p.lastError) > time.Second*10 {
-		p.lastError = &now
+	if p.lastError == nil || now.Sub(*p.lastErrorAt) > time.Second*10 {
+		p.lastError = err
+		p.lastErrorAt = &now
 	}
 
 	return err

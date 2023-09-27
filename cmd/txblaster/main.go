@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/Shopify/sarama"
+	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/worker"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -32,6 +34,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/resolver"
+	"storj.io/drpc/drpcconn"
 )
 
 var logger utils.Logger
@@ -198,11 +201,6 @@ func main() {
 		defer closer.Close()
 	}
 
-	propagationGrpcAddresses, ok := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	if !ok {
-		panic("no propagation_grpcAddresses setting found")
-	}
-
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
@@ -212,22 +210,12 @@ func main() {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
-	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
-	for _, propagationGrpcAddress := range propagationGrpcAddresses {
-		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-			MaxRetries:  3,
-		})
-		if err != nil {
-			panic(err)
-		}
-		propagationServers[propagationGrpcAddress] = propagation_api.NewPropagationAPIClient(pConn)
-	}
-
+	propagationServers := setPropagationServers(ctx)
 	if len(propagationServers) == 0 {
 		panic("No suitable propagation server connection found")
 	}
+
+	logger.Infof("Using %d propagation servers: %s", len(propagationServers), propagationServers)
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)
@@ -307,4 +295,74 @@ func main() {
 	if err := g.Wait(); err != nil {
 		logger.Errorf("error occurred in tx blaster: %v", err)
 	}
+}
+
+func setPropagationServers(ctx context.Context) map[string]extra.PropagationServer {
+	propagationServers := make(map[string]extra.PropagationServer)
+
+	propagationGrpcAddresses, okGrpc := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+	if !okGrpc {
+		panic("no propagation_grpcAddresses setting found")
+	}
+
+	for _, propagationGrpcAddress := range propagationGrpcAddresses {
+		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		host := strings.Split(propagationGrpcAddress, ":")[0]
+		propagationServers[host] = extra.PropagationServer{
+			GRPC: propagation_api.NewPropagationAPIClient(pConn),
+		}
+	}
+
+	if propagationDrpcAddresses, ok := gocore.Config().GetMulti("propagation_drpcAddresses", "|"); ok {
+		for _, propagationDrpcAddress := range propagationDrpcAddresses {
+			rawconn, err := net.Dial("tcp", propagationDrpcAddress)
+			if err != nil {
+				panic(err)
+			}
+			conn := drpcconn.New(rawconn)
+			drpcClient := propagation_api.NewDRPCPropagationAPIClient(conn)
+
+			host := strings.Split(propagationDrpcAddress, ":")[0]
+			if p, ok := propagationServers[host]; ok {
+				p.DRPC = drpcClient
+			} else {
+				propagationServers[host] = extra.PropagationServer{
+					DRPC: drpcClient,
+				}
+			}
+		}
+	}
+
+	if propagationFrpcAddresses, ok := gocore.Config().GetMulti("propagation_frpcAddresses", "|"); ok {
+		for _, propagationFrpcAddress := range propagationFrpcAddresses {
+			client, err := propagation_api.NewClient(nil, nil)
+			if err != nil {
+				panic(err)
+			}
+
+			err = client.Connect(propagationFrpcAddress)
+			if err != nil {
+				panic(err)
+			} else {
+				host := strings.Split(propagationFrpcAddress, ":")[0]
+				if p, ok := propagationServers[host]; ok {
+					p.FRPC = client
+				} else {
+					propagationServers[host] = extra.PropagationServer{
+						FRPC: client,
+					}
+				}
+			}
+		}
+	}
+
+	return propagationServers
 }
