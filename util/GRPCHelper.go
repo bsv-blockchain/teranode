@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
@@ -154,13 +152,13 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 			prometheus.WithClientStreamRecvHistogram(),
 			prometheus.WithClientHandlingTimeHistogram(),
 		)
+
 		unaryClientInterceptors = append(unaryClientInterceptors, prometheusClientMetrics.UnaryClientInterceptor())
 		streamClientInterceptors = append(streamClientInterceptors, prometheusClientMetrics.StreamClientInterceptor())
+		prometheusRegisterClientOnce.Do(func() {
+			prometheus_golang.MustRegister(prometheusClientMetrics)
+		})
 	}
-
-	// Add GRPC metrics
-	unaryClientInterceptors = append(unaryClientInterceptors, grpc_prometheus.UnaryClientInterceptor)
-	streamClientInterceptors = append(streamClientInterceptors, grpc_prometheus.StreamClientInterceptor)
 
 	if len(unaryClientInterceptors) > 0 {
 		opts = append(opts, grpc.WithChainUnaryInterceptor(unaryClientInterceptors...))
@@ -195,6 +193,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	return conn, nil
 }
 
+var prometheusIsRegistered = false
 var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
@@ -256,12 +255,13 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 	return server, nil
 }
 
-var once sync.Once
+func RegisterPrometheusMetrics() *prometheus.ServerMetrics {
+	if !prometheusIsRegistered {
+		prometheus_golang.MustRegister(prometheusMetrics)
+		prometheusIsRegistered = true
+	}
 
-func RegisterPrometheusMetrics() {
-	once.Do(func() {
-		_ = prometheus_golang.Register(prometheusMetrics)
-	})
+	return prometheusMetrics
 }
 
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {

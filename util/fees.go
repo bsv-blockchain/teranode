@@ -21,7 +21,7 @@ func GetFees(btTx *bt.Tx) (uint64, error) {
 		return fees, nil
 	}
 
-	if !IsExtended(btTx) {
+	if !btTx.IsExtended() {
 		return 0, fmt.Errorf("cannot get fees for non extended tx")
 	}
 

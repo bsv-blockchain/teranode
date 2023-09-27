@@ -2,6 +2,10 @@ package propagation
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -38,6 +42,19 @@ func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
+	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
+	if ok {
+		var serverURL *url.URL
+		serverURL, err = url.Parse(httpAddress)
+		if err != nil {
+			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
+		}
+		err = ps.StartHTTPServer(ctx, serverURL)
+		if err != nil {
+			return fmt.Errorf("HTTP server failed [%w]", err)
+		}
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
@@ -64,4 +81,32 @@ func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *pr
 	prometheusProcessedTransactions.Inc()
 
 	return &emptypb.Empty{}, nil
+}
+
+func (ps *DumbPropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
+	// start a simple http listener that handles incoming transaction requests
+	http.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(err.Error()))
+			return
+		}
+		if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+			Tx: body,
+		}); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(err.Error()))
+			return
+		}
+	})
+
+	go func() {
+		ps.logger.Infof("[%s] HTTP service listening on %s", serverURL)
+		if err := http.ListenAndServe(serverURL.Host, nil); err != nil {
+			ps.logger.Errorf("HTTP server failed [%s]", err)
+		}
+	}()
+
+	return nil
 }

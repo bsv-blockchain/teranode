@@ -229,7 +229,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 		return &emptypb.Empty{}, fmt.Errorf("received coinbase transaction: %s", btTx.TxID())
 	}
 
-	if !util.IsExtended(btTx) {
+	if !btTx.IsExtended() {
 		return &emptypb.Empty{}, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
 	}
 
