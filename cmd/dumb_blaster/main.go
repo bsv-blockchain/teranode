@@ -3,16 +3,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/native"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -34,7 +36,9 @@ var (
 	prometheusProcessedTransactions prometheus.Counter
 	workerCount                     int
 	broadcast                       bool
-	client                          propagation_api.PropagationAPIClient
+	grpcClient                      propagation_api.PropagationAPIClient
+	useHttp                         bool
+	httpUrl                         *url.URL
 )
 
 func init() {
@@ -72,24 +76,33 @@ func init() {
 
 	}()
 
-	prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
-	log.Printf("Using prometheus grpc metrics: %v", prom)
-
-	propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
-		Prometheus: prom,
-		MaxRetries: 3,
-	})
-	if err != nil {
-		panic(err)
-	}
-	client = propagation_api.NewPropagationAPIClient(conn)
 }
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.BoolVar(&broadcast, "broadcast", false, "Broadcast to propagation server")
+	flag.BoolVar(&useHttp, "http", false, "Use HTTP instead of gRPC")
 	flag.Parse()
+
+	if useHttp {
+		httpAddresses, _ := gocore.Config().GetMulti("propagation_httpAddresses", "|")
+		httpUrl, _ = url.Parse(httpAddresses[0])
+		log.Printf("Using HTTP propagation server: %v", httpUrl)
+
+	} else {
+		prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+		log.Printf("Using prometheus grpc metrics: %v", prom)
+
+		propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+		conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
+			Prometheus: prom,
+			MaxRetries: 3,
+		})
+		if err != nil {
+			panic(err)
+		}
+		grpcClient = propagation_api.NewPropagationAPIClient(conn)
+	}
 
 	var err error
 
@@ -149,11 +162,36 @@ func worker() {
 }
 
 func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error {
-	_, err := client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: txExtendedBytes,
-	})
+	if useHttp {
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/tx", httpUrl.String()), bytes.NewReader(txExtendedBytes))
+		if err != nil {
+			return err
+		}
 
-	return err
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		// Create an HTTP client and send the request
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("Error sending request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Check the response status
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("POST request failed with status: %v", resp.Status)
+		}
+
+		return nil
+
+	} else {
+		_, err := grpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+
+		return err
+	}
 }
 
 func FormatFloat(f float64) string {

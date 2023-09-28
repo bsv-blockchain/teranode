@@ -24,7 +24,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-build: build-dashboard build-ubsv build-status build-tx-blaster build-dumb-blaster
+build: build-dashboard build-ubsv build-status build-tx-blaster build-dumb-blaster build-aerospiketest
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard
