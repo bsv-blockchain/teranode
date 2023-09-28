@@ -35,7 +35,7 @@ func New(logger utils.Logger, timeout string, addr string, port int) *Ubsv {
 	}
 }
 
-func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Ubsv) Work(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -74,73 +74,7 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 				}
 
 				counter++
-
-				spenderCh <- &hash
 			}
-		}
-
-		// logger.Infof("Storer finished.")
-	}()
-
-}
-
-func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int) {
-	wg.Add(1)
-
-	spendingTxHash, err := chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
-	if err != nil {
-		panic(err)
-	}
-
-	go func() {
-		defer wg.Done()
-
-		var counter int
-
-		defer func() {
-			counterCh <- counter
-		}()
-
-		for hash := range spenderCh {
-			resp, err := s.store.Spend(ctx, hash, spendingTxHash)
-			if err != nil {
-				s.logger.Warnf("spend failed: %v\n", err)
-			}
-
-			if resp != nil && resp.Status != 0 {
-				s.logger.Warnf("spend failed: status=%d\n", resp.Status)
-			}
-
-			counter++
-
-			deleterCh <- hash
-		}
-	}()
-}
-
-func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int) {
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		var counter int
-
-		defer func() {
-			counterCh <- counter
-		}()
-
-		for hash := range deleteCh {
-			resp, err := s.store.Delete(ctx, hash)
-			if err != nil {
-				s.logger.Warnf("delete failed: %v\n", err)
-			}
-
-			if resp != nil && resp.Status != 0 {
-				s.logger.Warnf("delete failed: status=%d\n", resp.Status)
-			}
-
-			counter++
 		}
 	}()
 }

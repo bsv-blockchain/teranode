@@ -13,18 +13,15 @@ import (
 	_ "net/http/pprof"
 
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/direct"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/direct"
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/nothing"
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/simple"
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/ubsv"
 	"github.com/ordishs/gocore"
 )
 
 type Strategy interface {
-	Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int)
-	Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int)
-	Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int)
+	Work(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, counterCh chan int)
 }
 
 var (
@@ -36,23 +33,13 @@ var (
 	strategyStr   string
 	aerospikeHost string
 	aerospikePort int
-
-	bufferSize int
-
-	wgStorers        = &sync.WaitGroup{}
-	wgSpenders       = &sync.WaitGroup{}
-	wgDeleters       = &sync.WaitGroup{}
-	wgCounters       = &sync.WaitGroup{}
-	spenderCh        = make(chan *chainhash.Hash, bufferSize)
-	deleterCh        = make(chan *chainhash.Hash, bufferSize)
-	storerCounterCh  = make(chan int)
-	spenderCounterCh = make(chan int)
-	deleterCounterCh = make(chan int)
-	shutdownOnce     sync.Once
+	wgStorers     = &sync.WaitGroup{}
+	wgCounters    = &sync.WaitGroup{}
+	workCounterCh = make(chan int)
+	shutdownOnce  sync.Once
 )
 
 func main() {
-
 	flag.IntVar(&transactions, "transactions", 100, "number of transactions to process")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
 	flag.StringVar(&timeoutStr, "timeout", "", "timeout for aerospike")
@@ -60,7 +47,6 @@ func main() {
 	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, direct, simple, nothing]")
 	flag.StringVar(&aerospikeHost, "aerospike_host", "", "aerospike host")
 	flag.IntVar(&aerospikePort, "aerospike_port", 3000, "aerospike port")
-	flag.IntVar(&bufferSize, "buffer_size", 1000, "buffer size")
 
 	flag.Parse()
 
@@ -117,18 +103,14 @@ func main() {
 		os.Exit(1)
 	}()
 
-	counterWorker("Stored ", wgCounters, storerCounterCh)
-	counterWorker("Spent  ", wgCounters, spenderCounterCh)
-	counterWorker("Deleted", wgCounters, deleterCounterCh)
+	counterWorker("Work  ", wgCounters, workCounterCh)
 
 	for i := 0; i < workers; i++ {
 		txCount := split
 		if i == 0 {
 			txCount += remainder
 		}
-		strategy.Deleter(ctx, wgDeleters, deleterCh, deleterCounterCh)
-		strategy.Spender(ctx, wgSpenders, spenderCh, deleterCh, spenderCounterCh)
-		strategy.Storer(ctx, i, txCount, wgStorers, spenderCh, storerCounterCh)
+		strategy.Work(ctx, i, txCount, wgStorers, workCounterCh)
 	}
 
 	shutdown()
@@ -142,23 +124,8 @@ func shutdown() {
 		// Wait for the storers to finish
 		wgStorers.Wait()
 
-		// Close the spender channel
-		logger.Infof("Closing spender channel")
-		close(spenderCh)
-
-		wgSpenders.Wait()
-
-		// Close the deleter channel
-		logger.Infof("Closing deleter channel")
-		close(deleterCh)
-
-		// Wait for the spender to finish
-		wgDeleters.Wait()
-
 		// Close the counters
-		close(storerCounterCh)
-		close(spenderCounterCh)
-		close(deleterCounterCh)
+		close(workCounterCh)
 
 		// Close the finished channel
 		wgCounters.Wait()

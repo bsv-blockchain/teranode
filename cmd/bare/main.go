@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+var txCounter atomic.Uint64
 var byteCounter atomic.Uint64
 
 func main() {
@@ -20,13 +21,8 @@ func main() {
 	// Middleware
 	e.Use(middleware.Recover())
 
-	throttler := make(chan struct{}, 10000)
-
 	// Routes
 	e.POST("/tx", func(c echo.Context) error {
-		// Throttle the request
-		throttler <- struct{}{}
-
 		// Read the request body to track bytes sent
 		data, err := io.ReadAll(c.Request().Body)
 		if err != nil {
@@ -34,15 +30,14 @@ func main() {
 		}
 
 		byteCounter.Add(uint64(len(data)))
-
-		<-throttler
+		txCounter.Add(1)
 
 		return c.String(http.StatusOK, "OK")
 	})
 
 	e.GET("/count", func(c echo.Context) error {
 		// Return the total bytes sent
-		return c.String(http.StatusOK, fmt.Sprintf("Total bytes sent: %d", byteCounter.Load()))
+		return c.String(http.StatusOK, fmt.Sprintf("Total bytes sent: %d, %d requests\n", byteCounter.Load(), txCounter.Load()))
 	})
 
 	// Start the server with more optimized settings
