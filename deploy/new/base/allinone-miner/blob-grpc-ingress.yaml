@@ -1,0 +1,16 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: miner-ingressroute-tcp-8091
+spec:
+  entryPoints:
+    - blob-grpc
+  routes:
+  - match: HostSNI(`miner.allinone-miner.ubsv.dev`)
+    services:
+    - name: miner
+      port: 8091
+  tls:
+    # use miner-cert
+#    secretName: miner-tls
+    passthrough: true

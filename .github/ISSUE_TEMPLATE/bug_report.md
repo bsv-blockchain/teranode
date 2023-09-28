@@ -29,7 +29,7 @@ If applicable, add screenshots to help explain your problem.
  - Version [e.g. 22]
 
 **UBSV Env**
-- you can get that at the start of your program and looks something like 
+- you can get that at the start of your program and looks something like
 ```
 
 SETTINGS_CONTEXT
@@ -44,7 +44,7 @@ advertisingURL=
 blobserver_clientName=M1
 blobserver_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
 blobserver_grpcListenAddress=:8091
-blobserver_httpAddress=https://m1.scaling.ubsv.dev:8090
+blobserver_httpAddress=https://m1.scaling.ubsv.dev
 blobserver_httpListenAddress=:8090
 blobserver_http_port=80
 blobserver_https_port=443

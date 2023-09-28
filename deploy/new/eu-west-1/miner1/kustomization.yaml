@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../base/allinone-miner
+
+namespace: miner1
+
+nameSuffix: "-1"
+# add env var
+
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: SETTINGS_CONTEXT
+          value: allinone-miner.miner.1
+    target:
+      kind: Deployment
+      name: miner
+  - patch: |-
+      - op: replace
+        path: spec.routes[0].match
+        value: miner1.ubsv.dev
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: miner1.ubsv.dev
+    target:
+      kind: IngressRouteTCP

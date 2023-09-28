@@ -1,0 +1,15 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: m1-ingressroute-tcp-8093
+  namespace: coinbase-service
+spec:
+  entryPoints:
+    - coin-grpc
+  routes:
+  - match: HostSNI(`coinbase.scaling.ubsv.dev`)
+    services:
+    - name: coinbase-service
+      port: 8093
+  tls:
+    passthrough: true
