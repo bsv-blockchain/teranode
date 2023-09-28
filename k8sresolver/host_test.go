@@ -42,4 +42,11 @@ func Test_parseTarget(t *testing.T) {
 		require.Equal(t, "example.com", host)
 		require.Equal(t, "1888", port)
 	})
+
+	t.Run("should return host and default port when target is ipv4", func(t *testing.T) {
+		host, port, err := parseTarget("k8s://validation-service.validation-service.svc.cluster.local:8081", defaultPort)
+		require.NoError(t, err)
+		require.Equal(t, "validation-service.validation-service.svc.cluster.local", host)
+		require.Equal(t, "8081", port)
+	})
 }
