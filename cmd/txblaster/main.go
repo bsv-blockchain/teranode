@@ -23,6 +23,7 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/worker"
+	"github.com/bitcoin-sv/ubsv/k8sresolver"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -204,6 +205,7 @@ func main() {
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		resolver.Register(k8sresolver.NewBuilder(logger))
 		resolver.SetDefaultScheme("k8s")
 	} else if grpcResolver == "kubernetes" {
 		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")

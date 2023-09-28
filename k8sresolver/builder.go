@@ -21,8 +21,8 @@ var (
 )
 
 func init() {
-	logger.Infof("[k8s] GRPC k8sresolver init")
-	resolver.Register(NewBuilder(logger))
+	//logger.Infof("[k8s] GRPC k8sresolver init")
+	//resolver.Register(NewBuilder(logger))
 }
 
 // NewBuilder creates a k8sBuilder which is used to factory K8S service resolvers.

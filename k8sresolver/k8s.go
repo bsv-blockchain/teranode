@@ -7,7 +7,6 @@ import (
 
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -27,7 +26,6 @@ type serviceClient struct {
 	k8s          kubernetes.Interface
 	namespace    string
 	logger       utils.Logger
-	resolveTTL   time.Duration
 	resolveCache *ttlcache.Cache[string, []string]
 }
 
@@ -43,13 +41,10 @@ func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, 
 		return nil, fmt.Errorf("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
 	}
 
-	resolveTTL, _ := gocore.Config().GetInt("k8s_resolver_ttl", 10)
-
 	return &serviceClient{
 		k8s:          clientset,
 		namespace:    namespace,
 		logger:       logger,
-		resolveTTL:   time.Duration(resolveTTL) * time.Second,
 		resolveCache: ttlcache.New[string, []string](),
 	}, nil
 }
@@ -76,8 +71,8 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 		}
 	}
 
-	if s.resolveTTL > 0 {
-		_ = s.resolveCache.Set(cacheKey, eps, s.resolveTTL)
+	if resolveTTL > 0 {
+		_ = s.resolveCache.Set(cacheKey, eps, resolveTTL)
 	}
 
 	return eps, nil
