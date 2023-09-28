@@ -37,16 +37,11 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		return nil, err
 	}
 
-	txMetadata, err := f.ba.getTxMeta(ctx, txHash)
-	if err != nil {
+	if err = f.ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
 		return nil, err
 	}
 
-	if err = f.ba.blockAssembler.AddTx(txHash, txMetadata.Fee, txMetadata.SizeInBytes); err != nil {
-		return nil, err
-	}
-
-	err = f.ba.storeUtxos(ctx, txMetadata.UtxoHashes, txMetadata.LockTime)
+	err = f.ba.storeUtxos(ctx, req.Utxos, req.Locktime)
 	if err != nil {
 		return nil, err
 	}

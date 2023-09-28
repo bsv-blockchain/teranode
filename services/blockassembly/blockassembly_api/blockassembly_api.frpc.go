@@ -209,7 +209,11 @@ type BlockassemblyApiAddTxRequest struct {
 	error error
 	flags uint8
 
-	Txid []byte
+	Txid     []byte
+	Fee      uint64
+	Size     uint64
+	Locktime uint32
+	Utxos    [][]byte
 }
 
 func NewBlockassemblyApiAddTxRequest() *BlockassemblyApiAddTxRequest {
@@ -229,7 +233,11 @@ func (x *BlockassemblyApiAddTxRequest) Encode(b *polyglot.Buffer) {
 			return
 		}
 		polyglot.Encoder(b).Uint8(x.flags)
-		polyglot.Encoder(b).Bytes(x.Txid)
+		polyglot.Encoder(b).Bytes(x.Txid).Uint64(x.Fee).Uint64(x.Size).Uint32(x.Locktime)
+		polyglot.Encoder(b).Slice(uint32(len(x.Utxos)), polyglot.BytesKind)
+		for _, v := range x.Utxos {
+			polyglot.Encoder(b).Bytes(v)
+		}
 	}
 }
 
@@ -259,6 +267,32 @@ func (x *BlockassemblyApiAddTxRequest) decode(d *polyglot.Decoder) error {
 	x.Txid, err = d.Bytes(nil)
 	if err != nil {
 		return err
+	}
+	x.Fee, err = d.Uint64()
+	if err != nil {
+		return err
+	}
+	x.Size, err = d.Uint64()
+	if err != nil {
+		return err
+	}
+	x.Locktime, err = d.Uint32()
+	if err != nil {
+		return err
+	}
+	var sliceSize uint32
+	sliceSize, err = d.Slice(polyglot.BytesKind)
+	if err != nil {
+		return err
+	}
+	if uint32(len(x.Utxos)) != sliceSize {
+		x.Utxos = make([][]byte, sliceSize)
+	}
+	for i := uint32(0); i < sliceSize; i++ {
+		x.Utxos[i], err = d.Bytes([]byte{})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -100,14 +100,26 @@ func (s Client) connectFRPC() {
 	}
 }
 
-func (s Client) Store(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (s Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error) {
+	utxoBytes := make([][]byte, len(utxoHashes))
+	for i, h := range utxoHashes {
+		utxoBytes[i] = h[:]
+	}
 	req := &blockassembly_api.AddTxRequest{
-		Txid: hash[:],
+		Txid:     hash[:],
+		Fee:      fee,
+		Size:     size,
+		Locktime: locktime,
+		Utxos:    utxoBytes,
 	}
 
 	if s.frpcClient != nil {
 		if _, err := s.frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
-			Txid: hash[:],
+			Txid:     hash[:],
+			Fee:      fee,
+			Size:     size,
+			Locktime: locktime,
+			Utxos:    utxoBytes,
 		}); err != nil {
 			return false, err
 		}
