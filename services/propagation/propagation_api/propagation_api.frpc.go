@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	NilDecode = errors.New("cannot decode into a nil root struct")
+	ErrNilDecode = errors.New("cannot decode into a nil root struct")
 )
 
 type PropagationApiEmptyMessage struct {
@@ -48,7 +48,7 @@ func (x *PropagationApiEmptyMessage) Encode(b *polyglot.Buffer) {
 
 func (x *PropagationApiEmptyMessage) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -104,7 +104,7 @@ func (x *PropagationApiHealthResponse) Encode(b *polyglot.Buffer) {
 
 func (x *PropagationApiHealthResponse) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -170,7 +170,7 @@ func (x *PropagationApiGetRequest) Encode(b *polyglot.Buffer) {
 
 func (x *PropagationApiGetRequest) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -228,7 +228,7 @@ func (x *PropagationApiGetResponse) Encode(b *polyglot.Buffer) {
 
 func (x *PropagationApiGetResponse) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -286,7 +286,7 @@ func (x *PropagationApiProcessTransactionRequest) Encode(b *polyglot.Buffer) {
 
 func (x *PropagationApiProcessTransactionRequest) Decode(b []byte) error {
 	if x == nil {
-		return NilDecode
+		return ErrNilDecode
 	}
 	d := polyglot.GetDecoder(b)
 	defer d.Return()
@@ -319,7 +319,8 @@ type PropagationAPI interface {
 	ProcessTransaction(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 }
 
-const connectionContextKey int = 1000
+type connectionContext int
+const connectionContextKey connectionContext = 1000
 
 func SetErrorFlag(flags uint8, error bool) uint8 {
 	return flags | 0x2

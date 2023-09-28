@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -40,14 +41,9 @@ func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
-	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
+	httpAddress, ok := gocore.Config().Get("propagation_httpListenAddress")
 	if ok {
-		var serverURL *url.URL
-		serverURL, err = url.Parse(httpAddress)
-		if err != nil {
-			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
-		}
-		err = ps.StartHTTPServer(ctx, serverURL)
+		err = ps.startHTTPServer(ctx, httpAddress)
 		if err != nil {
 			return fmt.Errorf("HTTP server failed [%w]", err)
 		}
@@ -81,27 +77,30 @@ func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *pr
 	return &propagation_api.EmptyMessage{}, nil
 }
 
-func (ps *DumbPropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
-	// start a simple http listener that handles incoming transaction requests
-	http.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+func (ps *DumbPropagationServer) startHTTPServer(ctx context.Context, listenAddr string) error {
+	e := echo.New()
+	e.HideBanner = true
+
+	e.Use(middleware.Recover())
+
+	e.POST("/tx", func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
+			return c.String(http.StatusBadRequest, "Invalid request body")
 		}
+
 		if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: body,
 		}); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
+			return c.String(http.StatusInternalServerError, "Failed to process transaction")
 		}
+
+		return c.String(http.StatusOK, "OK")
 	})
 
 	go func() {
-		ps.logger.Infof("[%s] HTTP service listening on %s", serverURL)
-		if err := http.ListenAndServe(serverURL.Host, nil); err != nil {
+		ps.logger.Infof("[propagation] HTTP service listening on %s", listenAddr)
+		if err := e.Start(listenAddr); err != nil {
 			ps.logger.Errorf("HTTP server failed [%s]", err)
 		}
 	}()
