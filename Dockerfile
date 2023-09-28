@@ -33,6 +33,7 @@ COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
 COPY --from=0 /app/status.run .
 COPY --from=0 /app/dumbblaster.run .
+COPY --from=0 /app/aerospiketest.run .
 COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
