@@ -61,7 +61,6 @@ jobs:
         with:
           mask-password: true
 
-
       # Build and push Docker image to AWS ECR
       - name: Build and push
         uses: docker/build-push-action@v4
@@ -76,76 +75,15 @@ jobs:
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
 
-  eks-deploy:
-    name: Deploy to EKS
-    runs-on: ubuntu-latest
-    needs: [build-docker, go-lint-and-test]
-    steps:
-      - uses: actions/checkout@v3
-
-      # Set up AWS CLI
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2.2.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1  # Replace with your desired AWS region
-
-      # Install and configure kubectl for AWS EKS
-      - name: Install kubectl
-        run: |
-          # Download kubectl
-          sudo snap install kubectl --classic
-          kubectl version --client
-          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-north-1
-          kubectl cluster-info
-
-      # install kustomize for deployment
-      - name: Install Kustomize
-        run: |-
-          # Set up kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
-          chmod u+x ./kustomize
-          cp ./kustomize /usr/local/bin
-
-
-      # Deploy the Docker image to the GKE cluster
-      - name: Build k8s files
-        run: |-
-
-          # Setting Image
-          cd ./deploy/k8s/deployments
-          echo "Setting image"
-          kustomize edit set image 434394763103.dkr.ecr.eu-north-1.amazonaws.com/IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
-
-          # kustomize render & apply
-          echo "Building kustomize build in $(pwd)"
-          kustomize build . | kubectl apply -f -
-
-      - name: Validate Deployment Healthy
-        run: |-
-          # Apply latest deployment configuration changes
-          cd ./deploy/k8s/deployments
-          for file in *.yaml; do     # Loop over all files in the directory
-              # Skip kustomization.yaml file
-              if [ "$file" == "kustomization.yaml" ]; then
-                  continue
-              fi
-
-              # Get filename without extension. Remove everything after the first dot in the file name
-              FILE_NAME="${file%%.*}"
-
-              # Run kubectl commands
-              kubectl rollout status -f "$file"  --timeout=120s
-          done
-
-
-          # Apply latest services configuration changes
-          cd ../services
-          for file in *.yaml; do     # Loop over all files in the directory
-              # Get filename without extension. Remove everything after the first dot in the file name
-              FILE_NAME="${file%%.*}"
-
-              # Run kubectl commands
-              kubectl get services -o wide -n "$FILE_NAME-service"
-          done
+  eks-deploy-scaling:
+      uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@main
+      region: eu-north-1
+  eks-deploy-eu:
+    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@main
+    region: eu-north-1
+  eks-deploy-asia:
+    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@main
+    region: ap-northeast-1
+  eks-deploy-us:
+    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@main
+    region: us-east-1

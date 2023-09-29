@@ -54,7 +54,7 @@ export function connectToBootstrap(blobServerHTTPAddress) {
 
   const url = new URL(blobServerHTTPAddress)
 
-  // In a url x.scaling.ubsv.dev, replace x with bootstrap
+  // In a url x.scaling-miner.ubsv.dev, replace x with bootstrap
   let host = url.hostname
 
   const parts = url.hostname.split('.')

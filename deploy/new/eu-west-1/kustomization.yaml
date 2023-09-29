@@ -1,9 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-bases:
-  - ../base/allinone-miner
-  - ../base/allinone-shared
-resources:
-- miner1/*
-- miner2/*
-- miner3/*

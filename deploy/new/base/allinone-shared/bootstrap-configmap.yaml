@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: miner-config
-data:
-  SETTINGS_CONTEXT:  "" # injected through the customization
-  JAEGER_AGENT_HOST: jaeger-cluster-agent.jaeger.svc.cluster.local
-  JAEGER_AGENT_PORT: "6831"
