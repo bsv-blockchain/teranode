@@ -24,6 +24,7 @@ import (
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -41,7 +42,7 @@ var (
 	broadcastProtocol               string
 	httpUrl                         *url.URL
 	streamOnce                      sync.Once
-	txCh                            chan []byte
+	client                          *propagation.StreamingClient
 	errorCh                         chan error
 )
 
@@ -86,6 +87,8 @@ func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http)")
 	flag.Parse()
+
+	logger := gocore.Log("dumb_blaster")
 
 	switch broadcastProtocol {
 	case "http":
@@ -140,13 +143,13 @@ func main() {
 	}
 
 	for i := 0; i < workerCount; i++ {
-		go worker()
+		go worker(logger)
 	}
 
 	<-make(chan struct{})
 }
 
-func worker() {
+func worker(logger utils.Logger) {
 	prometheusWorkers.Inc()
 	defer func() {
 		prometheusWorkers.Dec()
@@ -161,7 +164,7 @@ func worker() {
 			panic(err)
 		}
 
-		if err := sendToPropagationServer(context.Background(), tx.ExtendedBytes()); err != nil {
+		if err := sendToPropagationServer(context.Background(), logger, tx.ExtendedBytes()); err != nil {
 			panic(err)
 		}
 
@@ -170,7 +173,7 @@ func worker() {
 	}
 }
 
-func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error {
+func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtendedBytes []byte) error {
 	switch broadcastProtocol {
 	case "disabled":
 
@@ -204,7 +207,7 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 
 		streamOnce.Do(func() {
 			var err error
-			txCh, errorCh, err = propagation.GetProcessTransactionChannel(context.Background())
+			client, err = propagation.NewStreamingClient(ctx, logger)
 			if err != nil {
 				panic(err)
 			}
@@ -220,8 +223,10 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 				}
 			}()
 		})
-
-		txCh <- txExtendedBytes
+		err := client.ProcessTransaction(ctx, txExtendedBytes)
+		if err != nil {
+			return err
+		}
 
 	case "unary":
 
