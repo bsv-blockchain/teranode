@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - staging
 jobs:
   go-lint-and-test:
     runs-on: ubuntu-latest
