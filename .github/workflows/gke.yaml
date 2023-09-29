@@ -77,14 +77,14 @@ jobs:
             GITHUB_REF=${{github.ref_name}}
 
   eks-deploy-scaling:
-      uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@master
+      uses: ./.github/workflows/deploy-to-region.yaml
       region: eu-north-1
   eks-deploy-eu:
-    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@master
+    uses: ./.github/workflows/deploy-to-region.yaml
     region: eu-north-1
   eks-deploy-asia:
-    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@master
+    uses: ./.github/workflows/deploy-to-region.yaml
     region: ap-northeast-1
   eks-deploy-us:
-    uses: bitcoin-sv/ubsv/.github/workflows/deploy-to-region.yaml@master
+    uses: ./.github/workflows/deploy-to-region.yaml
     region: us-east-1
