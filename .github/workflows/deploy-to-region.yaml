@@ -16,7 +16,6 @@ jobs:
   deploy-to-region:
     name: Deploy to EKS
     runs-on: ubuntu-latest
-    needs: [build-docker, go-lint-and-test]
     steps:
       - uses: actions/checkout@v3
 
