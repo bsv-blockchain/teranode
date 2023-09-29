@@ -61,7 +61,7 @@ jobs:
       - name: Validate Deployment Healthy
         run: |-
           # Apply latest deployment configuration changes
-          cd ./deploy/k8s/deployments
+          cd ./deploy/k8s/${{ inputs.region }}
           for file in *deployment.yaml; do     # Loop over all files in the directory
               # Skip kustomization.yaml file
               if [ "$file" == "kustomization.yaml" ]; then
