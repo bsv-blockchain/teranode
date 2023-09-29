@@ -41,7 +41,7 @@ var (
 	broadcastProtocol               string
 	httpUrl                         *url.URL
 	streamOnce                      sync.Once
-	txCh                            *chan []byte
+	txCh                            chan []byte
 	errorCh                         chan error
 )
 
@@ -221,7 +221,7 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 			}()
 		})
 
-		*txCh <- txExtendedBytes
+		txCh <- txExtendedBytes
 
 	case "unary":
 

@@ -2,6 +2,7 @@ package propagation
 
 import (
 	"context"
+	"log"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
@@ -61,9 +62,13 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func GetProcessTransactionChannel(ctx context.Context) (*chan []byte, chan error, error) {
-	errorCh := make(chan error)
-	txCh := make(chan []byte)
+func GetProcessTransactionChannel(ctx context.Context) (chan []byte, chan error, error) {
+	bufSize, ok := gocore.Config().GetInt("tx_blaster_buffer_size", 1000)
+	if ok {
+		log.Printf("Using tx_blaster_buffer_size: %d", bufSize)
+	}
+	errorCh := make(chan error, bufSize)
+	txCh := make(chan []byte, bufSize)
 
 	// defer func() {
 	// 	ctx.Done()
@@ -120,7 +125,7 @@ func GetProcessTransactionChannel(ctx context.Context) (*chan []byte, chan error
 		}
 	}()
 
-	return &txCh, errorCh, nil
+	return txCh, errorCh, nil
 
 	// _, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 	// 	Tx: tx.ExtendedBytes(),
