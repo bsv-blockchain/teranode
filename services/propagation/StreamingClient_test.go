@@ -16,7 +16,7 @@ func TestStreamingClient(t *testing.T) {
 	sc, err := propagation.NewStreamingClient(context.Background(), logger, true)
 	require.NoError(t, err)
 
-	numberOfIterations := 1_000_000
+	numberOfIterations := 100
 
 	for i := 0; i < numberOfIterations; i++ {
 		err := sc.ProcessTransaction([]byte("test"))

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,7 +40,6 @@ var (
 	grpcClient                      propagation_api.PropagationAPIClient
 	broadcastProtocol               string
 	httpUrl                         *url.URL
-	streamOnce                      sync.Once
 	client                          *propagation.StreamingClient
 	errorCh                         chan error
 )
@@ -204,9 +202,9 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		// Create an HTTP client and send the request
-		client := &http.Client{}
-		resp, err := client.Do(req)
+		// Create an HTTP httpClient and send the request
+		httpClient := &http.Client{}
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("error sending request: %v", err)
 		}

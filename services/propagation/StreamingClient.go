@@ -28,14 +28,10 @@ type StreamingClient struct {
 	stream    propagation_api.PropagationAPI_ProcessTransactionStreamClient
 	totalTime time.Duration
 	count     int
+	testMode  bool
 }
 
-func NewStreamingClient(ctx context.Context, logger utils.Logger, test ...bool) (*StreamingClient, error) {
-	testMode := false
-	if len(test) > 0 {
-		testMode = test[0]
-	}
-
+func NewStreamingClient(ctx context.Context, logger utils.Logger, testMode ...bool) (*StreamingClient, error) {
 	sc := &StreamingClient{
 		logger:    logger,
 		txCh:      make(chan []byte),
@@ -43,61 +39,74 @@ func NewStreamingClient(ctx context.Context, logger utils.Logger, test ...bool) 
 		timingsCh: make(chan chan timing),
 	}
 
+	if len(testMode) > 0 {
+		sc.testMode = testMode[0]
+	}
+
 	sc.initResolver()
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				sc.errorCh <- ctx.Err()
-				return
-
-			case getTimeCh := <-sc.timingsCh:
-				getTimeCh <- timing{
-					total: sc.totalTime,
-					count: sc.count,
-				}
-
-			case txBytes := <-sc.txCh:
-				if testMode {
-					sc.errorCh <- nil
-					continue
-				}
-
-				if sc.stream == nil {
-					if err := sc.initStream(ctx); err != nil {
-						return
-					}
-				}
-
-				if err := sc.stream.Send(&propagation_api.ProcessTransactionRequest{
-					Tx: txBytes,
-				}); err != nil {
-					sc.errorCh <- err
-				}
-
-				if _, err := sc.stream.Recv(); err != nil {
-					sc.errorCh <- err
-				}
-
-				sc.errorCh <- nil
-
-			case <-time.After(10 * time.Second):
-				if sc.stream != nil {
-					_ = sc.stream.CloseSend()
-				}
-				if sc.conn != nil {
-					_ = sc.conn.Close()
-				}
-				sc.stream = nil
-				sc.conn = nil
-			}
-		}
-	}()
+	go sc.handler(ctx)
 
 	return sc, nil
 }
 
+func (sc *StreamingClient) handler(ctx context.Context) {
+	defer sc.closeResources()
+
+	for {
+		select {
+		case <-ctx.Done():
+			sc.errorCh <- ctx.Err()
+			return
+
+		case getTimeCh := <-sc.timingsCh:
+			getTimeCh <- timing{
+				total: sc.totalTime,
+				count: sc.count,
+			}
+
+		case txBytes := <-sc.txCh:
+			if sc.testMode {
+				sc.errorCh <- nil
+				continue
+			}
+
+			if sc.stream == nil {
+				if err := sc.initStream(ctx); err != nil {
+					return
+				}
+			}
+
+			if err := sc.stream.Send(&propagation_api.ProcessTransactionRequest{
+				Tx: txBytes,
+			}); err != nil {
+				sc.errorCh <- err
+				return
+			}
+
+			if _, err := sc.stream.Recv(); err != nil {
+				sc.errorCh <- err
+				return
+			}
+
+			sc.errorCh <- nil
+
+		case <-time.After(10 * time.Second):
+			sc.closeResources()
+		}
+	}
+}
+
+func (sc *StreamingClient) closeResources() {
+	if sc.stream != nil {
+		_ = sc.stream.CloseSend()
+	}
+	if sc.conn != nil {
+		_ = sc.conn.Close()
+	}
+	sc.stream = nil
+	sc.conn = nil
+}
 func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	start := time.Now()
 
