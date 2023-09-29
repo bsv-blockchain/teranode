@@ -81,7 +81,9 @@
 <nav class="navbar is-fixed-top is-dark" aria-label="main navigation">
   <div class="navbar-brand">
     <span class="navbar-item">
-      <a class="is-size-4 client" href="/">Teranode</a>
+      <a class="is-size-4 client centre" href="/">
+        <img src="/teranode_shadow.png" alt="Teranode" />
+      </a>
     </span>
   </div>
 
@@ -157,5 +159,10 @@
 <style>
   .client {
     color: white;
+  }
+
+  .centre {
+    display: flex;
+    align-items: center;
   }
 </style>
