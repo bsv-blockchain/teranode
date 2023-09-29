@@ -68,6 +68,7 @@ func (sc *StreamingClient) handler(ctx context.Context) {
 
 			if sc.stream == nil {
 				if err := sc.initStream(ctx); err != nil {
+					sc.errorCh <- err
 					return
 				}
 			}
