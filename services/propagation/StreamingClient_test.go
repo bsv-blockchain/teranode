@@ -16,7 +16,7 @@ func TestStreamingClient(t *testing.T) {
 	sc, err := propagation.NewStreamingClient(context.Background(), logger, true)
 	require.NoError(t, err)
 
-	numberOfIterations := 2
+	numberOfIterations := 1_000_000
 
 	for i := 0; i < numberOfIterations; i++ {
 		err := sc.ProcessTransaction([]byte("test"))
@@ -25,5 +25,7 @@ func TestStreamingClient(t *testing.T) {
 
 	total, count := sc.GetTimings()
 	assert.Greater(t, total, time.Duration(0))
+	t.Logf("total time: %s", total)
+	t.Logf("average time: %s", total/time.Duration(count))
 	assert.Equal(t, numberOfIterations, count)
 }
