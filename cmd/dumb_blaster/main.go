@@ -155,6 +155,16 @@ func worker(logger utils.Logger) {
 		prometheusWorkers.Dec()
 	}()
 
+	var streamingClient *propagation.StreamingClient
+	if broadcastProtocol == "stream" {
+		var err error
+		ctx := context.Background()
+		streamingClient, err = propagation.NewStreamingClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	for {
 		// Create a new transaction
 		tx := incompleteTx.Clone()
@@ -164,8 +174,14 @@ func worker(logger utils.Logger) {
 			panic(err)
 		}
 
-		if err := sendToPropagationServer(context.Background(), logger, tx.ExtendedBytes()); err != nil {
-			panic(err)
+		if broadcastProtocol == "stream" {
+			if err := streamingClient.ProcessTransaction(tx.ExtendedBytes()); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := sendToPropagationServer(context.Background(), logger, tx.ExtendedBytes()); err != nil {
+				panic(err)
+			}
 		}
 
 		prometheusProcessedTransactions.Inc()
@@ -202,31 +218,6 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 		}
 
 		return nil
-
-	case "stream":
-
-		streamOnce.Do(func() {
-			var err error
-			client, err = propagation.NewStreamingClient(ctx, logger)
-			if err != nil {
-				panic(err)
-			}
-
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case err := <-errorCh:
-						panic(err)
-					}
-				}
-			}()
-		})
-		err := client.ProcessTransaction(ctx, txExtendedBytes)
-		if err != nil {
-			return err
-		}
 
 	case "unary":
 
