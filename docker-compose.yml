@@ -31,19 +31,20 @@ services:
       dockerfile: local.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker"
-  tx-blaster:
-    container_name: tx-blaster
-    image: taal/ubsv:latest
-    depends_on:
-      - postgres
-    build:
-      context: .
-      dockerfile: local.Dockerfile
-    environment:
-      SETTINGS_CONTEXT: "docker"
-      tx_blaster_profilerAddr: ":9092"
-    # pass arguments to the command
-    command: [ "./blaster.run", "-workers=1" ]
+
+  # tx-blaster:
+  #   container_name: tx-blaster
+  #   image: taal/ubsv:latest
+  #   depends_on:
+  #     - postgres
+  #   build:
+  #     context: .
+  #     dockerfile: local.Dockerfile
+  #   environment:
+  #     SETTINGS_CONTEXT: "docker"
+  #     tx_blaster_profilerAddr: ":9092"
+  #   # pass arguments to the command
+  #   command: [ "./blaster.run", "-workers=1" ]
   ubsv-1:
     container_name: ubsv-1
     image: taal/ubsv:latest
