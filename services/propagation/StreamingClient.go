@@ -14,20 +14,36 @@ import (
 	"google.golang.org/grpc/resolver"
 )
 
-type StreamingClient struct {
-	txCh    chan []byte
-	errorCh chan error
-	conn    *grpc.ClientConn
-	stream  propagation_api.PropagationAPI_ProcessTransactionStreamClient
+type timing struct {
+	total time.Duration
+	count int
 }
 
-func NewStreamingClient(ctx context.Context, logger utils.Logger) (*StreamingClient, error) {
-	initResolver(logger)
+type StreamingClient struct {
+	logger    utils.Logger
+	txCh      chan []byte
+	errorCh   chan error
+	timingsCh chan chan timing
+	conn      *grpc.ClientConn
+	stream    propagation_api.PropagationAPI_ProcessTransactionStreamClient
+	totalTime time.Duration
+	count     int
+}
+
+func NewStreamingClient(ctx context.Context, logger utils.Logger, test ...bool) (*StreamingClient, error) {
+	testMode := false
+	if len(test) > 0 {
+		testMode = test[0]
+	}
 
 	sc := &StreamingClient{
-		txCh:    make(chan []byte),
-		errorCh: make(chan error),
+		logger:    logger,
+		txCh:      make(chan []byte),
+		errorCh:   make(chan error),
+		timingsCh: make(chan chan timing),
 	}
+
+	sc.initResolver()
 
 	go func() {
 		for {
@@ -36,7 +52,18 @@ func NewStreamingClient(ctx context.Context, logger utils.Logger) (*StreamingCli
 				sc.errorCh <- ctx.Err()
 				return
 
+			case getTimeCh := <-sc.timingsCh:
+				getTimeCh <- timing{
+					total: sc.totalTime,
+					count: sc.count,
+				}
+
 			case txBytes := <-sc.txCh:
+				if testMode {
+					sc.errorCh <- nil
+					continue
+				}
+
 				if sc.stream == nil {
 					if err := sc.initStream(ctx); err != nil {
 						return
@@ -56,8 +83,12 @@ func NewStreamingClient(ctx context.Context, logger utils.Logger) (*StreamingCli
 				sc.errorCh <- nil
 
 			case <-time.After(10 * time.Second):
-				_ = sc.stream.CloseSend()
-				_ = sc.conn.Close()
+				if sc.stream != nil {
+					_ = sc.stream.CloseSend()
+				}
+				if sc.conn != nil {
+					_ = sc.conn.Close()
+				}
 				sc.stream = nil
 				sc.conn = nil
 			}
@@ -67,19 +98,39 @@ func NewStreamingClient(ctx context.Context, logger utils.Logger) (*StreamingCli
 	return sc, nil
 }
 
-func (sc *StreamingClient) ProcessTransaction(ctx context.Context, txBytes []byte) error {
+func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
+	start := time.Now()
+
 	sc.txCh <- txBytes
-	return <-sc.errorCh
+
+	err := <-sc.errorCh
+
+	sc.totalTime += time.Since(start)
+	sc.count++
+
+	return err
 }
 
-func initResolver(logger utils.Logger) {
+func (sc *StreamingClient) GetTimings() (time.Duration, int) {
+	ch := make(chan timing)
+	sc.timingsCh <- ch
+
+	timings := <-ch
+
+	return timings.total, timings.count
+}
+
+func (sc *StreamingClient) initResolver() {
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
-	if grpcResolver == "k8s" {
-		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+	switch grpcResolver {
+	case "k8s":
+		sc.logger.Infof("[VALIDATOR] Using k8s resolver for clients")
 		resolver.SetDefaultScheme("k8s")
-	} else if grpcResolver == "kubernetes" {
-		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
+	case "kubernetes":
+		sc.logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
 		kuberesolver.RegisterInClusterWithSchema("k8s")
+	default:
+		sc.logger.Infof("[VALIDATOR] Using default resolver for clients")
 	}
 }
 
