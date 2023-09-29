@@ -1,4 +1,4 @@
-name: deploy-to-eks
+name: deploy-to-region
 on:
   workflow_dispatch:
     inputs:
