@@ -33,7 +33,7 @@ jobs:
           # Download kubectl
           sudo snap install kubectl --classic
           kubectl version --client
-          aws eks update-kubeconfig --name aws-ubsv-playground --region ${{ inputs.APPEND_TIMESTAMP_TO_K8S_FILES }}
+          aws eks update-kubeconfig --name aws-ubsv-playground --region ${{ inputs.region }}
           kubectl cluster-info
 
       # install kustomize for deployment
@@ -52,7 +52,7 @@ jobs:
           # Setting Image
           cd ./deploy/k8s/${{ inputs.region }}
           echo "Setting image"
-          kustomize edit set image 434394763103.dkr.ecr.eu-north-1.amazonaws.com/IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
+          kustomize edit set image 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:cf3cc939b65e7e17a86a0ff3c8798d99b1ae45ae=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"

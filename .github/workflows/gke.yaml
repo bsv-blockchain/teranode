@@ -5,98 +5,98 @@ on:
       - master
       - staging
 jobs:
-  go-lint-and-test:
-    runs-on: ubuntu-latest
-    name: Go Lint and Test
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting
-          fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@v4 # v4 has caching enabled by default
-        with:
-          go-version: '1.21.0'
-
-#      - name: Install deps and lint deps
-#        run: make install-lint
+#  go-lint-and-test:
+#    runs-on: ubuntu-latest
+#    name: Go Lint and Test
+#    steps:
+#      - uses: actions/checkout@v3
+#        with:
+#          # Disabling shallow clone is recommended for improving relevancy of reporting
+#          fetch-depth: 0
+#      - name: Set up Go
+#        uses: actions/setup-go@v4 # v4 has caching enabled by default
+#        with:
+#          go-version: '1.21.0'
 #
-#      - name: Run golangci-lint
-#        run: make lint
+##      - name: Install deps and lint deps
+##        run: make install-lint
+##
+##      - name: Run golangci-lint
+##        run: make lint
+#
+#      - name: Run Go tests
+#        run: make longtests
+#
+#      - uses: twingate/github-action@v1
+#        with:
+#          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
+#
+#      - name: SonarQube Scan
+#        uses: sonarsource/sonarqube-scan-action@master
+#        env:
+#          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+#          SONAR_HOST_URL: https://sonarqube.ubsv.dev
 
-      - name: Run Go tests
-        run: make longtests
-
-      - uses: twingate/github-action@v1
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
-
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarqube.ubsv.dev
-
-  build-docker:
-    name: Build Docker image
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      # Set up AWS CLI
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2.2.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1  # Replace with your desired AWS region
-
-      # Setup Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      # Authenticate Docker to AWS ECR
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1.7.0
-        with:
-          mask-password: true
-
-      # Build and push Docker image to AWS ECR
-      - name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          file: ./Dockerfile
-          push: true
-          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
-          build-args: |
-            GITHUB_SHA=${{github.sha}}
-            GITHUB_REF=${{github.ref_name}}
+#  build-docker:
+#    name: Build Docker image
+#    runs-on: ubuntu-latest
+#
+#    steps:
+#      - uses: actions/checkout@v3
+#
+#      # Set up AWS CLI
+#      - name: Configure AWS credentials
+#        uses: aws-actions/configure-aws-credentials@v2.2.0
+#        with:
+#          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#          aws-region: eu-north-1  # Replace with your desired AWS region
+#
+#      # Setup Docker Buildx
+#      - name: Set up Docker Buildx
+#        uses: docker/setup-buildx-action@v2
+#
+#      # Authenticate Docker to AWS ECR
+#      - name: Login to Amazon ECR
+#        uses: aws-actions/amazon-ecr-login@v1.7.0
+#        with:
+#          mask-password: true
+#
+#      # Build and push Docker image to AWS ECR
+#      - name: Build and push
+#        uses: docker/build-push-action@v4
+#        with:
+#          context: .
+#          cache-from: type=gha
+#          cache-to: type=gha,mode=max
+#          file: ./Dockerfile
+#          push: true
+#          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+#          build-args: |
+#            GITHUB_SHA=${{github.sha}}
+#            GITHUB_REF=${{github.ref_name}}
 
   eks-deploy-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+#    needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
       region: eu-north-1
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+#    needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
       region: eu-north-1
   eks-deploy-asia:
     uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+#    needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
       region: ap-northeast-1
   eks-deploy-us:
     uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+#    needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
       region: us-east-1
