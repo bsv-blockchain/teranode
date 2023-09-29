@@ -66,7 +66,7 @@ func initResolver(logger utils.Logger) {
 }
 
 func getClientConn(ctx context.Context) (propagation_api.PropagationAPIClient, *grpc.ClientConn, error) {
-	propagation_grpcAddress, _ := gocore.Config().Get("propagation_grpcAddress")
+	propagation_grpcAddress, _ := gocore.Config().Get("propagation_grpcAddresses")
 	conn, err := util.GetGRPCClient(ctx, propagation_grpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
