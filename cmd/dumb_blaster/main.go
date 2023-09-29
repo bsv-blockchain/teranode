@@ -37,13 +37,11 @@ var (
 	prometheusWorkers               prometheus.Gauge
 	prometheusProcessedTransactions prometheus.Counter
 	workerCount                     int
-	broadcast                       bool
 	grpcClient                      propagation_api.PropagationAPIClient
-	useHttp                         bool
+	broadcastProtocol               string
 	httpUrl                         *url.URL
-	useStream                       bool
 	streamOnce                      sync.Once
-	txCh                            chan []byte
+	txCh                            *chan []byte
 	errorCh                         chan error
 )
 
@@ -86,17 +84,16 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.BoolVar(&broadcast, "broadcast", false, "Broadcast to propagation server")
-	flag.BoolVar(&useHttp, "http", false, "Use HTTP instead of gRPC")
-	flag.BoolVar(&useStream, "stream", false, "Use stream instead of unary")
+	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http)")
 	flag.Parse()
 
-	if useHttp {
+	switch broadcastProtocol {
+	case "http":
 		httpAddresses, _ := gocore.Config().GetMulti("propagation_httpAddresses", "|")
 		httpUrl, _ = url.Parse(httpAddresses[0])
 		log.Printf("Using HTTP propagation server: %v", httpUrl)
 
-	} else {
+	case "unary":
 		prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
 		log.Printf("Using prometheus grpc metrics: %v", prom)
 
@@ -129,12 +126,17 @@ func main() {
 		}
 	}()
 
-	if broadcast {
-		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	} else if useStream {
-		log.Printf("Starting %d stream worker(s)", workerCount)
-	} else {
+	switch broadcastProtocol {
+	case "disabled":
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
+	case "unary":
+		log.Printf("Starting %d broadcasting worker(s)", workerCount)
+	case "stream":
+		log.Printf("Starting %d stream worker(s)", workerCount)
+	case "http":
+		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
+	default:
+		panic("Unknown broadcast protocol")
 	}
 
 	for i := 0; i < workerCount; i++ {
@@ -159,10 +161,8 @@ func worker() {
 			panic(err)
 		}
 
-		if broadcast {
-			if err := sendToPropagationServer(context.Background(), tx.ExtendedBytes()); err != nil {
-				panic(err)
-			}
+		if err := sendToPropagationServer(context.Background(), tx.ExtendedBytes()); err != nil {
+			panic(err)
 		}
 
 		prometheusProcessedTransactions.Inc()
@@ -171,7 +171,13 @@ func worker() {
 }
 
 func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error {
-	if useHttp {
+	switch broadcastProtocol {
+	case "disabled":
+
+		return nil
+
+	case "http":
+
 		req, err := http.NewRequest("POST", fmt.Sprintf("%s/tx", httpUrl.String()), bytes.NewReader(txExtendedBytes))
 		if err != nil {
 			return err
@@ -183,7 +189,7 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("Error sending request: %v", err)
+			return fmt.Errorf("error sending request: %v", err)
 		}
 		defer resp.Body.Close()
 
@@ -194,7 +200,7 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 
 		return nil
 
-	} else if useStream {
+	case "stream":
 
 		streamOnce.Do(func() {
 			var err error
@@ -215,9 +221,10 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 			}()
 		})
 
-		txCh <- txExtendedBytes
+		*txCh <- txExtendedBytes
 
-	} else {
+	case "unary":
+
 		_, err := grpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})

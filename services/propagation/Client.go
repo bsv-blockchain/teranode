@@ -61,17 +61,17 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func GetProcessTransactionChannel(ctx context.Context) (chan []byte, chan error, error) {
+func GetProcessTransactionChannel(ctx context.Context) (*chan []byte, chan error, error) {
 	errorCh := make(chan error)
 	txCh := make(chan []byte)
 
-	defer func() {
-		ctx.Done()
-		close(errorCh)
-		close(txCh)
-	}()
+	// defer func() {
+	// 	ctx.Done()
+	// 	close(errorCh)
+	// 	close(txCh)
+	// }()
 
-	propagation_grpcAddress, _ := gocore.Config().Get("propagation_grpcAddress")
+	propagation_grpcAddress, _ := gocore.Config().Get("propagation_grpcAddresses")
 	conn, err := util.GetGRPCClient(ctx, propagation_grpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -101,6 +101,9 @@ func GetProcessTransactionChannel(ctx context.Context) (chan []byte, chan error,
 				}); err != nil {
 					errorCh <- err
 				}
+				if err := stream.RecvMsg(&propagation_api.EmptyMessage{}); err != nil {
+					errorCh <- err
+				}
 
 			case <-time.After(10 * time.Second):
 				propagation_grpcAddress, _ = gocore.Config().Get("propagation_grpcAddress")
@@ -117,7 +120,7 @@ func GetProcessTransactionChannel(ctx context.Context) (chan []byte, chan error,
 		}
 	}()
 
-	return txCh, errorCh, nil
+	return &txCh, errorCh, nil
 
 	// _, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 	// 	Tx: tx.ExtendedBytes(),
