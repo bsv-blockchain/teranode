@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PropagationAPI_Health_FullMethodName             = "/propagation_api.PropagationAPI/Health"
-	PropagationAPI_ProcessTransaction_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransaction"
+	PropagationAPI_Health_FullMethodName                   = "/propagation_api.PropagationAPI/Health"
+	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
+	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
 )
 
 // PropagationAPIClient is the client API for PropagationAPI service.
@@ -30,6 +31,7 @@ type PropagationAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error)
 }
 
 type propagationAPIClient struct {
@@ -58,6 +60,37 @@ func (c *propagationAPIClient) ProcessTransaction(ctx context.Context, in *Proce
 	return out, nil
 }
 
+func (c *propagationAPIClient) ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &PropagationAPI_ServiceDesc.Streams[0], PropagationAPI_ProcessTransactionStream_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &propagationAPIProcessTransactionStreamClient{stream}
+	return x, nil
+}
+
+type PropagationAPI_ProcessTransactionStreamClient interface {
+	Send(*ProcessTransactionRequest) error
+	Recv() (*EmptyMessage, error)
+	grpc.ClientStream
+}
+
+type propagationAPIProcessTransactionStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *propagationAPIProcessTransactionStreamClient) Send(m *ProcessTransactionRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *propagationAPIProcessTransactionStreamClient) Recv() (*EmptyMessage, error) {
+	m := new(EmptyMessage)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // PropagationAPIServer is the server API for PropagationAPI service.
 // All implementations must embed UnimplementedPropagationAPIServer
 // for forward compatibility
@@ -65,6 +98,7 @@ type PropagationAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
+	ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error
 	mustEmbedUnimplementedPropagationAPIServer()
 }
 
@@ -77,6 +111,9 @@ func (UnimplementedPropagationAPIServer) Health(context.Context, *EmptyMessage) 
 }
 func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransaction not implemented")
+}
+func (UnimplementedPropagationAPIServer) ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method ProcessTransactionStream not implemented")
 }
 func (UnimplementedPropagationAPIServer) mustEmbedUnimplementedPropagationAPIServer() {}
 
@@ -127,6 +164,32 @@ func _PropagationAPI_ProcessTransaction_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PropagationAPI_ProcessTransactionStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(PropagationAPIServer).ProcessTransactionStream(&propagationAPIProcessTransactionStreamServer{stream})
+}
+
+type PropagationAPI_ProcessTransactionStreamServer interface {
+	Send(*EmptyMessage) error
+	Recv() (*ProcessTransactionRequest, error)
+	grpc.ServerStream
+}
+
+type propagationAPIProcessTransactionStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *propagationAPIProcessTransactionStreamServer) Send(m *EmptyMessage) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *propagationAPIProcessTransactionStreamServer) Recv() (*ProcessTransactionRequest, error) {
+	m := new(ProcessTransactionRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // PropagationAPI_ServiceDesc is the grpc.ServiceDesc for PropagationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -143,6 +206,13 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PropagationAPI_ProcessTransaction_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ProcessTransactionStream",
+			Handler:       _PropagationAPI_ProcessTransactionStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "services/propagation/propagation_api/propagation_api.proto",
 }

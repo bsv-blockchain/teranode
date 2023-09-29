@@ -429,7 +429,7 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, loc
 	return nil
 }
 
-func (ba *BlockAssembly) getTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
+func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
 	startMetaTime := time.Now()
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {

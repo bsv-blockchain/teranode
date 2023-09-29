@@ -77,6 +77,21 @@ func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *pr
 	return &propagation_api.EmptyMessage{}, nil
 }
 
+func (ps *DumbPropagationServer) ProcessTransactionStream(srv propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
+	for {
+		_, err := srv.Recv()
+		if err != nil {
+			return err
+		}
+
+		if err := srv.Send(&propagation_api.EmptyMessage{}); err != nil {
+			return err
+		}
+
+		prometheusProcessedTransactions.Inc()
+	}
+}
+
 func (ps *DumbPropagationServer) startHTTPServer(ctx context.Context, listenAddr string) error {
 	e := echo.New()
 	e.HideBanner = true

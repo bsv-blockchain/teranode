@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/native"
+	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/wif"
@@ -39,6 +41,10 @@ var (
 	grpcClient                      propagation_api.PropagationAPIClient
 	useHttp                         bool
 	httpUrl                         *url.URL
+	useStream                       bool
+	streamOnce                      sync.Once
+	txCh                            chan []byte
+	errorCh                         chan error
 )
 
 func init() {
@@ -82,6 +88,7 @@ func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.BoolVar(&broadcast, "broadcast", false, "Broadcast to propagation server")
 	flag.BoolVar(&useHttp, "http", false, "Use HTTP instead of gRPC")
+	flag.BoolVar(&useStream, "stream", false, "Use stream instead of unary")
 	flag.Parse()
 
 	if useHttp {
@@ -124,6 +131,8 @@ func main() {
 
 	if broadcast {
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
+	} else if useStream {
+		log.Printf("Starting %d stream worker(s)", workerCount)
 	} else {
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
 	}
@@ -185,6 +194,29 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 
 		return nil
 
+	} else if useStream {
+
+		streamOnce.Do(func() {
+			var err error
+			txCh, errorCh, err = propagation.GetProcessTransactionChannel(context.Background())
+			if err != nil {
+				panic(err)
+			}
+
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case err := <-errorCh:
+						panic(err)
+					}
+				}
+			}()
+		})
+
+		txCh <- txExtendedBytes
+
 	} else {
 		_, err := grpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
@@ -192,6 +224,8 @@ func sendToPropagationServer(ctx context.Context, txExtendedBytes []byte) error 
 
 		return err
 	}
+
+	return nil
 }
 
 func FormatFloat(f float64) string {

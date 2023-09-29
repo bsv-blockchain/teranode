@@ -352,6 +352,24 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	return &propagation_api.EmptyMessage{}, nil
 }
 
+func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
+	for {
+		req, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		resp, err := ps.ProcessTransaction(stream.Context(), req)
+		if err != nil {
+			return err
+		}
+
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+	}
+}
+
 func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.Tx) error {
 	span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
 	defer span.Finish()
