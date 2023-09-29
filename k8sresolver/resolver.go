@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/resolver"
 	"k8s.io/apimachinery/pkg/watch"
 )
@@ -17,7 +19,15 @@ const (
 
 var (
 	errNoEndpoints = errors.New("no endpoints available")
+	resolveTTL     time.Duration
+	resolveCache   *ttlcache.Cache[string, *resolver.State]
 )
+
+func init() {
+	resolveTTLSeconds, _ := gocore.Config().GetInt("k8s_resolver_ttl", 10)
+	resolveTTL = time.Duration(resolveTTLSeconds) * time.Second
+	resolveCache = ttlcache.New[string, *resolver.State]()
+}
 
 type k8sResolver struct {
 	k8sC   serviceEndpointResolver
@@ -98,6 +108,12 @@ func (k *k8sResolver) watcher() {
 }
 
 func (k *k8sResolver) lookup() (*resolver.State, error) {
+	cachedState := resolveCache.Get(k.host+":"+k.port, ttlcache.WithDisableTouchOnHit[string, *resolver.State]())
+	if cachedState != nil {
+		k.logger.Debugf("[k8s] returning cached endpoints for host: %s, port: %s", k.host, k.port)
+		return cachedState.Value(), nil
+	}
+
 	k.logger.Debugf("[k8s] looking up service endpoints (%s:%s)", k.host, k.port)
 	endpoints, err := k.k8sC.Resolve(k.ctx, k.host, k.port)
 	if err != nil {
@@ -118,6 +134,10 @@ func (k *k8sResolver) lookup() (*resolver.State, error) {
 	}
 
 	k.logger.Debugf("[k8s] state: %v", state)
+
+	if resolveTTL > 0 {
+		_ = resolveCache.Set(k.host+":"+k.port, state, resolveTTL)
+	}
 
 	return state, nil
 }

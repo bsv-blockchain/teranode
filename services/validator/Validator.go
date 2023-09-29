@@ -20,6 +20,7 @@ import (
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 type Validator struct {
@@ -101,16 +102,27 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		return err
 	}
 
+	g, _ := errgroup.WithContext(ctx)
+
 	var parentTxHashes []*chainhash.Hash
-	if reservedUtxos, parentTxHashes, err = v.spendUtxos(traceSpan, tx); err != nil {
-		return err
-	}
+	g.Go(func() error {
+		// this will reverse the spends if there is an error
+		if reservedUtxos, parentTxHashes, err = v.spendUtxos(traceSpan, tx); err != nil {
+			return err
+		}
+		return nil
+	})
 
 	if v.blockAssemblyDisabled {
+		// block assembly is disabled, which means we are running in non-mining mode
 		utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreUtxos")
 		defer utxoSpan.Finish()
 
-		// block assembly is disabled, which means we are running in non-mining mode
+		// wait for the utxos to be spent before we store the new ones
+		if err = g.Wait(); err != nil {
+			return err
+		}
+
 		// we must create the new utxos in the utxo utxoStore and will stop processing after that
 		for _, hash := range utxoHashes {
 			if _, err = v.utxoStore.Store(utxoSpan.Ctx, hash, tx.LockTime); err != nil {
@@ -124,18 +136,33 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	// register transaction in tx status utxoStore
-	if err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, utxoHashes, reservedUtxos); err != nil {
+	g.Go(func() error {
+		if err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, reservedUtxos); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	// this allows the spending of the utxo and storing in the meta store to happen in parallel
+	if err = g.Wait(); err != nil {
+		_ = v.txMetaStore.Delete(traceSpan.Ctx, tx.TxIDChainHash())
 		return err
 	}
 
-	return v.sendToBlockAssembler(traceSpan, tx.TxIDChainHash(), reservedUtxos)
+	return v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
+		TxIDChainHash: tx.TxIDChainHash(),
+		Fee:           fees,
+		Size:          uint64(tx.Size()),
+		LockTime:      tx.LockTime,
+		UtxoHashes:    utxoHashes,
+	}, reservedUtxos)
 }
 
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, reservedUtxos []*chainhash.Hash) error {
+func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*chainhash.Hash) error {
 	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, utxoHashes, tx.LockTime); err != nil {
+	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
 			return nil
@@ -246,15 +273,16 @@ func (v *Validator) getFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, 
 	return fees, utxoHashes, nil
 }
 
-func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, txIDChainHash *chainhash.Hash, reservedUtxos []*chainhash.Hash) error {
+func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*chainhash.Hash) error {
+
 	if v.kafkaProducer != nil {
-		if err := v.publishToKafka(txIDChainHash); err != nil {
+		if err := v.publishToKafka(traceSpan, bData); err != nil {
 			v.reverseSpends(traceSpan, reservedUtxos)
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
 	} else {
-		if _, err := v.blockAssembler.Store(traceSpan.Ctx, txIDChainHash); err != nil {
+		if _, err := v.blockAssembler.Store(traceSpan.Ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes); err != nil {
 			v.reverseSpends(traceSpan, reservedUtxos)
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to block assembler: %v", err)
@@ -276,14 +304,17 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, reservedUtxos []*chain
 	}
 }
 
-func (v *Validator) publishToKafka(txIDBytes *chainhash.Hash) error {
+func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.Data) error {
+	kafkaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:publishToKafka")
+	defer kafkaSpan.Finish()
+
 	// partition is the first byte of the txid - max 2^8 partitions = 256
-	partition := binary.LittleEndian.Uint32(txIDBytes[:]) % uint32(v.kafkaPartitions)
+	partition := binary.LittleEndian.Uint32(bData.TxIDChainHash[:]) % uint32(v.kafkaPartitions)
 	_, _, err := v.kafkaProducer.SendMessage(&sarama.ProducerMessage{
 		Topic:     v.kafkaTopic,
 		Partition: int32(partition),
-		Key:       sarama.ByteEncoder(txIDBytes[:]),
-		Value:     sarama.ByteEncoder(txIDBytes[:]),
+		Key:       sarama.ByteEncoder(bData.TxIDChainHash[:]),
+		Value:     sarama.ByteEncoder(bData.Bytes()),
 	})
 	if err != nil {
 		return err

@@ -15,14 +15,13 @@ import (
 )
 
 type Direct struct {
-	logger           utils.Logger
-	client           *aerospike.Client
-	namespace        string
-	transactionCount int
-	timeout          time.Duration
+	logger    utils.Logger
+	client    *aerospike.Client
+	namespace string
+	timeout   time.Duration
 }
 
-func New(logger utils.Logger, transactionCount int, timeoutStr string) *Direct {
+func New(logger utils.Logger, timeoutStr string, addr string, port int) *Direct {
 	policy := aerospike.NewClientPolicy()
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
@@ -32,8 +31,8 @@ func New(logger utils.Logger, transactionCount int, timeoutStr string) *Direct {
 	// policy.MaxErrorRate = 0
 
 	host := &aerospike.Host{
-		Name: "192.168.20.214",
-		Port: 3000,
+		Name: addr,
+		Port: port,
 	}
 
 	var hosts []*aerospike.Host
@@ -54,15 +53,14 @@ func New(logger utils.Logger, transactionCount int, timeoutStr string) *Direct {
 	}
 
 	return &Direct{
-		logger:           logger,
-		transactionCount: transactionCount,
-		timeout:          timeout,
-		client:           client,
-		namespace:        "utxostore",
+		logger:    logger,
+		timeout:   timeout,
+		client:    client,
+		namespace: "utxostore",
 	}
 }
 
-func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -86,7 +84,7 @@ func (s *Direct) Storer(ctx context.Context, id int, wg *sync.WaitGroup, spender
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 		policy.SendKey = true
 
-		for i := 0; i < s.transactionCount; i++ {
+		for i := 0; i < txCount; i++ {
 			select {
 			case <-ctx.Done():
 				return

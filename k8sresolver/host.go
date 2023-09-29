@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 )
 
 var (
@@ -44,6 +45,14 @@ func parseTarget(target, defaultPort string) (host, port string, err error) {
 			host = "localhost"
 		}
 		return host, port, nil
+	}
+	parsedURL, err := url.Parse(target)
+	if err == nil && parsedURL.Host != "" {
+		port = parsedURL.Port()
+		if port == "" {
+			port = defaultPort
+		}
+		return parsedURL.Hostname(), port, nil
 	}
 	if host, port, err = net.SplitHostPort(target + ":" + defaultPort); err == nil {
 		// target doesn't have port

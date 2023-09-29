@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -48,6 +49,14 @@ type BlockAssembly struct {
 	txMetaStore      txmeta_store.Store
 	subtreeStore     blob.Store
 	jobStore         *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	storeUtxoLocal   blob.Store
+	storeUtxoCh      map[int]chan *storeUtxos
+}
+
+type storeUtxos struct {
+	txHash   *chainhash.Hash
+	utxos    [][]byte
+	locktime uint32
 }
 
 func Enabled() bool {
@@ -62,13 +71,25 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
+	localUtxoStore, err := badger.New("./data/blockassembly_storeUtxoLocal")
+	if err != nil {
+		panic(err)
+	}
+
+	storeUtxoCh := make(map[int]chan *storeUtxos)
+	for i := 0; i < 256; i++ {
+		storeUtxoCh[i] = make(chan *storeUtxos, 100_000)
+	}
+
 	ba := &BlockAssembly{
-		logger:       logger,
-		txStore:      txStore,
-		utxoStore:    utxoStore,
-		txMetaStore:  txMetaStore,
-		subtreeStore: subtreeStore,
-		jobStore:     ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		logger:         logger,
+		txStore:        txStore,
+		utxoStore:      utxoStore,
+		txMetaStore:    txMetaStore,
+		subtreeStore:   subtreeStore,
+		jobStore:       ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		storeUtxoLocal: localUtxoStore,
+		storeUtxoCh:    storeUtxoCh,
 	}
 
 	return ba
@@ -156,6 +177,15 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 		}
 	}
 
+	// start the workers to store the utxos in the background
+	for i := 0; i < 256; i++ {
+		go func(channel chan *storeUtxos) {
+			ba.utxoWorker(ctx, channel)
+		}(ba.storeUtxoCh[i])
+	}
+
+	// TODO start a worker to process utxos that were not updated in the utxo store
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
@@ -164,6 +194,24 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (ba *BlockAssembly) utxoWorker(ctx context.Context, channel chan *storeUtxos) {
+	for {
+		select {
+		case <-ctx.Done():
+			ba.logger.Infof("Stopping utxo store worker")
+			return
+		case utxo := <-channel:
+			if err := ba.storeUtxos(ctx, utxo.utxos, utxo.locktime); err != nil {
+				ba.logger.Errorf("error storing utxos: %s", err)
+			} else {
+				if err = ba.storeUtxoLocal.Del(ctx, utxo.txHash[:]); err != nil {
+					ba.logger.Errorf("failed to delete utxo from local store: %s", err)
+				}
+			}
+		}
+	}
 }
 
 func (ba *BlockAssembly) drpcServer(ctx context.Context, drpcAddress string) error {
@@ -321,20 +369,31 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	txMetadata, err := ba.getTxMeta(ctx, txHash)
-	if err != nil {
-		return nil, err
-	}
-
 	addTxSpan, _ := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:addTx")
-	if err = ba.blockAssembler.AddTx(txHash, txMetadata.Fee, txMetadata.SizeInBytes); err != nil {
+	if err = ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
 		return nil, err
 	}
 	addTxSpan.Finish()
 
-	err = ba.storeUtxos(ctx, txMetadata.UtxoHashes, txMetadata.LockTime)
-	if err != nil {
-		return nil, err
+	utxoLength := len(req.Utxos)
+	if utxoLength > 0 {
+		lengthVarInt := bt.VarInt(uint64(utxoLength))
+		utxoBytes := make([]byte, 0, len(req.Utxos)+lengthVarInt.Length())
+		utxoBytes = append(utxoBytes, lengthVarInt.Bytes()...)
+		for _, utxo := range req.Utxos {
+			utxoBytes = append(utxoBytes, utxo...)
+		}
+
+		// this sets the TTL for the utxo, it will be purged in 2 hours
+		if err = ba.storeUtxoLocal.Set(ctx, txHash[:], utxoBytes, options.WithTTL(120*time.Minute)); err != nil {
+			ba.logger.Errorf("failed to store utxo locally: %s", err)
+		}
+	}
+
+	ba.storeUtxoCh[int(txHash[0])] <- &storeUtxos{
+		txHash:   txHash,
+		utxos:    req.Utxos,
+		locktime: req.Locktime,
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -342,7 +401,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
-func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash.Hash, locktime uint32) error {
+func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, locktime uint32) error {
 	startUtxoTime := time.Now()
 	utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")
 	defer func() {
@@ -350,12 +409,17 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash
 		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
 	}()
 
-	// Add all the utxo hashes to the utxostore
-	// TODO what to do if this fails and the utxo table is not updated?
-	//   It's a bit of a chicken and egg thing. We cannot store the utxos before they have been added to the block
-	//   assembly, but we also cannot remove the hash from the block assembly if this fails.
-	var resp *utxostore.UTXOResponse
 	var err error
+	utxoHashes := make([]*chainhash.Hash, len(utxoBytes))
+	for i, hashBytes := range utxoBytes {
+		utxoHashes[i], err = chainhash.NewHash(hashBytes)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add all the utxo hashes to the utxostore
+	var resp *utxostore.UTXOResponse
 	for _, hash := range utxoHashes {
 		if resp, err = ba.utxoStore.Store(utxoSpanCtx, hash, locktime); err != nil {
 			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
@@ -365,7 +429,7 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoHashes []*chainhash
 	return nil
 }
 
-func (ba *BlockAssembly) getTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
+func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
 	startMetaTime := time.Now()
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {
