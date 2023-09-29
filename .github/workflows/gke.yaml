@@ -77,8 +77,8 @@ jobs:
             GITHUB_REF=${{github.ref_name}}
 
   eks-deploy-scaling:
-      uses: ./.github/workflows/deploy-to-region.yaml
-      region: eu-north-1
+    uses: ./.github/workflows/deploy-to-region.yaml
+    region: eu-north-1
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
     region: eu-north-1
