@@ -78,13 +78,17 @@ jobs:
 
   eks-deploy-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
-    region: eu-north-1
+    with:
+      region: eu-north-1
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
-    region: eu-north-1
+    with:
+      region: eu-north-1
   eks-deploy-asia:
     uses: ./.github/workflows/deploy-to-region.yaml
-    region: ap-northeast-1
+    with:
+      region: ap-northeast-1
   eks-deploy-us:
     uses: ./.github/workflows/deploy-to-region.yaml
-    region: us-east-1
+    with:
+      region: us-east-1
