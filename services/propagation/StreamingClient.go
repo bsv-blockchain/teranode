@@ -4,14 +4,9 @@ import (
 	"context"
 	"time"
 
-	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
-	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/resolver"
 )
 
 type timing struct {
@@ -43,7 +38,7 @@ func NewStreamingClient(ctx context.Context, logger utils.Logger, testMode ...bo
 		sc.testMode = testMode[0]
 	}
 
-	sc.initResolver()
+	initResolver(logger)
 
 	go sc.handler(ctx)
 
@@ -107,6 +102,7 @@ func (sc *StreamingClient) closeResources() {
 	sc.stream = nil
 	sc.conn = nil
 }
+
 func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	start := time.Now()
 
@@ -129,35 +125,13 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 	return timings.total, timings.count
 }
 
-func (sc *StreamingClient) initResolver() {
-	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
-	switch grpcResolver {
-	case "k8s":
-		sc.logger.Infof("[VALIDATOR] Using k8s resolver for clients")
-		resolver.SetDefaultScheme("k8s")
-	case "kubernetes":
-		sc.logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
-		kuberesolver.RegisterInClusterWithSchema("k8s")
-	default:
-		sc.logger.Infof("[VALIDATOR] Using default resolver for clients")
-	}
-}
-
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
-	propagation_grpcAddress, _ := gocore.Config().Get("propagation_grpcAddresses")
-
-	sc.conn, err = util.GetGRPCClient(ctx, propagation_grpcAddress, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
-	})
+	client, _, err := getClientConn(ctx)
 	if err != nil {
 		return err
 	}
-
-	client := propagation_api.NewPropagationAPIClient(sc.conn)
 
 	sc.stream, err = client.ProcessTransactionStream(ctx)
 	if err != nil {
