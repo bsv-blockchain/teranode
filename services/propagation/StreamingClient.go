@@ -14,24 +14,27 @@ type timing struct {
 	count int
 }
 
-type StreamingClient struct {
-	logger    utils.Logger
-	txCh      chan []byte
-	errorCh   chan error
-	timingsCh chan chan timing
-	conn      *grpc.ClientConn
-	stream    propagation_api.PropagationAPI_ProcessTransactionStreamClient
-	totalTime time.Duration
-	count     int
-	testMode  bool
+type transaction struct {
+	txBytes []byte
+	errCh   chan error
 }
 
-func NewStreamingClient(ctx context.Context, logger utils.Logger, testMode ...bool) (*StreamingClient, error) {
+type StreamingClient struct {
+	logger        utils.Logger
+	transactionCh chan *transaction
+	timingsCh     chan chan timing
+	conn          *grpc.ClientConn
+	stream        propagation_api.PropagationAPI_ProcessTransactionStreamClient
+	totalTime     time.Duration
+	count         int
+	testMode      bool
+}
+
+func NewStreamingClient(ctx context.Context, logger utils.Logger, bufferSize int, testMode ...bool) (*StreamingClient, error) {
 	sc := &StreamingClient{
-		logger:    logger,
-		txCh:      make(chan []byte),
-		errorCh:   make(chan error),
-		timingsCh: make(chan chan timing),
+		logger:        logger,
+		transactionCh: make(chan *transaction, bufferSize),
+		timingsCh:     make(chan chan timing),
 	}
 
 	if len(testMode) > 0 {
@@ -51,7 +54,6 @@ func (sc *StreamingClient) handler(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			sc.errorCh <- ctx.Err()
 			return
 
 		case getTimeCh := <-sc.timingsCh:
@@ -60,32 +62,32 @@ func (sc *StreamingClient) handler(ctx context.Context) {
 				count: sc.count,
 			}
 
-		case txBytes := <-sc.txCh:
+		case tx := <-sc.transactionCh:
 			if sc.testMode {
-				sc.errorCh <- nil
+				tx.errCh <- nil
 				continue
 			}
 
 			if sc.stream == nil {
 				if err := sc.initStream(ctx); err != nil {
-					sc.errorCh <- err
+					tx.errCh <- err
 					return
 				}
 			}
 
 			if err := sc.stream.Send(&propagation_api.ProcessTransactionRequest{
-				Tx: txBytes,
+				Tx: tx.txBytes,
 			}); err != nil {
-				sc.errorCh <- err
+				tx.errCh <- err
 				return
 			}
 
 			if _, err := sc.stream.Recv(); err != nil {
-				sc.errorCh <- err
+				tx.errCh <- err
 				return
 			}
 
-			sc.errorCh <- nil
+			tx.errCh <- nil
 
 		case <-time.After(10 * time.Second):
 			sc.closeResources()
@@ -107,9 +109,14 @@ func (sc *StreamingClient) closeResources() {
 func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	start := time.Now()
 
-	sc.txCh <- txBytes
+	errCh := make(chan error)
 
-	err := <-sc.errorCh
+	sc.transactionCh <- &transaction{
+		txBytes: txBytes,
+		errCh:   errCh,
+	}
+
+	err := <-errCh
 
 	sc.totalTime += time.Since(start)
 	sc.count++

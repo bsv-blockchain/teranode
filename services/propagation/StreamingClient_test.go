@@ -13,7 +13,7 @@ import (
 
 func TestStreamingClient(t *testing.T) {
 	logger := gocore.Log("test")
-	sc, err := propagation.NewStreamingClient(context.Background(), logger, true)
+	sc, err := propagation.NewStreamingClient(context.Background(), logger, 0, true)
 	require.NoError(t, err)
 
 	numberOfIterations := 100
