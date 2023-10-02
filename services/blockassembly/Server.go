@@ -19,7 +19,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -43,14 +42,15 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         utils.Logger
 
-	blockchainClient blockchain.ClientI
-	txStore          blob.Store
-	utxoStore        utxostore.Interface
-	txMetaStore      txmeta_store.Store
-	subtreeStore     blob.Store
-	jobStore         *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	storeUtxoLocal   blob.Store
-	storeUtxoCh      map[int]chan *storeUtxos
+	blockchainClient       blockchain.ClientI
+	txStore                blob.Store
+	utxoStore              utxostore.Interface
+	txMetaStore            txmeta_store.Store
+	subtreeStore           blob.Store
+	jobStore               *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	storeUTXOsInBackground bool
+	storeUtxoLocal         blob.Store
+	storeUtxoCh            map[int]chan *storeUtxos
 }
 
 type storeUtxos struct {
@@ -66,41 +66,46 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store,
-	subtreeStore blob.Store) *BlockAssembly {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
-	localUtxoStore, err := badger.New("./data/blockassembly_storeUtxoLocal")
-	if err != nil {
-		panic(err)
-	}
+	storeUTXOsInBackground := gocore.Config().GetBool("blockassembly_saveUTXOsInBackground", false)
 
-	storeUtxoCh := make(map[int]chan *storeUtxos)
-	for i := 0; i < 256; i++ {
-		storeUtxoCh[i] = make(chan *storeUtxos, 100_000)
+	var err error
+	var localUtxoStore *badger.Badger
+	var storeUtxoCh map[int]chan *storeUtxos
+
+	if storeUTXOsInBackground {
+		localUtxoStore, err = badger.New("./data/blockassembly_storeUtxoLocal")
+		if err != nil {
+			panic(err)
+		}
+
+		storeUtxoCh = make(map[int]chan *storeUtxos)
+		for i := 0; i < 256; i++ {
+			storeUtxoCh[i] = make(chan *storeUtxos, 100_000)
+		}
 	}
 
 	ba := &BlockAssembly{
-		logger:         logger,
-		txStore:        txStore,
-		utxoStore:      utxoStore,
-		txMetaStore:    txMetaStore,
-		subtreeStore:   subtreeStore,
-		jobStore:       ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		storeUtxoLocal: localUtxoStore,
-		storeUtxoCh:    storeUtxoCh,
+		logger:                 logger,
+		blockchainClient:       blockchainClient,
+		txStore:                txStore,
+		utxoStore:              utxoStore,
+		txMetaStore:            txMetaStore,
+		subtreeStore:           subtreeStore,
+		jobStore:               ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		storeUTXOsInBackground: storeUTXOsInBackground,
+		storeUtxoLocal:         localUtxoStore,
+		storeUtxoCh:            storeUtxoCh,
 	}
 
 	return ba
 }
 
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
-	ba.blockchainClient, err = blockchain.NewClient(ctx)
-	if err != nil {
-		panic(err)
-	}
-
 	newSubtreeChan := make(chan *util.Subtree)
 
 	// init the block assembler for this server
@@ -355,11 +360,11 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
 	startTime := time.Now()
-	traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
+	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
 
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
-		traceSpan.Finish()
+		//traceSpan.Finish()
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
@@ -369,31 +374,36 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	addTxSpan, _ := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:addTx")
 	if err = ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
 		return nil, err
 	}
-	addTxSpan.Finish()
 
-	utxoLength := len(req.Utxos)
-	if utxoLength > 0 {
-		lengthVarInt := bt.VarInt(uint64(utxoLength))
-		utxoBytes := make([]byte, 0, len(req.Utxos)+lengthVarInt.Length())
-		utxoBytes = append(utxoBytes, lengthVarInt.Bytes()...)
-		for _, utxo := range req.Utxos {
-			utxoBytes = append(utxoBytes, utxo...)
+	if ba.storeUTXOsInBackground {
+		utxoLength := len(req.Utxos)
+		if utxoLength > 0 {
+			lengthVarInt := bt.VarInt(uint64(utxoLength))
+			utxoBytes := make([]byte, 0, len(req.Utxos)+lengthVarInt.Length())
+			utxoBytes = append(utxoBytes, lengthVarInt.Bytes()...)
+			for _, utxo := range req.Utxos {
+				utxoBytes = append(utxoBytes, utxo...)
+			}
+
+			// this stores the utxo and sets the TTL, it will be purged in 2 hours
+			if err = ba.storeUtxoLocal.Set(ctx, txHash[:], utxoBytes, options.WithTTL(120*time.Minute)); err != nil {
+				return nil, fmt.Errorf("failed to store utxo locally: %s", err)
+			}
 		}
 
-		// this sets the TTL for the utxo, it will be purged in 2 hours
-		if err = ba.storeUtxoLocal.Set(ctx, txHash[:], utxoBytes, options.WithTTL(120*time.Minute)); err != nil {
-			ba.logger.Errorf("failed to store utxo locally: %s", err)
+		ba.storeUtxoCh[int(txHash[0])] <- &storeUtxos{
+			txHash:   txHash,
+			utxos:    req.Utxos,
+			locktime: req.Locktime,
 		}
-	}
-
-	ba.storeUtxoCh[int(txHash[0])] <- &storeUtxos{
-		txHash:   txHash,
-		utxos:    req.Utxos,
-		locktime: req.Locktime,
+	} else {
+		err = ba.storeUtxos(ctx, req.Utxos, req.Locktime)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -403,9 +413,10 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, locktime uint32) error {
 	startUtxoTime := time.Now()
-	utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")
+	//utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")
+	utxoSpanCtx := ctx
 	defer func() {
-		utxoSpan.Finish()
+		//utxoSpan.Finish()
 		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
 	}()
 

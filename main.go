@@ -163,12 +163,19 @@ func main() {
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			if err := sm.AddService("BlockAssembly", blockassembly.New(
+			// should this be done globally somewhere?
+			blockchainClient, err := blockchain.NewClient(ctx)
+			if err != nil {
+				panic(err)
+			}
+
+			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bass"),
 				getTxStore(),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
 				getSubtreeStore(),
+				blockchainClient,
 			)); err != nil {
 				panic(err)
 			}
