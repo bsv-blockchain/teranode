@@ -24,7 +24,8 @@ import (
 
 func TestServer_Performance(t *testing.T) {
 	t.Run("1 million txs", func(t *testing.T) {
-		//util.SkipLongTests(t)
+		// this test does not work online, it needs to be run locally
+		return
 
 		ba, err := initMockedServer(t)
 		require.NoError(t, err)
