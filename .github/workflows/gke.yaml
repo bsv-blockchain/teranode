@@ -40,9 +40,6 @@ jobs:
   build-docker:
     name: Build Docker image
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        region: ['eu-north-1', 'eu-west-1', 'yet-another-region']  # Add or modify regions as needed
 
     steps:
       - uses: actions/checkout@v3
