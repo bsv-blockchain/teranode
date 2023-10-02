@@ -72,6 +72,7 @@ jobs:
           file: ./Dockerfile
           push: false # Do not push here
           tags: ubsv:${{ github.sha }}
+          load: true
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
