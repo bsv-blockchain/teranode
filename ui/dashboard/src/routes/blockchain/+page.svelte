@@ -13,6 +13,26 @@
 
   $: $lastUpdated && fetchData()
 
+  function getHumanReadableTime(diff) {
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    const hours = Math.floor(
+            (diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+    )
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    const seconds = Math.floor((diff % (1000 * 60)) / 1000)
+
+    let humanReadableTime = ''
+    if (days > 0) {
+      return `${days}d${hours}h${minutes}m`
+    } else if (hours > 0) {
+      return `${hours}h${minutes}m`
+    } else if (minutes > 0) {
+      return `${minutes}m${seconds}s`
+    } else {
+      return `${seconds}s`
+    }
+  }
+
   async function fetchData() {
     try {
       if (!$selectedNode) {
@@ -41,15 +61,7 @@
         const prevBlockTime = new Date(prevBlock.timestamp)
         const blockTime = new Date(block.timestamp)
         const diff = blockTime - prevBlockTime
-
-        const minutes = Math.floor(diff / (1000 * 60))
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000)
-
-        if (minutes > 0) {
-          block.deltaTime = `${minutes}m${seconds}s`
-        } else {
-          block.deltaTime = `${seconds}s`
-        }
+        block.deltaTime = getHumanReadableTime(diff)
       })
 
       // Calculate the age of the block
@@ -57,23 +69,7 @@
         const blockTime = new Date(block.timestamp)
         const now = new Date()
         const diff = now - blockTime
-
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-        const hours = Math.floor(
-          (diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-        )
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000)
-
-        if (days > 0) {
-          block.age = `${days}d${hours}h${minutes}m`
-        } else if (hours > 0) {
-          block.age = `${hours}h${minutes}m`
-        } else if (minutes > 0) {
-          block.age = `${minutes}m${seconds}s`
-        } else {
-          block.age = `${seconds}s`
-        }
+        block.age = getHumanReadableTime(diff)
       })
 
       blocks = b.slice(0, numberOfBlocks) // Only show the last 10 blocks
