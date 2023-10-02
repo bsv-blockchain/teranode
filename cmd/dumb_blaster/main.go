@@ -42,6 +42,7 @@ var (
 	httpUrl                         *url.URL
 	client                          *propagation.StreamingClient
 	errorCh                         chan error
+	bufferSize                      int
 )
 
 func init() {
@@ -84,6 +85,7 @@ func init() {
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http)")
+	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
 	logger := gocore.Log("dumb_blaster")
@@ -157,7 +159,7 @@ func worker(logger utils.Logger) {
 	if broadcastProtocol == "stream" {
 		var err error
 		ctx := context.Background()
-		streamingClient, err = propagation.NewStreamingClient(ctx, logger)
+		streamingClient, err = propagation.NewStreamingClient(ctx, logger, bufferSize)
 		if err != nil {
 			panic(err)
 		}
