@@ -56,6 +56,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1.7.0
+        with:
+          mask-password: true
+          region: eu-north-1
 
       # Build and push Docker image to AWS ECR
       - name: Build Docker image
@@ -71,13 +77,6 @@ jobs:
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
-
-      # Authenticate Docker to AWS ECR
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1.7.0
-        with:
-          mask-password: true
-          region: eu-north-1
 
       - name: Push to eu-north-1
         run: |
