@@ -3,6 +3,7 @@ package miner
 import (
 	"context"
 	"fmt"
+	"hash/maphash"
 	"math/rand"
 	"time"
 
@@ -108,7 +109,8 @@ func (m *Miner) mine(ctx context.Context) error {
 
 	// Wait a bit before submitting the solution to simulate high difficulty
 	if waitSeconds > 0 {
-		randWait := rand.Intn(waitSeconds)
+		r := rand.New(rand.NewSource(int64(new(maphash.Hash).Sum64())))
+		randWait := r.Intn(waitSeconds)
 
 		m.logger.Warnf("[Miner] Found block on job %s, waiting %ds before submitting", candidateId, randWait)
 
