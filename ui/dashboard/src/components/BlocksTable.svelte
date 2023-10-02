@@ -9,14 +9,14 @@
 <table class="table">
   <thead>
     <tr>
-      <th>Height</th>
+      <th>Height<br/>Hash</th>
       <th>Timestamp (UTC)</th>
       <th>Age</th>
       <th>Delta Time</th>
       <th>Miner</th>
       <th>Fees</th>
       <th>Number of Transactions</th>
-      <th>Size</th>
+      <th>Size (Bytes)</th>
     </tr>
   </thead>
   <tbody>
