@@ -40,6 +40,9 @@ jobs:
   build-docker:
     name: Build Docker image
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        region: ['eu-north-1', 'eu-west-1', 'yet-another-region']  # Add or modify regions as needed
 
     steps:
       - uses: actions/checkout@v3
@@ -63,18 +66,38 @@ jobs:
           mask-password: true
 
       # Build and push Docker image to AWS ECR
-      - name: Build and push
+      - name: Build Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: ./Dockerfile
-          push: true
-          tags: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+          push: false # Do not push here
+          tags: ubsv:${{ github.sha }}
           build-args: |
             GITHUB_SHA=${{github.sha}}
             GITHUB_REF=${{github.ref_name}}
+
+      - name: Push to eu-north-1
+        run: |
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+          docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+
+      - name: Push to eu-west-1
+        run: |
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-west-1.amazonaws.com/ubsv:${{ github.sha }}
+          docker push 434394763103.dkr.ecr.eu-west-1.amazonaws.com/ubsv:${{ github.sha }}
+
+      - name: Push to ap-northeast-1
+        run: |
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.ap-northeast-1.amazonaws.com/ubsv:${{ github.sha }}
+          docker push 434394763103.dkr.ecr.ap-northeast-1.amazonaws.com/ubsv:${{ github.sha }}
+
+      - name: Push to us-east-1
+        run: |
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.us-east-1.amazonaws.com/ubsv:${{ github.sha }}
+          docker push 434394763103.dkr.ecr.us-east-1.amazonaws.com/ubsv:${{ github.sha }}
 
   eks-deploy-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
