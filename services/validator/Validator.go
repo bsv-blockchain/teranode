@@ -136,8 +136,9 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	// register transaction in tx status utxoStore
+	duplicateValidationRequest := false
 	g.Go(func() error {
-		if err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, reservedUtxos); err != nil {
+		if duplicateValidationRequest, err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, reservedUtxos); err != nil {
 			return err
 		}
 		return nil
@@ -149,6 +150,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 		return err
 	}
 
+	if duplicateValidationRequest {
+		// this was a duplicate validation request, because the tx already existed in the tx meta store
+		// we can just return here and will not send the tx to the block assembler
+		return nil
+	}
+
 	return v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
 		TxIDChainHash: tx.TxIDChainHash(),
 		Fee:           fees,
@@ -158,21 +165,21 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	}, reservedUtxos)
 }
 
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*chainhash.Hash) error {
+func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*chainhash.Hash) (bool, error) {
 	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
 	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
-			return nil
+			return true, nil
 		}
 
 		v.reverseSpends(traceSpan, reservedUtxos)
-		return fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
+		return false, fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 	}
 
-	return nil
+	return false, nil
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
