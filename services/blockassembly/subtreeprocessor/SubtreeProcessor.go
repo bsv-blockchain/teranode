@@ -53,7 +53,7 @@ type SubtreeProcessor struct {
 	currentSubtree      *util.Subtree
 	currentBlockHeader  *model.BlockHeader
 	sync.Mutex
-	txCount      uint64
+	txCount      atomic.Uint64
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       utils.Logger
@@ -92,7 +92,6 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		currentSubtree:      firstSubtree,
 		subtreeStore:        subtreeStore,
 		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
-		txCount:             0,
 		logger:              logger,
 	}
 
@@ -139,7 +138,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				if txReq.waitCh != nil {
 					txReq.waitCh <- struct{}{}
 				}
-				stp.txCount++
+				stp.txCount.Add(1)
 			}
 		}
 	}()
@@ -153,7 +152,7 @@ func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeade
 }
 
 func (stp *SubtreeProcessor) TxCount() uint64 {
-	return stp.txCount
+	return stp.txCount.Load()
 }
 
 func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64, sizeInBytes uint64, skipNotification ...bool) {
@@ -266,11 +265,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 }
 
 func (stp *SubtreeProcessor) setTxCount() {
-	stp.txCount = 0
+	stp.txCount.Store(0)
 	for _, subtree := range stp.chainedSubtrees {
-		stp.txCount += uint64(subtree.Length())
+		stp.txCount.Add(uint64(subtree.Length()))
 	}
-	stp.txCount += uint64(stp.currentSubtree.Length())
+	stp.txCount.Add(uint64(stp.currentSubtree.Length()))
 }
 
 // moveDownBlock adds all transactions that are in the block given to the current subtrees
