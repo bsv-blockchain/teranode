@@ -76,9 +76,14 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		panic(err)
 	}
 
+	txChanBufferSize := 100_000
+	if settingsBufferSize, ok := gocore.Config().GetInt("tx_chan_buffer_size", 0); ok {
+		txChanBufferSize = settingsBufferSize
+	}
+
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,
-		txChan:              make(chan *txIDAndFee, 100_000),
+		txChan:              make(chan *txIDAndFee, txChanBufferSize),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
 		moveUpBlockChan:     make(chan moveBlockRequest),
 		reorgBlockChan:      make(chan reorgBlocksRequest),

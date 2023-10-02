@@ -81,7 +81,12 @@ export function connectToBootstrap(blobServerHTTPAddress) {
 
         console.log('BootstrapWS', json)
         let nodesData = get(nodes)
-        if (!nodesData.find((node) => node.ip === json.ip)) {
+        if (!nodesData.find((node) => {
+          const a = node.name || node.blobServerHTTPAddress || node.ip
+          const b = json.name || json.blobServerHTTPAddress || json.ip
+
+          return a === b
+          })) {
           nodesData.push(json)
         }
 
