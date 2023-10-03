@@ -107,6 +107,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 	var parentTxHashes []*chainhash.Hash
 	g.Go(func() error {
 		// this will reverse the spends if there is an error
+		// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
+		//      do not allow any utxo be spent more than once
 		if reservedUtxos, parentTxHashes, err = v.spendUtxos(traceSpan, tx); err != nil {
 			return err
 		}
@@ -244,9 +246,6 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*chainhash.
 
 	if err != nil {
 		v.logger.Debugf("reverse %d utxos for %s", len(reservedUtxos), txIDChainHash.String())
-		defer func() {
-			utxoSpan.Finish()
-		}()
 
 		v.reverseSpends(traceSpan, reservedUtxos)
 		traceSpan.RecordError(err)

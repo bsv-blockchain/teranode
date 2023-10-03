@@ -20,7 +20,7 @@ import (
 )
 
 type txIDAndFee struct {
-	txID        chainhash.Hash
+	txID        *chainhash.Hash
 	fee         uint64
 	sizeInBytes uint64
 	waitCh      chan struct{}
@@ -100,8 +100,8 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				logger.Infof("[SubtreeProcessor] get current subtrees")
-				chainedSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees))
-				chainedSubtrees = append(chainedSubtrees, stp.chainedSubtrees...)
+				completeSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees))
+				completeSubtrees = append(completeSubtrees, stp.chainedSubtrees...)
 
 				// incomplete subtrees ?
 				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
@@ -110,12 +110,13 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 						_ = incompleteSubtree.AddNode(node.Hash, node.Fee, node.SizeInBytes)
 					}
 					incompleteSubtree.Fees = stp.currentSubtree.Fees
-					chainedSubtrees = append(chainedSubtrees, incompleteSubtree)
+					completeSubtrees = append(completeSubtrees, incompleteSubtree)
 
+					// store (and announce) new incomplete subtree to other miners
 					newSubtreeChan <- incompleteSubtree
 				}
 
-				getSubtreesChan <- chainedSubtrees
+				getSubtreesChan <- completeSubtrees
 
 			case reorgReq := <-stp.reorgBlockChan:
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor")
@@ -155,10 +156,10 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }
 
-func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64, sizeInBytes uint64, skipNotification ...bool) {
+func (stp *SubtreeProcessor) addNode(txID *chainhash.Hash, fee uint64, sizeInBytes uint64, skipNotification ...bool) {
 	prometheusSubtreeProcessorAddTx.Inc()
 
-	err := stp.currentSubtree.AddNode(&txID, fee, sizeInBytes)
+	err := stp.currentSubtree.AddNode(txID, fee, sizeInBytes)
 	if err != nil {
 		panic(err)
 	}
@@ -182,7 +183,7 @@ func (stp *SubtreeProcessor) addNode(txID chainhash.Hash, fee uint64, sizeInByte
 }
 
 // Add adds a tx hash to a channel
-func (stp *SubtreeProcessor) Add(hash chainhash.Hash, fee uint64, sizeInBytes uint64, optionalWaitCh ...chan struct{}) {
+func (stp *SubtreeProcessor) Add(hash *chainhash.Hash, fee uint64, sizeInBytes uint64, optionalWaitCh ...chan struct{}) {
 	if len(optionalWaitCh) > 0 {
 		stp.txChan <- &txIDAndFee{
 			txID:        hash,
@@ -244,6 +245,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		return errors.New("you must pass in blocks to move down the chain")
 	}
 
+	// TODO make this more efficient by doing all the moveDownBlocks in 1 go into the subtrees
 	for _, block := range moveDownBlocks {
 		err := stp.moveDownBlock(ctx, block)
 		if err != nil {
@@ -323,11 +325,11 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtree.Nodes); i++ {
-				stp.addNode(*subtree.Nodes[i].Hash, subtree.Nodes[i].Fee, subtree.Nodes[i].SizeInBytes, true)
+				stp.addNode(subtree.Nodes[i].Hash, subtree.Nodes[i].Fee, subtree.Nodes[i].SizeInBytes, true)
 			}
 		} else {
 			for _, node := range subtree.Nodes {
-				stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, true)
+				stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
 			}
 		}
 	}
@@ -335,13 +337,13 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, true)
+			stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
 		}
 	}
 
 	// add all the transactions from the last incomplete subtree
 	for _, node := range lastIncompleteSubtree.Nodes {
-		stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, true)
+		stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
 	}
 
 	// we must set the current block header
@@ -454,7 +456,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 					stp.logger.Warnf("skipping coinbase transaction: %s, %d", node.Hash.String(), idx)
 					continue
 				}
-				stp.addNode(*node.Hash, node.Fee, node.SizeInBytes, skipNotification)
+				stp.addNode(node.Hash, node.Fee, node.SizeInBytes, skipNotification)
 			}
 		}
 	}

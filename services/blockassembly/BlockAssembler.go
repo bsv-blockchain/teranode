@@ -254,7 +254,7 @@ func (b *BlockAssembler) AddTx(txHash *chainhash.Hash, fee, size uint64) error {
 	startTime := time.Now()
 	prometheusBlockAssemblerAddTx.Inc()
 
-	b.subtreeProcessor.Add(*txHash, fee, size)
+	b.subtreeProcessor.Add(txHash, fee, size)
 
 	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(time.Since(startTime).Seconds())
 
