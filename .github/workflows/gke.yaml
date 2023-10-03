@@ -89,18 +89,21 @@ jobs:
     secrets: inherit
     with:
       region: eu-north-1
+
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
-      region: eu-north-1
+      region: eu-west-1
+
   eks-deploy-asia:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
     with:
       region: ap-northeast-1
+
   eks-deploy-us:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]

@@ -62,12 +62,7 @@ jobs:
         run: |-
           # Apply latest deployment configuration changes
           cd ./deploy/k8s/${{ inputs.region }}
-          for file in *deployment.yaml; do     # Loop over all files in the directory
-              # Skip kustomization.yaml file
-              if [ "$file" == "kustomization.yaml" ]; then
-                  continue
-              fi
-
+          for file in $(ls *deployment.yaml); do  # Loop over all files with the name pattern
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
 
