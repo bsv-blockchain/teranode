@@ -52,7 +52,7 @@ jobs:
           # Setting Image
           cd ./deploy/k8s/${{ inputs.region }}
           echo "Setting image"
-          kustomize edit set image 434394763103.dkr.ecr.${{ inputs.region }}.amazonaws.com/IMAGE:TAG=434394763103.dkr.ecr.${{ inputs.region }}.amazonaws.com/ubsv:$GITHUB_SHA
+          kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.${{ inputs.region }}.amazonaws.com/ubsv:$GITHUB_SHA
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
