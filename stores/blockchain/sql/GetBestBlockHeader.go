@@ -31,6 +31,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// TODO prefer our own blocks over the ones from the network
+	//      exclude invalid blocks
 	q := `
 		SELECT
 	   b.version
