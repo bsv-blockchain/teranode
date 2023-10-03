@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"storj.io/drpc/drpcconn"
 )
 
 var (
@@ -38,9 +40,11 @@ var (
 	prometheusProcessedTransactions prometheus.Counter
 	workerCount                     int
 	grpcClient                      propagation_api.PropagationAPIClient
+	streamClient                    *propagation.StreamingClient
+	drpcClient                      propagation_api.DRPCPropagationAPIClient
+	frpcClient                      *propagation_api.Client
 	broadcastProtocol               string
 	httpUrl                         *url.URL
-	client                          *propagation.StreamingClient
 	errorCh                         chan error
 	bufferSize                      int
 )
@@ -109,6 +113,36 @@ func main() {
 			panic(err)
 		}
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
+
+	case "drpc":
+		if propagationDrpcAddresses, ok := gocore.Config().GetMulti("propagation_drpcAddresses", "|"); ok {
+			for _, propagationDrpcAddress := range propagationDrpcAddresses {
+				rawconn, err := net.Dial("tcp", propagationDrpcAddress)
+				if err != nil {
+					panic(err)
+				}
+				conn := drpcconn.New(rawconn)
+				drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
+			}
+		}
+
+	case "frpc":
+		if propagationFrpcAddresses, ok := gocore.Config().GetMulti("propagation_frpcAddresses", "|"); ok {
+			for _, propagationFrpcAddress := range propagationFrpcAddresses {
+				client, err := propagation_api.NewClient(nil, nil)
+				if err != nil {
+					panic(err)
+				}
+
+				err = client.Connect(propagationFrpcAddress)
+				if err != nil {
+					panic(err)
+				} else {
+					frpcClient = client
+				}
+			}
+		}
+
 	}
 
 	var err error
@@ -138,6 +172,10 @@ func main() {
 		log.Printf("Starting %d stream worker(s)", workerCount)
 	case "http":
 		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
+	case "drpc":
+		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
+	case "frpc":
+		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
 		panic("Unknown broadcast protocol")
 	}
@@ -191,6 +229,7 @@ func worker(logger utils.Logger) {
 
 func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtendedBytes []byte) error {
 	switch broadcastProtocol {
+
 	case "disabled":
 
 		return nil
@@ -226,6 +265,23 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 		})
 
 		return err
+
+	case "drpc":
+
+		_, err := drpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+
+		return err
+
+	case "frpc":
+
+		_, err := frpcClient.PropagationAPI.ProcessTransaction(ctx, &propagation_api.PropagationApiProcessTransactionRequest{
+			Tx: txExtendedBytes,
+		})
+
+		return err
+
 	}
 
 	return nil
