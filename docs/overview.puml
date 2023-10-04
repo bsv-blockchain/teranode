@@ -1,34 +1,30 @@
 @startuml overview
 actor TxBlaster
 actor Propagation
-database txstore
+database txStore
 actor Validator
-actor txMetaStore
-database txmetastore
+database txMetaStore
 actor BlockAssembler
 participant SubtreeProcessor
-actor utxoStore
-database utxostore
-database subtreestore
+database utxoStore
+database subtreeStore
 Actor Blockchain
-database blockchainstore
+database blockchainStore
 actor Miner
 
-TxBlaster -[#blue]> Propagation : grpc:Set(tx)
-Propagation -[#red]-> txstore: storeTransaction
+TxBlaster -[#blue]> Propagation : grpc:ProcessTransaction(tx)
+Propagation -[#red]-> txStore: storeTransaction
 Propagation -[#blue]> Validator: grpc:ValidateTransaction(tx)
 
-Validator -[#blue]-> txMetaStore: grpc:Create(txMeta)
-txMetaStore -[#red]-> txmetastore: Create
+Validator -[#red]-> txMetaStore: Create(txMeta)
 Validator -[#blue]> BlockAssembler: grpc:AddTx(tx)
 
-BlockAssembler -[#blue]> txMetaStore: grpc:Get(txMeta)
+BlockAssembler -[#red]> txMetaStore: Get(txMeta)
 BlockAssembler -> SubtreeProcessor: Add(tx)
-SubtreeProcessor -[#blue]> utxoStore: grpc:Store(tx)
-utxoStore -[#red]-> utxostore: Store
+SubtreeProcessor -[#red]> utxoStore: Store(tx)
 SubtreeProcessor -> SubtreeProcessor : addNode
 SubtreeProcessor -> SubtreeProcessor : newSubtreeChan
-SubtreeProcessor -[#red]-> subtreestore : Set
+SubtreeProcessor -[#red]-> subtreeStore : Set
 
 
 
@@ -37,16 +33,16 @@ Miner -> Miner : randomDelay()
 Miner -[#blue]> BlockAssembler : grpc:SubmitMiningSolution(solution))
 
 BlockAssembler -[#blue]> Blockchain : grpc:AddBlock(block)
-BlockAssembler -[#red]-> txstore : Set(coinbase tx)
-BlockAssembler -[#red]-> subtreestore : SetTTL(hash)
-Blockchain -[#red]-> blockchainstore : StoreBlock(block)
+BlockAssembler -[#red]-> txStore : Set(coinbase tx)
+BlockAssembler -[#red]-> subtreeStore : SetTTL(hash)
+Blockchain -[#red]-> blockchainStore : StoreBlock(block)
 Blockchain -[#blue]> BlockAssembler : grpc:SendNotification(block)
 BlockAssembler -[#blue]> Blockchain : grpc:GetBestBlockHeader()
 BlockAssembler -> BlockAssembler : (if-new-block)
 BlockAssembler -[#blue]> Blockchain : grpc:GetBlock(hash)
 BlockAssembler -[#blue]> SubtreeProcessor : grpc:MoveUpBlock(block)
 BlockAssembler -[#blue]> Blockchain : grpc:SetState(block)
-Blockchain -[#red]-> blockchainstore : SetState(block)
+Blockchain -[#red]-> blockchainStore : SetState(block)
 
 
 @enduml
