@@ -261,6 +261,8 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 		defer close(ch)
 
 		for c.running {
+			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
+
 			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
@@ -273,8 +275,9 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
-						c.logger.Errorf("[Blockchain] failed to receive notification: %v", err)
+						c.logger.Warnf("[Blockchain] failed to receive notification: %v", err)
 					}
+					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
 					time.Sleep(1 * time.Second)
 					break
 				}
