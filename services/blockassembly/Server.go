@@ -51,6 +51,7 @@ type BlockAssembly struct {
 	storeUTXOsInBackground bool
 	storeUtxoLocal         blob.Store
 	storeUtxoCh            map[int]chan *storeUtxos
+	blockAssemblyDisabled  bool
 }
 
 type storeUtxos struct {
@@ -100,6 +101,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		storeUTXOsInBackground: storeUTXOsInBackground,
 		storeUtxoLocal:         localUtxoStore,
 		storeUtxoCh:            storeUtxoCh,
+		blockAssemblyDisabled:  gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
 	return ba
@@ -374,8 +376,10 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, err
 	}
 
-	if err = ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
-		return nil, err
+	if !ba.blockAssemblyDisabled {
+		if err = ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
+			return nil, err
+		}
 	}
 
 	if ba.storeUTXOsInBackground {

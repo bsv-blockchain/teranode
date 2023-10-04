@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -50,8 +52,48 @@ func (u *UTXOStore) Init(_ context.Context) error {
 
 // Start function
 func (u *UTXOStore) Start(ctx context.Context) error {
+
+	// get the latest block height to compare against lock time utxos
+	blockchainClient, err := blockchain.NewClient(ctx)
+	if err != nil {
+		return err
+	}
+	blockchainSubscriptionCh, err := blockchainClient.Subscribe(ctx, "UTXOServer")
+	if err != nil {
+		return err
+	}
+
+	_, height, err := blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		u.logger.Errorf("[UTXOServer] error getting best block header: %v", err)
+	} else {
+		u.logger.Debugf("[UTXOServer] setting block height to %d", height)
+		_ = u.store.SetBlockHeight(height)
+	}
+
+	u.logger.Infof("[UTXOServer] starting block height subscription")
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				u.logger.Infof("[UTXOServer] shutting down block height subscription")
+				return
+			case notification := <-blockchainSubscriptionCh:
+				if notification.Type == model.NotificationType_Block {
+					_, height, err = blockchainClient.GetBestBlockHeader(ctx)
+					if err != nil {
+						u.logger.Errorf("[UTXOServer] error getting best block header: %v", err)
+						continue
+					}
+					u.logger.Debugf("[UTXOServer] setting block height to %d", height)
+					_ = u.store.SetBlockHeight(height)
+				}
+			}
+		}
+	}()
+
 	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, "utxo", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, u.logger, "utxo", func(server *grpc.Server) {
 		utxostore_api.RegisterUtxoStoreAPIServer(server, u)
 	}); err != nil {
 		return err
