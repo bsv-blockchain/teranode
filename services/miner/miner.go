@@ -134,7 +134,7 @@ func (m *Miner) mine(ctx context.Context) error {
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
 	m.logger.Debugf(solution.Stringify())
 
-	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+	err = m.blockAssemblyClient.SubmitMiningSolution(context.TODO(), solution)
 	if err != nil {
 		return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
 	}
