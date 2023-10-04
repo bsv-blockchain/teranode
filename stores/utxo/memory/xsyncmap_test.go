@@ -9,7 +9,7 @@ import (
 func TestXsyncMap(t *testing.T) {
 	t.Run("memory store", func(t *testing.T) {
 		db := NewXSyncMap(false)
-		err := db.delete(hash)
+		err := db.delete(testHash1)
 		require.NoError(t, err)
 
 		testStore(t, db)
@@ -17,7 +17,7 @@ func TestXsyncMap(t *testing.T) {
 
 	t.Run("memory spend", func(t *testing.T) {
 		db := NewXSyncMap(false)
-		err := db.delete(hash)
+		err := db.delete(testHash1)
 		require.NoError(t, err)
 
 		testSpend(t, db)
@@ -25,7 +25,7 @@ func TestXsyncMap(t *testing.T) {
 
 	t.Run("memory reset", func(t *testing.T) {
 		db := NewXSyncMap(false)
-		err := db.delete(hash)
+		err := db.delete(testHash1)
 		require.NoError(t, err)
 
 		testRestore(t, db)
@@ -33,7 +33,7 @@ func TestXsyncMap(t *testing.T) {
 
 	t.Run("memory lock time", func(t *testing.T) {
 		db := NewXSyncMap(false)
-		err := db.delete(hash)
+		err := db.delete(testHash1)
 		require.NoError(t, err)
 
 		testLockTime(t, db)

@@ -11,6 +11,7 @@ service UtxoStoreAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Store (StoreRequest) returns (StoreResponse) {}
+  rpc BatchStore (BatchStoreRequest) returns (BatchStoreResponse) {}
   rpc Spend (SpendRequest) returns (SpendResponse) {}
   rpc Reset (ResetRequest) returns (ResetResponse) {}
   rpc Delete (DeleteRequest) returns (DeleteResponse) {}
@@ -34,12 +35,23 @@ enum Status {
 
 // swagger:model StoreRequest
 message StoreRequest {
-  bytes uxto_hash = 1;
+  bytes utxo_hash = 1;
   uint32 lock_time = 2;
 }
 
 // swagger:model StoreResponse
 message StoreResponse {
+  Status status = 1;
+}
+
+// swagger:model BatchStoreRequest
+message BatchStoreRequest {
+  repeated bytes utxo_hashes = 1;
+  uint32 lock_time = 2;
+}
+
+// swagger:model BatchStoreResponse
+message BatchStoreResponse {
   Status status = 1;
 }
 

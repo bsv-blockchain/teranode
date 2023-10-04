@@ -220,10 +220,10 @@ func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint3
 	}, nil
 }
 
-func (s *Store) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+func (s *Store) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
 	var h *chainhash.Hash
 	for _, h = range hashes {
-		_, err := s.Store(ctx, h, 0)
+		_, err := s.Store(ctx, h, nLockTime)
 		if err != nil {
 			return nil, err
 		}

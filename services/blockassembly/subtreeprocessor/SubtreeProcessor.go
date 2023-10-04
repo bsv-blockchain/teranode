@@ -488,21 +488,12 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	}
 
 	var utxoHash *chainhash.Hash
-	var utxoHashes []*chainhash.Hash
-	var resp *utxostore.UTXOResponse
-	var success = true
+	utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
 	for i, output := range block.CoinbaseTx.Outputs {
 		if output.Satoshis > 0 {
 			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 			if err != nil {
 				stp.logger.Errorf("[SubtreeProcessor] error creating utxo hash: %v", err)
-				success = false
-				break
-			}
-
-			if resp, err = stp.utxoStore.Store(ctx, utxoHash, blockHeight+100); err != nil {
-				stp.logger.Errorf("[SubtreeProcessor] error storing utxo (%v): %v", resp, err)
-				success = false
 				break
 			}
 
@@ -511,12 +502,20 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		}
 	}
 
-	if err != nil || !success {
+	if err == nil {
+		if _, err = stp.utxoStore.BatchStore(ctx, utxoHashes, blockHeight+100); err != nil {
+			// error will be handled below
+			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+		}
+	}
+
+	if err != nil {
 		// revert the utxos we just added
+		var delErr error
 		for _, utxoHash = range utxoHashes {
-			_, err = stp.utxoStore.Delete(ctx, utxoHash)
-			if err != nil {
-				stp.logger.Errorf("[SubtreeProcessor] error reverting utxo (%s): %w", utxoHash, err)
+			_, delErr = stp.utxoStore.Delete(ctx, utxoHash)
+			if delErr != nil {
+				stp.logger.Errorf("[SubtreeProcessor] error reverting utxo (%s): %w", utxoHash, delErr)
 			}
 		}
 

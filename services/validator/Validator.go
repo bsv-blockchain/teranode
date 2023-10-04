@@ -125,13 +125,11 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 			return err
 		}
 
-		// we must create the new utxos in the utxo utxoStore and will stop processing after that
-		for _, hash := range utxoHashes {
-			if _, err = v.utxoStore.Store(utxoSpan.Ctx, hash, tx.LockTime); err != nil {
-				v.reverseSpends(traceSpan, reservedUtxos)
-				utxoSpan.RecordError(err)
-				return fmt.Errorf("error storing utxo: %v", err)
-			}
+		// TODO the BatchStore function should do the cleanup of new utxos if the storing fails
+		if _, err = v.utxoStore.BatchStore(utxoSpan.Ctx, utxoHashes, tx.LockTime); err != nil {
+			v.reverseSpends(traceSpan, reservedUtxos)
+			utxoSpan.RecordError(err)
+			return fmt.Errorf("error storing utxos: %v", err)
 		}
 
 		return nil

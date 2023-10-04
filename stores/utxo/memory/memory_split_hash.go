@@ -6,6 +6,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/sync/errgroup"
 )
 
 type SplitByHash struct {
@@ -60,9 +61,7 @@ func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.U
 }
 
 func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
-	memMap := m.m[[1]byte{hash[0]}]
-
-	status, err := memMap.Store(hash, nLockTime)
+	status, err := m.m[[1]byte{hash[0]}].Store(hash, nLockTime)
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +71,22 @@ func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash, nLockTime u
 	}, nil
 }
 
-func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
-	var h *chainhash.Hash
-	for _, h = range hashes {
-		_, err := m.Store(ctx, h, 0)
-		if err != nil {
-			return nil, err
-		}
+func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
+	var hash *chainhash.Hash
+	g, _ := errgroup.WithContext(ctx)
+	for _, hash = range hashes {
+		hash := hash
+		g.Go(func() error {
+			_, err := m.m[[1]byte{hash[0]}].Store(hash, nLockTime)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	return &utxostore.BatchResponse{

@@ -120,7 +120,7 @@ func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) 
 	traceSpan := tracing.Start(ctx, "UTXOStore:Store")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	utxoHash, err := chainhash.NewHash(req.UtxoHash)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +133,31 @@ func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) 
 	prometheusUtxoStore.Inc()
 
 	return &utxostore_api.StoreResponse{
+		Status: utxostore_api.Status(resp.Status),
+	}, nil
+}
+
+func (u *UTXOStore) BatchStore(ctx context.Context, req *utxostore_api.BatchStoreRequest) (*utxostore_api.BatchStoreResponse, error) {
+	traceSpan := tracing.Start(ctx, "UTXOStore:BatchStore")
+	defer traceSpan.Finish()
+
+	var err error
+	utxoHashes := make([]*chainhash.Hash, len(req.UtxoHashes))
+	for idx, hash := range req.UtxoHashes {
+		utxoHashes[idx], err = chainhash.NewHash(hash)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	resp, err := u.store.BatchStore(traceSpan.Ctx, utxoHashes, req.LockTime)
+	if err != nil {
+		return nil, err
+	}
+
+	prometheusUtxoStore.Inc()
+
+	return &utxostore_api.BatchStoreResponse{
 		Status: utxostore_api.Status(resp.Status),
 	}, nil
 }

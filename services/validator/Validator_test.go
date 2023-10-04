@@ -23,7 +23,7 @@ func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator test Null Store", nil
 }
 
-func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
 	return nil, nil
 }
 

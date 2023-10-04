@@ -13,30 +13,30 @@ import (
 )
 
 var (
-	hash, _  = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
-	hash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
+	testHash1, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
+	testHash2, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 )
 
 func testStore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash, 0)
+	resp, err := db.Store(ctx, testHash1, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Get(ctx, hash)
+	resp, err = db.Get(ctx, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Store(context.Background(), hash, 0)
+	resp, err = db.Store(context.Background(), testHash1, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Spend(context.Background(), hash, hash)
+	resp, err = db.Spend(context.Background(), testHash1, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Store(context.Background(), hash, 0)
+	resp, err = db.Store(context.Background(), testHash1, 0)
 	require.NoError(t, err)
 	// this value should be spent, but we delete spends, so it will now be ok (stored again)
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
@@ -45,17 +45,17 @@ func testStore(t *testing.T, db utxostore.Interface) {
 func testSpend(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash, 0)
+	resp, err := db.Store(ctx, testHash1, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Spend(ctx, hash, hash)
+	resp, err = db.Spend(ctx, testHash1, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
-	require.Equal(t, *hash, *resp.SpendingTxID)
+	require.Equal(t, *testHash1, *resp.SpendingTxID)
 
 	// try to spend with different txid
-	resp, err = db.Spend(context.Background(), hash, hash2)
+	resp, err = db.Spend(context.Background(), testHash1, testHash2)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
 }
@@ -63,16 +63,16 @@ func testSpend(t *testing.T, db utxostore.Interface) {
 func testRestore(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash, 0)
+	resp, err := db.Store(ctx, testHash1, 0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Spend(ctx, hash, hash)
+	resp, err = db.Spend(ctx, testHash1, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 	// try to reset the utxo
-	resp, err = db.Reset(ctx, hash)
+	resp, err = db.Reset(ctx, testHash1)
 	require.NoError(t, err)
 
 	require.NoError(t, err)
@@ -83,21 +83,21 @@ func testRestore(t *testing.T, db utxostore.Interface) {
 func testLockTime(t *testing.T, db utxostore.Interface) {
 	ctx := context.Background()
 
-	resp, err := db.Store(ctx, hash, 1000)
+	resp, err := db.Store(ctx, testHash1, 1000)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
-	resp, err = db.Spend(ctx, hash, hash)
+	resp, err = db.Spend(ctx, testHash1, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
 	require.Equal(t, uint32(1000), resp.LockTime)
 
 	_ = db.SetBlockHeight(1000)
 
-	resp, err = db.Spend(ctx, hash, hash)
+	resp, err = db.Spend(ctx, testHash1, testHash1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
-	require.Equal(t, hash, resp.SpendingTxID)
+	require.Equal(t, testHash1, resp.SpendingTxID)
 }
 
 func testSanity(t *testing.T, db utxostore.Interface) {
@@ -145,7 +145,7 @@ func benchmark(b *testing.B, db utxostore.Interface) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {
-		resp, err := db.Store(ctx, hash, 0)
+		resp, err := db.Store(ctx, testHash1, 0)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -153,7 +153,7 @@ func benchmark(b *testing.B, db utxostore.Interface) {
 			b.Fatal("unexpected status")
 		}
 
-		resp, err = db.Spend(ctx, hash, hash2)
+		resp, err = db.Spend(ctx, testHash1, testHash2)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -161,7 +161,7 @@ func benchmark(b *testing.B, db utxostore.Interface) {
 			b.Fatal("unexpected status")
 		}
 
-		_, err = db.Reset(ctx, hash)
+		_, err = db.Reset(ctx, testHash1)
 		if err != nil {
 			b.Fatal(err)
 		}

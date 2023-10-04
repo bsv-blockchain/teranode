@@ -326,7 +326,7 @@ func (s *Store) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32)
 	}, nil
 }
 
-func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 	batchWritePolicy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
@@ -340,7 +340,7 @@ func (s *Store) BatchStore(_ context.Context, hashes []*chainhash.Hash) (*utxost
 	for _, hash := range hashes {
 		key, _ := aerospike.NewKey(s.namespace, "utxo", hash[:])
 
-		bin := aerospike.NewBin("locktime", 0)
+		bin := aerospike.NewBin("locktime", nLockTime)
 		record := aerospike.NewBatchWrite(batchWritePolicy, key,
 			aerospike.PutOp(bin),
 		)

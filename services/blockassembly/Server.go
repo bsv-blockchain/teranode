@@ -433,12 +433,8 @@ func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, loc
 		}
 	}
 
-	// Add all the utxo hashes to the utxostore
-	var resp *utxostore.UTXOResponse
-	for _, hash := range utxoHashes {
-		if resp, err = ba.utxoStore.Store(utxoSpanCtx, hash, locktime); err != nil {
-			return fmt.Errorf("error storing utxo (%v): %w", resp, err)
-		}
+	if _, err = ba.utxoStore.BatchStore(utxoSpanCtx, utxoHashes, locktime); err != nil {
+		return fmt.Errorf("error storing utxos: %w", err)
 	}
 
 	return nil

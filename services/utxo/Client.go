@@ -57,7 +57,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 
 func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
-		UxtoHash: hash[:],
+		UtxoHash: hash[:],
 		LockTime: nLockTime,
 	})
 	if err != nil {
@@ -69,12 +69,18 @@ func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint3
 	}, nil
 }
 
-func (s *Store) BatchStore(ctx context.Context, hash []*chainhash.Hash) (*utxostore.BatchResponse, error) {
-	for _, h := range hash {
-		_, err := s.Store(ctx, h, 0)
-		if err != nil {
-			return nil, err
-		}
+func (s *Store) BatchStore(ctx context.Context, hash []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
+	utxosHashes := make([][]byte, len(hash))
+	for idx, h := range hash {
+		utxosHashes[idx] = h[:]
+	}
+
+	_, err := s.db.BatchStore(ctx, &utxostore_api.BatchStoreRequest{
+		UtxoHashes: utxosHashes,
+		LockTime:   nLockTime,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return &utxostore.BatchResponse{

@@ -90,10 +90,10 @@ func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint
 	}, nil
 }
 
-func (m *XsyncMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash) (*utxostore.BatchResponse, error) {
+func (m *XsyncMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
 	var h *chainhash.Hash
 	for _, h = range hashes {
-		_, err := m.Store(ctx, h, 0)
+		_, err := m.Store(ctx, h, nLockTime)
 		if err != nil {
 			return nil, err
 		}

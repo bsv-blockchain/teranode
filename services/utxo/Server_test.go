@@ -19,14 +19,14 @@ func TestStore(t *testing.T) {
 	require.NoError(t, err)
 
 	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UxtoHash: hash,
+		UtxoHash: hash,
 	})
 
 	assert.NoError(t, err)
 	assert.Equal(t, utxostore_api.Status_OK, res.Status)
 
 	res, err = s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UxtoHash: hash[:],
+		UtxoHash: hash[:],
 	})
 
 	assert.NoError(t, err)
@@ -42,7 +42,7 @@ func TestStoreAndSpend(t *testing.T) {
 	require.NoError(t, err)
 
 	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UxtoHash: hash,
+		UtxoHash: hash,
 	})
 
 	assert.NoError(t, err)
