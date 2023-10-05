@@ -99,7 +99,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http|drpc|frpc)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
