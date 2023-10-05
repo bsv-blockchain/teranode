@@ -2,6 +2,7 @@ package blobserver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,20 +30,47 @@ type BestBlockHeader struct {
 }
 
 func NewClient(ctx context.Context, logger utils.Logger, address string) (*Client, error) {
-	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		return nil, err
+	var err error
+	var blobConn *grpc.ClientConn
+	var blobClient blobserver_api.BlobServerAPIClient
+
+	// retry a few times to connect to the blob service
+	maxRetries, _ := gocore.Config().GetInt("blobserver_maxRetries", 3)
+	retrySleep, _ := gocore.Config().GetInt("blobserver_retrySleep", 1000)
+
+	retries := 0
+	for {
+		blobConn, err = util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
+		}
+
+		blobClient = blobserver_api.NewBlobServerAPIClient(blobConn)
+
+		_, err = blobClient.Health(ctx, &emptypb.Empty{})
+		if err != nil {
+			if retries < maxRetries {
+				retries++
+				logger.Warnf("failed to connect to blob service, retrying %d: %v", retries, err)
+				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
+				continue
+			}
+
+			logger.Errorf("failed to connect to blob service, retried %d times: %v", maxRetries, err)
+			return nil, err
+		}
+		break
 	}
 
 	return &Client{
-		client:  blobserver_api.NewBlobServerAPIClient(baConn),
+		client:  blobClient,
 		logger:  logger,
 		running: true,
-		conn:    baConn,
+		conn:    blobConn,
 	}, nil
 }
 
