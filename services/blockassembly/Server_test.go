@@ -58,7 +58,8 @@ func TestServer_Performance(t *testing.T) {
 			time.Sleep(1 * time.Millisecond)
 		}
 
-		assert.GreaterOrEqual(t, uint64(1_000_000), ba.blockAssembler.TxCount())
+		assert.Equal(t, uint64(1_000_000), ba.blockAssembler.TxCount())
+		assert.Equal(t, 977, ba.blockAssembler.subtreeProcessor.SubtreeCount())
 	})
 }
 
