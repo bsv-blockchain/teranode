@@ -28,6 +28,8 @@ import (
 )
 
 var (
+	version                       string
+	commit                        string
 	counter                       atomic.Int64
 	prometheusBlockAssemblerAddTx prometheus.Counter
 	workerCount                   int
@@ -82,6 +84,9 @@ func main() {
 	flag.Parse()
 
 	logger := gocore.Log("block_assembly_blaster")
+
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	switch broadcastProtocol {
 	case "grpc":

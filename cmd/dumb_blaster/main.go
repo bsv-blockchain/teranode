@@ -36,6 +36,8 @@ import (
 )
 
 var (
+	version                         string
+	commit                          string
 	incompleteTx, _                 = bt.NewTxFromString("010000000000000000ef0193a35408b6068499e0d5abd799d3e827d9bfe70c9b75ebe209c91d25072326510000000000ffffffff00e1f505000000001976a914c0a3c167a28cabb9fbb495affa0761e6e74ac60d88ac02404b4c00000000001976a91404ff367be719efa79d76e4416ffb072cd53b208888acde94a905000000001976a91404d03f746652cfcb6cb55119ab473a045137d26588ac00000000")
 	w                               *wif.WIF
 	counter                         atomic.Int64
@@ -104,6 +106,9 @@ func main() {
 	flag.Parse()
 
 	logger := gocore.Log("dumb_blaster")
+
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	switch broadcastProtocol {
 	case "http":
