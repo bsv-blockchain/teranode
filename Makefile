@@ -56,7 +56,7 @@ test:
 
 .PHONY: longtests
 longtests:
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
 
 .PHONY: testall

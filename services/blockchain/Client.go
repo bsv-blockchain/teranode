@@ -258,8 +258,6 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	}()
 
 	go func() {
-		defer close(ch)
-
 		for c.running {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
