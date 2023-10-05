@@ -17,6 +17,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 
+	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/native"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -29,6 +30,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sercand/kuberesolver/v5"
+	"google.golang.org/grpc/resolver"
 	"storj.io/drpc/drpcconn"
 )
 
@@ -84,6 +87,14 @@ func init() {
 
 	}()
 
+	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+	if grpcResolver == "k8s" {
+		log.Printf("[VALIDATOR] Using k8s resolver for clients")
+		resolver.SetDefaultScheme("k8s")
+	} else if grpcResolver == "kubernetes" {
+		log.Printf("[VALIDATOR] Using kubernetes resolver for clients")
+		kuberesolver.RegisterInClusterWithSchema("k8s")
+	}
 }
 
 func main() {
