@@ -137,12 +137,17 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) error {
 
 	// register transaction in tx status utxoStore
 	duplicateValidationRequest := false
-	g.Go(func() error {
+	started := g.TryGo(func() error {
 		if duplicateValidationRequest, err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, reservedUtxos); err != nil {
 			return err
 		}
 		return nil
 	})
+
+	if !started {
+		// too many goroutines running, we can't start another one
+		return fmt.Errorf("too many goroutines running, we can't start another one")
+	}
 
 	// this allows the spending of the utxo and storing in the meta store to happen in parallel
 	if err = g.Wait(); err != nil {
