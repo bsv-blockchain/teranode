@@ -38,6 +38,10 @@ build-tx-blaster:
 build-dumb-blaster:
 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o dumbblaster.run ./cmd/dumb_blaster/
 
+.PHONY: build-blockassembly-blaster
+build-blockassembly-blaster:
+	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
+
 .PHONY: build-status
 build-status:
 	go build -o status.run ./cmd/status/
