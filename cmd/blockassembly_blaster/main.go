@@ -77,7 +77,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (grpc|frpc|drpc|http)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
@@ -141,14 +141,8 @@ func main() {
 	}()
 
 	switch broadcastProtocol {
-	case "disabled":
-		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
-	case "unary":
+	case "grpc":
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	case "stream":
-		log.Printf("Starting %d stream worker(s)", workerCount)
-	case "http":
-		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
 	case "drpc":
 		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
 	case "frpc":
@@ -190,9 +184,6 @@ func worker(logger utils.Logger) {
 
 func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxRequest) error {
 	switch broadcastProtocol {
-
-	case "disabled":
-		return nil
 
 	case "grpc":
 		_, err := grpcClient.AddTx(ctx, req)
