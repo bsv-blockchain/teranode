@@ -92,6 +92,8 @@ func (c *Peer) Start(ctx context.Context) error {
 				}
 
 				switch resp.Type {
+				case blobserver_api.Type_Ping:
+					// do nothing except pass it to clients
 				case blobserver_api.Type_Subtree:
 					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
 
@@ -107,7 +109,6 @@ func (c *Peer) Start(ctx context.Context) error {
 						c.logger.Errorf("could not validate block: %v", err)
 						continue
 					}
-
 				}
 
 				// If we reach here, the incoming message has validated successfully: pass it to the notification channel...

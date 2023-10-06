@@ -29,8 +29,9 @@ message MiningSolution {
 
 // swagger:enum NotificationType
 enum NotificationType {
-  Subtree = 0;
-  Block = 1;
+  Ping = 0;
+  Subtree = 1;
+  Block = 2;
 }
 
 // swagger:model BlockInfo

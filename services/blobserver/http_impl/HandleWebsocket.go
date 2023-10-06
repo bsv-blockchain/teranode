@@ -3,6 +3,7 @@ package http_impl
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/gorilla/websocket"
@@ -12,8 +13,8 @@ import (
 
 type notificationMsg struct {
 	Type    string `json:"type"`
-	Hash    string `json:"hash"`
-	BaseURL string `json:"base_url"`
+	Hash    string `json:"hash,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
 }
 
 var (
@@ -29,6 +30,8 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification)
 	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
 
+	pingTimer := time.NewTicker(30 * time.Second)
+
 	go func() {
 		for {
 			select {
@@ -37,6 +40,23 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification)
 
 			case deadClient := <-deadClientCh:
 				delete(clientChannels, deadClient)
+
+			case <-pingTimer.C:
+				if len(clientChannels) == 0 {
+					continue
+				}
+
+				data, err := json.MarshalIndent(&notificationMsg{
+					Type: blobserver_api.Type_Ping.String(),
+				}, "", "  ")
+				if err != nil {
+					h.logger.Errorf("Error marshaling notification: %w", err)
+					continue
+				}
+
+				for clientCh := range clientChannels {
+					clientCh <- data
+				}
 
 			case notification := <-notificationCh:
 				if len(clientChannels) == 0 {

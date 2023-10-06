@@ -20,8 +20,9 @@ service BlobServerAPI {
 
 // swagger:enum Type
 enum Type {
-  Subtree = 0;
-  Block = 1;
+  Ping = 0;
+  Subtree = 1;
+  Block = 2;
 }
 
 // swagger:model HealthResponse
