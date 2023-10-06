@@ -79,7 +79,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (grpc|frpc|drpc|http)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
@@ -105,30 +105,26 @@ func main() {
 
 	case "drpc":
 		if blockassemblyDrpcAddresses, ok := gocore.Config().GetMulti("blockassembly_drpcAddresses", "|"); ok {
-			for _, blockassemblyDrpcAddress := range blockassemblyDrpcAddresses {
-				rawConn, err := net.Dial("tcp", blockassemblyDrpcAddress)
-				if err != nil {
-					panic(err)
-				}
-				conn := drpcconn.New(rawConn)
-				drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
+			rawConn, err := net.Dial("tcp", blockassemblyDrpcAddresses[0])
+			if err != nil {
+				panic(err)
 			}
+			conn := drpcconn.New(rawConn)
+			drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
 		}
 
 	case "frpc":
 		if blockassemblyFrpcAddresses, ok := gocore.Config().GetMulti("blockassembly_frpcAddresses", "|"); ok {
-			for _, blockassemblyFrpcAddress := range blockassemblyFrpcAddresses {
-				client, err := blockassembly_api.NewClient(nil, nil)
-				if err != nil {
-					panic(err)
-				}
+			client, err := blockassembly_api.NewClient(nil, nil)
+			if err != nil {
+				panic(err)
+			}
 
-				err = client.Connect(blockassemblyFrpcAddress)
-				if err != nil {
-					panic(err)
-				} else {
-					frpcClient = client
-				}
+			err = client.Connect(blockassemblyFrpcAddresses[0])
+			if err != nil {
+				panic(err)
+			} else {
+				frpcClient = client
 			}
 		}
 
@@ -146,6 +142,8 @@ func main() {
 	}()
 
 	switch broadcastProtocol {
+	case "disabled":
+		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
 	case "grpc":
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
 	case "drpc":
@@ -182,13 +180,18 @@ func worker(logger utils.Logger) {
 			panic(err)
 		}
 
-		prometheusBlockAssemblerAddTx.Inc()
+		if broadcastProtocol != "disabled" {
+			prometheusBlockAssemblerAddTx.Inc()
+		}
 		counter.Add(1)
 	}
 }
 
 func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxRequest) error {
 	switch broadcastProtocol {
+
+	case "disabled":
+		return nil
 
 	case "grpc":
 		_, err := grpcClient.AddTx(ctx, req)

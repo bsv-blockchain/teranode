@@ -101,7 +101,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "unary", "Broadcast to propagation server using (disabled|unary|stream|http|drpc|frpc)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|drpc|frpc)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
@@ -116,7 +116,7 @@ func main() {
 		httpUrl, _ = url.Parse(httpAddresses[0])
 		log.Printf("Using HTTP propagation server: %v", httpUrl)
 
-	case "unary":
+	case "grpc":
 		prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
 		log.Printf("Using prometheus grpc metrics: %v", prom)
 
@@ -132,33 +132,28 @@ func main() {
 
 	case "drpc":
 		if propagationDrpcAddresses, ok := gocore.Config().GetMulti("propagation_drpcAddresses", "|"); ok {
-			for _, propagationDrpcAddress := range propagationDrpcAddresses {
-				rawconn, err := net.Dial("tcp", propagationDrpcAddress)
-				if err != nil {
-					panic(err)
-				}
-				conn := drpcconn.New(rawconn)
-				drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
+			rawconn, err := net.Dial("tcp", propagationDrpcAddresses[0])
+			if err != nil {
+				panic(err)
 			}
+			conn := drpcconn.New(rawconn)
+			drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
 		}
 
 	case "frpc":
 		if propagationFrpcAddresses, ok := gocore.Config().GetMulti("propagation_frpcAddresses", "|"); ok {
-			for _, propagationFrpcAddress := range propagationFrpcAddresses {
-				client, err := propagation_api.NewClient(nil, nil)
-				if err != nil {
-					panic(err)
-				}
+			client, err := propagation_api.NewClient(nil, nil)
+			if err != nil {
+				panic(err)
+			}
 
-				err = client.Connect(propagationFrpcAddress)
-				if err != nil {
-					panic(err)
-				} else {
-					frpcClient = client
-				}
+			err = client.Connect(propagationFrpcAddresses[0])
+			if err != nil {
+				panic(err)
+			} else {
+				frpcClient = client
 			}
 		}
-
 	}
 
 	var err error
@@ -182,7 +177,7 @@ func main() {
 	switch broadcastProtocol {
 	case "disabled":
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
-	case "unary":
+	case "grpc":
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
 	case "stream":
 		log.Printf("Starting %d stream worker(s)", workerCount)
@@ -238,7 +233,9 @@ func worker(logger utils.Logger) {
 			}
 		}
 
-		prometheusProcessedTransactions.Inc()
+		if broadcastProtocol != "disabled" {
+			prometheusProcessedTransactions.Inc()
+		}
 		counter.Add(1)
 	}
 }
@@ -274,7 +271,7 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 
 		return nil
 
-	case "unary":
+	case "grpc":
 
 		_, err := grpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
