@@ -14,7 +14,7 @@ export async function loadLastBlocks() {
 
     const json = await res.json()
 
-    // sort the blocks by height
+    // sort the blocks by height - THIS IS IMPORTANT
     const sorted = json.sort((a, b) => {
       if (a.height < b.height) return -1
       if (a.height > b.height) return 1
