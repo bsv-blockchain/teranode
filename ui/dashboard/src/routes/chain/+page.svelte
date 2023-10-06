@@ -1,12 +1,14 @@
 <script>
   import { onMount } from 'svelte'
-  import { blocks } from '@stores/chainStore.js'
+  import { blocks, loadLastBlocks } from '@stores/chainStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
   let treeData = {}
 
-  onMount(() => {
+  onMount(async () => {
+    await loadLastBlocks()
+
     if ($blocks) {
       drawTree($blocks)
     }

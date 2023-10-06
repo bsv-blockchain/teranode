@@ -3,6 +3,32 @@ import { blobServerHTTPAddress } from '@stores/nodeStore.js'
 
 export const blocks = writable([])
 
+export async function loadLastBlocks() {
+  const url = `${get(blobServerHTTPAddress)}/lastblocks?n=10&includeOrphans=true`
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      throw new Error(`HTTP error! Status: ${res.status}`)
+    }
+
+    const json = await res.json()
+
+    // sort the blocks by height
+    const sorted = json.sort((a, b) => {
+      if (a.height < b.height) return -1
+      if (a.height > b.height) return 1
+      return 0
+    })
+
+    console.log("sorted:", sorted)
+    blocks.set(sorted)
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+
 export async function onMessage(data) {
   if (data.type !== 'Block') return
 

@@ -39,7 +39,6 @@ export const blobServerHTTPAddress = writable('', (set) => {
   return set
 })
 
-
 export function connectToBlobServer(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
   const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${

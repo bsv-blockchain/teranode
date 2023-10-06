@@ -67,6 +67,7 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 	{
 		"height": %d,
 		"hash": "%s",
+		"previousblockhash": "%s",
 		"coinbaseValue": %d,
 		"timestamp": "%s",
 		"transactionCount": %d,
@@ -75,6 +76,7 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 	}`,
 		bi.Height,
 		hash.String(),
+		header.HashPrevBlock.String(),
 		bi.CoinbaseValue,
 		timestamp.Format(dateFormat),
 		bi.TransactionCount,
