@@ -148,7 +148,7 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		}
 
 		mode := "HTTPS"
-		if level, _ := gocore.Config().GetInt("securityLevel", 0); level == 0 {
+		if level, _ := gocore.Config().GetInt("securityLevelHTTP", 0); level == 0 {
 			mode = "HTTP"
 		}
 

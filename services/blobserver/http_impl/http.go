@@ -105,7 +105,7 @@ func (h *HTTP) Init(_ context.Context) error {
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	mode := "HTTPS"
-	if level, _ := gocore.Config().GetInt("securityLevel", 0); level == 0 {
+	if level, _ := gocore.Config().GetInt("securityLevelHTTP", 0); level == 0 {
 		mode = "HTTP"
 	}
 

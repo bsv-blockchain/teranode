@@ -19,7 +19,7 @@ func StartGRPCServer(ctx context.Context, l utils.Logger, serviceName string, re
 		return fmt.Errorf("[%s] no setting %s found", serviceName, grpcAddress)
 	}
 
-	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+	securityLevel, _ := gocore.Config().GetInt("securityLevelGRPC", 0)
 
 	var certFile, keyFile string
 
