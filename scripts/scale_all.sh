@@ -20,3 +20,5 @@ ksd txmetastore1 --replicas 1 --all
 ksd utxostore1 --replicas 1 --all
 ksd blob1 --replicas 1 --all
 ksd blockassembly1 --replicas 1 --all
+
+kgp -o custom-columns='NAME:.metadata.name,STATUS:.status.phase' --no-headers=true | awk '$2!="Running" {system("kubectl get pod $1")}'
