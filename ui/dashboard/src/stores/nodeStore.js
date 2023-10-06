@@ -41,9 +41,8 @@ export const blobServerHTTPAddress = writable('', (set) => {
 
 export function connectToBlobServer(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
-  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${
-    url.hostname
-  }/ws`
+  const port = url.port || (url.protocol === 'http:' ? "80" : "443")
+  const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${url.hostname}:${port}/ws`
 
   let socket = new WebSocket(wsUrl)
 
