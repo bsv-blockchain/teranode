@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { selectedNode } from '@stores/bootstrapStore.js'
+import { blobServerHTTPAddress } from '@stores/nodeStore.js'
 
 export const blocks = writable([])
 
@@ -12,7 +12,7 @@ export async function onMessage(data) {
   let b = [...get(blocks)]
 
   // Now fetch the block header
-  const url = get(selectedNode) + '/header/' + data.hash + '/json'
+  const url = get(blobServerHTTPAddress) + '/header/' + data.hash + '/json'
 
   try {
     const res = await fetch(url)

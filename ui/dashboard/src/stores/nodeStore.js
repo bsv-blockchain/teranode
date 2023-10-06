@@ -21,6 +21,25 @@ const updateFn = (json) => {
   updateFns.forEach(async (fn) => await fn(json))
 }
 
+export const blobServerHTTPAddress = writable('', (set) => {
+  if (!import.meta.env.SSR && window && window.location) {
+    const url = new URL(window.location.href)
+    if (url.host.includes('localhost:517')) {
+      url.protocol = 'http:'
+      url.host = 'localhost'
+      url.port = '8090'
+    }
+    if (url.port === '') {
+      set(`${url.protocol}//${url.hostname}`)
+    } else {
+      set(`${url.protocol}//${url.hostname}:${url.port}`)
+    }
+  }
+
+  return set
+})
+
+
 export function connectToBlobServer(blobServerHTTPAddress) {
   const url = new URL(blobServerHTTPAddress)
   const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${

@@ -1,5 +1,5 @@
 <script>
-  import { selectedNode } from '@stores/bootstrapStore.js'
+  import { blobServerHTTPAddress } from '@stores/nodeStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
 
@@ -12,8 +12,8 @@
   let error = null
   let url = ''
 
-  $: if ($selectedNode && data.hash && data.hash.length === 64) {
-    url = $selectedNode + '/utxos/' + data.hash + '/json'
+  $: if ($blobServerHTTPAddress && data.hash && data.hash.length === 64) {
+    url = $blobServerHTTPAddress + '/utxos/' + data.hash + '/json'
     fetchData()
   } else {
     url = ''

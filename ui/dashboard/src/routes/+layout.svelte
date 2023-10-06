@@ -1,16 +1,12 @@
 <script>
   import { onMount } from 'svelte'
   import UpdateSpinner from '@components/UpdateSpinner.svelte'
-  import {
-    nodes,
-    connectToBootstrap,
-    selectedNode,
-  } from '@stores/bootstrapStore.js'
 
   import {
     loading,
     lastUpdated,
     connectToBlobServer,
+    blobServerHTTPAddress,
   } from '@stores/nodeStore.js'
 
   let isActive = false
@@ -40,8 +36,7 @@
   }
 
   onMount(async () => {
-    connectToBootstrap($selectedNode)
-    connectToBlobServer($selectedNode)
+    connectToBlobServer($blobServerHTTPAddress)
   })
 </script>
 
@@ -105,22 +100,13 @@
 
   <div id="navbarBasicExample" class="navbar-menu" class:is-active={isActive}>
     <div class="navbar-start">
-      <div class="navbar-item">
-        <div class="select">
-          <select
-            bind:value={$selectedNode}
-            on:change={() => connectToBootstrap($selectedNode)}
-          >
-            <option disabled>Select a URL</option>
-            {#each $nodes as node (node.blobServerHTTPAddress)}
-              <option value={node.blobServerHTTPAddress}
-                >{new URL(node.blobServerHTTPAddress).hostname}</option
-              >
-            {/each}
-          </select>
-        </div>
-      </div>
-
+      <!-- <a
+        class="navbar-item"
+        href="/blockchain"
+        on:click={handleNavbarItemClick}
+      >
+        Blockchain
+      </a> -->
       <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
         Viewer
       </a>
@@ -128,16 +114,7 @@
         UTXOInspector
       </a>
       <!-- <a class="navbar-item" href="/blocks" on:click={handleNavbarItemClick}> Blocks </a> -->
-      <a
-        class="navbar-item"
-        href="/blockchain"
-        on:click={handleNavbarItemClick}
-      >
-        Blockchain
-      </a>
-      <a class="navbar-item" href="/listener" on:click={handleNavbarItemClick}>
-        Listener
-      </a>
+      <!-- <a class="navbar-item" href="/listener" on:click={handleNavbarItemClick}>Listener</a> -->
       <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
         Chain
       </a>
