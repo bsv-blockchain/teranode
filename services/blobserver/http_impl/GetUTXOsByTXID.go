@@ -15,14 +15,14 @@ import (
 )
 
 type UTXOItem struct {
-	Txid          *chainhash.Hash      `json:"txid"`
-	Vout          uint32               `json:"vout"`
-	LockingScript *bscript.Script      `json:"lockingScript"`
-	Satoshis      uint64               `json:"satoshis"`
-	UtxoHash      *chainhash.Hash      `json:"utxoHash"`
-	Status        utxostore_api.Status `json:"status"`
-	SpendingTxID  *chainhash.Hash      `json:"spendingTxId,omitempty"`
-	LockTime      uint32               `json:"lockTime,omitempty"`
+	Txid          *chainhash.Hash `json:"txid"`
+	Vout          uint32          `json:"vout"`
+	LockingScript *bscript.Script `json:"lockingScript"`
+	Satoshis      uint64          `json:"satoshis"`
+	UtxoHash      *chainhash.Hash `json:"utxoHash"`
+	Status        string          `json:"status"`
+	SpendingTxID  *chainhash.Hash `json:"spendingTxId,omitempty"`
+	LockTime      uint32          `json:"lockTime,omitempty"`
 }
 
 func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
@@ -101,11 +101,11 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 					}
 
 					if utxoRes != nil && utxoRes.Status != int(utxostore_api.Status_NOT_FOUND) {
-						utxoItem.Status = utxostore_api.Status(utxoRes.Status)
+						utxoItem.Status = utxostore_api.Status(utxoRes.Status).String()
 						utxoItem.SpendingTxID = utxoRes.SpendingTxID
 						utxoItem.LockTime = utxoRes.LockTime
 					} else {
-						utxoItem.Status = utxostore_api.Status_NOT_FOUND
+						utxoItem.Status = utxostore_api.Status_NOT_FOUND.String()
 					}
 
 					// Send the UTXO to the channel.
