@@ -19,13 +19,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type txIDAndFee struct {
-	txID        *chainhash.Hash
-	fee         uint64
-	sizeInBytes uint64
-	waitCh      chan struct{}
-}
-
 type Job struct {
 	ID              *chainhash.Hash
 	Subtrees        []*util.Subtree
@@ -44,7 +37,7 @@ type reorgBlocksRequest struct {
 
 type SubtreeProcessor struct {
 	currentItemsPerFile int
-	txChan              chan *txIDAndFee
+	txChan              chan *[]txIDAndFee
 	getSubtreesChan     chan chan []*util.Subtree
 	moveUpBlockChan     chan moveBlockRequest
 	reorgBlockChan      chan reorgBlocksRequest
@@ -54,6 +47,7 @@ type SubtreeProcessor struct {
 	currentBlockHeader  *model.BlockHeader
 	sync.Mutex
 	txCount      atomic.Uint64
+	batcher      *txIDAndFeeBatch
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       utils.Logger
@@ -64,7 +58,7 @@ var (
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
-	newSubtreeChan chan *util.Subtree) *SubtreeProcessor {
+	newSubtreeChan chan *util.Subtree, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()
 
@@ -81,22 +75,32 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		txChanBufferSize = settingsBufferSize
 	}
 
+	batcherSize := 100
+	if settingsBufferSize, ok := gocore.Config().GetInt("blockassembly_subtreeProcessorBatcherSize", 100); ok {
+		batcherSize = settingsBufferSize
+	}
+
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,
-		txChan:              make(chan *txIDAndFee, txChanBufferSize),
+		txChan:              make(chan *[]txIDAndFee, txChanBufferSize),
 		getSubtreesChan:     make(chan chan []*util.Subtree),
 		moveUpBlockChan:     make(chan moveBlockRequest),
 		reorgBlockChan:      make(chan reorgBlocksRequest),
 		newSubtreeChan:      newSubtreeChan,
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
+		batcher:             newTxIDAndFeeBatch(batcherSize),
 		subtreeStore:        subtreeStore,
 		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
 		logger:              logger,
 	}
 
+	for _, opts := range options {
+		opts(stp)
+	}
+
 	go func() {
-		var txReq *txIDAndFee
+		var txReq txIDAndFee
 		var err error
 		for {
 			select {
@@ -136,15 +140,17 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				}
 				moveUpReq.errChan <- err
 
-			case txReq = <-stp.txChan:
-				err = stp.addNode(txReq.txID, txReq.fee, txReq.sizeInBytes)
-				if err != nil {
-					stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
+			case txReqs := <-stp.txChan:
+				for _, txReq = range *txReqs {
+					err = stp.addNode(txReq.txID, txReq.fee, txReq.sizeInBytes)
+					if err != nil {
+						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
+					}
+					if txReq.waitCh != nil {
+						txReq.waitCh <- struct{}{}
+					}
+					stp.txCount.Add(1)
 				}
-				if txReq.waitCh != nil {
-					txReq.waitCh <- struct{}{}
-				}
-				stp.txCount.Add(1)
 			}
 		}
 	}()
@@ -194,18 +200,23 @@ func (stp *SubtreeProcessor) addNode(txID *chainhash.Hash, fee uint64, sizeInByt
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(hash *chainhash.Hash, fee uint64, sizeInBytes uint64, optionalWaitCh ...chan struct{}) {
 	if len(optionalWaitCh) > 0 {
-		stp.txChan <- &txIDAndFee{
+		stp.txChan <- &[]txIDAndFee{{
 			txID:        hash,
 			fee:         fee,
 			sizeInBytes: sizeInBytes,
 			waitCh:      optionalWaitCh[0],
-		}
+		}}
 		return
 	}
-	stp.txChan <- &txIDAndFee{
+
+	txIDAndFees := stp.batcher.add(&txIDAndFee{
 		txID:        hash,
 		fee:         fee,
 		sizeInBytes: sizeInBytes,
+	})
+
+	if txIDAndFees != nil {
+		stp.txChan <- txIDAndFees
 	}
 }
 

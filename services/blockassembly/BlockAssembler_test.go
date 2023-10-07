@@ -31,7 +31,6 @@ type baTestItems struct {
 	txStore          *memory.Memory
 	blobStore        *memory.Memory
 	newSubtreeChan   chan *util.Subtree
-	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 	blockAssembler   *BlockAssembler
 	blockchainClient blockchain.ClientI
 }
@@ -288,7 +287,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan *util.Subtree)
-	items.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, items.newSubtreeChan)
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
@@ -309,6 +307,9 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		items.blockchainClient,
 		items.newSubtreeChan,
 	)
+
+	// overwrite default subtree processor with a new one
+	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, items.newSubtreeChan, subtreeprocessor.WithBatcherSize(1))
 
 	items.blockAssembler = ba
 

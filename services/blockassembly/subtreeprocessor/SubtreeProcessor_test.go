@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -558,7 +559,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	subtreeProcessor := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
+	subtreeProcessor := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan, WithBatcherSize(1))
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
@@ -604,6 +605,30 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	calculatedMerkleRoot := topTree.RootHash()
 	assert.Equal(t, expectedMerkleRoot, calculatedMerkleRoot.String())
 
+}
+
+func Test_txIDAndFeeBatch(t *testing.T) {
+	batcher := newTxIDAndFeeBatch(1000)
+	var wg sync.WaitGroup
+	batchCount := atomic.Uint64{}
+	for i := 0; i < 10_000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1_000; j++ {
+				batch := batcher.add(&txIDAndFee{
+					txID:        &chainhash.Hash{},
+					fee:         1,
+					sizeInBytes: 2,
+				})
+				if batch != nil {
+					batchCount.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, uint64(10_000), batchCount.Load())
 }
 
 func BenchmarkBlockAssembler_AddTx(b *testing.B) {
