@@ -38,6 +38,7 @@ var (
 	frpcClient                    *blockassembly_api.Client
 	broadcastProtocol             string
 	bufferSize                    int
+	batchSize                     int
 )
 
 func init() {
@@ -81,6 +82,7 @@ func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
+	flag.IntVar(&batchSize, "batch_size", 1, "Batch size [0 for no batching]")
 	flag.Parse()
 
 	logger := gocore.Log("block_assembly_blaster")
@@ -111,6 +113,8 @@ func main() {
 			}
 			conn := drpcconn.New(rawConn)
 			drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
+		} else {
+			panic(fmt.Errorf("must have valid blockassembly_drpcAddresses"))
 		}
 
 	case "frpc":
@@ -126,6 +130,8 @@ func main() {
 			} else {
 				frpcClient = client
 			}
+		} else {
+			panic(fmt.Errorf("must have valid blockassembly_frpcAddresses"))
 		}
 
 	}
@@ -162,6 +168,9 @@ func main() {
 }
 
 func worker(logger utils.Logger) {
+	var batchCounter = 0
+	txRequests := make([]*blockassembly_api.AddTxRequest, batchSize)
+
 	for {
 		// Create a dummy txid
 		txid := generateRandomBytes()
@@ -182,8 +191,26 @@ func worker(logger utils.Logger) {
 
 		if broadcastProtocol != "disabled" {
 			prometheusBlockAssemblerAddTx.Inc()
+			counter.Add(1)
 		}
-		counter.Add(1)
+
+		if batchSize == 0 {
+			if err := sendToBlockAssemblyServer(context.Background(), logger, req); err != nil {
+				panic(err)
+			}
+		} else {
+			txRequests[batchCounter] = req
+			batchCounter++
+			if batchCounter == batchSize {
+				batchReq := &blockassembly_api.AddTxBatchRequest{
+					TxRequests: txRequests,
+				}
+				if err := sendBatchToBlockAssemblyServer(context.Background(), logger, batchReq); err != nil {
+					panic(err)
+				}
+				batchCounter = 0
+			}
+		}
 	}
 }
 
@@ -208,6 +235,39 @@ func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *bl
 			Locktime: req.Locktime,
 			Size:     req.Size,
 			Utxos:    req.Utxos,
+		})
+
+		return err
+
+	}
+
+	return nil
+}
+
+func sendBatchToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxBatchRequest) error {
+	switch broadcastProtocol {
+
+	case "grpc":
+		_, err := grpcClient.AddTxBatch(ctx, req)
+		return err
+
+	case "drpc":
+		_, err := drpcClient.AddTxBatch(ctx, req)
+		return err
+
+	case "frpc":
+		batch := make([]*blockassembly_api.BlockassemblyApiAddTxRequest, len(req.TxRequests))
+		for i, req := range req.TxRequests {
+			batch[i] = &blockassembly_api.BlockassemblyApiAddTxRequest{
+				Txid:     req.Txid,
+				Fee:      req.Fee,
+				Locktime: req.Locktime,
+				Size:     req.Size,
+				Utxos:    req.Utxos,
+			}
+		}
+		_, err := frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, &blockassembly_api.BlockassemblyApiAddTxBatchRequest{
+			TxRequests: batch,
 		})
 
 		return err

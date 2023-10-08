@@ -415,6 +415,22 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
+func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
+	var batchError error = nil
+	txIdErrors := make([][]byte, 0)
+	for _, req := range batch.GetTxRequests() {
+		_, err := ba.AddTx(ctx, req)
+		if err != nil {
+			batchError = err
+			txIdErrors = append(txIdErrors, req.Txid)
+		}
+	}
+	return &blockassembly_api.AddTxBatchResponse{
+		Ok:         true,
+		TxIdErrors: txIdErrors,
+	}, batchError
+}
+
 func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, locktime uint32) error {
 	startUtxoTime := time.Now()
 	//utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")

@@ -42,6 +42,7 @@ type DRPCBlockAssemblyAPIClient interface {
 	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest) (*AddTxResponse, error)
+	AddTxBatch(ctx context.Context, in *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 }
@@ -83,6 +84,15 @@ func (c *drpcBlockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest
 	return out, nil
 }
 
+func (c *drpcBlockAssemblyAPIClient) AddTxBatch(ctx context.Context, in *AddTxBatchRequest) (*AddTxBatchResponse, error) {
+	out := new(AddTxBatchResponse)
+	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/AddTxBatch", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *drpcBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error) {
 	out := new(model.MiningCandidate)
 	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
@@ -105,6 +115,7 @@ type DRPCBlockAssemblyAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
+	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 }
@@ -123,6 +134,10 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) AddTx(context.Context, *AddTxR
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error) {
+	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
+}
+
 func (s *DRPCBlockAssemblyAPIUnimplementedServer) GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
@@ -133,7 +148,7 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) SubmitMiningSolution(context.C
 
 type DRPCBlockAssemblyAPIDescription struct{}
 
-func (DRPCBlockAssemblyAPIDescription) NumMethods() int { return 5 }
+func (DRPCBlockAssemblyAPIDescription) NumMethods() int { return 6 }
 
 func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Receiver, interface{}, bool) {
 	switch n {
@@ -165,6 +180,15 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 					)
 			}, DRPCBlockAssemblyAPIServer.AddTx, true
 	case 3:
+		return "/blockassembly_api.BlockAssemblyAPI/AddTxBatch", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
+			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
+				return srv.(DRPCBlockAssemblyAPIServer).
+					AddTxBatch(
+						ctx,
+						in1.(*AddTxBatchRequest),
+					)
+			}, DRPCBlockAssemblyAPIServer.AddTxBatch, true
+	case 4:
 		return "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
@@ -173,7 +197,7 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 						in1.(*EmptyMessage),
 					)
 			}, DRPCBlockAssemblyAPIServer.GetMiningCandidate, true
-	case 4:
+	case 5:
 		return "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
@@ -233,6 +257,22 @@ type drpcBlockAssemblyAPI_AddTxStream struct {
 }
 
 func (x *drpcBlockAssemblyAPI_AddTxStream) SendAndClose(m *AddTxResponse) error {
+	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
+		return err
+	}
+	return x.CloseSend()
+}
+
+type DRPCBlockAssemblyAPI_AddTxBatchStream interface {
+	drpc.Stream
+	SendAndClose(*AddTxBatchResponse) error
+}
+
+type drpcBlockAssemblyAPI_AddTxBatchStream struct {
+	drpc.Stream
+}
+
+func (x *drpcBlockAssemblyAPI_AddTxBatchStream) SendAndClose(m *AddTxBatchResponse) error {
 	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
 		return err
 	}

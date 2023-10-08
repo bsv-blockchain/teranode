@@ -51,6 +51,20 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 	}, nil
 }
 
+func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (*blockassembly_api.BlockassemblyApiAddTxBatchResponse, error) {
+	var err error
+	var txIdErrors [][]byte
+	for _, req := range batch.TxRequests {
+		_, err = f.AddTx(ctx, req)
+		if err != nil {
+			txIdErrors = append(txIdErrors, req.Txid)
+		}
+	}
+	return &blockassembly_api.BlockassemblyApiAddTxBatchResponse{
+		TxIdErrors: txIdErrors,
+	}, err
+}
+
 func (f *fRPC_BlockAssembly) GetMiningCandidate(ctx context.Context, message *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.ModelMiningCandidate, error) {
 	//TODO implement me
 	panic("implement me")

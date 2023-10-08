@@ -5,13 +5,11 @@ package blockassembly_api
 
 import (
 	"errors"
-	"net"
-
 	"github.com/loopholelabs/polyglot"
+	"net"
 
 	"context"
 	"crypto/tls"
-
 	"github.com/loopholelabs/frisbee-go"
 	"github.com/loopholelabs/frisbee-go/pkg/packet"
 	"github.com/rs/zerolog"
@@ -297,6 +295,81 @@ func (x *BlockassemblyApiAddTxRequest) decode(d *polyglot.Decoder) error {
 	return nil
 }
 
+type BlockassemblyApiAddTxBatchRequest struct {
+	error error
+	flags uint8
+
+	TxRequests []*BlockassemblyApiAddTxRequest
+}
+
+func NewBlockassemblyApiAddTxBatchRequest() *BlockassemblyApiAddTxBatchRequest {
+	return &BlockassemblyApiAddTxBatchRequest{}
+}
+
+func (x *BlockassemblyApiAddTxBatchRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockassemblyApiAddTxBatchRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+
+		polyglot.Encoder(b).Slice(uint32(len(x.TxRequests)), polyglot.AnyKind)
+		for _, v := range x.TxRequests {
+			v.Encode(b)
+		}
+	}
+}
+
+func (x *BlockassemblyApiAddTxBatchRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockassemblyApiAddTxBatchRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	var sliceSize uint32
+	sliceSize, err = d.Slice(polyglot.AnyKind)
+	if err != nil {
+		return err
+	}
+	if uint32(len(x.TxRequests)) != sliceSize {
+		x.TxRequests = make([]*BlockassemblyApiAddTxRequest, sliceSize)
+	}
+	for i := uint32(0); i < sliceSize; i++ {
+		if x.TxRequests[i] == nil {
+			x.TxRequests[i] = NewBlockassemblyApiAddTxRequest()
+		}
+		err = x.TxRequests[i].decode(d)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type BlockassemblyApiAddTxResponse struct {
 	error error
 	flags uint8
@@ -351,6 +424,83 @@ func (x *BlockassemblyApiAddTxResponse) decode(d *polyglot.Decoder) error {
 	x.Ok, err = d.Bool()
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+type BlockassemblyApiAddTxBatchResponse struct {
+	error error
+	flags uint8
+
+	Ok         bool
+	TxIdErrors [][]byte
+}
+
+func NewBlockassemblyApiAddTxBatchResponse() *BlockassemblyApiAddTxBatchResponse {
+	return &BlockassemblyApiAddTxBatchResponse{}
+}
+
+func (x *BlockassemblyApiAddTxBatchResponse) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockassemblyApiAddTxBatchResponse) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bool(x.Ok)
+		polyglot.Encoder(b).Slice(uint32(len(x.TxIdErrors)), polyglot.BytesKind)
+		for _, v := range x.TxIdErrors {
+			polyglot.Encoder(b).Bytes(v)
+		}
+	}
+}
+
+func (x *BlockassemblyApiAddTxBatchResponse) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockassemblyApiAddTxBatchResponse) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Ok, err = d.Bool()
+	if err != nil {
+		return err
+	}
+	var sliceSize uint32
+	sliceSize, err = d.Slice(polyglot.BytesKind)
+	if err != nil {
+		return err
+	}
+	if uint32(len(x.TxIdErrors)) != sliceSize {
+		x.TxIdErrors = make([][]byte, sliceSize)
+	}
+	for i := uint32(0); i < sliceSize; i++ {
+		x.TxIdErrors[i], err = d.Bytes([]byte{})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -495,6 +645,7 @@ type BlockAssemblyAPI interface {
 	Health(context.Context, *BlockassemblyApiEmptyMessage) (*BlockassemblyApiHealthResponse, error)
 	NewChaintipAndHeight(context.Context, *BlockassemblyApiNewChaintipAndHeightRequest) (*BlockassemblyApiEmptyMessage, error)
 	AddTx(context.Context, *BlockassemblyApiAddTxRequest) (*BlockassemblyApiAddTxResponse, error)
+	AddTxBatch(context.Context, *BlockassemblyApiAddTxBatchRequest) (*BlockassemblyApiAddTxBatchResponse, error)
 	GetMiningCandidate(context.Context, *BlockassemblyApiEmptyMessage) (*ModelMiningCandidate, error)
 	SubmitMiningSolution(context.Context, *BlockassemblyApiSubmitMiningSolutionRequest) (*BlockassemblyApiSubmitMiningSolutionResponse, error)
 }
@@ -580,6 +731,26 @@ func NewServer(blockAssemblyAPI BlockAssemblyAPI, tlsConfig *tls.Config, logger 
 		return
 	}
 	table[13] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewBlockassemblyApiAddTxBatchRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *BlockassemblyApiAddTxBatchResponse
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = blockAssemblyAPI.AddTxBatch(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockassemblyApiEmptyMessage()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -599,7 +770,7 @@ func NewServer(blockAssemblyAPI BlockAssemblyAPI, tlsConfig *tls.Config, logger 
 		}
 		return
 	}
-	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockassemblyApiSubmitMiningSolutionRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -670,6 +841,10 @@ type subBlockAssemblyAPIClient struct {
 	nextAddTxMu                    sync.RWMutex
 	inflightAddTx                  map[uint16]chan *BlockassemblyApiAddTxResponse
 	inflightAddTxMu                sync.RWMutex
+	nextAddTxBatch                 uint16
+	nextAddTxBatchMu               sync.RWMutex
+	inflightAddTxBatch             map[uint16]chan *BlockassemblyApiAddTxBatchResponse
+	inflightAddTxBatchMu           sync.RWMutex
 	nextGetMiningCandidate         uint16
 	nextGetMiningCandidateMu       sync.RWMutex
 	inflightGetMiningCandidate     map[uint16]chan *ModelMiningCandidate
@@ -727,6 +902,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		return
 	}
 	table[13] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.BlockAssemblyAPI.inflightAddTxBatchMu.RLock()
+		if ch, ok := c.BlockAssemblyAPI.inflightAddTxBatch[incoming.Metadata.Id]; ok {
+			c.BlockAssemblyAPI.inflightAddTxBatchMu.RUnlock()
+			res := NewBlockassemblyApiAddTxBatchResponse()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.BlockAssemblyAPI.inflightAddTxBatchMu.RUnlock()
+		}
+		return
+	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockAssemblyAPI.inflightGetMiningCandidateMu.RLock()
 		if ch, ok := c.BlockAssemblyAPI.inflightGetMiningCandidate[incoming.Metadata.Id]; ok {
 			c.BlockAssemblyAPI.inflightGetMiningCandidateMu.RUnlock()
@@ -738,7 +925,7 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
-	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockAssemblyAPI.inflightSubmitMiningSolutionMu.RLock()
 		if ch, ok := c.BlockAssemblyAPI.inflightSubmitMiningSolution[incoming.Metadata.Id]; ok {
 			c.BlockAssemblyAPI.inflightSubmitMiningSolutionMu.RUnlock()
@@ -777,6 +964,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.BlockAssemblyAPI.nextAddTx = 0
 	c.BlockAssemblyAPI.nextAddTxMu.Unlock()
 	c.BlockAssemblyAPI.inflightAddTx = make(map[uint16]chan *BlockassemblyApiAddTxResponse)
+	c.BlockAssemblyAPI.nextAddTxBatchMu.Lock()
+	c.BlockAssemblyAPI.nextAddTxBatch = 0
+	c.BlockAssemblyAPI.nextAddTxBatchMu.Unlock()
+	c.BlockAssemblyAPI.inflightAddTxBatch = make(map[uint16]chan *BlockassemblyApiAddTxBatchResponse)
 	c.BlockAssemblyAPI.nextGetMiningCandidateMu.Lock()
 	c.BlockAssemblyAPI.nextGetMiningCandidate = 0
 	c.BlockAssemblyAPI.nextGetMiningCandidateMu.Unlock()
@@ -898,10 +1089,44 @@ func (c *subBlockAssemblyAPIClient) AddTx(ctx context.Context, req *Blockassembl
 	return
 }
 
+func (c *subBlockAssemblyAPIClient) AddTxBatch(ctx context.Context, req *BlockassemblyApiAddTxBatchRequest) (res *BlockassemblyApiAddTxBatchResponse, err error) {
+	ch := make(chan *BlockassemblyApiAddTxBatchResponse, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 13
+
+	c.nextAddTxBatchMu.Lock()
+	c.nextAddTxBatch += 1
+	id := c.nextAddTxBatch
+	c.nextAddTxBatchMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightAddTxBatchMu.Lock()
+	c.inflightAddTxBatch[id] = ch
+	c.inflightAddTxBatchMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightAddTxBatchMu.Lock()
+	delete(c.inflightAddTxBatch, id)
+	c.inflightAddTxBatchMu.Unlock()
+	packet.Put(p)
+	return
+}
+
 func (c *subBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, req *BlockassemblyApiEmptyMessage) (res *ModelMiningCandidate, err error) {
 	ch := make(chan *ModelMiningCandidate, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 13
+	p.Metadata.Operation = 14
 
 	c.nextGetMiningCandidateMu.Lock()
 	c.nextGetMiningCandidate += 1
@@ -935,7 +1160,7 @@ func (c *subBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, req 
 func (c *subBlockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, req *BlockassemblyApiSubmitMiningSolutionRequest) (res *BlockassemblyApiSubmitMiningSolutionResponse, err error) {
 	ch := make(chan *BlockassemblyApiSubmitMiningSolutionResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 14
+	p.Metadata.Operation = 15
 
 	c.nextSubmitMiningSolutionMu.Lock()
 	c.nextSubmitMiningSolution += 1
