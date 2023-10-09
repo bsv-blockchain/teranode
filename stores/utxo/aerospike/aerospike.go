@@ -446,7 +446,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 					return nil, fmt.Errorf("chainhash error: %w", err)
 				}
 
-				s.logger.Debugf("utxo %s was spent: %s", hash.String(), err.Error())
+				s.logger.Debugf("utxo %s was spent by %s", hash.String(), spendingTxHash)
 				return &utxostore.UTXOResponse{
 					Status:       int(utxostore_api.Status_SPENT),
 					SpendingTxID: spendingTxHash,
