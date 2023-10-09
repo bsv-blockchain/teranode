@@ -1,5 +1,13 @@
 SHELL=/bin/bash
 
+DEBUG_FLAGS=
+
+.PHONY: set_debug_flags
+set_debug_flags:
+ifeq ($(DEBUG),true)
+	$(eval DEBUG_FLAGS = -N -l)
+endif
+
 .PHONY: all
 all: deps install lint build test
 
@@ -27,20 +35,20 @@ dev-dashboard:
 build: build-dashboard build-ubsv build-status build-tx-blaster build-dumb-blaster build-aerospiketest build-blockassembly-blaster
 
 .PHONY: build-ubsv
-build-ubsv: build-dashboard
-	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o ubsv.run .
+build-ubsv: build-dashboard set_debug_flags
+	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-tx-blaster
-build-tx-blaster:
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blaster.run ./cmd/txblaster/
+build-tx-blaster: set_debug_flags
+	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 .PHONY: build-dumb-blaster
-build-dumb-blaster:
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o dumbblaster.run ./cmd/dumb_blaster/
+build-dumb-blaster: set_debug_flags
+	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o dumbblaster.run ./cmd/dumb_blaster/
 
 .PHONY: build-blockassembly-blaster
-build-blockassembly-blaster:
-	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=-N -l" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
+build-blockassembly-blaster: set_debug_flags
+	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
 
 .PHONY: build-status
 build-status:
@@ -220,6 +228,7 @@ clean_gen:
 	rm -f ./services/blobserver/blobserver_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
+	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go
 
 .PHONY: clean

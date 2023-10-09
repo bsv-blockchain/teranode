@@ -76,6 +76,7 @@ jobs:
           load: true
           build-args: |
             GITHUB_SHA=${{github.sha}}
+            DEBUG=false
             GITHUB_REF=${{github.ref_name}}
 
       - name: Push to eu-north-1
