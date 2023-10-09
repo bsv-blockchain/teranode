@@ -3,15 +3,20 @@ package p2p
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libsv/go-bt/v2/chainhash"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	crypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -24,18 +29,36 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-const privateKeyFilename = "private_key"
+const (
+	privateKeyFilename = "private_key"
+	blockTopicName     = "block"
+	bestBlockTopicName = "bestblock"
+	subtreeTopicName   = "subtree"
+)
 
 type Server struct {
 	host              host.Host
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
 	logger            utils.Logger
-	blockTopicName    string
-	subtreeTopicName  string
 	bitcoinProtocolId string
 
-	blockchainClient blockchain.ClientI
+	blockchainClient         blockchain.ClientI
+	blobServerHttpAddressURL string
+}
+
+type BestBlockMessage struct {
+	PeerId string
+}
+
+type BlockMessage struct {
+	Hash       string
+	Height     uint32
+	DataHubUrl string
+}
+type SubtreeMessage struct {
+	Hash       string
+	DataHubUrl string
 }
 
 func NewServer(logger utils.Logger) *Server {
@@ -72,26 +95,29 @@ func NewServer(logger utils.Logger) *Server {
 	return &Server{
 		logger:            logger,
 		host:              h,
-		bitcoinProtocolId: "/bitcoin/1.0.0",
+		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 	}
 }
 
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("P2P service initialising")
-	var ok bool
-	s.blockTopicName, ok = gocore.Config().Get("p2p_block_topic")
-	if !ok {
-		panic("p2p_block_topic not set")
-	}
-	s.subtreeTopicName, ok = gocore.Config().Get("p2p_subtree_topic")
-	if !ok {
-		panic("p2p_subtree_topic not set")
-	}
 
 	s.blockchainClient, err = blockchain.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
 	}
+
+	blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
+	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+
+	if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
+		blobServerHttpAddressURL.Scheme = "https"
+		s.logger.Warnf("blobserver_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+	} else if blobServerHttpAddressURL.Scheme == "https" && securityLevel == 0 {
+		blobServerHttpAddressURL.Scheme = "http"
+		s.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+	}
+	s.blobServerHttpAddressURL = blobServerHttpAddressURL.String()
 
 	return nil
 }
@@ -99,7 +125,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
 
-	topicNames := []string{s.blockTopicName, s.subtreeTopicName}
+	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName}
 	go s.discoverPeers(ctx, topicNames)
 
 	ps, err := pubsub.NewGossipSub(ctx, s.host)
@@ -125,8 +151,11 @@ func (s *Server) Start(ctx context.Context) error {
 	s.topics = topics
 	s.subscriptions = subscriptions
 
-	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolId), handleBlockchainMessage)
-	s.logger.Infof("P2P service start ending")
+	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolId), s.handleBlockchainMessage)
+
+	go s.handleBestBlockTopic(ctx)
+	go s.handleBlockTopic(ctx)
+	go s.handleSubtreeTopic(ctx)
 
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
@@ -146,15 +175,50 @@ func (s *Server) Start(ctx context.Context) error {
 				// received a message
 				s.logger.Debugf("P2P Received %s notification: %s", notification.Type, notification.Hash.String())
 
-				// if it's a block notificdation send it on the block channel.
 				if notification.Type == model.NotificationType_Block {
-					if err := s.topics[s.blockTopicName].Publish(ctx, []byte(notification.Hash.CloneBytes())); err != nil {
-						log.Println("publish error:", err)
+					// if it's a block notification send it on the block channel.
+					b := BlockMessage{
+						Hash:       notification.Hash.String(),
+						DataHubUrl: s.blobServerHttpAddressURL,
+					}
+
+					msgBytes, err := json.Marshal(b)
+					if err != nil {
+						s.logger.Errorf("json mmarshal error: ", err)
+						continue
+					}
+					if err := s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
+						s.logger.Errorf("publish error:", err)
+					}
+				} else if notification.Type == model.NotificationType_Subtree {
+					// if it's a subtree notification send it on the subtree channel.
+					sm := SubtreeMessage{
+						Hash:       notification.Hash.String(),
+						DataHubUrl: s.blobServerHttpAddressURL,
+					}
+					msgBytes, err := json.Marshal(sm)
+					if err != nil {
+						s.logger.Errorf("json mmarshal error: ", err)
+						continue
+					}
+					if err := s.topics[subtreeTopicName].Publish(ctx, msgBytes); err != nil {
+						s.logger.Errorf("publish error:", err)
 					}
 				}
 			}
 		}
 	}()
+
+	bbr := &BestBlockMessage{PeerId: s.host.ID().String()}
+
+	msgBytes, err := json.Marshal(bbr)
+	if err != nil {
+		s.logger.Errorf("json mmarshal error: ", err)
+	}
+	// send  bestblock msg on topic
+	if err := s.topics[bestBlockTopicName].Publish(ctx, []byte(msgBytes)); err != nil {
+		s.logger.Errorf("publish error:", err)
+	}
 
 	return nil
 }
@@ -230,7 +294,7 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string) {
 					//  we fail to connect to a lot of peers. Just ignore it for now.
 					// s.logger.Debugf("Failed connecting to ", peer.ID.Pretty(), ", error:", err)
 				} else {
-					log.Println("Connected to:", peer.ID.Pretty())
+					s.logger.Debugf("Connected to:", peer.ID.Pretty())
 					anyConnected = true
 				}
 			}
@@ -241,15 +305,153 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string) {
 	s.logger.Debugf("peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
 }
 
-func handleBlockchainMessage(s network.Stream) {
-	buf, err := io.ReadAll(s)
+func (s *Server) handleBlockchainMessage(ns network.Stream) {
+	buf, err := io.ReadAll(ns)
 	if err != nil {
-		_ = s.Reset()
-		log.Println(err)
+		_ = ns.Reset()
+		s.logger.Errorf("failed to read network stream: %+v              ", err.Error())
 		return
 	}
-	s.Close()
+	ns.Close()
 	if len(buf) > 0 {
-		log.Printf("Received block topic message: %s", string(buf))
+		s.logger.Debugf("Received block topic message: %s", string(buf))
+	}
+}
+
+func (s *Server) handleBestBlockTopic(ctx context.Context) {
+	for {
+		m, err := s.subscriptions[bestBlockTopicName].Next(ctx)
+		if err != nil {
+			s.logger.Errorf("error getting msg from best block topic", err)
+			continue
+		}
+		if m.ReceivedFrom != s.host.ID() {
+			s.logger.Debugf("BESTBLOCK: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
+
+			// decode request
+			msg := new(BestBlockMessage)
+			err = json.Unmarshal(m.Data, msg)
+			if err != nil {
+				s.logger.Errorf("json unmarshal error: ", err)
+				continue
+			}
+			pid, err := peer.Decode(msg.PeerId)
+			if err != nil {
+				s.logger.Errorf("error decoding peerId: ", err)
+				continue
+			}
+
+			// get best block from blockchain service
+			bh, h, err := s.blockchainClient.GetBestBlockHeader(ctx)
+			if err != nil {
+				s.logger.Errorf("error getting best block header: ", err)
+				continue
+			}
+			if bh == nil {
+				s.logger.Errorf("error getting best block header: ", err)
+				continue
+			}
+
+			bbr := BlockMessage{
+				Hash:       bh.Hash().String(),
+				Height:     h,
+				DataHubUrl: s.blobServerHttpAddressURL,
+			}
+
+			msgBytes, err := json.Marshal(bbr)
+			if err != nil {
+				s.logger.Errorf("json mmarshal error: ", err)
+				continue
+			}
+
+			// send best block to the requester
+			s.sendPeerMessage(ctx, pid, msgBytes)
+		}
+	}
+}
+
+func (s *Server) sendPeerMessage(ctx context.Context, pid peer.ID, msg []byte) error {
+	h2pi := s.host.Peerstore().PeerInfo(pid)
+	log.Printf("dialing %s\n", h2pi.Addrs)
+	if err := s.host.Connect(ctx, h2pi); err != nil {
+		log.Printf("Failed to connect: %+v\n", err)
+	}
+
+	st, err := s.host.NewStream(
+		ctx,
+		pid,
+		protocol.ID(s.bitcoinProtocolId),
+	)
+	if err != nil {
+		return err
+	}
+	_, err = st.Write(msg)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) handleBlockTopic(ctx context.Context) {
+	s.logger.Debugf("handleBlockTopic\n")
+	for {
+		m, err := s.subscriptions[blockTopicName].Next(ctx)
+		if err != nil {
+			s.logger.Errorf("error getting msg from block topic", err)
+			continue
+		}
+		if m.ReceivedFrom != s.host.ID() {
+			// decode request
+			msg := new(BlockMessage)
+			err = json.Unmarshal(m.Data, msg)
+			if err != nil {
+				s.logger.Errorf("json unmarshal error: ", err)
+				continue
+			}
+			s.logger.Debugf("BLOCK: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
+			validationClient := blockvalidation.NewClient(ctx)
+			hash, err := chainhash.NewHashFromStr(msg.Hash)
+			if err != nil {
+				s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
+				continue
+			}
+			if err = validationClient.BlockFound(ctx, hash, msg.DataHubUrl); err != nil {
+				s.logger.Errorf("[BlobServer] error validating block from %s: %s", msg.DataHubUrl, err)
+			}
+		} else {
+			s.logger.Debugf("block message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
+		}
+	}
+}
+
+func (s *Server) handleSubtreeTopic(ctx context.Context) {
+	for {
+		m, err := s.subscriptions[subtreeTopicName].Next(ctx)
+		if err != nil {
+			s.logger.Errorf("error getting msg from subtree topic", err)
+			continue
+		}
+		if m.ReceivedFrom != s.host.ID() {
+			// decode request
+			msg := new(SubtreeMessage)
+			err = json.Unmarshal(m.Data, msg)
+			if err != nil {
+				s.logger.Errorf("json unmarshal error: ", err)
+				continue
+			}
+			s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
+			validationClient := blockvalidation.NewClient(ctx)
+			hash, err := chainhash.NewHashFromStr(msg.Hash)
+			if err != nil {
+				s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
+				continue
+			}
+			if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
+				s.logger.Errorf("[BlobServer] error validating subtree from %s: %s", msg.DataHubUrl, err)
+			}
+
+		} else {
+			s.logger.Debugf("subtree message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
+		}
 	}
 }

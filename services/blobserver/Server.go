@@ -37,6 +37,7 @@ type Server struct {
 	httpServer     *http_impl.HTTP
 	peers          map[string]peerWithContext
 	notificationCh chan *blobserver_api.Notification
+	useP2P         bool
 }
 
 func Enabled() bool {
@@ -108,6 +109,10 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
+	if gocore.Config().GetBool("feature_libP2P", false) {
+		v.useP2P = true
+	}
+
 	return nil
 }
 
@@ -129,6 +134,7 @@ func (v *Server) Start(ctx context.Context) error {
 		// browser clients.
 
 		// TODO - This may need to be moved to a separate location in the code
+
 		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
 
 		blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
@@ -144,56 +150,62 @@ func (v *Server) Start(ctx context.Context) error {
 
 		blobServerClientName, _ := gocore.Config().Get("blobserver_clientName")
 
-		// Start a subscription to the bootstrap service
+		if v.useP2P {
+			// if using p2p we are already subscribed but will need to get the best block from peers.
+			v.logger.Infof("Using libP2P")
+		} else {
+			v.logger.Infof("Using bootstrap service")
+			// Start a subscription to the bootstrap service
 
-		g.Go(func() error {
-			bootstrapClient := bootstrap.NewClient("BLOB_SERVER", blobServerClientName).WithCallback(func(p bootstrap.Peer) {
-				if p.BlobServerGrpcAddress != "" {
-					v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-					if pp, ok := v.peers[p.BlobServerGrpcAddress]; ok {
-						v.logger.Infof("[BlobServer] Already connected to blob server at: %s, stopping...", p.BlobServerGrpcAddress)
-						_ = pp.peer.Stop()
-						pp.cancelFunc()
-						delete(v.peers, p.BlobServerGrpcAddress)
+			g.Go(func() error {
+				bootstrapClient := bootstrap.NewClient("BLOB_SERVER", blobServerClientName).WithCallback(func(p bootstrap.Peer) {
+					if p.BlobServerGrpcAddress != "" {
+						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
+						if pp, ok := v.peers[p.BlobServerGrpcAddress]; ok {
+							v.logger.Infof("[BlobServer] Already connected to blob server at: %s, stopping...", p.BlobServerGrpcAddress)
+							_ = pp.peer.Stop()
+							pp.cancelFunc()
+							delete(v.peers, p.BlobServerGrpcAddress)
+						}
+
+						// Start a subscription to the new peer's blob server
+						peerCtx, peerCtxCancel := context.WithCancel(ctx)
+
+						peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress, v.notificationCh)
+
+						v.peers[p.BlobServerGrpcAddress] = peerWithContext{
+							peer:       peer,
+							cancelFunc: peerCtxCancel,
+						}
+						g.Go(func() error {
+							return v.peers[p.BlobServerGrpcAddress].peer.Start(peerCtx)
+						})
 					}
 
-					// Start a subscription to the new peer's blob server
-					peerCtx, peerCtxCancel := context.WithCancel(ctx)
+					if p.BlobServerHttpAddress != "" {
+						// get the best block header and send to the block validation for processing
+						v.logger.Infof("[BlobServer] Getting best block header from server at: %s", p.BlobServerHttpAddress)
+						blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.BlobServerHttpAddress))
+						if err != nil {
+							v.logger.Errorf("[BlobServer] error getting best block header from %s: %s", p.BlobServerHttpAddress, err)
+							return
+						}
+						blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
+						if err != nil {
+							v.logger.Errorf("[BlobServer] error parsing best block header from %s: %s", p.BlobServerHttpAddress, err)
+							return
+						}
 
-					peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress, v.notificationCh)
-
-					v.peers[p.BlobServerGrpcAddress] = peerWithContext{
-						peer:       peer,
-						cancelFunc: peerCtxCancel,
+						validationClient := blockvalidation.NewClient(ctx)
+						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.BlobServerHttpAddress); err != nil {
+							v.logger.Errorf("[BlobServer] error validating block from %s: %s", p.BlobServerHttpAddress, err)
+						}
 					}
-					g.Go(func() error {
-						return v.peers[p.BlobServerGrpcAddress].peer.Start(peerCtx)
-					})
-				}
+				}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddressURL.String())
 
-				if p.BlobServerHttpAddress != "" {
-					// get the best block header and send to the block validation for processing
-					v.logger.Infof("[BlobServer] Getting best block header from server at: %s", p.BlobServerHttpAddress)
-					blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.BlobServerHttpAddress))
-					if err != nil {
-						v.logger.Errorf("[BlobServer] error getting best block header from %s: %s", p.BlobServerHttpAddress, err)
-						return
-					}
-					blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
-					if err != nil {
-						v.logger.Errorf("[BlobServer] error parsing best block header from %s: %s", p.BlobServerHttpAddress, err)
-						return
-					}
-
-					validationClient := blockvalidation.NewClient(ctx)
-					if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.BlobServerHttpAddress); err != nil {
-						v.logger.Errorf("[BlobServer] error validating block from %s: %s", p.BlobServerHttpAddress, err)
-					}
-				}
-			}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddressURL.String())
-
-			return bootstrapClient.Start(ctx)
-		})
+				return bootstrapClient.Start(ctx)
+			})
+		}
 	}
 
 	if v.httpServer != nil {
