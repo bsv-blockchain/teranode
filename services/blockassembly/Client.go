@@ -15,10 +15,13 @@ import (
 )
 
 type Client struct {
-	client     blockassembly_api.BlockAssemblyAPIClient
-	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
-	frpcClient *blockassembly_api.Client
-	logger     utils.Logger
+	client       blockassembly_api.BlockAssemblyAPIClient
+	drpcClient   blockassembly_api.DRPCBlockAssemblyAPIClient
+	frpcClient   *blockassembly_api.Client
+	logger       utils.Logger
+	batchCh      chan *blockassembly_api.AddTxRequest
+	batchSize    int
+	batchTimeout int
 }
 
 func NewClient(ctx context.Context, logger utils.Logger) *Client {
@@ -36,9 +39,20 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 		panic(err)
 	}
 
+	sendBatchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
+	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
+	sendBatchWorkers, _ := gocore.Config().GetInt("blockassembly_sendBatchWorkers", 1)
+
+	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
+		logger.Fatalf("expecting blockassembly_sendBatchWorkers > 0 when blockassembly_sendBatchSize = %d", sendBatchSize)
+	}
+
 	client := &Client{
-		client: blockassembly_api.NewBlockAssemblyAPIClient(baConn),
-		logger: logger,
+		client:       blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		logger:       logger,
+		batchCh:      make(chan *blockassembly_api.AddTxRequest),
+		batchSize:    sendBatchSize,
+		batchTimeout: sendBatchTimeout,
 	}
 
 	// Connect to experimental DRPC server if configured
@@ -47,6 +61,12 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	// Connect to experimental fRPC server if configured
 	// fRPC has only been implemented for AddTx / Store
 	go client.connectFRPC()
+
+	if sendBatchSize > 0 {
+		for i := 0; i < sendBatchWorkers; i++ {
+			go client.batchWorker(ctx)
+		}
+	}
 
 	return client
 }
@@ -113,24 +133,37 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint6
 		Utxos:    utxoBytes,
 	}
 
-	if s.frpcClient != nil {
-		if _, err := s.frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
-			Txid:     hash[:],
-			Fee:      fee,
-			Size:     size,
-			Locktime: locktime,
-			Utxos:    utxoBytes,
-		}); err != nil {
-			return false, err
-		}
-	} else if s.drpcClient != nil {
-		if _, err := s.drpcClient.AddTx(ctx, req); err != nil {
-			return false, err
+	if s.batchSize == 0 {
+		if s.frpcClient != nil {
+
+			if _, err := s.frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
+				Txid:     hash[:],
+				Fee:      fee,
+				Size:     size,
+				Locktime: locktime,
+				Utxos:    utxoBytes,
+			}); err != nil {
+				return false, err
+			}
+
+		} else if s.drpcClient != nil {
+
+			if _, err := s.drpcClient.AddTx(ctx, req); err != nil {
+				return false, err
+			}
+
+		} else {
+
+			if _, err := s.client.AddTx(ctx, req); err != nil {
+				return false, err
+			}
+
 		}
 	} else {
-		if _, err := s.client.AddTx(ctx, req); err != nil {
-			return false, err
-		}
+
+		/* batch mode */
+		s.batchCh <- req
+
 	}
 
 	return true, nil
@@ -178,4 +211,82 @@ func (s Client) SubmitMiningSolution(ctx context.Context, solution *model.Mining
 	}
 
 	return nil
+}
+
+func (s *Client) batchWorker(ctx context.Context) {
+	duration := time.Duration(s.batchTimeout) * time.Millisecond
+	ringBuffer := make([]*blockassembly_api.AddTxRequest, s.batchSize)
+	i := 0
+	for {
+		select {
+		case req := <-s.batchCh:
+			ringBuffer[i] = req
+			i++
+			if i == s.batchSize {
+				s.sendBatchToBlockAssembly(ctx, ringBuffer)
+				i = 0
+			}
+		case <-time.After(duration):
+			if i > 0 {
+				s.sendBatchToBlockAssembly(ctx, ringBuffer[:i])
+				i = 0
+			}
+		}
+	}
+}
+
+func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*blockassembly_api.AddTxRequest) {
+	if s.frpcClient != nil {
+
+		fBatch := make([]*blockassembly_api.BlockassemblyApiAddTxRequest, len(batch))
+		for i, req := range batch {
+			fBatch[i] = &blockassembly_api.BlockassemblyApiAddTxRequest{
+				Txid:     req.Txid,
+				Fee:      req.Fee,
+				Locktime: req.Locktime,
+				Size:     req.Size,
+				Utxos:    req.Utxos,
+			}
+		}
+		txBatch := &blockassembly_api.BlockassemblyApiAddTxBatchRequest{
+			TxRequests: fBatch,
+		}
+		resp, err := s.frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, txBatch)
+		if err != nil {
+			s.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.TxIdErrors) > 0 {
+			s.logger.Errorf("batch send to blockassembly returned %d failed transactions from %d batch", len(resp.TxIdErrors), len(batch))
+		}
+
+	} else if s.drpcClient != nil {
+
+		txBatch := &blockassembly_api.AddTxBatchRequest{
+			TxRequests: batch,
+		}
+		resp, err := s.drpcClient.AddTxBatch(ctx, txBatch)
+		if err != nil {
+			s.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.TxIdErrors) > 0 {
+			s.logger.Errorf("batch send to blockassembly returned %d failed transactions from %d batch", len(resp.TxIdErrors), len(batch))
+		}
+
+	} else {
+
+		txBatch := &blockassembly_api.AddTxBatchRequest{
+			TxRequests: batch,
+		}
+		resp, err := s.client.AddTxBatch(ctx, txBatch)
+		if err != nil {
+			s.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.TxIdErrors) > 0 {
+			s.logger.Errorf("batch send to blockassembly returned %d failed transactions from %d batch", len(resp.TxIdErrors), len(batch))
+		}
+
+	}
 }
