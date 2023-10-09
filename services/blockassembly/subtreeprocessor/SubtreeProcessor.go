@@ -48,7 +48,7 @@ type SubtreeProcessor struct {
 	sync.Mutex
 	txCount      atomic.Uint64
 	batcher      *txIDAndFeeBatch
-	queue        *LockFreeQueue[*txIDAndFee]
+	queue        *LockFreeQueue
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       utils.Logger
@@ -76,12 +76,12 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		txChanBufferSize = settingsBufferSize
 	}
 
-	batcherSize := 100
-	if settingsBufferSize, ok := gocore.Config().GetInt("blockassembly_subtreeProcessorBatcherSize", 100); ok {
+	batcherSize := 1000
+	if settingsBufferSize, ok := gocore.Config().GetInt("blockassembly_subtreeProcessorBatcherSize", 1000); ok {
 		batcherSize = settingsBufferSize
 	}
 
-	queue := NewLockFreeQueue[*txIDAndFee]()
+	queue := NewLockFreeQueue()
 
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,
@@ -158,7 +158,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 			default:
 				nrProcessed := 0
 				for {
-					txReq = stp.queue.Dequeue()
+					txReq = stp.queue.dequeue()
 					if txReq == nil || nrProcessed > batcherSize {
 						break
 					}
@@ -168,7 +168,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					}
 					if txReq.waitCh != nil {
-						txReq.waitCh <- struct{}{}
+						utils.SafeSend(txReq.waitCh, struct{}{})
 					}
 
 					nrProcessed++
@@ -226,7 +226,7 @@ func (stp *SubtreeProcessor) Add(hash *chainhash.Hash, fee uint64, sizeInBytes u
 	if len(optionalWaitCh) > 0 {
 		waitCh = optionalWaitCh[0]
 	}
-	stp.queue.Enqueue(&txIDAndFee{
+	stp.queue.enqueue(&txIDAndFee{
 		txID:        hash,
 		fee:         fee,
 		sizeInBytes: sizeInBytes,

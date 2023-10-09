@@ -6,80 +6,56 @@ import (
 
 // LockFreeQueue represents a FIFO structure with operations to enqueue
 // and dequeue generic values.
+// This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
-type LockFreeQueue[T any] struct {
-	head atomic.Pointer[node[T]]
-	tail atomic.Pointer[node[T]]
-}
-
-// node represents a node in the queue
-type node[T any] struct {
-	value T
-	next  atomic.Pointer[node[T]]
-}
-
-// newNode creates and initializes a node
-func newNode[T any](v T) *node[T] {
-	return &node[T]{value: v}
+type LockFreeQueue struct {
+	head         atomic.Pointer[txIDAndFee]
+	tail         *txIDAndFee
+	previousTail *txIDAndFee
 }
 
 // NewLockFreeQueue creates and initializes a LockFreeQueue
-func NewLockFreeQueue[T any]() *LockFreeQueue[T] {
-	var n = node[T]{}
-	lf := &LockFreeQueue[T]{
-		head: atomic.Pointer[node[T]]{},
-		tail: atomic.Pointer[node[T]]{},
+func NewLockFreeQueue() *LockFreeQueue {
+	firstTail := &txIDAndFee{}
+	lf := &LockFreeQueue{
+		head:         atomic.Pointer[txIDAndFee]{},
+		tail:         firstTail,
+		previousTail: firstTail,
 	}
 
-	lf.head.Store(&n)
-	lf.tail.Store(&n)
+	lf.head.Store(nil)
 
 	return lf
 }
 
 // Enqueue adds a series of Request to the queue
-func (q *LockFreeQueue[T]) Enqueue(v T) {
-	n := newNode(v)
-	for {
-		tail := q.tail.Load()
-		next := tail.next.Load()
-		if tail == q.tail.Load() {
-			if next == nil {
-				if tail.next.CompareAndSwap(next, n) {
-					q.tail.CompareAndSwap(tail, n)
-					return
-				}
-			} else {
-				q.tail.CompareAndSwap(tail, next)
-			}
-		}
+// enqueue is thread safe, it uses atomic operations to add to the queue
+func (q *LockFreeQueue) enqueue(v *txIDAndFee) {
+	prev := q.head.Swap(v)
+	if prev == nil {
+		q.tail.next.Store(v)
+		return
 	}
+	prev.next.Store(v)
 }
 
 // Dequeue removes a Request from the queue
-func (q *LockFreeQueue[T]) Dequeue() T {
-	var t T
-	for {
-		head := q.head.Load()
-		tail := q.tail.Load()
-		next := head.next.Load()
-		if head == q.head.Load() {
-			if head == tail {
-				if next == nil {
-					return t
-				}
-				q.tail.CompareAndSwap(tail, next)
-			} else {
-				v := next.value
-				if q.head.CompareAndSwap(head, next) {
-					return v
-				}
-			}
-		}
+// dequeue is not thread safe, it should only be called from a single thread !!!
+func (q *LockFreeQueue) dequeue() *txIDAndFee {
+	next := q.tail.next.Load()
+	if next == nil || next == q.previousTail {
+		return nil
 	}
+
+	if next != nil {
+		q.tail = next
+	}
+
+	q.previousTail = next
+	return next
 }
 
 // IsEmpty Checks if the queue is empty.
-func (q *LockFreeQueue[T]) IsEmpty() bool {
-	return q.head.Load() == q.tail.Load()
+func (q *LockFreeQueue) IsEmpty() bool {
+	return q.previousTail == q.tail
 }

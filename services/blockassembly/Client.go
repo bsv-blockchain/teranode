@@ -71,7 +71,7 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	return client
 }
 
-func (s Client) connectDRPC() {
+func (s *Client) connectDRPC() {
 	func() {
 		err := recover()
 		if err != nil {
@@ -93,7 +93,7 @@ func (s Client) connectDRPC() {
 	}
 }
 
-func (s Client) connectFRPC() {
+func (s *Client) connectFRPC() {
 	func() {
 		err := recover()
 		if err != nil {
@@ -120,7 +120,7 @@ func (s Client) connectFRPC() {
 	}
 }
 
-func (s Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error) {
 	utxoBytes := make([][]byte, len(utxoHashes))
 	for i, h := range utxoHashes {
 		utxoBytes[i] = h[:]
@@ -169,7 +169,7 @@ func (s Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint6
 	return true, nil
 }
 
-func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
+func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
 	req := &blockassembly_api.EmptyMessage{}
 
 	var err error
@@ -187,7 +187,7 @@ func (s Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate,
 	return res, nil
 }
 
-func (s Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
+func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
 	var err error
 	if s.drpcClient != nil {
 		_, err = s.drpcClient.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
