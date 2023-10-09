@@ -4,6 +4,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -17,12 +18,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	aerospikeHost      = "aero.ubsv-store0.eu-north-1.ubsv.dev" // "localhost"
+	aerospikePort      = 3000                                   // 3800
+	aerospikeNamespace = "utxostore"                            // test
+)
+
 func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
-	client, aeroErr := aero.NewClient("localhost", 3800)
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse("aerospike://localhost:3800/test")
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -35,11 +42,11 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, err)
 
 	var hash2 *chainhash.Hash
-	hash2, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
+	hash2, err = chainhash.NewHashFromStr("663bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 	require.NoError(t, err)
 
 	var key *aero.Key
-	key, err = aero.NewKey("test", "utxo", hash[:])
+	key, err = aero.NewKey(aerospikeNamespace, "utxo", hash[:])
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
