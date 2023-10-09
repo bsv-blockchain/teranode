@@ -608,6 +608,8 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 }
 
 func Test_txIDAndFeeBatch(t *testing.T) {
+	util.SkipVeryLongTests(t)
+
 	batcher := newTxIDAndFeeBatch(1000)
 	var wg sync.WaitGroup
 	batchCount := atomic.Uint64{}
