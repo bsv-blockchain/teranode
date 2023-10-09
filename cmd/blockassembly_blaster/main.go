@@ -190,10 +190,12 @@ func worker(logger utils.Logger) {
 			Utxos: [][]byte{utxoHash},
 		}
 
-		if broadcastProtocol != "disabled" {
 			prometheusBlockAssemblerAddTx.Inc()
 			counter.Add(1)
-		}
+		
+		if broadcastProtocol == "disabled" {
+    return
+  }
 
 		if batchSize == 0 {
 			if err := sendToBlockAssemblyServer(context.Background(), logger, req); err != nil {
