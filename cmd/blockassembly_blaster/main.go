@@ -62,10 +62,15 @@ func init() {
 		log.Printf("Prometheus metrics available at http://%s%s", httpAddr, prometheusEndpoint)
 	}
 
+	// start dummy health check...
+	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
 	go func() {
 		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
-
 	}()
 
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
