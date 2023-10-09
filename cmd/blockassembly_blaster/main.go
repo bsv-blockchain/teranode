@@ -87,7 +87,7 @@ func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
-	flag.IntVar(&batchSize, "batch_size", 1, "Batch size [0 for no batching]")
+	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
 	logger := gocore.Log("block_assembly_blaster")
@@ -188,10 +188,6 @@ func worker(logger utils.Logger) {
 			Fee:   10,
 			Size:  100,
 			Utxos: [][]byte{utxoHash},
-		}
-
-		if err := sendToBlockAssemblyServer(context.Background(), logger, req); err != nil {
-			panic(err)
 		}
 
 		if broadcastProtocol != "disabled" {
