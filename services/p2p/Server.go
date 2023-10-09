@@ -365,7 +365,10 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 			}
 
 			// send best block to the requester
-			s.sendPeerMessage(ctx, pid, msgBytes)
+			err = s.sendPeerMessage(ctx, pid, msgBytes)
+			if err != nil {
+				s.logger.Errorf("error sending peer message: ", err)
+			}
 		}
 	}
 }

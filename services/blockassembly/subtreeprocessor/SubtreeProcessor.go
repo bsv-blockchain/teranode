@@ -48,6 +48,7 @@ type SubtreeProcessor struct {
 	sync.Mutex
 	txCount      atomic.Uint64
 	batcher      *txIDAndFeeBatch
+	queue        *LockFreeQueue[*txIDAndFee]
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       utils.Logger
@@ -80,6 +81,8 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		batcherSize = settingsBufferSize
 	}
 
+	queue := NewLockFreeQueue[*txIDAndFee]()
+
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,
 		txChan:              make(chan *[]txIDAndFee, txChanBufferSize),
@@ -90,6 +93,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:      firstSubtree,
 		batcher:             newTxIDAndFeeBatch(batcherSize),
+		queue:               queue,
 		subtreeStore:        subtreeStore,
 		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
 		logger:              logger,
@@ -100,7 +104,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 	}
 
 	go func() {
-		var txReq txIDAndFee
+		var txReq *txIDAndFee
 		var err error
 		for {
 			select {
@@ -140,8 +144,25 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				}
 				moveUpReq.errChan <- err
 
-			case txReqs := <-stp.txChan:
-				for _, txReq = range *txReqs {
+			//case txReqs := <-stp.txChan:
+			//	for _, txReq = range *txReqs {
+			//		err = stp.addNode(txReq.txID, txReq.fee, txReq.sizeInBytes)
+			//		if err != nil {
+			//			stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
+			//		}
+			//		if txReq.waitCh != nil {
+			//			txReq.waitCh <- struct{}{}
+			//		}
+			//		stp.txCount.Add(1)
+			//	}
+			default:
+				nrProcessed := 0
+				for {
+					txReq = stp.queue.Dequeue()
+					if txReq == nil || nrProcessed > batcherSize {
+						break
+					}
+
 					err = stp.addNode(txReq.txID, txReq.fee, txReq.sizeInBytes)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
@@ -149,6 +170,8 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 					if txReq.waitCh != nil {
 						txReq.waitCh <- struct{}{}
 					}
+
+					nrProcessed++
 					stp.txCount.Add(1)
 				}
 			}
@@ -199,25 +222,36 @@ func (stp *SubtreeProcessor) addNode(txID *chainhash.Hash, fee uint64, sizeInByt
 
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(hash *chainhash.Hash, fee uint64, sizeInBytes uint64, optionalWaitCh ...chan struct{}) {
+	var waitCh chan struct{}
 	if len(optionalWaitCh) > 0 {
-		stp.txChan <- &[]txIDAndFee{{
-			txID:        hash,
-			fee:         fee,
-			sizeInBytes: sizeInBytes,
-			waitCh:      optionalWaitCh[0],
-		}}
-		return
+		waitCh = optionalWaitCh[0]
 	}
-
-	txIDAndFees := stp.batcher.add(&txIDAndFee{
+	stp.queue.Enqueue(&txIDAndFee{
 		txID:        hash,
 		fee:         fee,
 		sizeInBytes: sizeInBytes,
+		waitCh:      waitCh,
 	})
 
-	if txIDAndFees != nil {
-		stp.txChan <- txIDAndFees
-	}
+	//if len(optionalWaitCh) > 0 {
+	//	stp.txChan <- &[]txIDAndFee{{
+	//		txID:        hash,
+	//		fee:         fee,
+	//		sizeInBytes: sizeInBytes,
+	//		waitCh:      optionalWaitCh[0],
+	//	}}
+	//	return
+	//}
+	//
+	//txIDAndFees := stp.batcher.add(&txIDAndFee{
+	//	txID:        hash,
+	//	fee:         fee,
+	//	sizeInBytes: sizeInBytes,
+	//})
+	//
+	//if txIDAndFees != nil {
+	//	stp.txChan <- txIDAndFees
+	//}
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
