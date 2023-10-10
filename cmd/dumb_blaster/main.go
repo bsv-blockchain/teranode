@@ -131,23 +131,23 @@ func main() {
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
 
 	case "drpc":
-		if propagationDrpcAddresses, ok := gocore.Config().GetMulti("propagation_drpcAddresses", "|"); ok {
-			rawconn, err := net.Dial("tcp", propagationDrpcAddresses[0])
+		if propagationDrpcAddress, ok := gocore.Config().Get("propagation_drpcAddress"); ok {
+			rawConn, err := net.Dial("tcp", propagationDrpcAddress)
 			if err != nil {
 				panic(err)
 			}
-			conn := drpcconn.New(rawconn)
+			conn := drpcconn.New(rawConn)
 			drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
 		}
 
 	case "frpc":
-		if propagationFrpcAddresses, ok := gocore.Config().GetMulti("propagation_frpcAddresses", "|"); ok {
+		if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
 			client, err := propagation_api.NewClient(nil, nil)
 			if err != nil {
 				panic(err)
 			}
 
-			err = client.Connect(propagationFrpcAddresses[0])
+			err = client.Connect(propagationFrpcAddress)
 			if err != nil {
 				panic(err)
 			} else {

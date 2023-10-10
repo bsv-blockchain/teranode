@@ -11,7 +11,6 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -22,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	ValidatorAPI_Health_FullMethodName                    = "/validator_api.ValidatorAPI/Health"
 	ValidatorAPI_ValidateTransaction_FullMethodName       = "/validator_api.ValidatorAPI/ValidateTransaction"
+	ValidatorAPI_ValidateTransactionBatch_FullMethodName  = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
 	ValidatorAPI_ValidateTransactionStream_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionStream"
 )
 
@@ -30,8 +30,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ValidatorAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ValidateTransaction(ctx context.Context, in *ValidateTransactionRequest, opts ...grpc.CallOption) (*ValidateTransactionResponse, error)
+	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionStreamClient, error)
 }
 
@@ -43,7 +44,7 @@ func NewValidatorAPIClient(cc grpc.ClientConnInterface) ValidatorAPIClient {
 	return &validatorAPIClient{cc}
 }
 
-func (c *validatorAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *validatorAPIClient) Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, ValidatorAPI_Health_FullMethodName, in, out, opts...)
 	if err != nil {
@@ -55,6 +56,15 @@ func (c *validatorAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts
 func (c *validatorAPIClient) ValidateTransaction(ctx context.Context, in *ValidateTransactionRequest, opts ...grpc.CallOption) (*ValidateTransactionResponse, error) {
 	out := new(ValidateTransactionResponse)
 	err := c.cc.Invoke(ctx, ValidatorAPI_ValidateTransaction_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *validatorAPIClient) ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error) {
+	out := new(ValidateTransactionBatchResponse)
+	err := c.cc.Invoke(ctx, ValidatorAPI_ValidateTransactionBatch_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -100,8 +110,9 @@ func (x *validatorAPIValidateTransactionStreamClient) CloseAndRecv() (*ValidateT
 // for forward compatibility
 type ValidatorAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
+	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error
 	mustEmbedUnimplementedValidatorAPIServer()
 }
@@ -110,11 +121,14 @@ type ValidatorAPIServer interface {
 type UnimplementedValidatorAPIServer struct {
 }
 
-func (UnimplementedValidatorAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+func (UnimplementedValidatorAPIServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
 func (UnimplementedValidatorAPIServer) ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateTransaction not implemented")
+}
+func (UnimplementedValidatorAPIServer) ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateTransactionBatch not implemented")
 }
 func (UnimplementedValidatorAPIServer) ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ValidateTransactionStream not implemented")
@@ -133,7 +147,7 @@ func RegisterValidatorAPIServer(s grpc.ServiceRegistrar, srv ValidatorAPIServer)
 }
 
 func _ValidatorAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
+	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -145,7 +159,7 @@ func _ValidatorAPI_Health_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: ValidatorAPI_Health_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ValidatorAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(ValidatorAPIServer).Health(ctx, req.(*EmptyMessage))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -164,6 +178,24 @@ func _ValidatorAPI_ValidateTransaction_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ValidatorAPIServer).ValidateTransaction(ctx, req.(*ValidateTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ValidatorAPI_ValidateTransactionBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateTransactionBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ValidatorAPIServer).ValidateTransactionBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidatorAPI_ValidateTransactionBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidatorAPIServer).ValidateTransactionBatch(ctx, req.(*ValidateTransactionBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -208,6 +240,10 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateTransaction",
 			Handler:    _ValidatorAPI_ValidateTransaction_Handler,
+		},
+		{
+			MethodName: "ValidateTransactionBatch",
+			Handler:    _ValidatorAPI_ValidateTransactionBatch_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

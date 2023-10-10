@@ -319,8 +319,9 @@ type PropagationAPI interface {
 	ProcessTransaction(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 }
 
-type connectionContext int
-const connectionContextKey connectionContext = 1000
+type contextKey int
+
+const connectionContextKey contextKey = 1000
 
 func SetErrorFlag(flags uint8, error bool) uint8 {
 	return flags | 0x2

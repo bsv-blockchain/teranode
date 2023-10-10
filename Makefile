@@ -195,6 +195,14 @@ gen-drpc:
 	--go-drpc_opt=paths=source_relative \
 	services/propagation/propagation_api/propagation_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-drpc_out=. \
+	--go-drpc_opt=paths=source_relative \
+	services/validator/validator_api/validator_api.proto
+
 .PHONY: gen-frpc
 gen-frpc:
 	# go install github.com/loopholelabs/frpc-go/protoc-gen-go-frpc@2efa3315a5871a40672a95c6a143b789a2249512
@@ -214,6 +222,14 @@ gen-frpc:
 	--go-frpc_out=. \
 	--go-frpc_opt=paths=source_relative \
 	services/propagation/propagation_api/propagation_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-frpc_out=. \
+	--go-frpc_opt=paths=source_relative \
+	services/validator/validator_api/validator_api.proto
 
 .PHONY: clean_gen
 clean_gen:

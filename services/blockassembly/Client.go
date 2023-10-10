@@ -83,11 +83,11 @@ func (s *Client) connectDRPC() {
 	if ok {
 		s.logger.Infof("Using DRPC connection to blockassembly")
 		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
-		rawconn, err := net.Dial("tcp", blockAssemblyDrpcAddress)
+		rawConn, err := net.Dial("tcp", blockAssemblyDrpcAddress)
 		if err != nil {
 			s.logger.Errorf("Error connecting to blockassembly: %s", err)
 		}
-		conn := drpcconn.New(rawconn)
+		conn := drpcconn.New(rawConn)
 		s.drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
 		s.logger.Infof("Connected to blockassembly DRPC server")
 	}

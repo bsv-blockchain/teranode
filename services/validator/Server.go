@@ -25,8 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Server type carries the logger within it
@@ -152,11 +150,11 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*validator_api.HealthResponse, error) {
+func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	prometheusHealth.Inc()
 	return &validator_api.HealthResponse{
 		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: uint32(time.Now().Unix()),
 	}, nil
 }
 
@@ -227,6 +225,24 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,
+	}, nil
+}
+
+func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
+	for _, reqItem := range req.GetTransactions() {
+		tx, err := v.ValidateTransaction(ctx, reqItem)
+		if err != nil {
+			errReasons = append(errReasons, &validator_api.ValidateTransactionError{
+				TxId:   tx.String(),
+				Reason: tx.Reason,
+			})
+		}
+	}
+
+	return &validator_api.ValidateTransactionBatchResponse{
+		Valid:   true,
+		Reasons: errReasons,
 	}, nil
 }
 

@@ -2,7 +2,8 @@ package validator
 
 import (
 	"context"
-	"fmt"
+	"net"
+	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
@@ -12,10 +13,17 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
+	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
-	client validator_api.ValidatorAPIClient
+	client       validator_api.ValidatorAPIClient
+	drpcClient   validator_api.DRPCValidatorAPIClient
+	frpcClient   *validator_api.Client
+	logger       utils.Logger
+	batchCh      chan *validator_api.ValidateTransactionRequest
+	batchSize    int
+	batchTimeout int
 }
 
 func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
@@ -39,11 +47,38 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		return nil, err
 	}
 
-	client := validator_api.NewValidatorAPIClient(conn)
+	grpcClient := validator_api.NewValidatorAPIClient(conn)
 
-	return &Client{
-		client: client,
-	}, nil
+	sendBatchSize, _ := gocore.Config().GetInt("validator_sendBatchSize", 0)
+	sendBatchTimeout, _ := gocore.Config().GetInt("validator_sendBatchTimeout", 100)
+	sendBatchWorkers, _ := gocore.Config().GetInt("validator_sendBatchWorkers", 1)
+
+	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
+		logger.Fatalf("expecting validator_sendBatchWorkers > 0 when validator_sendBatchSize = %d", sendBatchSize)
+	}
+
+	client := &Client{
+		client:       grpcClient,
+		logger:       logger,
+		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
+		batchSize:    sendBatchSize,
+		batchTimeout: sendBatchTimeout,
+	}
+
+	// Connect to experimental DRPC server if configured
+	go client.connectDRPC()
+
+	// Connect to experimental fRPC server if configured
+	// fRPC has only been implemented for AddTx / Store
+	go client.connectFRPC()
+
+	if sendBatchSize > 0 {
+		for i := 0; i < sendBatchWorkers; i++ {
+			go client.batchWorker(ctx)
+		}
+	}
+
+	return client, nil
 }
 
 func (c *Client) Stop() {
@@ -51,16 +86,165 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
-	resp, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-		TransactionData: tx.ExtendedBytes(),
-	})
-	if err != nil {
-		return err
-	}
+	if c.batchSize == 0 {
+		if c.frpcClient != nil {
 
-	if !resp.Valid {
-		return fmt.Errorf("invalid transaction: %s", resp.Reason)
+			if _, err := c.frpcClient.ValidatorAPI.ValidateTransaction(ctx, &validator_api.ValidatorApiValidateTransactionRequest{
+				TransactionData: tx.ExtendedBytes(),
+			}); err != nil {
+				return err
+			}
+
+		} else if c.drpcClient != nil {
+
+			if _, err := c.drpcClient.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
+				TransactionData: tx.ExtendedBytes(),
+			}); err != nil {
+				return err
+			}
+
+		} else {
+
+			if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
+				TransactionData: tx.ExtendedBytes(),
+			}); err != nil {
+				return err
+			}
+
+		}
+	} else {
+
+		/* batch mode */
+		c.batchCh <- &validator_api.ValidateTransactionRequest{
+			TransactionData: tx.ExtendedBytes(),
+		}
+
 	}
 
 	return nil
+}
+
+func (s *Client) batchWorker(ctx context.Context) {
+	duration := time.Duration(s.batchTimeout) * time.Millisecond
+	ringBuffer := make([]*validator_api.ValidateTransactionRequest, s.batchSize)
+	i := 0
+	for {
+		select {
+		case req := <-s.batchCh:
+			ringBuffer[i] = req
+			i++
+			if i == s.batchSize {
+				s.sendBatchToValidator(ctx, ringBuffer)
+				i = 0
+			}
+		case <-time.After(duration):
+			if i > 0 {
+				s.sendBatchToValidator(ctx, ringBuffer[:i])
+				i = 0
+			}
+		}
+	}
+}
+
+func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_api.ValidateTransactionRequest) {
+	if c.frpcClient != nil {
+
+		fBatch := make([]*validator_api.ValidatorApiValidateTransactionRequest, len(batch))
+		for i, req := range batch {
+			fBatch[i] = &validator_api.ValidatorApiValidateTransactionRequest{
+				TransactionData: req.GetTransactionData(),
+			}
+		}
+		txBatch := &validator_api.ValidatorApiValidateTransactionBatchRequest{
+			Transactions: fBatch,
+		}
+
+		resp, err := c.frpcClient.ValidatorAPI.ValidateTransactionBatch(ctx, txBatch)
+		if err != nil {
+			c.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.Reasons) > 0 {
+			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
+		}
+
+	} else if c.drpcClient != nil {
+
+		txBatch := &validator_api.ValidateTransactionBatchRequest{
+			Transactions: batch,
+		}
+
+		resp, err := c.drpcClient.ValidateTransactionBatch(ctx, txBatch)
+		if err != nil {
+			c.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.Reasons) > 0 {
+			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
+		}
+
+	} else {
+
+		txBatch := &validator_api.ValidateTransactionBatchRequest{
+			Transactions: batch,
+		}
+		resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
+		if err != nil {
+			c.logger.Errorf("%v", err)
+			return
+		}
+		if len(resp.Reasons) > 0 {
+			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
+		}
+
+	}
+}
+
+func (c *Client) connectDRPC() {
+	func() {
+		err := recover()
+		if err != nil {
+			c.logger.Errorf("Error connecting to validator DRPC: %s", err)
+		}
+	}()
+
+	validatorDrpcAddress, ok := gocore.Config().Get("validator_drpcAddress")
+	if ok {
+		c.logger.Infof("Using DRPC connection to validator")
+		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+		rawConn, err := net.Dial("tcp", validatorDrpcAddress)
+		if err != nil {
+			c.logger.Errorf("Error connecting to validator: %s", err)
+		}
+		conn := drpcconn.New(rawConn)
+		c.drpcClient = validator_api.NewDRPCValidatorAPIClient(conn)
+		c.logger.Infof("Connected to validator DRPC server")
+	}
+}
+
+func (c *Client) connectFRPC() {
+	func() {
+		err := recover()
+		if err != nil {
+			c.logger.Errorf("Error connecting to validator fRPC: %s", err)
+		}
+	}()
+
+	validatorFRPCAddress, ok := gocore.Config().Get("validator_frpcAddress")
+	if ok {
+		c.logger.Infof("Using fRPC connection to validator")
+		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+
+		client, err := validator_api.NewClient(nil, nil)
+		if err != nil {
+			c.logger.Errorf("error creating new fRPC client in validator: %s", err)
+		}
+
+		err = client.Connect(validatorFRPCAddress)
+		if err != nil {
+			c.logger.Errorf("error connecting to fRPC server in validator: %s", err)
+		} else {
+			c.frpcClient = client
+		}
+	}
 }

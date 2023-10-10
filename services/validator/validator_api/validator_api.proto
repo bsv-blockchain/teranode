@@ -4,21 +4,22 @@ option go_package = ".;validator_api";
 
 package validator_api;
 
-import "google/protobuf/timestamp.proto";
-import "google/protobuf/empty.proto";
-
 service ValidatorAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc Health (EmptyMessage) returns (HealthResponse) {}
   rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+  rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
 }
+
+// swagger:model EmptyMessage
+message EmptyMessage {}
 
 // swagger:model HealthResponse
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  uint32 timestamp = 3;
 }
 
 // swagger:model ValidateTransactionRequest
@@ -30,4 +31,21 @@ message ValidateTransactionRequest {
 message ValidateTransactionResponse {
   bool valid = 1;
   string reason = 2;
+}
+
+// swagger:model ValidateTransactionBatchRequest
+message ValidateTransactionBatchRequest {
+  repeated ValidateTransactionRequest transactions = 1;
+}
+
+// swagger:model ValidateTransactionError
+message ValidateTransactionError {
+  string txId = 1;
+  string reason = 2;
+}
+
+// swagger:model ValidateTransactionBatchResponse
+message ValidateTransactionBatchResponse {
+  bool valid = 1;
+  repeated ValidateTransactionError reasons = 2;
 }

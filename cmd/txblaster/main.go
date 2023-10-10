@@ -321,44 +321,40 @@ func setPropagationServers(ctx context.Context) map[string]extra.PropagationServ
 		}
 	}
 
-	if propagationDrpcAddresses, ok := gocore.Config().GetMulti("propagation_drpcAddresses", "|"); ok {
-		for _, propagationDrpcAddress := range propagationDrpcAddresses {
-			rawconn, err := net.Dial("tcp", propagationDrpcAddress)
-			if err != nil {
-				panic(err)
-			}
-			conn := drpcconn.New(rawconn)
-			drpcClient := propagation_api.NewDRPCPropagationAPIClient(conn)
+	if propagationDrpcAddress, ok := gocore.Config().Get("propagation_drpcAddress"); ok {
+		rawConn, err := net.Dial("tcp", propagationDrpcAddress)
+		if err != nil {
+			panic(err)
+		}
+		conn := drpcconn.New(rawConn)
+		drpcClient := propagation_api.NewDRPCPropagationAPIClient(conn)
 
-			host := strings.Split(propagationDrpcAddress, ":")[0]
-			if p, ok := propagationServers[host]; ok {
-				p.DRPC = drpcClient
-			} else {
-				propagationServers[host] = extra.PropagationServer{
-					DRPC: drpcClient,
-				}
+		host := strings.Split(propagationDrpcAddress, ":")[0]
+		if p, ok := propagationServers[host]; ok {
+			p.DRPC = drpcClient
+		} else {
+			propagationServers[host] = extra.PropagationServer{
+				DRPC: drpcClient,
 			}
 		}
 	}
 
-	if propagationFrpcAddresses, ok := gocore.Config().GetMulti("propagation_frpcAddresses", "|"); ok {
-		for _, propagationFrpcAddress := range propagationFrpcAddresses {
-			client, err := propagation_api.NewClient(nil, nil)
-			if err != nil {
-				panic(err)
-			}
+	if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
+		client, err := propagation_api.NewClient(nil, nil)
+		if err != nil {
+			panic(err)
+		}
 
-			err = client.Connect(propagationFrpcAddress)
-			if err != nil {
-				panic(err)
+		err = client.Connect(propagationFrpcAddress)
+		if err != nil {
+			panic(err)
+		} else {
+			host := strings.Split(propagationFrpcAddress, ":")[0]
+			if p, ok := propagationServers[host]; ok {
+				p.FRPC = client
 			} else {
-				host := strings.Split(propagationFrpcAddress, ":")[0]
-				if p, ok := propagationServers[host]; ok {
-					p.FRPC = client
-				} else {
-					propagationServers[host] = extra.PropagationServer{
-						FRPC: client,
-					}
+				propagationServers[host] = extra.PropagationServer{
+					FRPC: client,
 				}
 			}
 		}

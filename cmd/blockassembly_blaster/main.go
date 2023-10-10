@@ -111,32 +111,32 @@ func main() {
 		grpcClient = blockassembly_api.NewBlockAssemblyAPIClient(conn)
 
 	case "drpc":
-		if blockassemblyDrpcAddresses, ok := gocore.Config().GetMulti("blockassembly_drpcAddresses", "|"); ok {
-			rawConn, err := net.Dial("tcp", blockassemblyDrpcAddresses[0])
+		if blockassemblyDrpcAddress, ok := gocore.Config().Get("blockassembly_drpcAddress"); ok {
+			rawConn, err := net.Dial("tcp", blockassemblyDrpcAddress)
 			if err != nil {
 				panic(err)
 			}
 			conn := drpcconn.New(rawConn)
 			drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
 		} else {
-			panic(fmt.Errorf("must have valid blockassembly_drpcAddresses"))
+			panic(fmt.Errorf("must have valid blockassembly_drpcAddress"))
 		}
 
 	case "frpc":
-		if blockassemblyFrpcAddresses, ok := gocore.Config().GetMulti("blockassembly_frpcAddresses", "|"); ok {
+		if blockassemblyFrpcAddress, ok := gocore.Config().Get("blockassembly_frpcAddress"); ok {
 			client, err := blockassembly_api.NewClient(nil, nil)
 			if err != nil {
 				panic(err)
 			}
 
-			err = client.Connect(blockassemblyFrpcAddresses[0])
+			err = client.Connect(blockassemblyFrpcAddress)
 			if err != nil {
 				panic(err)
 			} else {
 				frpcClient = client
 			}
 		} else {
-			panic(fmt.Errorf("must have valid blockassembly_frpcAddresses"))
+			panic(fmt.Errorf("must have valid blockassembly_frpcAddress"))
 		}
 
 	}
@@ -190,12 +190,12 @@ func worker(logger utils.Logger) {
 			Utxos: [][]byte{utxoHash},
 		}
 
-			prometheusBlockAssemblerAddTx.Inc()
-			counter.Add(1)
-		
+		prometheusBlockAssemblerAddTx.Inc()
+		counter.Add(1)
+
 		if broadcastProtocol == "disabled" {
-    return
-  }
+			return
+		}
 
 		if batchSize == 0 {
 			if err := sendToBlockAssemblyServer(context.Background(), logger, req); err != nil {
