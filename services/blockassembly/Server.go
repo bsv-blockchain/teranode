@@ -408,8 +408,9 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		}
 	}
 
-	resp.Ok = true
-	return resp, nil
+	return &blockassembly_api.AddTxResponse{
+		Ok: true,
+	}, nil
 }
 
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {

@@ -51,8 +51,9 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		return nil, err
 	}
 
-	resp.Ok = true
-	return resp, nil
+	return &blockassembly_api.BlockassemblyApiAddTxResponse{
+		Ok: true,
+	}, nil
 }
 
 // frpcStoreUtxos is mostly a duplicate from the Server, but prevents extra mallocs by using the req directly
@@ -90,8 +91,9 @@ func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembl
 		}
 	}
 
-	resp.TxIdErrors = txIdErrors
-	return resp, err
+	return &blockassembly_api.BlockassemblyApiAddTxBatchResponse{
+		Ok: true,
+	}, err
 }
 
 func (f *fRPC_BlockAssembly) GetMiningCandidate(ctx context.Context, message *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.ModelMiningCandidate, error) {
