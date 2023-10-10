@@ -360,7 +360,7 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 	}, nil
 }
 
-func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error) {
+func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	startTime := time.Now()
 	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
 
@@ -382,7 +382,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		SizeInBytes: req.Size,
 	}
 
-	var err error
 	if !ba.blockAssemblyDisabled {
 		if err = ba.blockAssembler.AddTx(node); err != nil {
 			return nil, err
@@ -417,9 +416,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		}
 	}
 
-	return &blockassembly_api.AddTxResponse{
-		Ok: true,
-	}, nil
+	resp.Ok = true
+	return resp, nil
 }
 
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {

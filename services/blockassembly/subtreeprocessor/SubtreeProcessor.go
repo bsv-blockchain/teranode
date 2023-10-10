@@ -230,26 +230,6 @@ func (stp *SubtreeProcessor) Add(node *util.SubtreeNode, optionalWaitCh ...chan 
 		node:   node,
 		waitCh: waitCh,
 	})
-
-	//if len(optionalWaitCh) > 0 {
-	//	stp.txChan <- &[]txIDAndFee{{
-	//		txID:        hash,
-	//		fee:         fee,
-	//		sizeInBytes: sizeInBytes,
-	//		waitCh:      optionalWaitCh[0],
-	//	}}
-	//	return
-	//}
-	//
-	//txIDAndFees := stp.batcher.add(&txIDAndFee{
-	//	txID:        hash,
-	//	fee:         fee,
-	//	sizeInBytes: sizeInBytes,
-	//})
-	//
-	//if txIDAndFees != nil {
-	//	stp.txChan <- txIDAndFees
-	//}
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
@@ -637,6 +617,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 			}
 
 			subtree = &util.Subtree{}
+			// TODO deserialize only the hashes, we don't need any of the rest
 			err = subtree.Deserialize(subtreeBytes)
 			if err != nil {
 				return fmt.Errorf("error deserializing subtree: %s", err.Error())

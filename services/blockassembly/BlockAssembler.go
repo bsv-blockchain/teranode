@@ -251,13 +251,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 }
 
 func (b *BlockAssembler) AddTx(node *util.SubtreeNode) error {
-	startTime := time.Now()
-	prometheusBlockAssemblerAddTx.Inc()
-
 	b.subtreeProcessor.Add(node)
-
-	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(time.Since(startTime).Seconds())
-
 	return nil
 }
 

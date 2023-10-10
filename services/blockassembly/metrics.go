@@ -18,15 +18,13 @@ var (
 	prometheusBlockAssemblyUpdateTxMinedStatus          prometheus.Histogram
 
 	// in BlockAssembler
-	prometheusBlockAssemblerAddTx                       prometheus.Counter
-	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
-	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
-	prometheusBlockAssemblerTransactions                prometheus.Gauge
-	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
-	prometheusBlockAssemblerUtxoStoreDuration           prometheus.Histogram
-	prometheusBlockAssemblerSubtreeAddToChannelDuration prometheus.Histogram
-	prometheusBlockAssemblerReorg                       prometheus.Counter
-	prometheusBlockAssemblerReorgDuration               prometheus.Histogram
+	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
+	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
+	prometheusBlockAssemblerTransactions       prometheus.Gauge
+	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
+	prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
+	prometheusBlockAssemblerReorg              prometheus.Counter
+	prometheusBlockAssemblerReorgDuration      prometheus.Histogram
 )
 
 var prometheusMetricsInitialized = false
@@ -113,14 +111,6 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblerAddTx = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "block_assembler_add_tx",
-			Help:      "Number of txs added to the block assembler",
-		},
-	)
-
 	prometheusBlockAssemblerGetMiningCandidate = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockassembly",
@@ -159,15 +149,6 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "utxo_store_duration_v2",
 			Help:      "Duration of storing new utxos by block assembler",
-		},
-	)
-
-	prometheusBlockAssemblerSubtreeAddToChannelDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockassembly",
-			Name:      "add_tx_to_channel_duration_v2",
-			Help:      "Duration of writing tx to subtree processor channel by block assembler",
-			Buckets:   util.MetricsBuckets,
 		},
 	)
 
