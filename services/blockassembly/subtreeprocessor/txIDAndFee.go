@@ -4,15 +4,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bitcoin-sv/ubsv/util"
 )
 
 type txIDAndFee struct {
-	txID        *chainhash.Hash
-	fee         uint64
-	sizeInBytes uint64
-	waitCh      chan struct{}
-	next        atomic.Pointer[txIDAndFee]
+	node   *util.SubtreeNode
+	waitCh chan struct{}
+	next   atomic.Pointer[txIDAndFee]
 }
 
 type txIDAndFeeBatch struct {

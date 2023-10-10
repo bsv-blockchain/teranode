@@ -371,13 +371,23 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
 
-	txHash, err := chainhash.NewHash(req.Txid)
-	if err != nil {
-		return nil, err
+	if len(req.Txid) != 32 {
+		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
 	}
 
+	// create the subtree node
+	node := &util.SubtreeNode{
+		Hash:        &chainhash.Hash{},
+		Fee:         req.Fee,
+		SizeInBytes: req.Size,
+	}
+
+	// alloc free copying of the hash to [32]byte, which is a chainhash.Hash
+	copy(node.Hash[:], req.Txid)
+
+	var err error
 	if !ba.blockAssemblyDisabled {
-		if err = ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
+		if err = ba.blockAssembler.AddTx(node); err != nil {
 			return nil, err
 		}
 	}
@@ -393,13 +403,13 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			}
 
 			// this stores the utxo and sets the TTL, it will be purged in 2 hours
-			if err = ba.storeUtxoLocal.Set(ctx, txHash[:], utxoBytes, options.WithTTL(120*time.Minute)); err != nil {
+			if err = ba.storeUtxoLocal.Set(ctx, req.Txid, utxoBytes, options.WithTTL(120*time.Minute)); err != nil {
 				return nil, fmt.Errorf("failed to store utxo locally: %s", err)
 			}
 		}
 
-		ba.storeUtxoCh[int(txHash[0])] <- &storeUtxos{
-			txHash:   txHash,
+		ba.storeUtxoCh[int(req.Txid[0])] <- &storeUtxos{
+			txHash:   node.Hash,
 			utxos:    req.Utxos,
 			locktime: req.Locktime,
 		}

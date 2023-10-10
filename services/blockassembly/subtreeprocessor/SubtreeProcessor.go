@@ -163,7 +163,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 						break
 					}
 
-					err = stp.addNode(txReq.txID, txReq.fee, txReq.sizeInBytes)
+					err = stp.addNode(txReq.node)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					}
@@ -194,10 +194,10 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 	return len(stp.chainedSubtrees) + 1
 }
 
-func (stp *SubtreeProcessor) addNode(txID *chainhash.Hash, fee uint64, sizeInBytes uint64, skipNotification ...bool) (err error) {
+func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification ...bool) (err error) {
 	prometheusSubtreeProcessorAddTx.Inc()
 
-	err = stp.currentSubtree.AddNode(txID, fee, sizeInBytes)
+	err = stp.currentSubtree.AddSubtreeNode(node)
 	if err != nil {
 		return fmt.Errorf("error adding node to subtree: %s", err.Error())
 	}
@@ -221,16 +221,14 @@ func (stp *SubtreeProcessor) addNode(txID *chainhash.Hash, fee uint64, sizeInByt
 }
 
 // Add adds a tx hash to a channel
-func (stp *SubtreeProcessor) Add(hash *chainhash.Hash, fee uint64, sizeInBytes uint64, optionalWaitCh ...chan struct{}) {
+func (stp *SubtreeProcessor) Add(node *util.SubtreeNode, optionalWaitCh ...chan struct{}) {
 	var waitCh chan struct{}
 	if len(optionalWaitCh) > 0 {
 		waitCh = optionalWaitCh[0]
 	}
 	stp.queue.enqueue(&txIDAndFee{
-		txID:        hash,
-		fee:         fee,
-		sizeInBytes: sizeInBytes,
-		waitCh:      waitCh,
+		node:   node,
+		waitCh: waitCh,
 	})
 
 	//if len(optionalWaitCh) > 0 {
@@ -379,11 +377,11 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtree.Nodes); i++ {
-				_ = stp.addNode(subtree.Nodes[i].Hash, subtree.Nodes[i].Fee, subtree.Nodes[i].SizeInBytes, true)
+				_ = stp.addNode(subtree.Nodes[i], true)
 			}
 		} else {
 			for _, node := range subtree.Nodes {
-				_ = stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
+				_ = stp.addNode(node, true)
 			}
 		}
 	}
@@ -391,13 +389,13 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			_ = stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
+			_ = stp.addNode(node, true)
 		}
 	}
 
 	// add all the transactions from the last incomplete subtree
 	for _, node := range lastIncompleteSubtree.Nodes {
-		_ = stp.addNode(node.Hash, node.Fee, node.SizeInBytes, true)
+		_ = stp.addNode(node, true)
 	}
 
 	// we must set the current block header
@@ -471,7 +469,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// TODO make sure there are no transactions in our tx chan buffer that were in the block
 	//      or are they going to be caught by the tx meta lookup?
 
-	var remainderTxHashes *[]util.SubtreeNode
+	var remainderTxHashes *[]*util.SubtreeNode
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
 
@@ -486,7 +484,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 			// just use the first subtree, each subtree should be the same size
 			chainedSubtreeSize = chainedSubtrees[0].Size()
 		}
-		r := make([]util.SubtreeNode, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
+		r := make([]*util.SubtreeNode, 0, (len(chainedSubtrees)*chainedSubtreeSize)+len(lastIncompleteSubtree.Nodes))
 		remainderTxHashes = &r
 
 		for _, subtree := range chainedSubtrees {
@@ -510,7 +508,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 					stp.logger.Warnf("skipping coinbase transaction: %s, %d", node.Hash.String(), idx)
 					continue
 				}
-				_ = stp.addNode(node.Hash, node.Fee, node.SizeInBytes, skipNotification)
+				_ = stp.addNode(node, skipNotification)
 			}
 		}
 	}
@@ -581,14 +579,14 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	return nil
 }
 
-func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtree, transactionMap *util.SplitSwissMap) *[]util.SubtreeNode {
+func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtree, transactionMap *util.SplitSwissMap) *[]*util.SubtreeNode {
 	var hashCount atomic.Int64
 
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	var wg sync.WaitGroup
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
-	remainderSubtreeHashes := make([][]util.SubtreeNode, len(chainedSubtrees))
+	remainderSubtreeHashes := make([][]*util.SubtreeNode, len(chainedSubtrees))
 	for idx, subtree := range chainedSubtrees {
 		wg.Add(1)
 		go func(idx int, st *util.Subtree) {
@@ -610,10 +608,11 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 	wg.Wait()
 
 	// add all found tx hashes to the final list
-	remainderSubtreeNodes := make([]util.SubtreeNode, 0, hashCount.Load())
+	remainderSubtreeNodes := make([]*util.SubtreeNode, 0, hashCount.Load())
 	for _, subtreeHashes := range remainderSubtreeHashes {
 		remainderSubtreeNodes = append(remainderSubtreeNodes, subtreeHashes...)
 	}
+
 	return &remainderSubtreeNodes
 }
 

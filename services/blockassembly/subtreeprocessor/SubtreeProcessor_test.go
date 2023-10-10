@@ -86,7 +86,7 @@ func TestRotate(t *testing.T) {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(hash, 1, 0, waitCh)
+		stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 		<-waitCh
 	}
 
@@ -98,7 +98,7 @@ func TestRotate(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	require.NoError(t, err)
 
-	stp.Add(hash, 1, 0, waitCh)
+	stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 	<-waitCh
 
 	assert.Equal(t, 1, stp.currentSubtree.Length())
@@ -154,7 +154,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(hash, 1, 0, waitCh)
+				stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 				<-waitCh
 			}
 		}
@@ -186,7 +186,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(hash, 1, 0, waitCh)
+				stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 				<-waitCh
 			}
 		}
@@ -254,7 +254,7 @@ func TestMoveUpBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(hash, 1, 0, waitCh)
+			stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 			<-waitCh
 		}
 	}
@@ -333,7 +333,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(hash, 1, 0, waitCh)
+			stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 			<-waitCh
 		}
 	}
@@ -411,7 +411,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(hash, 1, 0, waitCh)
+			stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 			<-waitCh
 		}
 	}
@@ -489,7 +489,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(hash, 1, 0, waitCh)
+			stp.Add(&util.SubtreeNode{Hash: hash, Fee: 1}, waitCh)
 			<-waitCh
 		}
 	}
@@ -564,11 +564,11 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			subtreeProcessor.Add(hash, 111, 0)
+			subtreeProcessor.Add(&util.SubtreeNode{Hash: hash, Fee: 111})
 		}
 	}
 	// add 1 more hash to create the second subtree
-	subtreeProcessor.Add(hashes[0], 111, 0)
+	subtreeProcessor.Add(&util.SubtreeNode{Hash: hashes[0], Fee: 111})
 
 	wg.Wait()
 
@@ -619,9 +619,11 @@ func Test_txIDAndFeeBatch(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 1_000; j++ {
 				batch := batcher.add(&txIDAndFee{
-					txID:        &chainhash.Hash{},
-					fee:         1,
-					sizeInBytes: 2,
+					node: &util.SubtreeNode{
+						Hash:        &chainhash.Hash{},
+						Fee:         1,
+						SizeInBytes: 2,
+					},
 				})
 				if batch != nil {
 					batchCount.Add(1)
@@ -656,7 +658,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(txHashes[i], 1, 0, nil)
+		stp.Add(&util.SubtreeNode{Hash: txHashes[i], Fee: 1}, nil)
 	}
 }
 

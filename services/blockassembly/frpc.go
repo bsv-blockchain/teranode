@@ -2,10 +2,13 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 )
 
 type fRPC_BlockAssembly struct {
@@ -32,17 +35,25 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
 
-	txHash, err := chainhash.NewHash(req.Txid)
-	if err != nil {
+	if len(req.Txid) != 32 {
+		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
+	}
+
+	// create the subtree node
+	node := &util.SubtreeNode{
+		Hash:        &chainhash.Hash{},
+		Fee:         req.Fee,
+		SizeInBytes: req.Size,
+	}
+
+	// alloc free copying of the hash to [32]byte, which is a chainhash.Hash
+	copy(node.Hash[:], req.Txid)
+
+	if err := f.ba.blockAssembler.AddTx(node); err != nil {
 		return nil, err
 	}
 
-	if err = f.ba.blockAssembler.AddTx(txHash, req.Fee, req.Size); err != nil {
-		return nil, err
-	}
-
-	err = f.ba.storeUtxos(ctx, req.Utxos, req.Locktime)
-	if err != nil {
+	if err := f.ba.storeUtxos(ctx, req.Utxos, req.Locktime); err != nil {
 		return nil, err
 	}
 

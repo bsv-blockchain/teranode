@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -84,10 +85,12 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
 				q.enqueue(&txIDAndFee{
-					txID:        nil,
-					fee:         uint64(u),
-					sizeInBytes: 0,
-					waitCh:      nil,
+					node: &util.SubtreeNode{
+						Hash:        nil,
+						Fee:         uint64(u),
+						SizeInBytes: 0,
+					},
+					waitCh: nil,
 				})
 			}
 		}(n)

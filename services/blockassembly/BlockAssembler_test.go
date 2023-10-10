@@ -82,23 +82,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		}()
 
 		require.NoError(t, testItems.txMetaStore.Create(ctx, tx1, 111, 0, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}, 0))
-		err := testItems.blockAssembler.AddTx(tx1, 111, 0)
+		err := testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: tx1, Fee: 111})
 		require.NoError(t, err)
 
 		require.NoError(t, testItems.txMetaStore.Create(ctx, tx2, 222, 0, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}, 0))
-		err = testItems.blockAssembler.AddTx(tx2, 222, 0)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: tx2, Fee: 222})
 		require.NoError(t, err)
 
 		require.NoError(t, testItems.txMetaStore.Create(ctx, tx3, 333, 0, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}, 0))
-		err = testItems.blockAssembler.AddTx(tx3, 333, 0)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: tx3, Fee: 333})
 		require.NoError(t, err)
 
 		require.NoError(t, testItems.txMetaStore.Create(ctx, tx4, 444, 0, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}, 0))
-		err = testItems.blockAssembler.AddTx(tx4, 444, 0)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: tx4, Fee: 444})
 		require.NoError(t, err)
 
 		require.NoError(t, testItems.txMetaStore.Create(ctx, tx5, 555, 0, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}, 0))
-		err = testItems.blockAssembler.AddTx(tx5, 555, 0)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: tx5, Fee: 555})
 		require.NoError(t, err)
 
 		wg.Wait()

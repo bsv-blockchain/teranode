@@ -250,11 +250,11 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(txHash *chainhash.Hash, fee, size uint64) error {
+func (b *BlockAssembler) AddTx(node *util.SubtreeNode) error {
 	startTime := time.Now()
 	prometheusBlockAssemblerAddTx.Inc()
 
-	b.subtreeProcessor.Add(txHash, fee, size)
+	b.subtreeProcessor.Add(node)
 
 	prometheusBlockAssemblerSubtreeAddToChannelDuration.Observe(time.Since(startTime).Seconds())
 
