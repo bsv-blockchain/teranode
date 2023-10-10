@@ -12,9 +12,9 @@ import (
 )
 
 type SubtreeNode struct {
-	Hash        *chainhash.Hash `json:"hash"`
-	Fee         uint64          `json:"fee"`
-	SizeInBytes uint64          `json:"size"`
+	Hash        chainhash.Hash `json:"hash"`
+	Fee         uint64         `json:"fee"`
+	SizeInBytes uint64         `json:"size"`
 }
 
 type Subtree struct {
@@ -103,13 +103,13 @@ func (st *Subtree) IsComplete() bool {
 func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
 	if len(st.Nodes) < 1 {
 		st.Nodes = append(st.Nodes, &SubtreeNode{
-			Hash:        node,
+			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
 		})
 	} else {
 		st.Nodes[0] = &SubtreeNode{
-			Hash:        node,
+			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
 		}
@@ -158,7 +158,7 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64)
 	//}
 
 	st.Nodes = append(st.Nodes, &SubtreeNode{
-		Hash:        node,
+		Hash:        *node,
 		Fee:         fee,
 		SizeInBytes: sizeInBytes,
 	})
@@ -189,7 +189,7 @@ func (st *Subtree) Difference(ids TxMap) ([]*SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]*SubtreeNode, 0, 1_000)
 	for _, node := range st.Nodes {
-		if !ids.Exists(*node.Hash) {
+		if !ids.Exists(node.Hash) {
 			diff = append(diff, node)
 		}
 	}
@@ -226,9 +226,9 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 		if i == height {
 			// we are at the leaf level and read from the Nodes array
 			if index%2 == 0 {
-				nodes = append(nodes, st.Nodes[index+1].Hash)
+				nodes = append(nodes, &st.Nodes[index+1].Hash)
 			} else {
-				nodes = append(nodes, st.Nodes[index-1].Hash)
+				nodes = append(nodes, &st.Nodes[index-1].Hash)
 			}
 		} else {
 			treePos := treeIndexPos + treeIndex
@@ -266,7 +266,7 @@ func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 	if arraySize == 1 {
 		// Handle this Bitcoin exception that the merkle root is the same as the transaction hash if there
 		// is only one transaction.
-		return []*chainhash.Hash{st.Nodes[0].Hash}, nil
+		return []*chainhash.Hash{&st.Nodes[0].Hash}, nil
 	}
 
 	// Start the array offset after the last transaction and adjusted to the
@@ -280,13 +280,13 @@ func (st *Subtree) BuildMerkleTreeStoreFromBytes() ([]*chainhash.Hash, error) {
 			if i >= len(st.Nodes) {
 				currentMerkle = nil
 			} else {
-				currentMerkle = st.Nodes[i].Hash
+				currentMerkle = &st.Nodes[i].Hash
 			}
 
 			if i+1 >= len(st.Nodes) {
 				currentMerkle1 = nil
 			} else {
-				currentMerkle1 = st.Nodes[i+1].Hash
+				currentMerkle1 = &st.Nodes[i+1].Hash
 			}
 		} else {
 			currentMerkle = merkles[i-nextPoT]
@@ -450,7 +450,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
 
 		st.Nodes[i] = &SubtreeNode{
-			Hash:        hash,
+			Hash:        *hash,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
 		}

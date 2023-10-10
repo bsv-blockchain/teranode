@@ -202,16 +202,16 @@ func main() {
 				var btTx *bt.Tx
 				subtreeFees := uint64(0)
 				for _, node := range subtree.Nodes {
-					if !model.CoinbasePlaceholderHash.IsEqual(node.Hash) {
+					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 
 						// check that the transaction does not already exist in another block
-						previousBlockSubtree, ok := transactionMap[*node.Hash]
+						previousBlockSubtree, ok := transactionMap[node.Hash]
 						if ok {
 							logger.Debugf("current subtree %s in block %s", subtreeHash, block.Hash())
 							logger.Errorf("transaction %s already exists in subtree %s in block %s", node.Hash, previousBlockSubtree.Subtree, previousBlockSubtree.Block)
 						} else {
-							transactionMap[*node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
+							transactionMap[node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
 						}
 
 						// check that the transaction exists in the tx store
@@ -290,7 +290,7 @@ func main() {
 						}
 
 						// check whether this transaction was missing before and write out info if it was
-						if blockOfChild, ok := missingParents[*node.Hash]; ok {
+						if blockOfChild, ok := missingParents[node.Hash]; ok {
 							logger.Warnf("found missing parent %s in block %s, subtree %s", node.Hash, block.Hash(), subtreeHash)
 							logger.Warnf("-- child was in block %s, subtree %s", blockOfChild.Block, blockOfChild.Subtree)
 						}

@@ -41,13 +41,10 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 
 	// create the subtree node
 	node := &util.SubtreeNode{
-		Hash:        &chainhash.Hash{},
+		Hash:        chainhash.Hash(req.Txid),
 		Fee:         req.Fee,
 		SizeInBytes: req.Size,
 	}
-
-	// alloc free copying of the hash to [32]byte, which is a chainhash.Hash
-	copy(node.Hash[:], req.Txid)
 
 	if err := f.ba.blockAssembler.AddTx(node); err != nil {
 		return nil, err

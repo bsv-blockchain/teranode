@@ -232,7 +232,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if *b.subtreeSlices[0].Nodes[0].Hash != CoinbasePlaceholder {
+		if !b.subtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
 			return false, fmt.Errorf("first transaction in first subtree is not a coinbase placeholder")
 		}
 
@@ -293,10 +293,10 @@ func (b *Block) checkDuplicateTransactions() error {
 	for subIdx, subtree := range b.subtreeSlices {
 		size := len(subtree.Nodes)
 		for txIdx, subtreeNode := range subtree.Nodes {
-			if b.txMap.Exists(*subtreeNode.Hash) {
+			if b.txMap.Exists(subtreeNode.Hash) {
 				return fmt.Errorf("duplicate transaction %s", subtreeNode.Hash.String())
 			}
-			err := b.txMap.Put(*subtreeNode.Hash, uint64((subIdx*size)+txIdx))
+			err := b.txMap.Put(subtreeNode.Hash, uint64((subIdx*size)+txIdx))
 			if err != nil {
 				return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
 			}

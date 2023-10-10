@@ -377,13 +377,10 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 	// create the subtree node
 	node := &util.SubtreeNode{
-		Hash:        &chainhash.Hash{},
+		Hash:        chainhash.Hash(req.Txid),
 		Fee:         req.Fee,
 		SizeInBytes: req.Size,
 	}
-
-	// alloc free copying of the hash to [32]byte, which is a chainhash.Hash
-	copy(node.Hash[:], req.Txid)
 
 	var err error
 	if !ba.blockAssemblyDisabled {
@@ -409,7 +406,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		}
 
 		ba.storeUtxoCh[int(req.Txid[0])] <- &storeUtxos{
-			txHash:   node.Hash,
+			txHash:   &node.Hash,
 			utxos:    req.Utxos,
 			locktime: req.Locktime,
 		}
@@ -719,7 +716,7 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 		nodes := subtree.Nodes
 		g.Go(func() error {
 			for _, node := range nodes {
-				if err := txMetaStore.SetMined(gCtx, node.Hash, blockHeader.Hash()); err != nil {
+				if err := txMetaStore.SetMined(gCtx, &node.Hash, blockHeader.Hash()); err != nil {
 					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 				}
 			}

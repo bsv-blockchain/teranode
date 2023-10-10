@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -86,7 +87,7 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 				u := (n * iter) + i
 				q.enqueue(&txIDAndFee{
 					node: &util.SubtreeNode{
-						Hash:        nil,
+						Hash:        chainhash.Hash{},
 						Fee:         uint64(u),
 						SizeInBytes: 0,
 					},

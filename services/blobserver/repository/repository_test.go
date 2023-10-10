@@ -129,6 +129,6 @@ func TestSubtree(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
-	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
+	assert.Equal(t, *txns[0], subtree2.Nodes[0].Hash)
+	assert.Equal(t, *txns[1], subtree2.Nodes[1].Hash)
 }

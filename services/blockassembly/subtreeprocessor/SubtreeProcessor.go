@@ -117,7 +117,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
 					incompleteSubtree := util.NewTreeByLeafCount(stp.currentItemsPerFile)
 					for _, node := range stp.currentSubtree.Nodes {
-						_ = incompleteSubtree.AddNode(node.Hash, node.Fee, node.SizeInBytes)
+						_ = incompleteSubtree.AddSubtreeNode(node)
 					}
 					incompleteSubtree.Fees = stp.currentSubtree.Fees
 					completeSubtrees = append(completeSubtrees, incompleteSubtree)
@@ -503,7 +503,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	if remainderTxHashes != nil {
 		for idx, node := range *remainderTxHashes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
-				if coinbaseId.IsEqual(node.Hash) {
+				if coinbaseId.Equal(node.Hash) {
 					// this is the coinbase transaction, we need to skip it
 					stp.logger.Warnf("skipping coinbase transaction: %s, %d", node.Hash.String(), idx)
 					continue
@@ -643,7 +643,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 			}
 
 			for _, node := range subtree.Nodes {
-				_ = transactionMap.Put(*node.Hash)
+				_ = transactionMap.Put(node.Hash)
 			}
 
 			return nil
