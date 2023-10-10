@@ -618,6 +618,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		TransactionCount: transactionCount,
 		SizeInBytes:      sizeInBytes + 80 + util.VarintSize(transactionCount), // 80 byte header and bytes for txcount, // TODO calculate varint of transaction count
 		Subtrees:         jobSubtreeHashes,                                     // we need to store the hashes of the subtrees in the block, without the coinbase
+		SubtreeSlices:    job.Subtrees,
 	}
 
 	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())

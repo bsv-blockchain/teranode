@@ -81,11 +81,11 @@ type Block struct {
 	TransactionCount uint64            `json:"transaction_count"`
 	SizeInBytes      uint64            `json:"size_in_bytes"`
 	Subtrees         []*chainhash.Hash `json:"subtrees"`
+	SubtreeSlices    []*util.Subtree   `json:"-"`
 
 	// local
 	hash            *chainhash.Hash
 	subtreeLength   uint64
-	subtreeSlices   []*util.Subtree
 	subtreeSlicesMu sync.RWMutex
 	txMap           *util.SplitSwissMapUint64
 }
@@ -232,7 +232,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.subtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
+		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
 			return false, fmt.Errorf("first transaction in first subtree is not a coinbase placeholder")
 		}
 
@@ -275,7 +275,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	subtreeFees := uint64(0)
-	for _, subtree := range b.subtreeSlices {
+	for _, subtree := range b.SubtreeSlices {
 		subtreeFees += subtree.Fees
 	}
 
@@ -290,7 +290,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 
 func (b *Block) checkDuplicateTransactions() error {
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
-	for subIdx, subtree := range b.subtreeSlices {
+	for subIdx, subtree := range b.SubtreeSlices {
 		size := len(subtree.Nodes)
 		for txIdx, subtreeNode := range subtree.Nodes {
 			if b.txMap.Exists(subtreeNode.Hash) {
@@ -367,14 +367,14 @@ func (b *Block) GetSubtrees(subtreeStore blob.Store) ([]*util.Subtree, error) {
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
-	if len(b.subtreeSlices) == 0 {
+	if len(b.SubtreeSlices) == 0 {
 		// get the subtree slices from the subtree store
 		if err := b.GetAndValidateSubtrees(context.Background(), subtreeStore); err != nil {
 			return nil, err
 		}
 	}
 
-	return b.subtreeSlices, nil
+	return b.SubtreeSlices, nil
 }
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
@@ -388,7 +388,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 		b.subtreeSlicesMu.Unlock()
 	}()
 
-	b.subtreeSlices = make([]*util.Subtree, len(b.Subtrees))
+	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 
 	var subtreeSize int
 	var subtreeBytes []byte
@@ -419,7 +419,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 				}
 			}
 
-			b.subtreeSlices[i] = subtree
+			b.SubtreeSlices[i] = subtree
 
 			return nil
 		})
@@ -435,7 +435,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 }
 
 func (b *Block) CheckMerkleRoot() (err error) {
-	if len(b.Subtrees) != len(b.subtreeSlices) {
+	if len(b.Subtrees) != len(b.SubtreeSlices) {
 		return fmt.Errorf("number of subtrees does not match number of subtree slices")
 	}
 
@@ -445,7 +445,7 @@ func (b *Block) CheckMerkleRoot() (err error) {
 	}()
 
 	hashes := make([]*chainhash.Hash, len(b.Subtrees))
-	for i, subtree := range b.subtreeSlices {
+	for i, subtree := range b.SubtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
 			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), uint64(b.CoinbaseTx.Size()), 0)
