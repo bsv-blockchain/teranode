@@ -51,6 +51,7 @@ type BlockAssembly struct {
 	storeUTXOsInBackground bool
 	storeUtxoLocal         blob.Store
 	storeUtxoCh            map[int]chan *blockassembly_api.AddTxRequest
+	blockSubmissionChan    chan *blockassembly_api.SubmitMiningSolutionRequest
 	blockAssemblyDisabled  bool
 }
 
@@ -95,6 +96,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		storeUTXOsInBackground: storeUTXOsInBackground,
 		storeUtxoLocal:         localUtxoStore,
 		storeUtxoCh:            storeUtxoCh,
+		blockSubmissionChan:    make(chan *blockassembly_api.SubmitMiningSolutionRequest, 100),
 		blockAssemblyDisabled:  gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
@@ -141,6 +143,21 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				}
 
 				ba.logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
+			}
+		}
+	}()
+
+	// start the block submission listener in the background
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				ba.logger.Infof("Stopping block submission listener")
+				return
+			case blockSubmission := <-ba.blockSubmissionChan:
+				if _, err = ba.submitMiningSolution(ctx, blockSubmission); err != nil {
+					ba.logger.Errorf("Failed to submit block [%s]", err)
+				}
 			}
 		}
 	}()
@@ -502,7 +519,17 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	return miningCandidate, nil
 }
 
-func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	// we don't have the processing to handle multiple huge blocks at the same time, so we limit it to 1
+	// at a time, this is a temporary solution for now
+	ba.blockSubmissionChan <- req
+
+	return &blockassembly_api.SubmitMiningSolutionResponse{
+		Ok: true,
+	}, nil
+}
+
+func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	startTime := time.Now()
 
 	prometheusBlockAssemblySubmitMiningSolution.Inc()
