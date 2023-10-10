@@ -50,14 +50,8 @@ type BlockAssembly struct {
 	jobStore               *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	storeUTXOsInBackground bool
 	storeUtxoLocal         blob.Store
-	storeUtxoCh            map[int]chan *storeUtxos
+	storeUtxoCh            map[int]chan *blockassembly_api.AddTxRequest
 	blockAssemblyDisabled  bool
-}
-
-type storeUtxos struct {
-	txHash   *chainhash.Hash
-	utxos    [][]byte
-	locktime uint32
 }
 
 func Enabled() bool {
@@ -76,7 +70,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 
 	var err error
 	var localUtxoStore *badger.Badger
-	var storeUtxoCh map[int]chan *storeUtxos
+	var storeUtxoCh map[int]chan *blockassembly_api.AddTxRequest
 
 	if storeUTXOsInBackground {
 		localUtxoStore, err = badger.New("./data/blockassembly_storeUtxoLocal")
@@ -84,9 +78,9 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 			panic(err)
 		}
 
-		storeUtxoCh = make(map[int]chan *storeUtxos)
+		storeUtxoCh = make(map[int]chan *blockassembly_api.AddTxRequest)
 		for i := 0; i < 256; i++ {
-			storeUtxoCh[i] = make(chan *storeUtxos, 100_000)
+			storeUtxoCh[i] = make(chan *blockassembly_api.AddTxRequest, 100_000)
 		}
 	}
 
@@ -186,7 +180,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 
 	// start the workers to store the utxos in the background
 	for i := 0; i < 256; i++ {
-		go func(channel chan *storeUtxos) {
+		go func(channel chan *blockassembly_api.AddTxRequest) {
 			ba.utxoWorker(ctx, channel)
 		}(ba.storeUtxoCh[i])
 	}
@@ -203,17 +197,19 @@ func (ba *BlockAssembly) Start(ctx context.Context) error {
 	return nil
 }
 
-func (ba *BlockAssembly) utxoWorker(ctx context.Context, channel chan *storeUtxos) {
+func (ba *BlockAssembly) utxoWorker(ctx context.Context, channel chan *blockassembly_api.AddTxRequest) {
+	var err error
+	var req *blockassembly_api.AddTxRequest
 	for {
 		select {
 		case <-ctx.Done():
 			ba.logger.Infof("Stopping utxo store worker")
 			return
-		case utxo := <-channel:
-			if err := ba.storeUtxos(ctx, utxo.utxos, utxo.locktime); err != nil {
+		case req = <-channel:
+			if err = ba.storeUtxos(ctx, req); err != nil {
 				ba.logger.Errorf("error storing utxos: %s", err)
 			} else {
-				if err = ba.storeUtxoLocal.Del(ctx, utxo.txHash[:]); err != nil {
+				if err = ba.storeUtxoLocal.Del(ctx, req.Txid); err != nil {
 					ba.logger.Errorf("failed to delete utxo from local store: %s", err)
 				}
 			}
@@ -404,13 +400,9 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			}
 		}
 
-		ba.storeUtxoCh[int(req.Txid[0])] <- &storeUtxos{
-			txHash:   &node.Hash,
-			utxos:    req.Utxos,
-			locktime: req.Locktime,
-		}
+		ba.storeUtxoCh[int(req.Txid[0])] <- req
 	} else {
-		err = ba.storeUtxos(ctx, req.Utxos, req.Locktime)
+		err = ba.storeUtxos(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -436,25 +428,23 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}, batchError
 }
 
-func (ba *BlockAssembly) storeUtxos(ctx context.Context, utxoBytes [][]byte, locktime uint32) error {
+func (ba *BlockAssembly) storeUtxos(ctx context.Context, req *blockassembly_api.AddTxRequest) error {
 	startUtxoTime := time.Now()
-	//utxoSpan, utxoSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:utxo")
 	utxoSpanCtx := ctx
 	defer func() {
-		//utxoSpan.Finish()
 		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
 	}()
 
 	var err error
-	utxoHashes := make([]*chainhash.Hash, len(utxoBytes))
-	for i, hashBytes := range utxoBytes {
+	utxoHashes := make([]*chainhash.Hash, len(req.Utxos))
+	for i, hashBytes := range req.Utxos {
 		utxoHashes[i], err = chainhash.NewHash(hashBytes)
 		if err != nil {
 			return err
 		}
 	}
 
-	if _, err = ba.utxoStore.BatchStore(utxoSpanCtx, utxoHashes, locktime); err != nil {
+	if _, err = ba.utxoStore.BatchStore(utxoSpanCtx, utxoHashes, req.Locktime); err != nil {
 		return fmt.Errorf("error storing utxos: %w", err)
 	}
 
