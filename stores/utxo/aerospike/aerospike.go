@@ -480,7 +480,7 @@ func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTX
 		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
 	}
 
-	policy := util.GetAerospikeWritePolicy(2, 0, writeOptions...)
+	policy := util.GetAerospikeWritePolicy(3, 0, writeOptions...)
 	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

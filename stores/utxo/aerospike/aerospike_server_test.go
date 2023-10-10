@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"testing"
 	"time"
+	"unsafe"
 
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
@@ -23,6 +24,22 @@ const (
 	aerospikePort      = 3000                                   // 3800
 	aerospikeNamespace = "utxostore"                            // test
 )
+
+func main() {
+	// your byte slice that you know is 32 bytes
+	message := []byte("This is a 32-byte message!!")
+
+	// check if the length of message is 32 bytes
+	if len(message) != 32 {
+		panic("message is not 32 bytes long")
+	}
+
+	// convert to [32]byte without allocation
+	var array [32]byte
+	*(*[32]byte)(unsafe.Pointer(&array)) = *(*[32]byte)(unsafe.Pointer(&message[0]))
+
+	fmt.Println(array) // This will print the [32]byte array
+}
 
 func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
@@ -126,7 +143,8 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		require.Equal(t, uint32(2), value.Generation)
+		// generation will be 3, because we did a touch for the TTL
+		require.Equal(t, uint32(3), value.Generation)
 
 		// try to spend with different txid
 		resp, err = db.Spend(context.Background(), hash, hash2)
@@ -163,6 +181,9 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Nil(t, value.Bins["txid"])
+		require.Equal(t, uint32(1), value.Generation)
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
@@ -182,8 +203,7 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		require.Equal(t, uint32(2), value.Generation)
-
+		require.Equal(t, uint32(3), value.Generation)
 	})
 
 	t.Run("aerospike unix time locktime", func(t *testing.T) {
@@ -212,7 +232,7 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		require.Equal(t, uint32(2), value.Generation)
+		require.Equal(t, uint32(3), value.Generation)
 
 	})
 }
