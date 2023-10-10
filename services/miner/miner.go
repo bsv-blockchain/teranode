@@ -108,7 +108,7 @@ func (m *Miner) mine(ctx context.Context) error {
 	}
 
 	// Wait a bit before submitting the solution to simulate high difficulty
-	if waitSeconds > 0 {
+	if candidate.Height > 200 && waitSeconds > 0 { // SAO - Mine the first 200 blocks without delay
 		r := rand.New(rand.NewSource(int64(new(maphash.Hash).Sum64())))
 		randWait := r.Intn(waitSeconds)
 
