@@ -191,7 +191,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike unix time locktime", func(t *testing.T) {
 		cleanDB(t, client, key)
-		resp, err = db.Store(context.Background(), hash, uint32(time.Now().Unix()+1)) // valid in 1 second
+		resp, err = db.Store(context.Background(), hash, uint32(time.Now().UTC().Unix()+1)) // valid in 1 second
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 
