@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"testing"
 	"time"
-	"unsafe"
 
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
@@ -24,22 +23,6 @@ const (
 	aerospikePort      = 3000                                   // 3800
 	aerospikeNamespace = "utxostore"                            // test
 )
-
-func main() {
-	// your byte slice that you know is 32 bytes
-	message := []byte("This is a 32-byte message!!")
-
-	// check if the length of message is 32 bytes
-	if len(message) != 32 {
-		panic("message is not 32 bytes long")
-	}
-
-	// convert to [32]byte without allocation
-	var array [32]byte
-	*(*[32]byte)(unsafe.Pointer(&array)) = *(*[32]byte)(unsafe.Pointer(&message[0]))
-
-	fmt.Println(array) // This will print the [32]byte array
-}
 
 func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
