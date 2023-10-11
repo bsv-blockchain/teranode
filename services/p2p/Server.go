@@ -118,7 +118,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
-	securityLevel, _ := gocore.Config().GetInt("securityLevel", 0)
+	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
 	if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
 		blobServerHttpAddressURL.Scheme = "https"
