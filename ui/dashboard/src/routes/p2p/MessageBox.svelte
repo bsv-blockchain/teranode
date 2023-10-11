@@ -15,6 +15,7 @@
     <div class="message-box-content">
       <div>Hash: {message.hash}</div>
       <div>From: {message.base_url}</div>
+      <div>Peer: {message.peer_id}</div>
     </div>
   </div>
 {:else if message.type === 'subtree'}
@@ -26,6 +27,7 @@
     <div class="message-box-content">
       <div>Hash: {message.hash}</div>
       <div>From: {message.base_url}</div>
+      <div>Peer: {message.peer_id}</div>
     </div>
   </div>
 {:else if message.type === 'Ping'}
