@@ -673,10 +673,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockass
 		return nil
 	})
 
+	ba.logger.Infof("[BlockAssembly] waiting for removeSubtreesTTL and UpdateTxMinedStatus: %s", block.Header.Hash())
 	if err = g.Wait(); err != nil {
 		// TODO do we need to do a cleanup?
 		return nil, fmt.Errorf("[BlockAssembly] error updating status: %w", err)
 	}
+	ba.logger.Infof("[BlockAssembly] wait over for removeSubtreesTTL and UpdateTxMinedStatus: %s", block.Header.Hash())
 
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain
