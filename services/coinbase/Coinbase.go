@@ -315,7 +315,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 }
 
 func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
-	c.logger.Debugf("processing coinbase: %s, for block: %s", coinbaseTx.TxID(), blockHash.String())
+	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
 	for vout, output := range coinbaseTx.Outputs {
 		if !output.LockingScript.IsP2PKH() {
