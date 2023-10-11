@@ -194,9 +194,10 @@ func worker(logger utils.Logger) {
 		if broadcastProtocol == "disabled" {
 			return
 		}
+		ctx, ctxCancelFunc := context.WithDeadline(context.Background(), time.Now().Add(1*time.Second))
 
 		if batchSize == 0 {
-			if err := sendToBlockAssemblyServer(context.Background(), logger, req); err != nil {
+			if err := sendToBlockAssemblyServer(ctx, logger, req); err != nil {
 				panic(err)
 			}
 		} else {
@@ -206,12 +207,13 @@ func worker(logger utils.Logger) {
 				batchReq := &blockassembly_api.AddTxBatchRequest{
 					TxRequests: txRequests,
 				}
-				if err := sendBatchToBlockAssemblyServer(context.Background(), logger, batchReq); err != nil {
+				if err := sendBatchToBlockAssemblyServer(ctx, logger, batchReq); err != nil {
 					panic(err)
 				}
 				batchCounter = 0
 			}
 		}
+		ctxCancelFunc()
 	}
 }
 
