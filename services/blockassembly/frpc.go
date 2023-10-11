@@ -92,7 +92,8 @@ func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembl
 	}
 
 	return &blockassembly_api.BlockassemblyApiAddTxBatchResponse{
-		Ok: true,
+		Ok:         true,
+		TxIdErrors: txIdErrors,
 	}, err
 }
 
