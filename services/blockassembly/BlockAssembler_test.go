@@ -301,7 +301,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	ba := NewBlockAssembler(
 		context.Background(),
 		p2p.TestLogger{},
-		items.txMetaStore,
 		items.utxoStore,
 		items.blobStore,
 		items.blockchainClient,

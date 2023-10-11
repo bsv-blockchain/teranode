@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -30,7 +29,6 @@ type miningCandidateResponse struct {
 
 type BlockAssembler struct {
 	logger           utils.Logger
-	txMetaClient     txmetastore.Store
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
@@ -47,7 +45,7 @@ type BlockAssembler struct {
 	maxBlockCatchup          int
 }
 
-func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient txmetastore.Store, utxoStore utxostore.Interface,
+func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxostore.Interface,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	maxBlockReorg, _ := gocore.Config().GetInt("block_assembler_max_block_reorg", 100)
@@ -55,7 +53,6 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, txMetaClient tx
 
 	b := &BlockAssembler{
 		logger:            logger,
-		txMetaClient:      txMetaClient,
 		utxoStore:         utxoStore,
 		subtreeStore:      subtreeStore,
 		blockchainClient:  blockchainClient,

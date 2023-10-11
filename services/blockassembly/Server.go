@@ -107,7 +107,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	newSubtreeChan := make(chan *util.Subtree)
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.txMetaStore, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	// start the new subtree listener in the background
 	go func() {
