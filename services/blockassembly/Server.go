@@ -713,7 +713,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 			// TODO this would be better as a batch operation
 			err = ba.subtreeStore.SetTTL(setCtx, subtreeHashBytes, 0)
 			if err != nil {
-				ba.logger.Errorf("failed to update subtree TTL: %w", err)
+				ba.logger.Warnf("failed to update subtree TTL: %v", err)
 			}
 		}(subtreeHash[:])
 	}
