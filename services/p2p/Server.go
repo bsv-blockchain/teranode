@@ -4,15 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/util/servicemanager"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -45,6 +50,8 @@ type Server struct {
 
 	blockchainClient         blockchain.ClientI
 	blobServerHttpAddressURL string
+	e                        *echo.Echo
+	notificationCh           chan *notificationMsg
 }
 
 type BestBlockMessage struct {
@@ -55,10 +62,12 @@ type BlockMessage struct {
 	Hash       string
 	Height     uint32
 	DataHubUrl string
+	PeerId     string
 }
 type SubtreeMessage struct {
 	Hash       string
 	DataHubUrl string
+	PeerId     string
 }
 
 func NewServer(logger utils.Logger) *Server {
@@ -96,6 +105,7 @@ func NewServer(logger utils.Logger) *Server {
 		logger:            logger,
 		host:              h,
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
+		notificationCh:    make(chan *notificationMsg),
 	}
 }
 
@@ -124,7 +134,31 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
 
+	e.Use(middleware.Recover())
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+	}))
+
+	s.e = e
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+
+	e.GET("/ws", s.HandleWebSocket(s.notificationCh))
+	go func() {
+		err := s.StartHttp(ctx)
+		if err != nil {
+			s.logger.Errorf("error starting http server: %s", err)
+			return
+		}
+	}()
 	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName}
 	go s.discoverPeers(ctx, topicNames)
 
@@ -180,6 +214,7 @@ func (s *Server) Start(ctx context.Context) error {
 					b := BlockMessage{
 						Hash:       notification.Hash.String(),
 						DataHubUrl: s.blobServerHttpAddressURL,
+						PeerId:     s.host.ID().String(),
 					}
 
 					msgBytes, err := json.Marshal(b)
@@ -190,11 +225,18 @@ func (s *Server) Start(ctx context.Context) error {
 					if err := s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
+					s.notificationCh <- &notificationMsg{
+						Type:    "block",
+						Hash:    notification.Hash.String(),
+						BaseURL: s.blobServerHttpAddressURL,
+						PeerId:  s.host.ID().String(),
+					}
 				} else if notification.Type == model.NotificationType_Subtree {
 					// if it's a subtree notification send it on the subtree channel.
 					sm := SubtreeMessage{
 						Hash:       notification.Hash.String(),
 						DataHubUrl: s.blobServerHttpAddressURL,
+						PeerId:     s.host.ID().String(),
 					}
 					msgBytes, err := json.Marshal(sm)
 					if err != nil {
@@ -203,6 +245,12 @@ func (s *Server) Start(ctx context.Context) error {
 					}
 					if err := s.topics[subtreeTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
+					}
+					s.notificationCh <- &notificationMsg{
+						Type:    "subtree",
+						Hash:    notification.Hash.String(),
+						BaseURL: s.blobServerHttpAddressURL,
+						PeerId:  s.host.ID().String(),
 					}
 				}
 			}
@@ -223,10 +271,66 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop(ctx context.Context) error {
-	s.logger.Infof("Stopping P2P service")
+func (s *Server) StartHttp(ctx context.Context) error {
+	addr, _, _ := gocore.Config().GetURL("p2p_httpAddress")
+	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
+
+	if addr.Scheme == "http" && securityLevel == 1 {
+		addr.Scheme = "https"
+		s.logger.Warnf("p2p_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+	} else if addr.Scheme == "https" && securityLevel == 0 {
+		addr.Scheme = "http"
+		s.logger.Warnf("p2p_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+	}
+
+	s.logger.Infof("p2p %s service listening on %s", addr.Scheme, addr)
+
+	go func() {
+		<-ctx.Done()
+		s.logger.Infof("[p2p] %s (impl) service shutting down", addr.Scheme)
+		err := s.e.Shutdown(ctx)
+		if err != nil {
+			s.logger.Errorf("[p2p] %s (impl) service shutdown error: %s", addr.Scheme, err)
+		}
+	}()
+
+	// err := h.e.Start(addr)
+	// if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// 	return err
+	// }
+
+	var err error
+
+	addrString := fmt.Sprintf("%s:%s", addr.Hostname(), addr.Port())
+	if addr.Scheme == "http" {
+		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTP listening on %s", addr))
+		err = s.e.Start(addrString)
+
+	} else {
+
+		certFile, found := gocore.Config().Get("server_certFile")
+		if !found {
+			return errors.New("server_certFile is required for HTTPS")
+		}
+		keyFile, found := gocore.Config().Get("server_keyFile")
+		if !found {
+			return errors.New("server_keyFile is required for HTTPS")
+		}
+
+		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTPS listening on %s", addr))
+		err = s.e.StartTLS(addrString, certFile, keyFile)
+	}
+
+	if err != http.ErrServerClosed {
+		return err
+	}
 
 	return nil
+}
+
+func (s *Server) Stop(ctx context.Context) error {
+	s.logger.Infof("Stopping P2P service")
+	return s.e.Shutdown(ctx)
 }
 
 func generatePrivateKey() (*crypto.PrivKey, error) {
