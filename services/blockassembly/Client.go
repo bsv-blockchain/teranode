@@ -46,6 +46,9 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
 		logger.Fatalf("expecting blockassembly_sendBatchWorkers > 0 when blockassembly_sendBatchSize = %d", sendBatchSize)
 	}
+	if sendBatchSize > 0 {
+		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, workers: %d, timeout: %d", sendBatchSize, sendBatchWorkers, sendBatchTimeout)
+	}
 
 	client := &Client{
 		client:       blockassembly_api.NewBlockAssemblyAPIClient(baConn),

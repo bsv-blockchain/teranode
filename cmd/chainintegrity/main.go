@@ -24,6 +24,7 @@ var (
 type BlockSubtree struct {
 	Block   chainhash.Hash
 	Subtree chainhash.Hash
+	Index   int
 }
 
 func main() {
@@ -201,7 +202,7 @@ func main() {
 				var tx []byte
 				var btTx *bt.Tx
 				subtreeFees := uint64(0)
-				for _, node := range subtree.Nodes {
+				for nodeIdx, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 
@@ -211,7 +212,7 @@ func main() {
 							logger.Debugf("current subtree %s in block %s", subtreeHash, block.Hash())
 							logger.Errorf("transaction %s already exists in subtree %s in block %s", node.Hash, previousBlockSubtree.Subtree, previousBlockSubtree.Block)
 						} else {
-							transactionMap[node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
+							transactionMap[node.Hash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash, Index: nodeIdx}
 						}
 
 						// check that the transaction exists in the tx store
@@ -234,8 +235,8 @@ func main() {
 							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
 								_, ok = transactionMap[inputHash]
 								if !ok {
-									missingParents[inputHash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash}
-									logger.Errorf("the parent %s does not appear before the transaction %s, in block %s, subtree %s", inputHash, node.Hash.String(), block.Hash(), subtreeHash)
+									missingParents[inputHash] = BlockSubtree{Block: *block.Hash(), Subtree: *subtreeHash, Index: nodeIdx}
+									logger.Errorf("the parent %s does not appear before the transaction %s, in block %s, subtree %s:%d", inputHash, node.Hash.String(), block.Hash(), subtreeHash, nodeIdx)
 								} else {
 									// check that parent inputs are marked as spent by this tx in the utxo store
 									utxoHash, err := util.UTXOHashFromInput(input)
@@ -291,8 +292,8 @@ func main() {
 
 						// check whether this transaction was missing before and write out info if it was
 						if blockOfChild, ok := missingParents[node.Hash]; ok {
-							logger.Warnf("found missing parent %s in block %s, subtree %s", node.Hash, block.Hash(), subtreeHash)
-							logger.Warnf("-- child was in block %s, subtree %s", blockOfChild.Block, blockOfChild.Subtree)
+							logger.Warnf("found missing parent %s in block %s, subtree %s:%d", node.Hash, block.Hash(), subtreeHash, nodeIdx)
+							logger.Warnf("-- child was in block %s, subtree %s:%d", blockOfChild.Block, blockOfChild.Subtree, blockOfChild.Index)
 						}
 					}
 				}

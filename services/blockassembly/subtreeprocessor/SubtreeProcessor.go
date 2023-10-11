@@ -163,6 +163,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 						break
 					}
 
+					//stp.logger.Debugf("[SubtreeProcessor] addNode tx: %s", txReq.node.Hash.String())
 					err = stp.addNode(txReq.node)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
@@ -226,6 +227,7 @@ func (stp *SubtreeProcessor) Add(node *util.SubtreeNode, optionalWaitCh ...chan 
 	if len(optionalWaitCh) > 0 {
 		waitCh = optionalWaitCh[0]
 	}
+	//stp.logger.Debugf("[SubtreeProcessor] enqueue tx: %s", node.Hash.String())
 	stp.queue.enqueue(&txIDAndFee{
 		node:   node,
 		waitCh: waitCh,
@@ -587,7 +589,7 @@ func (stp *SubtreeProcessor) getRemainderTxHashes(chainedSubtrees []*util.Subtre
 	}
 	wg.Wait()
 
-	// add all found tx hashes to the final list
+	// add all found tx hashes to the final list, in order
 	remainderSubtreeNodes := make([]*util.SubtreeNode, 0, hashCount.Load())
 	for _, subtreeHashes := range remainderSubtreeHashes {
 		remainderSubtreeNodes = append(remainderSubtreeNodes, subtreeHashes...)

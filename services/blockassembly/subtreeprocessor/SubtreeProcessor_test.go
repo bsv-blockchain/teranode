@@ -635,6 +635,97 @@ func Test_txIDAndFeeBatch(t *testing.T) {
 	assert.Equal(t, uint64(10_000), batchCount.Load())
 }
 
+func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
+	t.Run("no remainder", func(t *testing.T) {
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+		txIDs := []string{
+			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
+			"1c518b6671f8d349e96c56d4e7fe831a46f398c4bb46ca7778b2152ee6ba6f27",
+			"1e7aa360e3e84aff86515e66976b5b12e622c134b776242927e62de7effdc989",
+			"344efe10fa4084c7f4f17c91bf3da72b9139c342aea074d75d8656a99ac3693f",
+			"59814dce8ee8f9149074da4d0528fd3593b418b36b73ffafc15436646aa23c26",
+			"687ea838f8b8d2924ff99859c37edd33dcd8069bfd5e92aca66734580aa29c94",
+			"9f312fb2b31b6b511fabe0934a98c4d5ac4421b4bc99312f25e6c104912d9159",
+			"c1d3a483ff04b90ab103d62afb3423447981d59f8e96b29022bc39c62ed9d9ab",
+			"c467b87936d3ffd5b2e03a4dbde5cd66910a245b56c8cddff7eafa776ba39bbf",
+			"07c09335f887a2da94efbc9730106abb1b50cc63a95b24edc9f8bb3e63c380c7",
+			"1bb1b0ffdd0fa0450f900f647e713855e76e2b17683372741b6ef29575ddc99b",
+			"6a613e159f1a9dbfa0321b657103f55dc28ecee201a2a43ab833c2e0c95117db",
+			"fe1345fb6b3efe6225e95dc9324f6d21ddb304ad76d92381d999abec07161c7f",
+			"e61cb73244eba0b774e640fef50818322842b41d89f7daa0c771b6e9fc2c6c34",
+			"2a73facff0bc80e1b32d9dc6ff24fa75b711de5987eb30bbd34109bfa06de352",
+			"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
+		}
+
+		newSubtreeChan := make(chan *util.Subtree)
+		go func() {
+			// just read and discard
+			for {
+				<-newSubtreeChan
+			}
+		}()
+		subtreeProcessor := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
+
+		hashes := make([]*chainhash.Hash, len(txIDs))
+		for idx, txid := range txIDs {
+			hash, _ := chainhash.NewHashFromStr(txid)
+			hashes[idx] = hash
+			_ = subtreeProcessor.addNode(&util.SubtreeNode{Hash: *hash, Fee: 1})
+		}
+
+		assert.Equal(t, 4, len(subtreeProcessor.chainedSubtrees))
+
+		chainedSubtrees := make([]*util.Subtree, 0, len(subtreeProcessor.chainedSubtrees)+1)
+		chainedSubtrees = append(chainedSubtrees, subtreeProcessor.chainedSubtrees...)
+		chainedSubtrees = append(chainedSubtrees, subtreeProcessor.currentSubtree)
+
+		transactionMap := util.NewSplitSwissMap(4)
+
+		remainder := subtreeProcessor.getRemainderTxHashes(chainedSubtrees, transactionMap)
+		assert.Equal(t, 17, len(*remainder))
+		for idx, txHash := range *remainder {
+			if idx == 0 {
+				continue
+			}
+			assert.Equal(t, txIDs[idx-1], txHash.Hash.String())
+		}
+
+		_ = transactionMap.Put(*hashes[3])
+		_ = transactionMap.Put(*hashes[7])
+		_ = transactionMap.Put(*hashes[11])
+		_ = transactionMap.Put(*hashes[15])
+
+		expectedTxIDs := []string{
+			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
+			"1c518b6671f8d349e96c56d4e7fe831a46f398c4bb46ca7778b2152ee6ba6f27",
+			"1e7aa360e3e84aff86515e66976b5b12e622c134b776242927e62de7effdc989",
+			//"344efe10fa4084c7f4f17c91bf3da72b9139c342aea074d75d8656a99ac3693f",
+			"59814dce8ee8f9149074da4d0528fd3593b418b36b73ffafc15436646aa23c26",
+			"687ea838f8b8d2924ff99859c37edd33dcd8069bfd5e92aca66734580aa29c94",
+			"9f312fb2b31b6b511fabe0934a98c4d5ac4421b4bc99312f25e6c104912d9159",
+			//"c1d3a483ff04b90ab103d62afb3423447981d59f8e96b29022bc39c62ed9d9ab",
+			"c467b87936d3ffd5b2e03a4dbde5cd66910a245b56c8cddff7eafa776ba39bbf",
+			"07c09335f887a2da94efbc9730106abb1b50cc63a95b24edc9f8bb3e63c380c7",
+			"1bb1b0ffdd0fa0450f900f647e713855e76e2b17683372741b6ef29575ddc99b",
+			//"6a613e159f1a9dbfa0321b657103f55dc28ecee201a2a43ab833c2e0c95117db",
+			"fe1345fb6b3efe6225e95dc9324f6d21ddb304ad76d92381d999abec07161c7f",
+			"e61cb73244eba0b774e640fef50818322842b41d89f7daa0c771b6e9fc2c6c34",
+			"2a73facff0bc80e1b32d9dc6ff24fa75b711de5987eb30bbd34109bfa06de352",
+			//"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
+		}
+
+		remainder = subtreeProcessor.getRemainderTxHashes(chainedSubtrees, transactionMap)
+		assert.Equal(t, 13, len(*remainder)) // 3 removed
+		for idx, txHash := range *remainder {
+			if idx == 0 {
+				continue
+			}
+			assert.Equal(t, expectedTxIDs[idx-1], txHash.Hash.String())
+		}
+	})
+}
+
 func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	_ = os.Setenv("initial_merkle_items_per_subtree", "1024")
 

@@ -21,8 +21,9 @@ func Test_queue(t *testing.T) {
 		if item == nil {
 			break
 		}
+		assert.Equal(t, uint64(items), item.node.Fee)
 		items++
-		//t.Logf("Item: %d\n", item.fee)
+		//t.Logf("Item: %d\n", item.node.Fee)
 	}
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10, items)
@@ -35,11 +36,44 @@ func Test_queue(t *testing.T) {
 		if item == nil {
 			break
 		}
+		assert.Equal(t, uint64(items), item.node.Fee)
 		items++
-		//t.Logf("Item: %d\n", item.fee)
+		//t.Logf("Item: %d\n", item.node.Fee)
 	}
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10, items)
+}
+
+func Test_queue2Threads(t *testing.T) {
+	q := NewLockFreeQueue()
+
+	enqueueItems(t, q, 2, 10)
+
+	items := 0
+	for {
+		item := q.dequeue()
+		if item == nil {
+			break
+		}
+		items++
+		t.Logf("Item: %d\n", item.node.Fee)
+	}
+	assert.True(t, q.IsEmpty())
+	assert.Equal(t, 20, items)
+
+	enqueueItems(t, q, 2, 10)
+
+	items = 0
+	for {
+		item := q.dequeue()
+		if item == nil {
+			break
+		}
+		items++
+		t.Logf("Item: %d\n", item.node.Fee)
+	}
+	assert.True(t, q.IsEmpty())
+	assert.Equal(t, 20, items)
 }
 
 func Test_queueLarge(t *testing.T) {
