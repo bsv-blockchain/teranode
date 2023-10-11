@@ -2,6 +2,7 @@ package util
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -186,7 +187,7 @@ func Test_Serialize(t *testing.T) {
 }
 
 func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
-	t.Run("", func(t *testing.T) {
+	t.Run("complete tree", func(t *testing.T) {
 		hashes := make([]*chainhash.Hash, 8)
 		hashes[0], _ = chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 		hashes[1], _ = chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
@@ -215,9 +216,89 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			"86867b9f3e7dcb4bdf5b5cc99322122fe492bc466621f3709d4e389e7e14c16c",
 		}
 
-		actualMerkleStore := make([]string, len(merkleStore))
-		for idx, merkle := range merkleStore {
+		actualMerkleStore := make([]string, len(*merkleStore))
+		for idx, merkle := range *merkleStore {
 			actualMerkleStore[idx] = merkle.String()
+		}
+
+		assert.Equal(t, expectedMerkleStore, actualMerkleStore)
+	})
+
+	t.Run("incomplete tree", func(t *testing.T) {
+		st := NewTreeByLeafCount(8)
+		txIDS := []string{
+			"4634057867994ae379e82b408cc9eb145a6e921b95ca38f2ced7eb880685a290",
+			"7f87fe1100963977975cef49344e442b4fa3dd9d41de19bc94609c100210ca05",
+			"a28c1021f07263101f5a5052c6a7bdc970ac1d0ab09d8d20aa7a4a61ad9d6597",
+			"dcd31c71368f757f65105d68ee1a2e5598db84900e28dabecba23651c5cda468",
+			"7bac32882547cbb540914f48c6ac99ac682ef001c3aa3d4dcdb5951c8db79678",
+			"67c0f4eb336057ecdf940497a75fcbd1a131e981edf568b54eed2f944889e441",
+		}
+
+		var txHash *chainhash.Hash
+		for _, txID := range txIDS {
+			txHash, _ = chainhash.NewHashFromStr(txID)
+			_ = st.AddNode(txHash, 101, 0)
+		}
+
+		merkleStore, err := st.BuildMerkleTreeStoreFromBytes()
+		require.NoError(t, err)
+
+		expectedMerkleStore := []string{
+			"dc9ab938cd3124ad36e90c30bcb02256eb73eb62dc657d93e89a0a29f323c3c7",
+			"a9e6413abb02b534ff5250cbabdc673480656d0e053cfd23fd010241d5e045f2",
+			"e2a6065233b307b77a5f73f9f27843d42e48d5e061567416b4508517ef2dd452",
+			"",
+			"bfd8a13a5cb1ba128319ee95e09a7e2ff67a52d0c9af8485bfffae737e32d6bf",
+			"63fd0f07ff87223f688d0809f46a8118f185bab04d300406513acdc8832bad5e",
+			"68e239fc6684a224142add79ebed60569baedf667c6be03a5f8719aba44a488b",
+		}
+
+		actualMerkleStore := make([]string, len(*merkleStore))
+		for idx, merkle := range *merkleStore {
+			if merkle.Equal(chainhash.Hash{}) {
+				actualMerkleStore[idx] = ""
+			} else {
+				actualMerkleStore[idx] = merkle.String()
+			}
+		}
+
+		assert.Equal(t, expectedMerkleStore, actualMerkleStore)
+	})
+
+	t.Run("incomplete tree 2", func(t *testing.T) {
+		hashes := make([]*chainhash.Hash, 5)
+		hashes[0], _ = chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		hashes[1], _ = chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		hashes[2], _ = chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		hashes[3], _ = chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+		hashes[4], _ = chainhash.NewHashFromStr("87af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+
+		subtree := NewTreeByLeafCount(8)
+		for _, hash := range hashes {
+			_ = subtree.AddNode(hash, 111, 0)
+		}
+
+		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		require.NoError(t, err)
+
+		expectedMerkleStore := []string{
+			"2207df31366e6fdd96a7ef3286278422c1c6dd3d74c3f85bbcfee82a8d31da25",
+			"c32db78e5f8437648888713982ea3d49628dbde0b4b48857147f793b55d26f09",
+			"61a34fe6c63b5276e042a10a559e9ee9bb785f7b40f753fefdf0fe615d8a6be1",
+			"",
+			"b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225",
+			"95d960d5691c5a92beb94501d0f775dbc161e6fe1c6ca420e158ef22f25320cb",
+			"e641bf2a1c0a2298d628ad70e25976cbda419e825eeb21d854976d6f93192a24",
+		}
+
+		actualMerkleStore := make([]string, len(*merkleStore))
+		for idx, merkle := range *merkleStore {
+			if merkle.Equal(chainhash.Hash{}) {
+				actualMerkleStore[idx] = ""
+			} else {
+				actualMerkleStore[idx] = merkle.String()
+			}
 		}
 
 		assert.Equal(t, expectedMerkleStore, actualMerkleStore)
@@ -266,4 +347,21 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = st.AddNode(hashes[i], 111, 0)
 	}
+}
+
+func BenchmarkSubtree_Serialize(b *testing.B) {
+	st := NewIncompleteTreeByLeafCount(b.N)
+
+	for i := 0; i < b.N; i++ {
+		// int to bytes
+		var bb [32]byte
+		binary.LittleEndian.PutUint32(bb[:], uint32(i))
+		_ = st.AddNode((*chainhash.Hash)(&bb), 111, 234)
+	}
+
+	b.ResetTimer()
+
+	ser, err := st.Serialize()
+	require.NoError(b, err)
+	assert.GreaterOrEqual(b, len(ser), 48*b.N)
 }
