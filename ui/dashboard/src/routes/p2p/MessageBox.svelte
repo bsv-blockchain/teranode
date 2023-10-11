@@ -1,8 +1,6 @@
 <!-- src/components/MessageBox.svelte -->
 <script>
   export let message // This will receive the JSON data as a prop
-
-  $: console.log(message)
 </script>
 
 <!-- If message is a "block" -->
@@ -43,6 +41,8 @@
   /* Add your CSS styles here to style the message box */
   .message-box {
     border: 1px solid #ccc;
+    margin-left: 20px;
+    margin-right: 20px;
     padding-left: 10px;
     padding-right: 10px;
     margin: 5px;

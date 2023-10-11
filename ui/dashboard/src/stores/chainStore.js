@@ -21,7 +21,6 @@ export async function loadLastBlocks() {
       return 0
     })
 
-    console.log("sorted:", sorted)
     blocks.set(sorted)
   } catch (err) {
     console.error(err)

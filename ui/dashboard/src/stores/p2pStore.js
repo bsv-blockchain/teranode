@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store'
 
 export const messages = writable([])
+export const wsUrl = writable('')
 
 const maxMessages = 100
 
@@ -11,38 +12,39 @@ export function connectToP2PServer() {
     url.port = '9906'
     url.pathname = '/ws'
 
-  let socket = new WebSocket(url)
+    wsUrl.set(url)
 
-  socket.onopen = () => {
-    console.log(`p2pWS connection opened to ${url}`)
-  }
+    let socket = new WebSocket(url)
 
-  socket.onmessage = async (event) => {
-    try {
-      const data = await event.data
-      const json = JSON.parse(data)
+    socket.onopen = () => {
+      console.log(`p2pWS connection opened to ${url}`)
+    }
 
-      json.receivedAt = new Date()
+    socket.onmessage = async (event) => {
+      try {
+        const data = await event.data
+        const json = JSON.parse(data)
 
-      console.log('p2p', json)
-      let m = get(messages)
-      m = [...m, json].slice(-maxMessages)
+        json.receivedAt = new Date()
 
-      messages.set(m)
+        let m = get(messages)
+        m = [...m, json].slice(-maxMessages)
 
-    } catch (error) {
-      console.error('p2pWS: Error parsing WebSocket data:', error)
+        messages.set(m)
+
+      } catch (error) {
+        console.error('p2pWS: Error parsing WebSocket data:', error)
+      }
+    }
+
+
+    socket.onclose = () => {
+      console.log(`p2pWS connection closed by server (${url})`)
+      socket = null
+
+      setTimeout(() => {
+        connectToP2PServer()
+      }, 5000) // Adjust the delay as necessary
     }
   }
-
-
-  socket.onclose = () => {
-    console.log(`p2pWS connection closed by server (${wsUrl})`)
-    socket = null
-
-    setTimeout(() => {
-      connectToP2PServer()
-    }, 5000) // Adjust the delay as necessary
-  }
-}
 }

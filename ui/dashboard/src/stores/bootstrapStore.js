@@ -79,7 +79,6 @@ export function connectToBootstrap(blobServerHTTPAddress) {
         const header = await getNodeHeader(json.blobServerHTTPAddress)
         json.header = header
 
-        console.log('BootstrapWS', json)
         let nodesData = get(nodes)
         if (!nodesData.find((node) => {
           const a = node.name || node.blobServerHTTPAddress || node.ip

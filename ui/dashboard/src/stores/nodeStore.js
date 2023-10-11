@@ -55,8 +55,6 @@ export function connectToBlobServer(blobServerHTTPAddress) {
       const data = await event.data
       const json = JSON.parse(data)
 
-      console.log('BlobserverWS', json)
-
       if (json.type === 'Block') {
         // Get the node from the list of nodes
         const header = await getNodeHeader(json.base_url)

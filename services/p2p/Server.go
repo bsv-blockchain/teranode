@@ -272,25 +272,17 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) StartHttp(ctx context.Context) error {
-	addr, _, _ := gocore.Config().GetURL("p2p_httpAddress")
+	addr, _ := gocore.Config().Get("p2p_httpListenAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
-	if addr.Scheme == "http" && securityLevel == 1 {
-		addr.Scheme = "https"
-		s.logger.Warnf("p2p_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-	} else if addr.Scheme == "https" && securityLevel == 0 {
-		addr.Scheme = "http"
-		s.logger.Warnf("p2p_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
-	}
-
-	s.logger.Infof("p2p %s service listening on %s", addr.Scheme, addr)
+	s.logger.Infof("p2p service listening on %s", addr)
 
 	go func() {
 		<-ctx.Done()
-		s.logger.Infof("[p2p] %s (impl) service shutting down", addr.Scheme)
+		s.logger.Infof("[p2p] service shutting down")
 		err := s.e.Shutdown(ctx)
 		if err != nil {
-			s.logger.Errorf("[p2p] %s (impl) service shutdown error: %s", addr.Scheme, err)
+			s.logger.Errorf("[p2p] service shutdown error: %v", err)
 		}
 	}()
 
@@ -301,10 +293,9 @@ func (s *Server) StartHttp(ctx context.Context) error {
 
 	var err error
 
-	addrString := fmt.Sprintf("%s:%s", addr.Hostname(), addr.Port())
-	if addr.Scheme == "http" {
-		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTP listening on %s", addr))
-		err = s.e.Start(addrString)
+	if securityLevel == 0 {
+		servicemanager.AddListenerInfo(fmt.Sprintf("p2p HTTP listening on %s", addr))
+		err = s.e.Start(addr)
 
 	} else {
 
@@ -317,8 +308,8 @@ func (s *Server) StartHttp(ctx context.Context) error {
 			return errors.New("server_keyFile is required for HTTPS")
 		}
 
-		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTPS listening on %s", addr))
-		err = s.e.StartTLS(addrString, certFile, keyFile)
+		servicemanager.AddListenerInfo(fmt.Sprintf("p2p HTTPS listening on %s", addr))
+		err = s.e.StartTLS(addr, certFile, keyFile)
 	}
 
 	if err != http.ErrServerClosed {
@@ -426,7 +417,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 	for {
 		m, err := s.subscriptions[bestBlockTopicName].Next(ctx)
 		if err != nil {
-			s.logger.Errorf("error getting msg from best block topic", err)
+			s.logger.Errorf("error getting msg from best block topic: %v", err)
 			continue
 		}
 		if m.ReceivedFrom != s.host.ID() {
@@ -504,7 +495,7 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 	for {
 		m, err := s.subscriptions[blockTopicName].Next(ctx)
 		if err != nil {
-			s.logger.Errorf("error getting msg from block topic", err)
+			s.logger.Errorf("error getting msg from block topic: %v", err)
 			continue
 		}
 		if m.ReceivedFrom != s.host.ID() {
@@ -523,7 +514,7 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 				continue
 			}
 			if err = validationClient.BlockFound(ctx, hash, msg.DataHubUrl); err != nil {
-				s.logger.Errorf("[BlobServer] error validating block from %s: %s", msg.DataHubUrl, err)
+				s.logger.Errorf("[p2p] error validating block from %s: %s", msg.DataHubUrl, err)
 			}
 		} else {
 			s.logger.Debugf("block message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
@@ -535,7 +526,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 	for {
 		m, err := s.subscriptions[subtreeTopicName].Next(ctx)
 		if err != nil {
-			s.logger.Errorf("error getting msg from subtree topic", err)
+			s.logger.Errorf("error getting msg from subtree topic: %v", err)
 			continue
 		}
 		if m.ReceivedFrom != s.host.ID() {
@@ -554,7 +545,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 				continue
 			}
 			if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
-				s.logger.Errorf("[BlobServer] error validating subtree from %s: %s", msg.DataHubUrl, err)
+				s.logger.Errorf("[p2p] error validating subtree from %s: %s", msg.DataHubUrl, err)
 			}
 
 		} else {
