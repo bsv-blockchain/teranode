@@ -37,7 +37,6 @@ var (
 	drpcClient                    blockassembly_api.DRPCBlockAssemblyAPIClient
 	frpcClient                    *blockassembly_api.Client
 	broadcastProtocol             string
-	bufferSize                    int
 	batchSize                     int
 )
 
@@ -86,7 +85,6 @@ func init() {
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
 	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
-	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
