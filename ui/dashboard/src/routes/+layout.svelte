@@ -9,6 +9,8 @@
     blobServerHTTPAddress,
   } from '@stores/nodeStore.js'
 
+  import { connectToP2PServer } from '@stores/p2pStore.js'
+
   let isActive = false
 
   function toggleNavbar() {
@@ -37,6 +39,7 @@
 
   onMount(async () => {
     connectToBlobServer($blobServerHTTPAddress)
+    connectToP2PServer()
   })
 </script>
 
@@ -120,6 +123,10 @@
       </a>
       <a class="navbar-item" href="/metrics" on:click={handleNavbarItemClick}>
         Metrics
+      </a>
+
+      <a class="navbar-item" href="/p2p" on:click={handleNavbarItemClick}>
+        P2P
       </a>
     </div>
 
