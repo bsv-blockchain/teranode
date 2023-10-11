@@ -251,9 +251,12 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}
 
 	// 11. Check that there are no duplicate transactions in the block.
-	err = b.checkDuplicateTransactions()
-	if err != nil {
-		return false, err
+	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
+	if subtreeStore != nil {
+		err = b.checkDuplicateTransactions()
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// // 12. Check that all transactions are in the valid order and blessed
