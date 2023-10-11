@@ -56,7 +56,7 @@ jobs:
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
-          kustomize build . | kubectl apply -f -
+          kustomize build . | kubectl replace -f -
 
       - name: Validate Deployment Healthy
         run: |-
