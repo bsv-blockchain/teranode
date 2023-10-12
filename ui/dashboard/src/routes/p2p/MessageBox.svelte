@@ -11,13 +11,13 @@
       <span>{message.receivedAt.toISOString().replace('T', ' ')}</span>
     </div>
     <div class="message-box-content">
-      <div>Hash: {message.hash}</div>
-      <div>From: {message.base_url}</div>
-      <div>Peer: {message.peer_id}</div>
-      <div>Height: {message.height}</div>
-      <div>Size: {message.sizeInBytes}</div>
-      <div>Txns: {message.txCount}</div>
-      <div>Miner: {message.miner}</div>
+      <div><span>Hash:</span><span>{message.hash}</span></div>
+      <div><span>From:</span><span>{message.base_url}</span></div>
+      <div><span>Peer:</span><span>{message.peer_id}</span></div>
+      <div><span>Height:</span><span>{message.height}</span></div>
+      <div><span>Size:</span><span>{message.sizeInBytes}</span></div>
+      <div><span>Txns:</span><span>{message.txCount}</span></div>
+      <div><span>Miner:</span><span>{message.miner}</span></div>
     </div>
   </div>
 {:else if message.type === 'subtree'}
@@ -78,6 +78,11 @@
     padding-left: 10px;
     padding-right: 10px;
     padding-bottom: 3px;
+  }
+
+  .message-box-content span:first-child {
+    display: inline-block; /* This is necessary to set a fixed width */
+    width: 50px;
   }
 
   .blue {
