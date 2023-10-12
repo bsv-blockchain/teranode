@@ -14,6 +14,10 @@
       <div>Hash: {message.hash}</div>
       <div>From: {message.base_url}</div>
       <div>Peer: {message.peer_id}</div>
+      <div>Height: {message.details.height}</div>
+      <div>Size: {message.details.sizeInBytes}</div>
+      <div>Txns: {message.details.txCount}</div>
+      <div>Miner: {message.details.miner}</div>
     </div>
   </div>
 {:else if message.type === 'subtree'}

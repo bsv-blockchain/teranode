@@ -27,6 +27,12 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
+        if (json.type==='block') {
+          const res2 = await fetch(`http://localhost:8090/header/${json.hash}/json`)
+          const json2 = await res2.json()
+          json.details = json2
+        }
+
         let m = get(messages)
         m = [...m, json].slice(-maxMessages)
 
