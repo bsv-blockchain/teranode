@@ -23,14 +23,19 @@ export function connectToP2PServer() {
     socket.onmessage = async (event) => {
       try {
         const data = await event.data
-        const json = JSON.parse(data)
+        let json = JSON.parse(data)
 
         json.receivedAt = new Date()
 
         if (json.type==='block') {
-          const res2 = await fetch(`http://localhost:8090/header/${json.hash}/json`)
-          const json2 = await res2.json()
-          json.details = json2
+          const loc = `${json.base_url}/header/${json.hash}/json`
+          try{
+            const res2 = await fetch(loc)
+            const json2 = await res2.json()
+            json = { ...json, ...json2 }
+          } catch (error) {
+            console.error(`p2pWS: Error fetching block header (${loc}):`, error)
+          }
         }
 
         let m = get(messages)
