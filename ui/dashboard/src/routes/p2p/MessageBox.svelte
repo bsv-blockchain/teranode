@@ -1,5 +1,7 @@
 <!-- src/components/MessageBox.svelte -->
 <script>
+  import { humanTime } from '@utils/humanTime.js'
+
   export let message // This will receive the JSON data as a prop
 </script>
 
@@ -8,7 +10,10 @@
   <div class="message-box blue">
     <div class="message-box-title">
       <span>BLOCK</span>
-      <span>{message.receivedAt.toISOString().replace('T', ' ')}</span>
+      <span>
+        {message.receivedAt.toISOString().replace('T', ' ')}
+        ({humanTime(message.receivedAt)} ago)
+      </span>
     </div>
     <div class="message-box-content">
       <div><span>Hash:</span><span>{message.hash}</span></div>
@@ -24,7 +29,10 @@
   <div class="message-box pink">
     <div class="message-box-title">
       <span>SUBTREE</span>
-      <span>{message.receivedAt.toISOString().replace('T', ' ')}</span>
+      <span>
+        {message.receivedAt.toISOString().replace('T', ' ')}
+        ({humanTime(message.receivedAt)} ago)
+      </span>
     </div>
     <div class="message-box-content">
       <div>Hash: {message.hash}</div>
@@ -36,7 +44,10 @@
   <div class="message-box grey">
     <div class="message-box-title">
       <span>PING</span>
-      <span>{message.receivedAt.toISOString().replace('T', ' ')}</span>
+      <span>
+        {message.receivedAt.toISOString().replace('T', ' ')}
+        ({humanTime(message.receivedAt)} ago)
+      </span>
     </div>
   </div>
 {/if}

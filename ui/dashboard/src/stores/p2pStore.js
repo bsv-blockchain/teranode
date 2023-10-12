@@ -39,7 +39,7 @@ export function connectToP2PServer() {
         }
 
         let m = get(messages)
-        m = [...m, json].slice(-maxMessages)
+        m = [json, ...m].slice(-maxMessages)
 
         messages.set(m)
 

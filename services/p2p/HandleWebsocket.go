@@ -30,7 +30,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
 
-	pingTimer := time.NewTicker(30 * time.Second)
+	pingTimer := time.NewTicker(10 * time.Second)
 
 	go func() {
 		for {
