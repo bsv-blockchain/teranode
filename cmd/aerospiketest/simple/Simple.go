@@ -18,7 +18,7 @@ type Simple struct {
 	timeout   time.Duration
 }
 
-func New(logger utils.Logger, timeoutStr string, addr string, port int) *Simple {
+func New(logger utils.Logger, timeoutStr string, addr string, port int, namespace string) *Simple {
 	host := &aerospike.Host{
 		Name: addr,
 		Port: port,
@@ -45,7 +45,7 @@ func New(logger utils.Logger, timeoutStr string, addr string, port int) *Simple 
 		logger:    logger,
 		timeout:   timeout,
 		client:    client,
-		namespace: "utxostore",
+		namespace: namespace,
 	}
 }
 

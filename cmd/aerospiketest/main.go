@@ -28,14 +28,15 @@ type Strategy interface {
 }
 
 var (
-	logger        = gocore.Log("test")
-	workers       int
-	transactions  int
-	timeoutStr    string
-	aslLogger     bool
-	strategyStr   string
-	aerospikeHost string
-	aerospikePort int
+	logger             = gocore.Log("test")
+	workers            int
+	transactions       int
+	timeoutStr         string
+	aslLogger          bool
+	strategyStr        string
+	aerospikeHost      string
+	aerospikePort      int
+	aerospikeNamespace string
 
 	bufferSize int
 
@@ -60,6 +61,7 @@ func main() {
 	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, direct, simple, nothing]")
 	flag.StringVar(&aerospikeHost, "aerospike_host", "", "aerospike host")
 	flag.IntVar(&aerospikePort, "aerospike_port", 3000, "aerospike port")
+	flag.StringVar(&aerospikeNamespace, "aerospike_namespace", "utxostore", "aerospike namespace [utxostore]")
 	flag.IntVar(&bufferSize, "buffer_size", 1000, "buffer size")
 
 	flag.Parse()
@@ -84,13 +86,13 @@ func main() {
 
 	switch strategyStr {
 	case "direct":
-		strategy = direct.New(logger, timeoutStr, aerospikeHost, aerospikePort)
+		strategy = direct.New(logger, timeoutStr, aerospikeHost, aerospikePort, aerospikeNamespace)
 	case "simple":
-		strategy = simple.New(logger, timeoutStr, aerospikeHost, aerospikePort)
+		strategy = simple.New(logger, timeoutStr, aerospikeHost, aerospikePort, aerospikeNamespace)
 	case "nothing":
 		strategy = nothing.New(logger)
 	case "ubsv":
-		strategy = ubsv.New(logger, timeoutStr, aerospikeHost, aerospikePort)
+		strategy = ubsv.New(logger, timeoutStr, aerospikeHost, aerospikePort, aerospikeNamespace)
 	default:
 		logger.Fatalf("unknown strategy")
 	}

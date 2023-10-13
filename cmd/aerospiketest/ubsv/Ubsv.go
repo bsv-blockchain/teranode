@@ -18,8 +18,8 @@ type Ubsv struct {
 	store  utxostore.Interface
 }
 
-func New(logger utils.Logger, timeout string, addr string, port int) *Ubsv {
-	urlStr := fmt.Sprintf("aerospike://%s:%d/utxostore", addr, port)
+func New(logger utils.Logger, timeout string, addr string, port int, namespace string) *Ubsv {
+	urlStr := fmt.Sprintf("aerospike://%s:%d/%s", addr, port, namespace)
 	if timeout != "" {
 		urlStr += "?timeout=" + timeout
 	}

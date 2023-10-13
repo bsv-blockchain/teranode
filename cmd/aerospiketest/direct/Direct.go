@@ -21,7 +21,7 @@ type Direct struct {
 	timeout   time.Duration
 }
 
-func New(logger utils.Logger, timeoutStr string, addr string, port int) *Direct {
+func New(logger utils.Logger, timeoutStr string, addr string, port int, namespace string) *Direct {
 	policy := aerospike.NewClientPolicy()
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
@@ -56,7 +56,7 @@ func New(logger utils.Logger, timeoutStr string, addr string, port int) *Direct 
 		logger:    logger,
 		timeout:   timeout,
 		client:    client,
-		namespace: "utxostore",
+		namespace: namespace,
 	}
 }
 
