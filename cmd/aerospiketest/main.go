@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -31,6 +32,7 @@ var (
 	logger             = gocore.Log("test")
 	workers            int
 	transactions       int
+	repeat             int
 	timeoutStr         string
 	aslLogger          bool
 	strategyStr        string
@@ -40,22 +42,22 @@ var (
 
 	bufferSize int
 
-	wgStorers        = &sync.WaitGroup{}
-	wgSpenders       = &sync.WaitGroup{}
-	wgDeleters       = &sync.WaitGroup{}
-	wgCounters       = &sync.WaitGroup{}
-	spenderCh        = make(chan *chainhash.Hash, bufferSize)
-	deleterCh        = make(chan *chainhash.Hash, bufferSize)
-	storerCounterCh  = make(chan int)
-	spenderCounterCh = make(chan int)
-	deleterCounterCh = make(chan int)
-	shutdownOnce     sync.Once
+	wgStorers        *sync.WaitGroup
+	wgSpenders       *sync.WaitGroup
+	wgDeleters       *sync.WaitGroup
+	wgCounters       *sync.WaitGroup
+	spenderCh        chan *chainhash.Hash
+	deleterCh        chan *chainhash.Hash
+	storerCounterCh  chan int
+	spenderCounterCh chan int
+	deleterCounterCh chan int
 )
 
 func main() {
 
 	flag.IntVar(&transactions, "transactions", 100, "number of transactions to process")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
+	flag.IntVar(&repeat, "repeat", 1, "number of time to repeat the test [1]")
 	flag.StringVar(&timeoutStr, "timeout", "", "timeout for aerospike")
 	flag.BoolVar(&aslLogger, "asl_logger", false, "enable aerospike logger")
 	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, direct, simple, nothing]")
@@ -114,10 +116,23 @@ func main() {
 		logger.Infof("Received signal, stopping...")
 		cancelFunc() // cancel the contexts
 
-		shutdown()
+		closeChannels()
 
 		os.Exit(1)
 	}()
+
+	for i := 0; i < repeat; i++ {
+		runTest(ctx, split, remainder, strategy)
+	}
+
+	logger.Infof("Finished.")
+	// os.Exit(0)
+}
+
+func runTest(ctx context.Context, split int, remainder int, strategy Strategy) {
+	start := time.Now()
+
+	createChannels()
 
 	counterWorker("Stored ", wgCounters, storerCounterCh)
 	counterWorker("Spent  ", wgCounters, spenderCounterCh)
@@ -133,38 +148,49 @@ func main() {
 		strategy.Storer(ctx, i, txCount, wgStorers, spenderCh, storerCounterCh)
 	}
 
-	shutdown()
+	closeChannels()
 
-	logger.Infof("Finished.")
-	// os.Exit(0)
+	// wait for everything to finish
+	wgCounters.Wait()
+
+	elapsed := time.Since(start)
+	logger.Infof("Took %s", elapsed)
 }
 
-func shutdown() {
-	shutdownOnce.Do(func() {
-		// Wait for the storers to finish
-		wgStorers.Wait()
+func createChannels() {
+	wgStorers = &sync.WaitGroup{}
+	wgSpenders = &sync.WaitGroup{}
+	wgDeleters = &sync.WaitGroup{}
+	wgCounters = &sync.WaitGroup{}
+	spenderCh = make(chan *chainhash.Hash, bufferSize)
+	deleterCh = make(chan *chainhash.Hash, bufferSize)
+	storerCounterCh = make(chan int)
+	spenderCounterCh = make(chan int)
+	deleterCounterCh = make(chan int)
+}
 
-		// Close the spender channel
-		logger.Infof("Closing spender channel")
-		close(spenderCh)
+func closeChannels() {
+	// Wait for the storers to finish
+	wgStorers.Wait()
 
-		wgSpenders.Wait()
+	// Close the spender channel
+	logger.Infof("Closing spender channel")
+	close(spenderCh)
 
-		// Close the deleter channel
-		logger.Infof("Closing deleter channel")
-		close(deleterCh)
+	wgSpenders.Wait()
 
-		// Wait for the spender to finish
-		wgDeleters.Wait()
+	// Close the deleter channel
+	logger.Infof("Closing deleter channel")
+	close(deleterCh)
 
-		// Close the counters
-		close(storerCounterCh)
-		close(spenderCounterCh)
-		close(deleterCounterCh)
+	// Wait for the spender to finish
+	wgDeleters.Wait()
 
-		// Close the finished channel
-		wgCounters.Wait()
-	})
+	// Close the counters
+	close(storerCounterCh)
+	close(spenderCounterCh)
+	close(deleterCounterCh)
+
 }
 
 func counterWorker(name string, wg *sync.WaitGroup, counterCh chan int) {

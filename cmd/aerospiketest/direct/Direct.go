@@ -26,7 +26,8 @@ func New(logger utils.Logger, timeoutStr string, addr string, port int, namespac
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = true
+	policy.MinConnectionsPerNode = 10240
+	// policy.LimitConnectionsToQueueSize = true
 	policy.ConnectionQueueSize = 10240
 	// policy.MaxErrorRate = 0
 
@@ -241,9 +242,7 @@ func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *c
 			}
 
 			if _, err := s.client.Delete(policy, key); err != nil {
-				if err != nil {
-					s.logger.Warnf("delete failed: %v\n", err)
-				}
+				s.logger.Warnf("delete failed: %v\n", err)
 			}
 
 			counter++
