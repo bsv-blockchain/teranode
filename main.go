@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -149,9 +150,12 @@ func main() {
 		if !found {
 			panic("no txmeta_store setting found")
 		}
+
 		if txMetaStoreURL.Scheme != "memory" {
-			panic("txmeta grpc server only supports memory store")
+			logger.Warnf("txmeta grpc server only supports memory store, changing to memory store")
+			txMetaStoreURL, _ = url.ParseRequestURI("memory:///")
 		}
+
 		if err := sm.AddService("TxMetaStore", txmeta.New(
 			gocore.Log("txsts"),
 			txMetaStoreURL,
