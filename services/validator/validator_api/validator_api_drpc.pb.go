@@ -130,7 +130,6 @@ type DRPCValidatorAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
-	ValidateTransactionStream(DRPCValidatorAPI_ValidateTransactionStreamStream) error
 }
 
 type DRPCValidatorAPIUnimplementedServer struct{}
@@ -153,7 +152,7 @@ func (s *DRPCValidatorAPIUnimplementedServer) ValidateTransactionStream(DRPCVali
 
 type DRPCValidatorAPIDescription struct{}
 
-func (DRPCValidatorAPIDescription) NumMethods() int { return 4 }
+func (DRPCValidatorAPIDescription) NumMethods() int { return 3 }
 
 func (DRPCValidatorAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Receiver, interface{}, bool) {
 	switch n {
@@ -184,14 +183,6 @@ func (DRPCValidatorAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Re
 						in1.(*ValidateTransactionBatchRequest),
 					)
 			}, DRPCValidatorAPIServer.ValidateTransactionBatch, true
-	case 3:
-		return "/validator_api.ValidatorAPI/ValidateTransactionStream", drpcEncoding_File_services_validator_validator_api_validator_api_proto{},
-			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
-				return nil, srv.(DRPCValidatorAPIServer).
-					ValidateTransactionStream(
-						&drpcValidatorAPI_ValidateTransactionStreamStream{in1.(drpc.Stream)},
-					)
-			}, DRPCValidatorAPIServer.ValidateTransactionStream, true
 	default:
 		return "", nil, nil, nil, false
 	}

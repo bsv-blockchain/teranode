@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"storj.io/drpc/drpcmux"
+	"storj.io/drpc/drpcserver"
 )
 
 // Server type carries the logger within it
@@ -132,6 +135,24 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Experimental DRPC server - to test throughput at scale
+	drpcAddress, ok := gocore.Config().Get("validator_drpcListenAddress")
+	if ok {
+		err := v.drpcServer(ctx, drpcAddress)
+		if err != nil {
+			v.logger.Errorf("failed to start DRPC server: %v", err)
+		}
+	}
+
+	// Experimental fRPC server - to test throughput at scale
+	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
+	if ok {
+		err := v.frpcServer(ctx, frpcAddress)
+		if err != nil {
+			v.logger.Errorf("failed to start fRPC server: %v", err)
+		}
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
@@ -203,7 +224,8 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
 	defer traceSpan.Finish()
 
-	tx, err := bt.NewTxFromBytes(req.TransactionData)
+	transactionData := req.GetTransactionData()
+	tx, err := bt.NewTxFromBytes(transactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
@@ -220,7 +242,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		}, nil
 	}
 
-	prometheusTransactionSize.Observe(float64(len(req.TransactionData)))
+	prometheusTransactionSize.Observe(float64(len(transactionData)))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &validator_api.ValidateTransactionResponse{
@@ -251,4 +273,72 @@ func (v *Server) logError(err error) error {
 		v.logger.Errorf("%v", err)
 	}
 	return err
+}
+
+func (v *Server) drpcServer(ctx context.Context, drpcAddress string) error {
+	v.logger.Infof("Starting DRPC server on %s", drpcAddress)
+	m := drpcmux.New()
+	// register the proto-specific methods on the mux
+	err := validator_api.DRPCRegisterValidatorAPI(m, v)
+	if err != nil {
+		return fmt.Errorf("failed to register DRPC service: %v", err)
+	}
+	// create the drpc server
+	s := drpcserver.New(m)
+
+	// listen on a tcp socket
+	var lis net.Listener
+	lis, err = net.Listen("tcp", drpcAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen on drpc server: %v", err)
+	}
+
+	// run the server
+	// N.B.: if you want TLS, you need to wrap the net.Listener with
+	// TLS before passing to Serve here.
+	go func() {
+		err = s.Serve(ctx, lis)
+		if err != nil {
+			v.logger.Errorf("failed to serve drpc: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
+	v.logger.Infof("Starting fRPC server on %s", frpcAddress)
+
+	frpcValidator := &fRPC_Validator{
+		v: v,
+	}
+
+	s, err := validator_api.NewServer(frpcValidator, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create fRPC server: %v", err)
+	}
+
+	concurrency, ok := gocore.Config().GetInt("validator_frpcConcurrency")
+	if ok {
+		v.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
+		s.SetConcurrency(uint64(concurrency))
+	}
+
+	// run the server
+	go func() {
+		err = s.Start(frpcAddress)
+		if err != nil {
+			v.logger.Errorf("failed to serve frpc: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		err = s.Shutdown()
+		if err != nil {
+			v.logger.Errorf("failed to shutdown frpc server: %v", err)
+		}
+	}()
+
+	return nil
 }
