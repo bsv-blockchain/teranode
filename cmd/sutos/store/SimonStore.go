@@ -13,8 +13,11 @@ type SimonStore struct {
 	responseCh chan string
 }
 
-func NewSimonStore() Store {
-	conn, err := net.Dial("tcp", "localhost:22121")
+// This is a simplified RESP store (Request-Response Protocol).
+// You should create a New SimonStore for each goroutine.
+// addr is the address of the Redis server in host:port format.
+func NewSimonStore(addr string) Store {
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Fatal(err)
 	}
