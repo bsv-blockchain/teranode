@@ -34,11 +34,13 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-const (
-	privateKeyFilename = "private_key"
-	blockTopicName     = "block"
-	bestBlockTopicName = "bestblock"
-	subtreeTopicName   = "subtree"
+const privateKeyFilename = "private_key"
+
+var (
+	topicPrefix        string
+	blockTopicName     string
+	bestBlockTopicName string
+	subtreeTopicName   string
 )
 
 type Server struct {
@@ -90,6 +92,26 @@ func NewServer(logger utils.Logger) *Server {
 	if !ok {
 		panic("p2p_port not set in config")
 	}
+
+	topicPrefix, ok = gocore.Config().Get("p2p_topic_prefix")
+	if !ok {
+		panic("p2p_topic_prefix not set in config")
+	}
+	btn, ok := gocore.Config().Get("p2p_block_topic")
+	if !ok {
+		panic("p2p_block_topic not set in config")
+	}
+	stn, ok := gocore.Config().Get("p2p_subtree_topic")
+	if !ok {
+		panic("p2p_subtree_topic not set in config")
+	}
+	bbtn, ok := gocore.Config().Get("p2p_bestblock_topic")
+	if !ok {
+		panic("p2p_bestblock_topic not set in config")
+	}
+	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
+	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
+	bestBlockTopicName = fmt.Sprintf("%s-%s", topicPrefix, bbtn)
 
 	h, err := libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", p2pIp, p2pPort)), libp2p.Identity(*pk))
 	if err != nil {
