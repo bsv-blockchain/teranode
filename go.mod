@@ -36,6 +36,7 @@ require (
 	github.com/ordishs/gocore v1.0.44
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
+	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.30.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/stretchr/testify v1.8.4
@@ -77,6 +78,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
 	github.com/deepmap/oapi-codegen v1.11.0 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dolthub/maphash v0.0.0-20221220182448-74e1e1ea1577 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
