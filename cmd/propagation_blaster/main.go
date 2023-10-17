@@ -105,7 +105,7 @@ func main() {
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
-	logger := gocore.Log("dumb_blaster")
+	logger := gocore.Log("propagation_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

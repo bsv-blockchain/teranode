@@ -32,7 +32,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-build: build-dashboard build-ubsv build-status build-tx-blaster build-dumb-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster
+build: build-dashboard build-ubsv build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
@@ -42,9 +42,9 @@ build-ubsv: build-dashboard set_debug_flags
 build-tx-blaster: set_debug_flags
 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
-.PHONY: build-dumb-blaster
-build-dumb-blaster: set_debug_flags
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o dumbblaster.run ./cmd/dumb_blaster/
+.PHONY: build-propagation-blaster
+build-propagation-blaster: set_debug_flags
+	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
 
 .PHONY: build-utxostore-blaster
 build-utxostore-blaster: set_debug_flags
