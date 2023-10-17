@@ -9,6 +9,7 @@ service PropagationAPI {
   rpc Health (EmptyMessage) returns (HealthResponse) {}
   rpc ProcessTransaction (ProcessTransactionRequest) returns (EmptyMessage) {}
   rpc ProcessTransactionStream (stream ProcessTransactionRequest) returns (stream EmptyMessage) {}
+  rpc ProcessTransactionDebug (ProcessTransactionRequest) returns (EmptyMessage) {}
 }
 
 // swagger:model EmptyMessage

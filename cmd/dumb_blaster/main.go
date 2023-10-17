@@ -273,7 +273,7 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 
 	case "grpc":
 
-		_, err := grpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+		_, err := grpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
 
@@ -281,7 +281,7 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 
 	case "drpc":
 
-		_, err := drpcClient.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+		_, err := drpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
 
@@ -289,7 +289,7 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 
 	case "frpc":
 
-		_, err := frpcClient.PropagationAPI.ProcessTransaction(ctx, &propagation_api.PropagationApiProcessTransactionRequest{
+		_, err := frpcClient.PropagationAPI.ProcessTransactionDebug(ctx, &propagation_api.PropagationApiProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
 

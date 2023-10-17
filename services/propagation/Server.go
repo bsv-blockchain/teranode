@@ -370,6 +370,17 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 	}
 }
 
+func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	btTx, err := bt.NewTxFromBytes(req.Tx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse transaction from bytes: %s", err.Error())
+	}
+	if err := ps.storeTransaction(ctx, btTx); err != nil {
+		return nil, fmt.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
+	}
+	return &propagation_api.EmptyMessage{}, nil
+}
+
 func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.Tx) error {
 	span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
 	defer span.Finish()

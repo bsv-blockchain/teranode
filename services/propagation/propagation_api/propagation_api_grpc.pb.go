@@ -22,6 +22,7 @@ const (
 	PropagationAPI_Health_FullMethodName                   = "/propagation_api.PropagationAPI/Health"
 	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
 	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
+	PropagationAPI_ProcessTransactionDebug_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionDebug"
 )
 
 // PropagationAPIClient is the client API for PropagationAPI service.
@@ -32,6 +33,7 @@ type PropagationAPIClient interface {
 	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error)
+	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type propagationAPIClient struct {
@@ -91,6 +93,15 @@ func (x *propagationAPIProcessTransactionStreamClient) Recv() (*EmptyMessage, er
 	return m, nil
 }
 
+func (c *propagationAPIClient) ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransactionDebug_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PropagationAPIServer is the server API for PropagationAPI service.
 // All implementations must embed UnimplementedPropagationAPIServer
 // for forward compatibility
@@ -99,6 +110,7 @@ type PropagationAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error
+	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedPropagationAPIServer()
 }
 
@@ -114,6 +126,9 @@ func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *Pr
 }
 func (UnimplementedPropagationAPIServer) ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ProcessTransactionStream not implemented")
+}
+func (UnimplementedPropagationAPIServer) ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionDebug not implemented")
 }
 func (UnimplementedPropagationAPIServer) mustEmbedUnimplementedPropagationAPIServer() {}
 
@@ -190,6 +205,24 @@ func (x *propagationAPIProcessTransactionStreamServer) Recv() (*ProcessTransacti
 	return m, nil
 }
 
+func _PropagationAPI_ProcessTransactionDebug_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProcessTransactionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PropagationAPIServer).ProcessTransactionDebug(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PropagationAPI_ProcessTransactionDebug_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PropagationAPIServer).ProcessTransactionDebug(ctx, req.(*ProcessTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PropagationAPI_ServiceDesc is the grpc.ServiceDesc for PropagationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -204,6 +237,10 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProcessTransaction",
 			Handler:    _PropagationAPI_ProcessTransaction_Handler,
+		},
+		{
+			MethodName: "ProcessTransactionDebug",
+			Handler:    _PropagationAPI_ProcessTransactionDebug_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

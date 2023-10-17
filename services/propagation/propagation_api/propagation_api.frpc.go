@@ -317,6 +317,7 @@ func (x *PropagationApiProcessTransactionRequest) decode(d *polyglot.Decoder) er
 type PropagationAPI interface {
 	Health(context.Context, *PropagationApiEmptyMessage) (*PropagationApiHealthResponse, error)
 	ProcessTransaction(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
+	ProcessTransactionDebug(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 }
 
 type contextKey int
@@ -379,6 +380,26 @@ func NewServer(propagationAPI PropagationAPI, tlsConfig *tls.Config, logger *zer
 		}
 		return
 	}
+	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewPropagationApiProcessTransactionRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *PropagationApiEmptyMessage
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = propagationAPI.ProcessTransactionDebug(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
 	var fsrv *frisbee.Server
 	var err error
 	if tlsConfig != nil {
@@ -417,17 +438,21 @@ func (s *Server) SetOnClosed(f func(*frisbee.Async, error)) error {
 }
 
 type subPropagationAPIClient struct {
-	client                       *frisbee.Client
-	nextHealth                   uint16
-	nextHealthMu                 sync.RWMutex
-	inflightHealth               map[uint16]chan *PropagationApiHealthResponse
-	inflightHealthMu             sync.RWMutex
-	nextProcessTransaction       uint16
-	nextProcessTransactionMu     sync.RWMutex
-	inflightProcessTransaction   map[uint16]chan *PropagationApiEmptyMessage
-	inflightProcessTransactionMu sync.RWMutex
-	nextStreamingID              uint16
-	nextStreamingIDMu            sync.RWMutex
+	client                            *frisbee.Client
+	nextHealth                        uint16
+	nextHealthMu                      sync.RWMutex
+	inflightHealth                    map[uint16]chan *PropagationApiHealthResponse
+	inflightHealthMu                  sync.RWMutex
+	nextProcessTransaction            uint16
+	nextProcessTransactionMu          sync.RWMutex
+	inflightProcessTransaction        map[uint16]chan *PropagationApiEmptyMessage
+	inflightProcessTransactionMu      sync.RWMutex
+	nextProcessTransactionDebug       uint16
+	nextProcessTransactionDebugMu     sync.RWMutex
+	inflightProcessTransactionDebug   map[uint16]chan *PropagationApiEmptyMessage
+	inflightProcessTransactionDebugMu sync.RWMutex
+	nextStreamingID                   uint16
+	nextStreamingIDMu                 sync.RWMutex
 }
 type Client struct {
 	*frisbee.Client
@@ -462,6 +487,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
+	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.PropagationAPI.inflightProcessTransactionDebugMu.RLock()
+		if ch, ok := c.PropagationAPI.inflightProcessTransactionDebug[incoming.Metadata.Id]; ok {
+			c.PropagationAPI.inflightProcessTransactionDebugMu.RUnlock()
+			res := NewPropagationApiEmptyMessage()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.PropagationAPI.inflightProcessTransactionDebugMu.RUnlock()
+		}
+		return
+	}
 	var err error
 	if tlsConfig != nil {
 		c.Client, err = frisbee.NewClient(table, context.Background(), frisbee.WithTLS(tlsConfig), frisbee.WithLogger(logger))
@@ -485,6 +522,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.PropagationAPI.nextProcessTransaction = 0
 	c.PropagationAPI.nextProcessTransactionMu.Unlock()
 	c.PropagationAPI.inflightProcessTransaction = make(map[uint16]chan *PropagationApiEmptyMessage)
+	c.PropagationAPI.nextProcessTransactionDebugMu.Lock()
+	c.PropagationAPI.nextProcessTransactionDebug = 0
+	c.PropagationAPI.nextProcessTransactionDebugMu.Unlock()
+	c.PropagationAPI.inflightProcessTransactionDebug = make(map[uint16]chan *PropagationApiEmptyMessage)
 	return c, nil
 }
 
@@ -560,6 +601,40 @@ func (c *subPropagationAPIClient) ProcessTransaction(ctx context.Context, req *P
 	c.inflightProcessTransactionMu.Lock()
 	delete(c.inflightProcessTransaction, id)
 	c.inflightProcessTransactionMu.Unlock()
+	packet.Put(p)
+	return
+}
+
+func (c *subPropagationAPIClient) ProcessTransactionDebug(ctx context.Context, req *PropagationApiProcessTransactionRequest) (res *PropagationApiEmptyMessage, err error) {
+	ch := make(chan *PropagationApiEmptyMessage, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 12
+
+	c.nextProcessTransactionDebugMu.Lock()
+	c.nextProcessTransactionDebug += 1
+	id := c.nextProcessTransactionDebug
+	c.nextProcessTransactionDebugMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightProcessTransactionDebugMu.Lock()
+	c.inflightProcessTransactionDebug[id] = ch
+	c.inflightProcessTransactionDebugMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightProcessTransactionDebugMu.Lock()
+	delete(c.inflightProcessTransactionDebug, id)
+	c.inflightProcessTransactionDebugMu.Unlock()
 	packet.Put(p)
 	return
 }

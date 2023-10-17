@@ -40,6 +40,7 @@ type DRPCPropagationAPIClient interface {
 
 	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest) (*EmptyMessage, error)
+	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest) (*EmptyMessage, error)
 }
 
 type drpcPropagationAPIClient struct {
@@ -70,9 +71,19 @@ func (c *drpcPropagationAPIClient) ProcessTransaction(ctx context.Context, in *P
 	return out, nil
 }
 
+func (c *drpcPropagationAPIClient) ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, "/propagation_api.PropagationAPI/ProcessTransactionDebug", drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{}, in, out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 type DRPCPropagationAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
+	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 }
 
 type DRPCPropagationAPIUnimplementedServer struct{}
@@ -85,9 +96,13 @@ func (s *DRPCPropagationAPIUnimplementedServer) ProcessTransaction(context.Conte
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
+func (s *DRPCPropagationAPIUnimplementedServer) ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
+	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
+}
+
 type DRPCPropagationAPIDescription struct{}
 
-func (DRPCPropagationAPIDescription) NumMethods() int { return 2 }
+func (DRPCPropagationAPIDescription) NumMethods() int { return 3 }
 
 func (DRPCPropagationAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Receiver, interface{}, bool) {
 	switch n {
@@ -109,6 +124,15 @@ func (DRPCPropagationAPIDescription) Method(n int) (string, drpc.Encoding, drpc.
 						in1.(*ProcessTransactionRequest),
 					)
 			}, DRPCPropagationAPIServer.ProcessTransaction, true
+	case 2:
+		return "/propagation_api.PropagationAPI/ProcessTransactionDebug", drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{},
+			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
+				return srv.(DRPCPropagationAPIServer).
+					ProcessTransactionDebug(
+						ctx,
+						in1.(*ProcessTransactionRequest),
+					)
+			}, DRPCPropagationAPIServer.ProcessTransactionDebug, true
 	default:
 		return "", nil, nil, nil, false
 	}
@@ -144,6 +168,22 @@ type drpcPropagationAPI_ProcessTransactionStream struct {
 }
 
 func (x *drpcPropagationAPI_ProcessTransactionStream) SendAndClose(m *EmptyMessage) error {
+	if err := x.MsgSend(m, drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{}); err != nil {
+		return err
+	}
+	return x.CloseSend()
+}
+
+type DRPCPropagationAPI_ProcessTransactionDebugStream interface {
+	drpc.Stream
+	SendAndClose(*EmptyMessage) error
+}
+
+type drpcPropagationAPI_ProcessTransactionDebugStream struct {
+	drpc.Stream
+}
+
+func (x *drpcPropagationAPI_ProcessTransactionDebugStream) SendAndClose(m *EmptyMessage) error {
 	if err := x.MsgSend(m, drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{}); err != nil {
 		return err
 	}
