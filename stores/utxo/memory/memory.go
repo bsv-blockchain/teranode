@@ -131,7 +131,7 @@ func (m *Memory) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.
 				}, nil
 			} else {
 				return &utxostore.UTXOResponse{
-					Status:   int(utxostore_api.Status_LOCK_TIME),
+					Status:   int(utxostore_api.Status_LOCKED),
 					LockTime: utxo.LockTime,
 				}, nil
 			}

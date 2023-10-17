@@ -415,7 +415,7 @@ func (s *Store) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.H
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			s.logger.Debugf("utxo %s is not spendable in block %d: %s", hash.String(), s.blockHeight, err.Error())
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_LOCK_TIME),
+				Status: int(utxostore_api.Status_LOCKED),
 			}, nil
 		}
 

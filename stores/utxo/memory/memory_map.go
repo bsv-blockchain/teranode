@@ -96,7 +96,7 @@ func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int
 				}
 			}
 		} else {
-			return int(utxostore_api.Status_LOCK_TIME), utxo.LockTime, nil
+			return int(utxostore_api.Status_LOCKED), utxo.LockTime, nil
 		}
 
 		return int(utxostore_api.Status_OK), utxo.LockTime, nil

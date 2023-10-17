@@ -87,7 +87,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		assert.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 		assert.Equal(t, uint32(123), resp.LockTime)
 	})
 
@@ -170,7 +170,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		require.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Spend(context.Background(), hash, hash)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		require.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)

@@ -115,7 +115,7 @@ func (m *SwissMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhas
 				}
 			} else {
 				return &utxostore.UTXOResponse{
-					Status:   int(utxostore_api.Status_LOCK_TIME),
+					Status:   int(utxostore_api.Status_LOCKED),
 					LockTime: utxo.LockTime,
 				}, nil
 			}

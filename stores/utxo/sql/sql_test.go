@@ -113,7 +113,7 @@ func Test_SQL(t *testing.T) {
 
 		resp, err = db.Spend(ctx, hash, hash)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		require.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 
 		resp, err = db.Get(ctx, hash)
 		require.NoError(t, err)
@@ -143,7 +143,7 @@ func Test_SQL(t *testing.T) {
 
 		resp, err = db.Spend(ctx, hash, hash)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+		require.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 
 		resp, err = db.Get(ctx, hash)
 		require.NoError(t, err)

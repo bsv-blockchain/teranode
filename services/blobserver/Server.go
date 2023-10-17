@@ -209,6 +209,8 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	if v.httpServer != nil {
+		v.grpcServer.AddHttpSubscriber(v.notificationCh)
+
 		g.Go(func() error {
 			return v.httpServer.Start(ctx, v.httpAddr)
 		})

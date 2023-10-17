@@ -280,7 +280,7 @@ func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash
 			}
 		} else if (utxo.LockTime > s.blockHeight && utxo.LockTime < 500000000) || utxo.LockTime > uint32(time.Now().Unix()) {
 			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_LOCK_TIME),
+				Status: int(utxostore_api.Status_LOCKED),
 			}, nil
 		}
 	}

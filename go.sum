@@ -569,8 +569,8 @@ github.com/ordishs/go-bt/v2 v2.2.5 h1:PMty/zNK5pdgKDTfnnV9djH4eTwIqNZt+iSoGKCc/l
 github.com/ordishs/go-bt/v2 v2.2.5/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.50 h1:XVmyo3vsYSfFsc8Vue2bUHVznSdwnyI7Nh6LjEFaQpg=
 github.com/ordishs/go-utils v1.0.50/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.44 h1:8LZqoTLxYAMOy4jkK3rMbjlPYp8/TzDmsC+f36us1E8=
-github.com/ordishs/gocore v1.0.44/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
+github.com/ordishs/gocore v1.0.45 h1:awbNElPU0o6onnuBBunrbEa8Y0Y6RdXnNzTBEwEReIo=
+github.com/ordishs/gocore v1.0.45/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=

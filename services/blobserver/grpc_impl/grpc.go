@@ -27,16 +27,18 @@ type subscriber struct {
 
 type GRPC struct {
 	blobserver_api.UnimplementedBlobServerAPIServer
-	logger            utils.Logger
-	baseURL           string
-	getPeers          func() []string
-	repository        *repository.Repository
-	grpcServer        *grpc.Server
-	blockchainClient  blockchain.ClientI
-	newSubscriptions  chan subscriber
-	deadSubscriptions chan subscriber
-	subscribers       map[subscriber]bool
-	notifications     chan *blobserver_api.Notification
+	logger               utils.Logger
+	baseURL              string
+	getPeers             func() []string
+	repository           *repository.Repository
+	grpcServer           *grpc.Server
+	blockchainClient     blockchain.ClientI
+	newSubscriptions     chan subscriber
+	newHttpSubscriptions chan chan *blobserver_api.Notification
+	deadSubscriptions    chan subscriber
+	subscribers          map[subscriber]bool
+	httpSubscribers      map[chan *blobserver_api.Notification]bool
+	notifications        chan *blobserver_api.Notification
 }
 
 func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
@@ -81,14 +83,16 @@ func New(logger utils.Logger, repo *repository.Repository, getPeers func() []str
 	}
 
 	g := &GRPC{
-		logger:            logger,
-		baseURL:           u.String(),
-		getPeers:          getPeers,
-		repository:        repo,
-		newSubscriptions:  make(chan subscriber, 10),
-		deadSubscriptions: make(chan subscriber, 10),
-		subscribers:       make(map[subscriber]bool),
-		notifications:     make(chan *blobserver_api.Notification, 100),
+		logger:               logger,
+		baseURL:              u.String(),
+		getPeers:             getPeers,
+		repository:           repo,
+		newSubscriptions:     make(chan subscriber, 10),
+		newHttpSubscriptions: make(chan chan *blobserver_api.Notification, 10),
+		deadSubscriptions:    make(chan subscriber, 10),
+		subscribers:          make(map[subscriber]bool),
+		httpSubscribers:      make(map[chan *blobserver_api.Notification]bool),
+		notifications:        make(chan *blobserver_api.Notification, 100),
 	}
 
 	return g, nil
@@ -152,6 +156,14 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 						}
 					}(sub)
 				}
+				for sub := range g.httpSubscribers {
+					go func(s chan *blobserver_api.Notification) {
+						s <- notification
+					}(sub)
+				}
+			case s := <-g.newHttpSubscriptions:
+				g.httpSubscribers[s] = true
+				g.logger.Infof("[BlobServer] New HTTP Subscription received (Total=%d).", len(g.httpSubscribers))
 
 			case s := <-g.newSubscriptions:
 				g.subscribers[s] = true
@@ -297,6 +309,10 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Ge
 	return &blobserver_api.GetNodesResponse{
 		Nodes: g.getPeers(),
 	}, nil
+}
+
+func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
+	g.newHttpSubscriptions <- ch
 }
 
 func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {

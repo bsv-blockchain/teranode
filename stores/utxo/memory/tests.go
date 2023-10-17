@@ -89,7 +89,7 @@ func testLockTime(t *testing.T, db utxostore.Interface) {
 
 	resp, err = db.Spend(ctx, testHash1, testHash1)
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore_api.Status_LOCK_TIME), resp.Status)
+	require.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
 	require.Equal(t, uint32(1000), resp.LockTime)
 
 	_ = db.SetBlockHeight(1000)

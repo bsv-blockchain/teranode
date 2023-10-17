@@ -29,8 +29,9 @@ message HealthResponse {
 enum Status {
   OK = 0;
   SPENT = 1;
-  LOCK_TIME = 2;
+  LOCKED = 2;
   NOT_FOUND = 3;
+  ALREADY_EXISTS = 4;
 }
 
 // swagger:model StoreRequest
