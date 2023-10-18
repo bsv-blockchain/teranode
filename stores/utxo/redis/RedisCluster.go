@@ -3,9 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,14 +13,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type RedisRing struct {
+type RedisCluster struct {
 	url                *url.URL
-	rdb                *redis.Ring
+	rdb                *redis.ClusterClient
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
 }
 
-// NewRedis returns a new Redis store.
+// NewRedisCluster returns a new Redis store.
 // We will use the chainhash.Hash as the key and the value will be a comma separated string of the following:
 // 1. The status of the UTXO
 // 2. The locktime of the UTXO
@@ -30,25 +28,26 @@ type RedisRing struct {
 // For example:
 // 0,0 would be an unspent UTXO
 // 0,80000000 would be an unspent UTXO with a locktime of 80000000
-func NewRedis(u *url.URL) (*RedisRing, error) {
-	hosts := strings.Split(u.Host, ",")
 
-	addrs := make(map[string]string)
-	for i, host := range hosts {
-		addrs[fmt.Sprintf("shard%d", i)] = host
-	}
-
-	rdb := redis.NewRing(&redis.RingOptions{
-		Addrs: addrs,
+func NewRedisCluster(u *url.URL) (*RedisCluster, error) {
+	rdb := redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs: []string{
+			"192.168.27.209:6379",
+			"192.168.19.139:6379",
+			"192.168.37.146:6379",
+			"192.168.182.64:6379",
+			"192.168.48.137:6379",
+			"192.168.190.252:6379",
+		},
 	})
 
-	return &RedisRing{
+	return &RedisCluster{
 		url: u,
 		rdb: rdb,
 	}, nil
 }
 
-func (rr *RedisRing) SetBlockHeight(height uint32) error {
+func (rr *RedisCluster) SetBlockHeight(height uint32) error {
 	rr.heightMutex.Lock()
 	defer rr.heightMutex.Unlock()
 
@@ -56,18 +55,18 @@ func (rr *RedisRing) SetBlockHeight(height uint32) error {
 	return nil
 }
 
-func (rr *RedisRing) getBlockHeight() uint32 {
+func (rr *RedisCluster) getBlockHeight() uint32 {
 	rr.heightMutex.RLock()
 	defer rr.heightMutex.RUnlock()
 
 	return rr.currentBlockHeight
 }
 
-func (rr *RedisRing) Health(ctx context.Context) (int, string, error) {
+func (rr *RedisCluster) Health(ctx context.Context) (int, string, error) {
 	return 0, "Redis Ring", nil
 }
 
-func (rr *RedisRing) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	res := rr.rdb.Get(ctx, hash.String())
 
 	if res.Err() != nil {
@@ -98,7 +97,7 @@ func (rr *RedisRing) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.
 	}, nil
 }
 
-func (rr *RedisRing) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
 	v := &Value{
 		LockTime: nLockTime,
 	}
@@ -121,20 +120,13 @@ func (rr *RedisRing) Store(ctx context.Context, hash *chainhash.Hash, nLockTime 
 	}, nil
 }
 
-func (rr *RedisRing) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
+func (rr *RedisCluster) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
 	return &utxostore.BatchResponse{
 		Status: 0,
 	}, nil
 }
 
-var (
-	errWatchFailed = errors.New("WATCH failed")
-	errNotFound    = errors.New("NOT_FOUND")
-	errSpent       = errors.New("SPENT")
-	errLocked      = errors.New("LOCKED")
-)
-
-func (rr *RedisRing) Spend(ctx context.Context, hash *chainhash.Hash, spendingTxID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Spend(ctx context.Context, hash *chainhash.Hash, spendingTxID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	var v *Value
 
 	err := rr.rdb.Watch(ctx, func(tx *redis.Tx) error {
@@ -166,9 +158,13 @@ func (rr *RedisRing) Spend(ctx context.Context, hash *chainhash.Hash, spendingTx
 		// Spend it.
 		v.SpendingTxID = spendingTxID
 
-		res2 := tx.Set(ctx, hash.String(), v.String(), 0)
-		if res2.Err() != nil {
-			return res.Err()
+		// Operation is committed only if the watched keys remain unchanged.
+		_, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			res2 := pipe.Set(ctx, hash.String(), v.String(), 0)
+			return res2.Err()
+		})
+		if err != nil {
+			return err
 		}
 
 		return nil
@@ -201,7 +197,7 @@ func (rr *RedisRing) Spend(ctx context.Context, hash *chainhash.Hash, spendingTx
 	}, nil
 }
 
-func (rr *RedisRing) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	err := rr.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		res := tx.Get(ctx, hash.String())
 		if res.Err() != nil {
@@ -229,7 +225,7 @@ func (rr *RedisRing) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostor
 	}, nil
 }
 
-func (rr *RedisRing) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
 	res := rr.rdb.Del(ctx, hash.String())
 
 	if res.Err() != nil {
@@ -241,5 +237,5 @@ func (rr *RedisRing) Delete(ctx context.Context, hash *chainhash.Hash) (*utxosto
 	}, nil
 }
 
-func (rr *RedisRing) DeleteSpends(deleteSpends bool) {
+func (rr *RedisCluster) DeleteSpends(deleteSpends bool) {
 }

@@ -9,6 +9,6 @@ import (
 
 func init() {
 	availableDatabases["redis"] = func(url *url.URL) (utxostore.Interface, error) {
-		return redis.NewRedis(url)
+		return redis.NewRedisRing(url)
 	}
 }
