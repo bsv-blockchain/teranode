@@ -5,8 +5,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"golang.org/x/sync/errgroup"
 )
 
 type SplitByHash struct {
@@ -38,97 +38,92 @@ func (m *SplitByHash) Health(ctx context.Context) (int, string, error) {
 	return 0, "SplitByHash Store", nil
 }
 
-func (m *SplitByHash) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	memMap := m.m[[1]byte{hash[0]}]
+func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+	memMap := m.m[[1]byte{spend.Hash[0]}]
 
-	if utxo, ok := memMap.Get(hash); ok {
-		if utxo.Hash == nil {
-			return &utxostore.UTXOResponse{
-				Status:   int(utxostore_api.Status_OK),
-				LockTime: utxo.LockTime,
+	if utxo, ok := memMap.Get(spend.Hash); ok {
+		if utxo.Hash == nil || utxo.Hash.IsEqual(spend.SpendingTxID) {
+			return &utxostore.Response{
+				Status:       int(utxostore_api.Status_OK),
+				SpendingTxID: utxo.Hash,
+				LockTime:     utxo.LockTime,
 			}, nil
 		}
-		return &utxostore.UTXOResponse{
+		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: utxo.Hash,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
-	return &utxostore.UTXOResponse{
+	return &utxostore.Response{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *SplitByHash) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
-	status, err := m.m[[1]byte{hash[0]}].Store(hash, nLockTime)
+func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx) error {
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: status,
-	}, nil
+	var ok bool
+	for _, hash := range utxoHashes {
+		_, ok = m.m[[1]byte{hash[0]}].Get(hash)
+		if ok {
+			return utxostore.ErrAlreadyExists
+		}
+
+		_, err = m.m[[1]byte{hash[0]}].Store(hash, tx.LockTime)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (m *SplitByHash) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	var hash *chainhash.Hash
-	g, _ := errgroup.WithContext(ctx)
-	for _, hash = range hashes {
-		hash := hash
-		g.Go(func() error {
-			_, err := m.m[[1]byte{hash[0]}].Store(hash, nLockTime)
-			if err != nil {
-				return err
+func (m *SplitByHash) Spend(_ context.Context, spends []*utxostore.Spend) error {
+	for idx, spend := range spends {
+		memMap := m.m[[1]byte{spend.Hash[0]}]
+
+		status, _, _ := memMap.Spend(spend.Hash, spend.SpendingTxID)
+		var statusErr error
+		if status == int(utxostore_api.Status_NOT_FOUND) {
+			statusErr = utxostore.ErrNotFound
+		} else if status == int(utxostore_api.Status_SPENT) {
+			statusErr = utxostore.ErrSpent
+		} else if status == int(utxostore_api.Status_LOCKED) {
+			statusErr = utxostore.ErrLockTime
+		}
+
+		if statusErr != nil {
+			for i := 0; i < idx; i++ {
+				m.m[[1]byte{spends[i].Hash[0]}].Set(spends[i].Hash, nil)
 			}
-			return nil
-		})
+			return statusErr
+		}
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	return &utxostore.BatchResponse{
-		Status: 0,
-	}, nil
+	return nil
 }
 
-func (m *SplitByHash) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	memMap := m.m[[1]byte{hash[0]}]
+func (m *SplitByHash) Reset(_ context.Context, spend *utxostore.Spend) error {
+	memMap := m.m[[1]byte{spend.Hash[0]}]
+	_, ok := memMap.Get(spend.Hash)
 
-	status, nLockTime, err := memMap.Spend(hash, txID)
-	if err != nil {
-		return nil, err
-	}
-
-	return &utxostore.UTXOResponse{
-		Status:       status,
-		SpendingTxID: txID,
-		LockTime:     nLockTime,
-	}, nil
-}
-
-func (m *SplitByHash) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	memMap := m.m[[1]byte{hash[0]}]
-	utxo, ok := memMap.Get(hash)
-	memMap.Delete(hash)
-
-	nLockTime := uint32(0)
 	if ok {
-		nLockTime = utxo.LockTime
+		memMap.Set(spend.Hash, nil)
 	}
 
-	return m.Store(ctx, hash, nLockTime)
+	return nil
 }
 
-func (m *SplitByHash) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	memMap := m.m[[1]byte{hash[0]}]
-	memMap.Delete(hash)
+func (m *SplitByHash) Delete(_ context.Context, spend *utxostore.Spend) error {
+	memMap := m.m[[1]byte{spend.Hash[0]}]
+	memMap.Delete(spend.Hash)
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
 // only used for testing

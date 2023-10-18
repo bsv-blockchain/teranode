@@ -10,12 +10,11 @@ import "google/protobuf/empty.proto";
 service UtxoStoreAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc Store (StoreRequest) returns (StoreResponse) {}
-  rpc BatchStore (BatchStoreRequest) returns (BatchStoreResponse) {}
-  rpc Spend (SpendRequest) returns (SpendResponse) {}
-  rpc Reset (ResetRequest) returns (ResetResponse) {}
-  rpc Delete (DeleteRequest) returns (DeleteResponse) {}
-  rpc Get (GetRequest) returns (GetResponse) {}
+  rpc Store (StoreRequest) returns (google.protobuf.Empty) {}
+  rpc Spend (Request) returns (google.protobuf.Empty) {}
+  rpc Reset (Request) returns (google.protobuf.Empty) {}
+  rpc Delete (Request) returns (google.protobuf.Empty) {}
+  rpc Get (Request) returns (GetResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -36,8 +35,7 @@ enum Status {
 
 // swagger:model StoreRequest
 message StoreRequest {
-  bytes utxo_hash = 1;
-  uint32 lock_time = 2;
+  bytes tx = 1;
 }
 
 // swagger:model StoreResponse
@@ -45,32 +43,19 @@ message StoreResponse {
   Status status = 1;
 }
 
-// swagger:model BatchStoreRequest
-message BatchStoreRequest {
-  repeated bytes utxo_hashes = 1;
-  uint32 lock_time = 2;
-}
-
-// swagger:model BatchStoreResponse
-message BatchStoreResponse {
-  Status status = 1;
-}
-
-// swagger:model SpendRequest
-message SpendRequest {
-  bytes uxto_hash = 1;
-  bytes spending_txid = 2;
+// swagger:model Request
+message Request {
+  bytes tx_id = 1;
+  uint32 vout = 2;
+  bytes uxto_hash = 3;
+  bytes spending_txid = 4;
 }
 
 // swagger:model SpendResponse
 message SpendResponse {
   Status status = 1;
   bytes spending_txid = 2;
-}
-
-// swagger:model ResetRequest
-message ResetRequest {
-  bytes uxto_hash = 1;
+  uint32 lock_time = 3;
 }
 
 // swagger:model ResetResponse
@@ -78,23 +63,14 @@ message ResetResponse {
   Status status = 1;
 }
 
-// swagger:model DeleteRequest
-message DeleteRequest {
-  bytes uxto_hash = 1;
-}
-
 // swagger:model DeleteResponse
 message DeleteResponse {
   Status status = 1;
-}
-
-// swagger:model GetRequest
-message GetRequest {
-  bytes uxto_hash = 1;
 }
 
 // swagger:model GetResponse
 message GetResponse {
   Status status = 1;
   bytes spending_txid = 2;
+  uint32 lock_time = 3;
 }

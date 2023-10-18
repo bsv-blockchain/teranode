@@ -9,7 +9,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p"
 )
 
@@ -23,40 +22,33 @@ func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator test Null Store", nil
 }
 
-func (ns *NullStore) BatchStore(ctx context.Context, hash []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	return nil, nil
-}
-
 func (ns *NullStore) DeleteSpends(deleteSpends bool) {
 	// No nothing
 }
 
-func (ns *NullStore) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	// fmt.Printf("Get(%s)\n", hash.String())
 	return nil, nil
 }
 
-func (ns *NullStore) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx) error {
 	// fmt.Printf("Store(%s)\n", hash.String())
-	return nil, nil
+	return nil
 }
 
-func (ns *NullStore) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend) error {
 	// fmt.Printf("Spend(%s, %s)\n", hash.String(), txID.String())
-	return &utxostore.UTXOResponse{
-		Status:       0,
-		SpendingTxID: txID,
-	}, nil
+	return nil
 }
 
-func (ns *NullStore) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Reset(ctx context.Context, spend *utxostore.Spend) error {
 	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
-	return nil, nil
+	return nil
 }
 
-func (ns *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (ns *NullStore) Delete(ctx context.Context, spend *utxostore.Spend) error {
 	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
-	return nil, nil
+	return nil
 }
 
 func BenchmarkValidator(b *testing.B) {

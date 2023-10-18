@@ -11,6 +11,7 @@ import (
 	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -156,7 +157,11 @@ func main() {
 					logger.Errorf("failed to get utxo hash for output %d in coinbase %s: %s", vout, block.CoinbaseTx.TxIDChainHash(), err)
 					continue
 				}
-				utxo, err := utxoStore.Get(ctx, utxoHash)
+				utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+					TxID: block.CoinbaseTx.TxIDChainHash(),
+					Vout: uint32(vout),
+					Hash: utxoHash,
+				})
 				if err != nil {
 					logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
 					continue
@@ -229,7 +234,7 @@ func main() {
 						}
 
 						// check the topological order of the transactions
-						for _, input := range btTx.Inputs {
+						for inputIdx, input := range btTx.Inputs {
 							// the input tx id (parent tx) should already be in the transaction map
 							inputHash := chainhash.Hash(input.PreviousTxID())
 							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
@@ -244,7 +249,11 @@ func main() {
 										logger.Errorf("failed to get utxo hash for parent tx input %s in transaction %s: %s", input, btTx.TxIDChainHash(), err)
 										continue
 									}
-									utxo, err := utxoStore.Get(ctx, utxoHash)
+									utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+										TxID: btTx.TxIDChainHash(),
+										Vout: uint32(inputIdx),
+										Hash: utxoHash,
+									})
 									if err != nil {
 										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)
 										continue
@@ -268,7 +277,11 @@ func main() {
 								logger.Errorf("failed to get utxo hash for output %d in transaction %s: %s", vout, btTx.TxIDChainHash(), err)
 								continue
 							}
-							utxo, err := utxoStore.Get(ctx, utxoHash)
+							utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+								TxID: btTx.TxIDChainHash(),
+								Vout: uint32(vout),
+								Hash: utxoHash,
+							})
 							if err != nil {
 								logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
 								continue

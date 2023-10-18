@@ -12,6 +12,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -152,16 +153,16 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	prometheusUtxoGet.Inc()
 
 	var lockTime uint32
 	var txIdBytes []byte
-	err := s.db.QueryRowContext(ctx, "SELECT lock_time, tx_id FROM utxos WHERE hash = $1", hash[:]).
+	err := s.db.QueryRowContext(ctx, "SELECT lock_time, tx_id FROM utxos WHERE hash = $1", spend.Hash[:]).
 		Scan(&lockTime, &txIdBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &utxostore.UTXOResponse{
+			return &utxostore.Response{
 				Status: int(utxostore_api.Status_NOT_FOUND),
 			}, nil
 		}
@@ -176,65 +177,50 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		}
 	}
 
-	return &utxostore.UTXOResponse{
-		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)),
+	status := utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)
+	if txHash != nil && spend.SpendingTxID.IsEqual(txHash) {
+		status = utxostore_api.Status_OK
+	}
+
+	return &utxostore.Response{
+		Status:       int(status),
 		LockTime:     lockTime,
 		SpendingTxID: txHash,
 	}, nil
 }
 
-func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
+func (s *Store) Store(ctx context.Context, tx *bt.Tx) error {
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	if err != nil {
+		return err
+	}
+
 	q := `
 		INSERT INTO utxos
-		    (hash, lock_time)
+		    (lock_time, hash)
 		VALUES
-		    ($1, $2)
 	`
-	if _, err := s.db.Exec(q, hash[:], nLockTime); err != nil {
-		// check whether we already set this utxo with the same tx_id
-		var txIdBytes []byte
-		err = s.db.QueryRowContext(ctx, "SELECT tx_id FROM utxos WHERE hash = $1", hash[:]).Scan(&txIdBytes)
-		if err != nil {
-			return nil, err
-		}
 
-		// if we have the same tx_id, we are good
-		if txIdBytes == nil {
-			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_OK),
-			}, nil
-		} else if [32]byte(txIdBytes) == *hash {
-			return &utxostore.UTXOResponse{
-				Status:       int(utxostore_api.Status_SPENT),
-				SpendingTxID: hash,
-			}, nil
-		}
-
-		return nil, err
+	variables := make([]interface{}, 0, len(utxoHashes)+1)
+	variables = append(variables, tx.LockTime)
+	for _, hash := range utxoHashes {
+		variables = append(variables, hash[:])
+		q += fmt.Sprintf("($1, $%d),", len(variables))
 	}
 
-	prometheusUtxoStore.Inc()
+	// remove last comma from query
+	q = q[:len(q)-1]
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK), // should be created, we need this for the block assembly
-	}, nil
-}
-
-func (s *Store) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	var h *chainhash.Hash
-	for _, h = range hashes {
-		_, err := s.Store(ctx, h, nLockTime)
-		if err != nil {
-			return nil, err
-		}
+	if _, err = s.db.ExecContext(ctx, q, variables...); err != nil {
+		return err
 	}
 
-	return &utxostore.BatchResponse{
-		Status: 0,
-	}, nil
+	prometheusUtxoStore.Add(float64(len(utxoHashes)))
+
+	return nil
 }
 
-func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (utxoResponse *utxostore.UTXOResponse, err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -242,87 +228,74 @@ func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash
 		}
 	}()
 
-	q := `
-		UPDATE utxos
-		SET tx_id = $1
-		WHERE hash = $2
-		  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
-		  AND tx_id IS NULL
-	`
-	result, err := s.db.ExecContext(ctx, q, txID[:], hash[:], s.blockHeight, time.Now().Unix())
-	if err != nil {
-		return nil, err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-
-	var utxo *utxostore.UTXOResponse
-	if affected == 0 {
-		utxo, err = s.Get(ctx, hash)
+	var result sql.Result
+	for _, spend := range spends {
+		q := `
+			UPDATE utxos
+			SET tx_id = $1
+			WHERE hash = $2
+			  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
+			  AND tx_id IS NULL
+		`
+		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight, time.Now().Unix())
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if utxo.SpendingTxID != nil {
-			if utxo.SpendingTxID.IsEqual(txID) {
-				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_OK),
-					LockTime:     utxo.LockTime,
-					SpendingTxID: utxo.SpendingTxID,
-				}, nil
-			} else {
-				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_SPENT),
-					LockTime:     utxo.LockTime,
-					SpendingTxID: utxo.SpendingTxID,
-				}, nil
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		var utxo *utxostore.Response
+		if affected == 0 {
+			utxo, err = s.Get(ctx, spend)
+			if err != nil {
+				return err
 			}
-		} else if (utxo.LockTime > s.blockHeight && utxo.LockTime < 500000000) || utxo.LockTime > uint32(time.Now().Unix()) {
-			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_LOCKED),
-			}, nil
+			if utxo.SpendingTxID != nil {
+				if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
+					return nil
+				} else {
+					return utxostore.ErrSpent
+				}
+			} else if (utxo.LockTime > s.blockHeight && utxo.LockTime < 500000000) || utxo.LockTime > uint32(time.Now().Unix()) {
+				return utxostore.ErrLockTime
+			}
 		}
+
+		prometheusUtxoSpend.Inc()
 	}
 
-	prometheusUtxoSpend.Inc()
-
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
-func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Reset(ctx context.Context, spend *utxostore.Spend) error {
 	q := `
 		UPDATE utxos
 		SET tx_id = NULL
 		WHERE hash = $1
 	`
-	if _, err := s.db.ExecContext(ctx, q, hash[:]); err != nil {
-		return nil, err
+	if _, err := s.db.ExecContext(ctx, q, spend.Hash[:]); err != nil {
+		return err
 	}
 
 	prometheusUtxoReset.Inc()
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (s *Store) Delete(ctx context.Context, spend *utxostore.Spend) error {
 	q := `
 		DELETE FROM utxos
 		WHERE hash = $1
 	`
-	if _, err := s.db.ExecContext(ctx, q, hash[:]); err != nil {
-		return nil, err
+	if _, err := s.db.ExecContext(ctx, q, spend.Hash[:]); err != nil {
+		return err
 	}
 
 	prometheusUtxoDelete.Inc()
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
 func (s *Store) DeleteSpends(_ bool) {

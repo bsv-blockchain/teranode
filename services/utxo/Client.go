@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -36,9 +37,11 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, resp.Details, nil
 }
 
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Get(ctx, &utxostore_api.GetRequest{
-		UxtoHash: hash[:],
+func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+	response, err := s.db.Get(ctx, &utxostore_api.Request{
+		TxId:     spend.TxID.CloneBytes(),
+		Vout:     spend.Vout,
+		UxtoHash: spend.Hash.CloneBytes(),
 	})
 	if err != nil {
 		return nil, err
@@ -49,83 +52,76 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOR
 		return nil, err
 	}
 
-	return &utxostore.UTXOResponse{
+	return &utxostore.Response{
 		Status:       int(response.Status.Number()),
 		SpendingTxID: txid,
 	}, nil
 }
 
-func (s *Store) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
-		UtxoHash: hash[:],
-		LockTime: nLockTime,
+func (s *Store) Store(ctx context.Context, tx *bt.Tx) error {
+	_, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
+		Tx: tx.Bytes(),
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(response.Status),
-	}, nil
+	return nil
 }
 
-func (s *Store) BatchStore(ctx context.Context, hash []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	utxosHashes := make([][]byte, len(hash))
-	for idx, h := range hash {
-		utxosHashes[idx] = h[:]
+func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) error {
+	for idx, spend := range spends {
+		err := s.spend(ctx, spend)
+		if err != nil {
+			for i := 0; i < idx; i++ {
+				// revert the created utxos
+				_ = s.Reset(ctx, spends[i])
+			}
+			return err
+		}
 	}
 
-	_, err := s.db.BatchStore(ctx, &utxostore_api.BatchStoreRequest{
-		UtxoHashes: utxosHashes,
-		LockTime:   nLockTime,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &utxostore.BatchResponse{
-		Status: 0,
-	}, nil
+	return nil
 }
 
-func (s *Store) Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Spend(ctx, &utxostore_api.SpendRequest{
-		UxtoHash:     hash[:],
-		SpendingTxid: txID[:],
+func (s *Store) spend(ctx context.Context, spend *utxostore.Spend) error {
+	_, err := s.db.Spend(ctx, &utxostore_api.Request{
+		TxId:         spend.TxID.CloneBytes(),
+		Vout:         spend.Vout,
+		UxtoHash:     spend.Hash.CloneBytes(),
+		SpendingTxid: spend.SpendingTxID.CloneBytes(),
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(response.Status),
-	}, nil
+	return nil
 }
 
-func (s *Store) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Reset(ctx, &utxostore_api.ResetRequest{
-		UxtoHash: hash[:],
+func (s *Store) Reset(ctx context.Context, spend *utxostore.Spend) error {
+	_, err := s.db.Reset(ctx, &utxostore_api.Request{
+		TxId:     spend.TxID.CloneBytes(),
+		Vout:     spend.Vout,
+		UxtoHash: spend.Hash.CloneBytes(),
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(response.Status),
-	}, nil
+	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	response, err := s.db.Delete(ctx, &utxostore_api.DeleteRequest{
-		UxtoHash: hash[:],
+func (s *Store) Delete(ctx context.Context, spend *utxostore.Spend) error {
+	_, err := s.db.Delete(ctx, &utxostore_api.Request{
+		TxId:     spend.TxID.CloneBytes(),
+		Vout:     spend.Vout,
+		UxtoHash: spend.Hash.CloneBytes(),
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(response.Status),
-	}, nil
+	return nil
 }
 
 func (s *Store) DeleteSpends(deleteSpends bool) {

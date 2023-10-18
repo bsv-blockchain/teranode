@@ -5,73 +5,79 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStore(t *testing.T) {
-	hash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	tx := bt.NewTx()
+	_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000))
 
 	s := New(p2p.TestLogger{}, memory.New(false))
 	err := s.Init(context.Background())
 	require.NoError(t, err)
 
-	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UtxoHash: hash,
+	_, err = s.Store(context.Background(), &utxostore_api.StoreRequest{
+		Tx: tx.ExtendedBytes(),
+	})
+	assert.NoError(t, err)
+
+	_, err = s.Store(context.Background(), &utxostore_api.StoreRequest{
+		Tx: tx.ExtendedBytes(),
 	})
 
-	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_OK, res.Status)
-
-	res, err = s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UtxoHash: hash[:],
-	})
-
-	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_OK, res.Status)
+	assert.Error(t, err, utxo.ErrAlreadyExists)
 }
 
 func TestStoreAndSpend(t *testing.T) {
-	hash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	tx := bt.NewTx()
+	_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000))
+	hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
 	spendingHash := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 
 	s := New(p2p.TestLogger{}, memory.New(false))
-	err := s.Init(context.Background())
+	err = s.Init(context.Background())
 	require.NoError(t, err)
 
-	res, err := s.Store(context.Background(), &utxostore_api.StoreRequest{
-		UtxoHash: hash,
+	_, err = s.Store(context.Background(), &utxostore_api.StoreRequest{
+		Tx: tx.ExtendedBytes(),
 	})
 
 	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_OK, res.Status)
 
-	res2, err := s.Spend(context.Background(), &utxostore_api.SpendRequest{
-		UxtoHash:     hash,
+	_, err = s.Spend(context.Background(), &utxostore_api.Request{
+		TxId:         tx.TxIDChainHash().CloneBytes(),
+		Vout:         0,
+		UxtoHash:     hash.CloneBytes(),
 		SpendingTxid: spendingHash,
 	})
 
 	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_OK, res2.Status)
 
-	res2, err = s.Spend(context.Background(), &utxostore_api.SpendRequest{
-		UxtoHash:     hash,
+	_, err = s.Spend(context.Background(), &utxostore_api.Request{
+		TxId:         tx.TxIDChainHash().CloneBytes(),
+		Vout:         0,
+		UxtoHash:     hash.CloneBytes(),
 		SpendingTxid: spendingHash,
 	})
 
 	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_OK, res2.Status)
 
 	spendingHash[0] = 2
 
-	res2, err = s.Spend(context.Background(), &utxostore_api.SpendRequest{
-		UxtoHash:     hash,
+	_, err = s.Spend(context.Background(), &utxostore_api.Request{
+		TxId:         tx.TxIDChainHash().CloneBytes(),
+		Vout:         0,
+		UxtoHash:     hash.CloneBytes(),
 		SpendingTxid: spendingHash,
 	})
 
-	assert.NoError(t, err)
-	assert.Equal(t, utxostore_api.Status_SPENT, res2.Status)
-	assert.Equal(t, hash[:], res2.SpendingTxid)
+	assert.Error(t, err, utxo.ErrSpent)
 }

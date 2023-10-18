@@ -1,9 +1,12 @@
 package utxo
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -12,12 +15,37 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 	if spendingTxId != nil {
 		status = utxostore_api.Status_SPENT
 	} else if lockTime > 0 {
-		if lockTime < 500000000 && uint32(lockTime) > blockHeight {
+		if lockTime < 500000000 && lockTime > blockHeight {
 			status = utxostore_api.Status_LOCKED
-		} else if lockTime >= 500000000 && uint32(lockTime) > uint32(time.Now().Unix()) {
+		} else if lockTime >= 500000000 && lockTime > uint32(time.Now().Unix()) {
+			// TODO this should be a check for the median time past for the last 11 blocks
 			status = utxostore_api.Status_LOCKED
 		}
 	}
 
 	return status
+}
+
+func GetFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
+	var fees uint64
+	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
+
+	for _, input := range tx.Inputs {
+		fees += input.PreviousTxSatoshis
+	}
+
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 {
+			fees -= output.Satoshis
+
+			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+			if utxoErr != nil {
+				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+			}
+
+			utxoHashes = append(utxoHashes, utxoHash)
+		}
+	}
+
+	return fees, utxoHashes, nil
 }

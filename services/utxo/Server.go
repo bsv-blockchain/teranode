@@ -10,6 +10,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -116,136 +117,92 @@ func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.
 	}, nil
 }
 
-func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) (*utxostore_api.StoreResponse, error) {
+func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) (*emptypb.Empty, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Store")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UtxoHash)
+	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := u.store.Store(traceSpan.Ctx, utxoHash, req.LockTime)
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusUtxoStore.Inc()
-
-	return &utxostore_api.StoreResponse{
-		Status: utxostore_api.Status(resp.Status),
-	}, nil
-}
-
-func (u *UTXOStore) BatchStore(ctx context.Context, req *utxostore_api.BatchStoreRequest) (*utxostore_api.BatchStoreResponse, error) {
-	traceSpan := tracing.Start(ctx, "UTXOStore:BatchStore")
-	defer traceSpan.Finish()
-
-	var err error
-	utxoHashes := make([]*chainhash.Hash, len(req.UtxoHashes))
-	for idx, hash := range req.UtxoHashes {
-		utxoHashes[idx], err = chainhash.NewHash(hash)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	resp, err := u.store.BatchStore(traceSpan.Ctx, utxoHashes, req.LockTime)
+	err = u.store.Store(traceSpan.Ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 
 	prometheusUtxoStore.Inc()
 
-	return &utxostore_api.BatchStoreResponse{
-		Status: utxostore_api.Status(resp.Status),
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
-func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.SpendRequest) (*utxostore_api.SpendResponse, error) {
+func (u *UTXOStore) Spend(ctx context.Context, req *utxostore_api.Request) (*emptypb.Empty, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Spend")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	spend, err := u.getSpends(req)
 	if err != nil {
 		return nil, err
 	}
 
-	spendingHash, err := chainhash.NewHash(req.SpendingTxid)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := u.store.Spend(traceSpan.Ctx, utxoHash, spendingHash)
+	err = u.store.Spend(traceSpan.Ctx, spend)
 	if err != nil {
 		return nil, err
 	}
 
 	prometheusUtxoSpend.Inc()
 
-	var spendingTxID []byte
-	if resp.SpendingTxID != nil {
-		spendingTxID = resp.SpendingTxID[:]
-	}
-
-	return &utxostore_api.SpendResponse{
-		Status:       utxostore_api.Status(resp.Status),
-		SpendingTxid: spendingTxID,
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
-func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.ResetRequest) (*utxostore_api.ResetResponse, error) {
+func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.Request) (*emptypb.Empty, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Reset")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	spend, err := u.getSpends(req)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := u.store.Reset(traceSpan.Ctx, utxoHash)
+	err = u.store.Reset(traceSpan.Ctx, spend[0])
 	if err != nil {
 		return nil, err
 	}
 
 	prometheusUtxoReset.Inc()
 
-	return &utxostore_api.ResetResponse{
-		Status: utxostore_api.Status(resp.Status),
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
-func (u *UTXOStore) Delete(ctx context.Context, req *utxostore_api.DeleteRequest) (*utxostore_api.DeleteResponse, error) {
+func (u *UTXOStore) Delete(ctx context.Context, req *utxostore_api.Request) (*emptypb.Empty, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Delete")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	spends, err := u.getSpends(req)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := u.store.Delete(traceSpan.Ctx, utxoHash)
+	err = u.store.Delete(traceSpan.Ctx, spends[0])
 	if err != nil {
 		return nil, err
 	}
 
 	prometheusUtxoReset.Inc()
 
-	return &utxostore_api.DeleteResponse{
-		Status: utxostore_api.Status(resp.Status),
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
-func (u *UTXOStore) Get(ctx context.Context, req *utxostore_api.GetRequest) (*utxostore_api.GetResponse, error) {
+func (u *UTXOStore) Get(ctx context.Context, req *utxostore_api.Request) (*utxostore_api.GetResponse, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Get")
 	defer traceSpan.Finish()
 
-	utxoHash, err := chainhash.NewHash(req.UxtoHash)
+	spends, err := u.getSpends(req)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := u.store.Get(traceSpan.Ctx, utxoHash)
+	resp, err := u.store.Get(traceSpan.Ctx, spends[0])
 	if err != nil {
 		return nil, err
 	}
@@ -261,4 +218,34 @@ func (u *UTXOStore) Get(ctx context.Context, req *utxostore_api.GetRequest) (*ut
 	}
 
 	return r, nil
+}
+
+func (u *UTXOStore) getSpends(req *utxostore_api.Request) ([]*utxostore.Spend, error) {
+	txHash, err := chainhash.NewHash(req.GetTxId())
+	if err != nil {
+		return nil, err
+	}
+
+	utxoHash, err := chainhash.NewHash(req.GetUxtoHash())
+	if err != nil {
+		return nil, err
+	}
+
+	var spendingHash *chainhash.Hash
+	spendingTxID := req.GetSpendingTxid()
+	if spendingTxID != nil {
+		spendingHash, err = chainhash.NewHash(spendingTxID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	spend := []*utxostore.Spend{{
+		TxID:         txHash,
+		Vout:         req.GetVout(),
+		Hash:         utxoHash,
+		SpendingTxID: spendingHash,
+	}}
+
+	return spend, nil
 }

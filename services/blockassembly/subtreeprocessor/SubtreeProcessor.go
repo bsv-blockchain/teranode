@@ -352,7 +352,11 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 					return fmt.Errorf("error creating utxo hash: %s", err.Error())
 				}
 
-				if _, err = stp.utxoStore.Delete(ctx, utxoHash); err != nil {
+				if err = stp.utxoStore.Delete(ctx, &utxostore.Spend{
+					TxID: block.CoinbaseTx.TxIDChainHash(),
+					Vout: uint32(outputIdx),
+					Hash: utxoHash,
+				}); err != nil {
 					return fmt.Errorf("error deleting utxo (%s): %s", utxoHash, err.Error())
 				}
 			}
@@ -513,47 +517,18 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		log.Printf("********************************************* block or coinbase is nil")
 		return nil
 	}
-	// add the utxos from the block coinbase
-	txIDHash := block.CoinbaseTx.TxIDChainHash()
+
 	// TODO this does not work for the early blocks in Bitcoin
 	blockHeight, err := block.ExtractCoinbaseHeight()
 	if err != nil {
 		return fmt.Errorf("error extracting coinbase height: %v", err)
 	}
 
-	var utxoHash *chainhash.Hash
-	utxoHashes := make([]*chainhash.Hash, 0, len(block.CoinbaseTx.Outputs))
-	for i, output := range block.CoinbaseTx.Outputs {
-		if output.Satoshis > 0 {
-			utxoHash, err = util.UTXOHashFromOutput(txIDHash, output, uint32(i))
-			if err != nil {
-				stp.logger.Errorf("[SubtreeProcessor] error creating utxo hash: %v", err)
-				break
-			}
-
-			// this is used to revert if something goes wrong
-			utxoHashes = append(utxoHashes, utxoHash)
-		}
-	}
-
-	if err == nil {
-		if _, err = stp.utxoStore.BatchStore(ctx, utxoHashes, blockHeight+100); err != nil {
-			// error will be handled below
-			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
-		}
-	}
-
-	if err != nil {
-		// revert the utxos we just added
-		var delErr error
-		for _, utxoHash = range utxoHashes {
-			_, delErr = stp.utxoStore.Delete(ctx, utxoHash)
-			if delErr != nil {
-				stp.logger.Errorf("[SubtreeProcessor] error reverting utxo (%s): %w", utxoHash, delErr)
-			}
-		}
-
-		return fmt.Errorf("error storing utxo (%s): %w", utxoHash, err)
+	tx := block.CoinbaseTx.Clone()
+	tx.LockTime = blockHeight + 100 // TODO should this not be in the coinbase tx??
+	if err = stp.utxoStore.Store(ctx, tx); err != nil {
+		// error will be handled below
+		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(time.Since(startTime).Seconds())
