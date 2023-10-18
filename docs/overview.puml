@@ -16,12 +16,13 @@ TxBlaster -[#blue]> Propagation : grpc:ProcessTransaction(tx)
 Propagation -[#red]-> txStore: storeTransaction
 Propagation -[#blue]> Validator: grpc:ValidateTransaction(tx)
 
-Validator -[#red]-> txMetaStore: Create(txMeta)
+Validator -[#red]-> utxoStore: Spend
+Validator -[#red]-> txMetaStore: Create
+Validator -[#red]-> txMetaStore: (if-duplicate) Delete
 Validator -[#blue]> BlockAssembler: grpc:AddTx(tx)
 
-BlockAssembler -[#red]> txMetaStore: Get(txMeta)
 BlockAssembler -> SubtreeProcessor: Add(tx)
-SubtreeProcessor -[#red]> utxoStore: Store(tx)
+SubtreeProcessor -[#red]> utxoStore: Store
 SubtreeProcessor -> SubtreeProcessor : addNode
 SubtreeProcessor -> SubtreeProcessor : newSubtreeChan
 SubtreeProcessor -[#red]-> subtreeStore : Set
@@ -32,11 +33,11 @@ Miner -[#blue]> BlockAssembler : grpc:getMiningCandidate()
 Miner -> Miner : randomDelay()
 Miner -[#blue]> BlockAssembler : grpc:SubmitMiningSolution(solution))
 
-BlockAssembler -[#red]-> txMetaStore: setMined(tx)
+BlockAssembler -[#red]-> txMetaStore: setMined
 BlockAssembler -[#blue]> Blockchain : grpc:AddBlock(block)
 BlockAssembler -[#red]-> txStore : Set(coinbase tx)
 BlockAssembler -[#red]-> subtreeStore : SetTTL(hash) (expire subtrees that have been mined)
-Blockchain -[#red]-> blockchainStore : StoreBlock(block)
+Blockchain -[#red]-> blockchainStore : StoreBlock
 Blockchain -[#blue]> BlockAssembler : grpc:SendNotification(block)
 BlockAssembler -[#blue]> Blockchain : grpc:GetBestBlockHeader()
 BlockAssembler -> BlockAssembler : (if-new-block)
