@@ -34,6 +34,7 @@ COPY --from=0 /app/blaster.run .
 COPY --from=0 /app/status.run .
 COPY --from=0 /app/dumbblaster.run .
 COPY --from=0 /app/blockassemblyblaster.run .
+COPY --from=0 /app/utxostoreblaster.run .
 COPY --from=0 /app/aerospiketest.run .
 COPY --from=0 /app/ubsv.run .
 

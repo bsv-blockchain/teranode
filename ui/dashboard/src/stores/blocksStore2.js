@@ -3,62 +3,69 @@ import { writable, get } from 'svelte/store'
 export const blocks = writable([])
 export const error = writable('')
 export const loading = writable(false)
-export const wsUrl = writeable('')
+export const wsUrl = writable('')
 
 const numberOfBlocks = 100
 
 const serviceName = 'BlocksService'
 const uniqueData = new Set();
 
-let socket = new WebSocket('ws:///ws')
-
-socket.onopen = () => {
-  console.log(`${serviceName} connection opened to ${wsUrl}`)
-}
-
-socket.onmessage = async (event) => {
-  try {
-    const data = await event.data
-    const json = JSON.parse(data)
-
-    if (json.type === 'Block') {
-      // Get the node from the list of nodes
-      const header = await getNodeHeader(json.base_url)
-
-      // Update the node with the new block
-      let nodesData = get(nodes)
-      const index = nodesData.findIndex(
-        (node) => node.blobServerHTTPAddress === json.base_url
-      )
-
-      nodesData[index].header = header
-
-      // sort the nodesData by name
-      nodesData = nodesData.sort((a, b) => {
-        if (a.name < b.name) {
-          return -1
-        } else if (a.name > b.name) {
-          return 1
-        } else {
-          return 0
-        }
-      })
-
-      nodes.set(nodesData)
-    }
-
-  } catch (error) {
-    console.error(`${serviceName}: Error parsing WebSocket data:`, error)
+export function startWebSocket() {
+  if (typeof WebSocket === 'undefined') {
+    return
   }
-}
 
-socket.onclose = () => {
-  console.log(`${serviceName} connection closed by server (${wsUrl})`)
-  socket = null
 
-  setTimeout(() => {
-    startWS()
-  }, 5000) // Adjust the delay as necessary
+  let socket = new WebSocket('ws:///ws')
+
+  socket.onopen = () => {
+    console.log(`${serviceName} connection opened to ${wsUrl}`)
+  }
+
+  socket.onmessage = async (event) => {
+    try {
+      const data = await event.data
+      const json = JSON.parse(data)
+
+      if (json.type === 'Block') {
+        // Get the node from the list of nodes
+        const header = await getNodeHeader(json.base_url)
+
+        // Update the node with the new block
+        let nodesData = get(nodes)
+        const index = nodesData.findIndex(
+          (node) => node.blobServerHTTPAddress === json.base_url
+        )
+
+        nodesData[index].header = header
+
+        // sort the nodesData by name
+        nodesData = nodesData.sort((a, b) => {
+          if (a.name < b.name) {
+            return -1
+          } else if (a.name > b.name) {
+            return 1
+          } else {
+            return 0
+          }
+        })
+
+        nodes.set(nodesData)
+      }
+
+    } catch (error) {
+      console.error(`${serviceName}: Error parsing WebSocket data:`, error)
+    }
+  }
+
+  socket.onclose = () => {
+    console.log(`${serviceName} connection closed by server (${wsUrl})`)
+    socket = null
+
+    setTimeout(() => {
+      startWS()
+    }, 5000) // Adjust the delay as necessary
+  }
 }
 
 fetchData()
