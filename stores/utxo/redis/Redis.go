@@ -31,7 +31,8 @@ type Redis struct {
 
 func NewRedis(u *url.URL) (*Redis, error) {
 	rdb := redis.NewClient(&redis.Options{
-		Addr: u.Host,
+		Addr:     u.Host,
+		Password: "TfocK5PCg7",
 	})
 
 	return &Redis{
