@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -30,34 +31,37 @@ var (
 	version                          string
 	commit                           string
 	counter                          atomic.Int64
-	prometheusUtxoStoreBlasterDelete prometheus.Counter
-	prometheusUtxoStoreBlasterStore  prometheus.Counter
-	prometheusUtxoStoreBlasterSpend  prometheus.Counter
+	prometheusUtxoStoreBlasterDelete prometheus.Histogram
+	prometheusUtxoStoreBlasterStore  prometheus.Histogram
+	prometheusUtxoStoreBlasterSpend  prometheus.Histogram
 	workerCount                      int
 	storeType                        string
 	storeFn                          func() (utxo.Interface, error)
 )
 
 func init() {
-	prometheusUtxoStoreBlasterDelete = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusUtxoStoreBlasterDelete = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "utxostore_blaster",
 			Name:      "res_delete",
-			Help:      "Number of txs deleted from utxostore",
+			Help:      "Time to delete from utxostore",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-	prometheusUtxoStoreBlasterStore = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusUtxoStoreBlasterStore = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "utxostore_blaster",
 			Name:      "res_store",
-			Help:      "Number of txs stored in utxostore",
+			Help:      "Time to store utxo in utxostore",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-	prometheusUtxoStoreBlasterSpend = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusUtxoStoreBlasterSpend = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "utxostore_blaster",
 			Name:      "res_spend",
-			Help:      "Number of txs spent in utxostore",
+			Help:      "Time to spend utxo in utxostore",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -168,22 +172,25 @@ func worker(logger utils.Logger) {
 		utxoHash, _ := chainhash.NewHash(generateRandomBytes())
 
 		// Delete the txid
+		timeStart := time.Now()
 		if _, err := utxostore.Delete(ctx, utxoHash); err != nil {
 			panic(err)
 		}
-		prometheusUtxoStoreBlasterDelete.Inc()
+		prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Store the txid
+		timeStart = time.Now()
 		if _, err = utxostore.Store(ctx, utxoHash, 0); err != nil {
 			panic(err)
 		}
-		prometheusUtxoStoreBlasterStore.Inc()
+		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Spend the txid
+		timeStart = time.Now()
 		if _, err = utxostore.Spend(ctx, utxoHash, txid); err != nil {
 			panic(err)
 		}
-		prometheusUtxoStoreBlasterSpend.Inc()
+		prometheusUtxoStoreBlasterSpend.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		counter.Add(1)
 	}
