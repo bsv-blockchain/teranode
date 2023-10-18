@@ -37,7 +37,8 @@ func NewRedisCluster(u *url.URL) (*RedisCluster, error) {
 	addrs = append(addrs, hosts...)
 
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: addrs,
+		Addrs:    addrs,
+		Password: "TfocK5PCg7",
 	})
 
 	return &RedisCluster{
