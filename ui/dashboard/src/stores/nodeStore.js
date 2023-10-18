@@ -65,7 +65,12 @@ export function connectToBlobServer(blobServerHTTPAddress) {
           (node) => node.blobServerHTTPAddress === json.base_url
         )
 
-        nodesData[index].header = header
+        if (index === -1) {
+          json.header = header
+          nodesData.push(json)
+        } else {
+          nodesData[index].header = header
+        }
 
         // sort the nodesData by name
         nodesData = nodesData.sort((a, b) => {

@@ -128,6 +128,10 @@
       <a class="navbar-item" href="/p2p" on:click={handleNavbarItemClick}>
         P2P
       </a>
+
+      <a class="navbar-item" href="/network" on:click={handleNavbarItemClick}>
+        Network
+      </a>
     </div>
 
     <div class="navbar-end">

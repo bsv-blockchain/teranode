@@ -1,8 +1,22 @@
 <!-- src/components/MessageBox.svelte -->
 <script>
+  import { onMount } from 'svelte'
   import { humanTime } from '@utils/humanTime.js'
 
   export let message // This will receive the JSON data as a prop
+  let age = ''
+
+  onMount(() => {
+    age = humanTime(message.receivedAt)
+
+    const interval = setInterval(() => {
+      if (message.receivedAt) {
+        age = humanTime(message.receivedAt)
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  })
 </script>
 
 <!-- If message is a "block" -->
@@ -12,7 +26,7 @@
       <span>BLOCK</span>
       <span>
         {message.receivedAt.toISOString().replace('T', ' ')}
-        ({humanTime(message.receivedAt)} ago)
+        ({age} ago)
       </span>
     </div>
     <div class="message-box-content">
@@ -31,7 +45,7 @@
       <span>SUBTREE</span>
       <span>
         {message.receivedAt.toISOString().replace('T', ' ')}
-        ({humanTime(message.receivedAt)} ago)
+        ({age} ago)
       </span>
     </div>
     <div class="message-box-content">
@@ -46,7 +60,7 @@
       <span>PING</span>
       <span>
         {message.receivedAt.toISOString().replace('T', ' ')}
-        ({humanTime(message.receivedAt)} ago)
+        ({age} ago)
       </span>
     </div>
   </div>
@@ -71,7 +85,7 @@
 
   .message-box-title span:first-child {
     display: inline-block; /* This is necessary to set a fixed width */
-    width: 70px;
+    width: 85px;
     padding-left: 10px;
     padding-right: 10px;
   }
@@ -85,7 +99,7 @@
   .message-box-content {
     font-size: 0.7em;
     margin-top: 3px;
-    margin-left: 70px;
+    margin-left: 85px;
     padding-left: 10px;
     padding-right: 10px;
     padding-bottom: 3px;

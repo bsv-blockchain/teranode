@@ -9,9 +9,9 @@
 </script>
 
 <tr>
-  <td>{node.source || 'anonymous'}</td>
-  <td>{node.name}</td>
-  <td>{node.blobServerHTTPAddress}</td>
+  <!-- <td>{node.source || 'anonymous'}</td> -->
+  <!-- <td>{node.name}</td> -->
+  <!-- <td>{node.blobServerHTTPAddress}</td> -->
   <td class="right">{node.header.height}</td>
   <td title={node.header.hash}>{shortHash(node.header.hash)}</td>
   <td title={node.header.previousblockhash}
