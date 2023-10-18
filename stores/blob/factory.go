@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
+	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
 )
 
@@ -67,6 +68,11 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		store, err = seaweedfs.New(storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating seaweedfs blob store: %v", err)
+		}
+	case "seaweedfss3":
+		store, err = seaweedfss3.New(storeUrl)
+		if err != nil {
+			return nil, fmt.Errorf("error creating seaweedfss3 blob store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
