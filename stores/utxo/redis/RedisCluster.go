@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,15 +31,13 @@ type RedisCluster struct {
 // 0,80000000 would be an unspent UTXO with a locktime of 80000000
 
 func NewRedisCluster(u *url.URL) (*RedisCluster, error) {
+	hosts := strings.Split(u.Host, ",")
+
+	addrs := make([]string, 0)
+	addrs = append(addrs, hosts...)
+
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{
-			"192.168.27.209:6379",
-			"192.168.19.139:6379",
-			"192.168.37.146:6379",
-			"192.168.182.64:6379",
-			"192.168.48.137:6379",
-			"192.168.190.252:6379",
-		},
+		Addrs: addrs,
 	})
 
 	return &RedisCluster{

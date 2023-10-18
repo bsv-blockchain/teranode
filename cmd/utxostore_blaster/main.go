@@ -13,7 +13,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -31,6 +34,8 @@ var (
 	prometheusUtxoStoreBlasterStore  prometheus.Counter
 	prometheusUtxoStoreBlasterSpend  prometheus.Counter
 	workerCount                      int
+	storeType                        string
+	storeFn                          func() (utxo.Interface, error)
 )
 
 func init() {
@@ -82,12 +87,52 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
+	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|null)")
 	flag.Parse()
 
 	logger := gocore.Log("utxostore_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
+
+	switch storeType {
+	case "redis":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxostore")
+			return redis.NewRedis(u)
+		}
+		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
+	case "redis-ring":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxostore")
+			return redis.NewRedisRing(u)
+		}
+		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
+	case "redis-cluster":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxostore")
+			return redis.NewRedisCluster(u)
+		}
+		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
+	case "memory":
+		storeFn = func() (utxo.Interface, error) {
+			return memory.New(false), nil
+		}
+		log.Printf("Starting memory utxostore-blaster with %d worker(s)", workerCount)
+	case "null":
+		storeFn = func() (utxo.Interface, error) {
+			return nullstore.NewNullStore()
+		}
+		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
+	case "aerospike":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxostore")
+			return aerospike.New(u)
+		}
+		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
+	default:
+		panic(fmt.Sprintf("Unknown store type: %s", storeType))
+	}
 
 	go func() {
 		start := time.Now()
@@ -100,8 +145,6 @@ func main() {
 		}
 	}()
 
-	log.Printf("Starting utxostore-blaster with %d worker(s)", workerCount)
-
 	for i := 0; i < workerCount; i++ {
 		go worker(logger)
 	}
@@ -110,8 +153,7 @@ func main() {
 }
 
 func worker(logger utils.Logger) {
-	u, _, _ := gocore.Config().GetURL("utxostore")
-	utxostore, err := redis.NewRedisRing(u)
+	utxostore, err := storeFn()
 	if err != nil {
 		panic(err)
 	}
