@@ -3,10 +3,18 @@ package utxo
 import (
 	"context"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-type UTXOResponse struct {
+type Spend struct {
+	TxID         *chainhash.Hash `json:"txId"`
+	Vout         uint32          `json:"vout"`
+	Hash         *chainhash.Hash `json:"hash"`
+	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+}
+
+type Response struct {
 	Status       int             `json:"status"`
 	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
 	LockTime     uint32          `json:"lockTime,omitempty"`
@@ -18,12 +26,11 @@ type BatchResponse struct {
 
 type Interface interface {
 	Health(ctx context.Context) (int, string, error)
-	Get(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
-	Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*UTXOResponse, error)
-	BatchStore(ctx context.Context, hash []*chainhash.Hash, nLockTime uint32) (*BatchResponse, error)
-	Spend(ctx context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*UTXOResponse, error)
-	Reset(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
-	Delete(ctx context.Context, hash *chainhash.Hash) (*UTXOResponse, error)
+	Get(ctx context.Context, spend *Spend) (*Response, error)
+	Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
+	Spend(ctx context.Context, spend []*Spend) error
+	Reset(ctx context.Context, spend *Spend) error
+	Delete(ctx context.Context, spend *Spend) error
 	DeleteSpends(deleteSpends bool)
 	SetBlockHeight(height uint32) error
 }

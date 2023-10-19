@@ -20,13 +20,12 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	UtxoStoreAPI_Health_FullMethodName     = "/utxostore_api.UtxoStoreAPI/Health"
-	UtxoStoreAPI_Store_FullMethodName      = "/utxostore_api.UtxoStoreAPI/Store"
-	UtxoStoreAPI_BatchStore_FullMethodName = "/utxostore_api.UtxoStoreAPI/BatchStore"
-	UtxoStoreAPI_Spend_FullMethodName      = "/utxostore_api.UtxoStoreAPI/Spend"
-	UtxoStoreAPI_Reset_FullMethodName      = "/utxostore_api.UtxoStoreAPI/Reset"
-	UtxoStoreAPI_Delete_FullMethodName     = "/utxostore_api.UtxoStoreAPI/Delete"
-	UtxoStoreAPI_Get_FullMethodName        = "/utxostore_api.UtxoStoreAPI/Get"
+	UtxoStoreAPI_Health_FullMethodName = "/utxostore_api.UtxoStoreAPI/Health"
+	UtxoStoreAPI_Store_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Store"
+	UtxoStoreAPI_Spend_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Spend"
+	UtxoStoreAPI_Reset_FullMethodName  = "/utxostore_api.UtxoStoreAPI/Reset"
+	UtxoStoreAPI_Delete_FullMethodName = "/utxostore_api.UtxoStoreAPI/Delete"
+	UtxoStoreAPI_Get_FullMethodName    = "/utxostore_api.UtxoStoreAPI/Get"
 )
 
 // UtxoStoreAPIClient is the client API for UtxoStoreAPI service.
@@ -35,12 +34,11 @@ const (
 type UtxoStoreAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*StoreResponse, error)
-	BatchStore(ctx context.Context, in *BatchStoreRequest, opts ...grpc.CallOption) (*BatchStoreResponse, error)
-	Spend(ctx context.Context, in *SpendRequest, opts ...grpc.CallOption) (*SpendResponse, error)
-	Reset(ctx context.Context, in *ResetRequest, opts ...grpc.CallOption) (*ResetResponse, error)
-	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
-	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Spend(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Reset(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Delete(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*GetResponse, error)
 }
 
 type utxoStoreAPIClient struct {
@@ -60,8 +58,8 @@ func (c *utxoStoreAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*StoreResponse, error) {
-	out := new(StoreResponse)
+func (c *utxoStoreAPIClient) Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Store_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -69,17 +67,8 @@ func (c *utxoStoreAPIClient) Store(ctx context.Context, in *StoreRequest, opts .
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) BatchStore(ctx context.Context, in *BatchStoreRequest, opts ...grpc.CallOption) (*BatchStoreResponse, error) {
-	out := new(BatchStoreResponse)
-	err := c.cc.Invoke(ctx, UtxoStoreAPI_BatchStore_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *utxoStoreAPIClient) Spend(ctx context.Context, in *SpendRequest, opts ...grpc.CallOption) (*SpendResponse, error) {
-	out := new(SpendResponse)
+func (c *utxoStoreAPIClient) Spend(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Spend_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -87,8 +76,8 @@ func (c *utxoStoreAPIClient) Spend(ctx context.Context, in *SpendRequest, opts .
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) Reset(ctx context.Context, in *ResetRequest, opts ...grpc.CallOption) (*ResetResponse, error) {
-	out := new(ResetResponse)
+func (c *utxoStoreAPIClient) Reset(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Reset_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -96,8 +85,8 @@ func (c *utxoStoreAPIClient) Reset(ctx context.Context, in *ResetRequest, opts .
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
-	out := new(DeleteResponse)
+func (c *utxoStoreAPIClient) Delete(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Delete_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -105,7 +94,7 @@ func (c *utxoStoreAPIClient) Delete(ctx context.Context, in *DeleteRequest, opts
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *utxoStoreAPIClient) Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*GetResponse, error) {
 	out := new(GetResponse)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Get_FullMethodName, in, out, opts...)
 	if err != nil {
@@ -120,12 +109,11 @@ func (c *utxoStoreAPIClient) Get(ctx context.Context, in *GetRequest, opts ...gr
 type UtxoStoreAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	Store(context.Context, *StoreRequest) (*StoreResponse, error)
-	BatchStore(context.Context, *BatchStoreRequest) (*BatchStoreResponse, error)
-	Spend(context.Context, *SpendRequest) (*SpendResponse, error)
-	Reset(context.Context, *ResetRequest) (*ResetResponse, error)
-	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
-	Get(context.Context, *GetRequest) (*GetResponse, error)
+	Store(context.Context, *StoreRequest) (*emptypb.Empty, error)
+	Spend(context.Context, *Request) (*emptypb.Empty, error)
+	Reset(context.Context, *Request) (*emptypb.Empty, error)
+	Delete(context.Context, *Request) (*emptypb.Empty, error)
+	Get(context.Context, *Request) (*GetResponse, error)
 	mustEmbedUnimplementedUtxoStoreAPIServer()
 }
 
@@ -136,22 +124,19 @@ type UnimplementedUtxoStoreAPIServer struct {
 func (UnimplementedUtxoStoreAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) Store(context.Context, *StoreRequest) (*StoreResponse, error) {
+func (UnimplementedUtxoStoreAPIServer) Store(context.Context, *StoreRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Store not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) BatchStore(context.Context, *BatchStoreRequest) (*BatchStoreResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method BatchStore not implemented")
-}
-func (UnimplementedUtxoStoreAPIServer) Spend(context.Context, *SpendRequest) (*SpendResponse, error) {
+func (UnimplementedUtxoStoreAPIServer) Spend(context.Context, *Request) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Spend not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) Reset(context.Context, *ResetRequest) (*ResetResponse, error) {
+func (UnimplementedUtxoStoreAPIServer) Reset(context.Context, *Request) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Reset not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+func (UnimplementedUtxoStoreAPIServer) Delete(context.Context, *Request) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+func (UnimplementedUtxoStoreAPIServer) Get(context.Context, *Request) (*GetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
 func (UnimplementedUtxoStoreAPIServer) mustEmbedUnimplementedUtxoStoreAPIServer() {}
@@ -203,26 +188,8 @@ func _UtxoStoreAPI_Store_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UtxoStoreAPI_BatchStore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BatchStoreRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UtxoStoreAPIServer).BatchStore(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: UtxoStoreAPI_BatchStore_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).BatchStore(ctx, req.(*BatchStoreRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _UtxoStoreAPI_Spend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SpendRequest)
+	in := new(Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -234,13 +201,13 @@ func _UtxoStoreAPI_Spend_Handler(srv interface{}, ctx context.Context, dec func(
 		FullMethod: UtxoStoreAPI_Spend_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).Spend(ctx, req.(*SpendRequest))
+		return srv.(UtxoStoreAPIServer).Spend(ctx, req.(*Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _UtxoStoreAPI_Reset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResetRequest)
+	in := new(Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -252,13 +219,13 @@ func _UtxoStoreAPI_Reset_Handler(srv interface{}, ctx context.Context, dec func(
 		FullMethod: UtxoStoreAPI_Reset_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).Reset(ctx, req.(*ResetRequest))
+		return srv.(UtxoStoreAPIServer).Reset(ctx, req.(*Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _UtxoStoreAPI_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteRequest)
+	in := new(Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -270,13 +237,13 @@ func _UtxoStoreAPI_Delete_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: UtxoStoreAPI_Delete_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).Delete(ctx, req.(*DeleteRequest))
+		return srv.(UtxoStoreAPIServer).Delete(ctx, req.(*Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _UtxoStoreAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetRequest)
+	in := new(Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -288,7 +255,7 @@ func _UtxoStoreAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(in
 		FullMethod: UtxoStoreAPI_Get_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).Get(ctx, req.(*GetRequest))
+		return srv.(UtxoStoreAPIServer).Get(ctx, req.(*Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -307,10 +274,6 @@ var UtxoStoreAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Store",
 			Handler:    _UtxoStoreAPI_Store_Handler,
-		},
-		{
-			MethodName: "BatchStore",
-			Handler:    _UtxoStoreAPI_BatchStore_Handler,
 		},
 		{
 			MethodName: "Spend",

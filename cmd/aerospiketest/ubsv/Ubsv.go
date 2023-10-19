@@ -9,6 +9,8 @@ import (
 	// "github.com/aerospike/aerospike-client-go/v6"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 )
@@ -54,28 +56,32 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 				return
 			default:
 				// Generate a random hash
-				hash := chainhash.HashH([]byte(fmt.Sprintf("%d:%d", id, i)))
+				tx := bt.NewTx()
+				_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i))
+				hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+				if err != nil {
+					s.logger.Warnf("hash failed: %v\n", err)
+				}
 
-				_, err := s.store.Delete(ctx, &hash)
+				err = s.store.Delete(ctx, &utxostore.Spend{
+					TxID: tx.TxIDChainHash(),
+					Vout: 0,
+					Hash: hash,
+				})
 				if err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				resp, err := s.store.Store(ctx, &hash, 0)
+				err = s.store.Store(ctx, tx)
 				if err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}
 
-				if resp.Status != 0 {
-					s.logger.Warnf("store failed: status=%d\n", resp.Status)
-					return
-				}
-
 				counter++
 
-				spenderCh <- &hash
+				spenderCh <- hash
 			}
 		}
 
@@ -102,13 +108,12 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 		}()
 
 		for hash := range spenderCh {
-			resp, err := s.store.Spend(ctx, hash, spendingTxHash)
+			err = s.store.Spend(ctx, []*utxostore.Spend{{
+				Hash:         hash,
+				SpendingTxID: spendingTxHash,
+			}})
 			if err != nil {
 				s.logger.Warnf("spend failed: %v\n", err)
-			}
-
-			if resp != nil && resp.Status != 0 {
-				s.logger.Warnf("spend failed: status=%d\n", resp.Status)
 			}
 
 			counter++
@@ -131,13 +136,11 @@ func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *c
 		}()
 
 		for hash := range deleteCh {
-			resp, err := s.store.Delete(ctx, hash)
+			err := s.store.Delete(ctx, &utxostore.Spend{
+				Hash: hash,
+			})
 			if err != nil {
 				s.logger.Warnf("delete failed: %v\n", err)
-			}
-
-			if resp != nil && resp.Status != 0 {
-				s.logger.Warnf("delete failed: status=%d\n", resp.Status)
 			}
 
 			counter++

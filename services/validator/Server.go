@@ -236,10 +236,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return &validator_api.ValidateTransactionResponse{
-			Valid:  false,
-			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),
-		}, nil
+		return nil, v.logError(status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err))
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))

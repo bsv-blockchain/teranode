@@ -104,7 +104,9 @@ func main() {
 
 	log.Printf("Chainhash:  %x", utxoHash.CloneBytes())
 
-	res3, err := utxostore.Get(ctx, &utxostore_api.GetRequest{
+	res3, err := utxostore.Get(ctx, &utxostore_api.Request{
+		TxId:     txid.CloneBytes(),
+		Vout:     0,
 		UxtoHash: utxoHash.CloneBytes(),
 	})
 	if err != nil {
@@ -145,14 +147,13 @@ func main() {
 		panic(err)
 	}
 
-	res4, err := utxostore.Spend(ctx, &utxostore_api.SpendRequest{
+	_, err = utxostore.Spend(ctx, &utxostore_api.Request{
+		TxId:         txid.CloneBytes(),
+		Vout:         0,
 		UxtoHash:     utxoHash.CloneBytes(),
 		SpendingTxid: utxoHash.CloneBytes(),
 	})
 	if err != nil {
 		panic(err)
 	}
-
-	log.Printf("UTXO spent: %v", res4.Status)
-
 }

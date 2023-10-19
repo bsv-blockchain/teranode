@@ -3,11 +3,13 @@ package memory
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/maphash"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/puzpuzpuz/xsync/v2"
 )
@@ -44,67 +46,81 @@ func (m *XsyncMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
-func (m *XsyncMap) Health(ctx context.Context) (int, string, error) {
+func (m *XsyncMap) Health(_ context.Context) (int, string, error) {
 	return 0, "XsyncMap Store", nil
 }
 
-func (m *XsyncMap) Get(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	if utxo, ok := m.m.Load(*hash); ok {
-		if utxo.Hash == nil {
-			return &utxostore.UTXOResponse{
-				Status:   int(utxostore_api.Status_OK),
-				LockTime: utxo.LockTime,
+func (m *XsyncMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+	if utxo, ok := m.m.Load(*spend.Hash); ok {
+		if utxo.Hash == nil || utxo.Hash.IsEqual(spend.SpendingTxID) {
+			return &utxostore.Response{
+				Status:       int(utxostore_api.Status_OK),
+				SpendingTxID: utxo.Hash,
+				LockTime:     utxo.LockTime,
 			}, nil
 		}
 
-		return &utxostore.UTXOResponse{
+		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
 			SpendingTxID: utxo.Hash,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
-	return &utxostore.UTXOResponse{
+	return &utxostore.Response{
 		Status: int(utxostore_api.Status_NOT_FOUND),
 	}, nil
 }
 
-func (m *XsyncMap) Store(_ context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
-	if utxo, ok := m.m.Load(*hash); ok {
-		if utxo.Hash != nil {
-			return &utxostore.UTXOResponse{
-				Status:       int(utxostore_api.Status_SPENT),
-				SpendingTxID: utxo.Hash,
-				LockTime:     utxo.LockTime,
-			}, nil
-		}
-	} else {
-		m.m.Store(*hash, UTXO{
-			Hash:     nil,
-			LockTime: nLockTime,
-		})
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	if err != nil {
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
+	}
+
+	for _, hash := range utxoHashes {
+		if utxo, ok := m.m.Load(*hash); ok {
+			if utxo.Hash != nil {
+				return utxostore.ErrSpent
+			} else {
+				return utxostore.ErrAlreadyExists
+			}
+		} else {
+			m.m.Store(*hash, UTXO{
+				Hash:     nil,
+				LockTime: storeLockTime,
+			})
+		}
+	}
+
+	return nil
 }
 
-func (m *XsyncMap) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	var h *chainhash.Hash
-	for _, h = range hashes {
-		_, err := m.Store(ctx, h, nLockTime)
+func (m *XsyncMap) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	for idx, spend := range spends {
+		err = m.spendUtxo(spend.Hash, spend.SpendingTxID)
 		if err != nil {
-			return nil, err
+			for i := 0; i < idx; i++ {
+				err = m.Reset(ctx, spends[i])
+				if err != nil {
+					fmt.Printf("error resetting utxo: %s\n", err.Error())
+				}
+			}
+			return err
 		}
 	}
 
-	return &utxostore.BatchResponse{
-		Status: 0,
-	}, nil
+	return nil
 }
 
-func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (m *XsyncMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 	if utxo, ok := m.m.Load(*hash); ok {
 		if utxo.Hash == nil {
 			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
@@ -112,56 +128,40 @@ func (m *XsyncMap) Spend(_ context.Context, hash *chainhash.Hash, txID *chainhas
 					Hash:     txID,
 					LockTime: utxo.LockTime,
 				})
-				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_OK),
-					SpendingTxID: txID,
-				}, nil
-			} else {
-				return &utxostore.UTXOResponse{
-					Status:   int(utxostore_api.Status_LOCKED),
-					LockTime: utxo.LockTime,
-				}, nil
+				return nil
 			}
+
+			return utxostore.ErrLockTime
 		} else {
 			if utxo.Hash.IsEqual(txID) {
-				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_OK),
-					SpendingTxID: txID,
-					LockTime:     utxo.LockTime,
-				}, nil
+				return nil
 			} else {
-				return &utxostore.UTXOResponse{
-					Status:       int(utxostore_api.Status_SPENT),
-					SpendingTxID: utxo.Hash,
-					LockTime:     utxo.LockTime,
-				}, nil
+				return utxostore.ErrSpent
 			}
 		}
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_NOT_FOUND),
-	}, nil
+	return utxostore.ErrNotFound
 }
 
-func (m *XsyncMap) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	utxo, ok := m.m.Load(*hash)
-	m.m.Delete(*hash)
-
-	nLockTime := uint32(0)
-	if ok {
-		nLockTime = utxo.LockTime
+func (m *XsyncMap) Reset(_ context.Context, spend *utxostore.Spend) error {
+	utxo, ok := m.m.Load(*spend.Hash)
+	if !ok {
+		return utxostore.ErrNotFound
 	}
 
-	return m.Store(ctx, hash, nLockTime)
+	m.m.Store(*spend.Hash, UTXO{
+		Hash:     nil,
+		LockTime: utxo.LockTime,
+	})
+
+	return nil
 }
 
-func (m *XsyncMap) Delete(_ context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	m.m.Delete(*hash)
+func (m *XsyncMap) Delete(_ context.Context, spend *utxostore.Spend) error {
+	m.m.Delete(*spend.Hash)
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
 func (m *XsyncMap) delete(hash *chainhash.Hash) error {

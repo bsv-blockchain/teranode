@@ -9,6 +9,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/redis/go-redis/v9"
 )
@@ -65,15 +67,15 @@ func (rr *RedisCluster) Health(ctx context.Context) (int, string, error) {
 	return 0, "Redis Ring", nil
 }
 
-func (rr *RedisCluster) Get(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	res := rr.rdb.Get(ctx, hash.String())
+func (rr *RedisCluster) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+	res := rr.rdb.Get(ctx, spend.Hash.String())
 
 	if res.Err() != nil {
 		return nil, res.Err()
 	}
 
 	if res.Val() == string(redis.Nil) {
-		return &utxostore.UTXOResponse{
+		return &utxostore.Response{
 			Status: int(utxostore_api.Status_NOT_FOUND),
 		}, nil
 	}
@@ -89,49 +91,88 @@ func (rr *RedisCluster) Get(ctx context.Context, hash *chainhash.Hash) (*utxosto
 		status = utxostore_api.Status_LOCKED
 	}
 
-	return &utxostore.UTXOResponse{
+	return &utxostore.Response{
 		Status:       int(status),
 		LockTime:     v.LockTime,
 		SpendingTxID: v.SpendingTxID,
 	}, nil
 }
 
-func (rr *RedisCluster) Store(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) (*utxostore.UTXOResponse, error) {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (rr *RedisCluster) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
+	}
+
+	txIDHash := tx.TxIDChainHash()
+
+	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 { // only do outputs with value
+			hash, err := util.UTXOHashFromOutput(txIDHash, output, uint32(i))
+			if err != nil {
+				return err
+			}
+
+			utxoHashes[i] = hash
+		}
+	}
+
+	for outputIdx, hash := range utxoHashes {
+		err := rr.storeUtxo(ctx, hash, storeLockTime)
+		if err != nil {
+			for i := 0; i < outputIdx; i++ {
+				// revert the created utxos
+				_ = rr.Delete(ctx, &utxostore.Spend{
+					TxID: txIDHash,
+					Vout: uint32(i),
+					Hash: hash,
+				})
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (rr *RedisCluster) storeUtxo(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) error {
 	v := &Value{
 		LockTime: nLockTime,
 	}
 
 	res := rr.rdb.SetNX(ctx, hash.String(), v.String(), 0)
 	if res.Err() != nil {
-		return nil, res.Err()
+		return res.Err()
 	}
 
 	if !res.Val() {
 		// This means the key already existed
-		return &utxostore.UTXOResponse{
-			Status: int(utxostore_api.Status_ALREADY_EXISTS),
-		}, nil
+		return utxostore.ErrAlreadyExists
 	}
 
-	return &utxostore.UTXOResponse{
-		Status:   int(utxostore_api.Status_OK),
-		LockTime: nLockTime,
-	}, nil
+	return nil
 }
 
-func (rr *RedisCluster) BatchStore(ctx context.Context, hashes []*chainhash.Hash, nLockTime uint32) (*utxostore.BatchResponse, error) {
-	return &utxostore.BatchResponse{
-		Status: 0,
-	}, nil
+func (rr *RedisCluster) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	for idx, spend := range spends {
+		if err = spendUtxo(ctx, rr.rdb, spend, rr.getBlockHeight()); err != nil {
+			for i := 0; i < idx; i++ {
+				// revert the created utxos
+				_ = rr.Reset(ctx, spends[i])
+			}
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (rr *RedisCluster) Spend(ctx context.Context, hash *chainhash.Hash, spendingTxID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	return spend(ctx, rr.rdb, hash, spendingTxID, rr.getBlockHeight())
-}
-
-func (rr *RedisCluster) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
+func (rr *RedisCluster) Reset(ctx context.Context, spend *utxostore.Spend) error {
 	err := rr.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		res := tx.Get(ctx, hash.String())
+		res := tx.Get(ctx, spend.Hash.String())
 		if res.Err() != nil {
 			return res.Err()
 		}
@@ -140,33 +181,29 @@ func (rr *RedisCluster) Reset(ctx context.Context, hash *chainhash.Hash) (*utxos
 
 		v.SpendingTxID = nil
 
-		res2 := tx.Set(ctx, hash.String(), v.String(), 0)
+		res2 := tx.Set(ctx, spend.Hash.String(), v.String(), 0)
 		if res2.Err() != nil {
 			return res2.Err()
 		}
 
 		return nil
-	}, hash.String())
+	}, spend.Hash.String())
 
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
-func (rr *RedisCluster) Delete(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	res := rr.rdb.Del(ctx, hash.String())
+func (rr *RedisCluster) Delete(ctx context.Context, spend *utxostore.Spend) error {
+	res := rr.rdb.Del(ctx, spend.Hash.String())
 
 	if res.Err() != nil {
-		return nil, res.Err()
+		return res.Err()
 	}
 
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return nil
 }
 
 func (rr *RedisCluster) DeleteSpends(deleteSpends bool) {

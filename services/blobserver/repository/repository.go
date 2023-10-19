@@ -163,9 +163,9 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]
 	return resp.SpendingTxID.CloneBytes(), nil
 }
 
-func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.UTXOResponse, error) {
+func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.Response, error) {
 	r.logger.Debugf("[Repository] GetUtxo: %s", hash.String())
-	resp, err := r.UtxoStore.Get(ctx, hash)
+	resp, err := r.UtxoStore.Get(ctx, &utxo.Spend{Hash: hash})
 	if err != nil {
 		return nil, err
 	}

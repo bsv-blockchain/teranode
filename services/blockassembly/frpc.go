@@ -47,38 +47,13 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		return nil, err
 	}
 
-	if err = f.ba.frpcStoreUtxos(ctx, req); err != nil {
-		return nil, err
-	}
+	//if err = f.ba.frpcStoreUtxos(ctx, req); err != nil {
+	//	return nil, err
+	//}
 
 	return &blockassembly_api.BlockassemblyApiAddTxResponse{
 		Ok: true,
 	}, nil
-}
-
-// frpcStoreUtxos is mostly a duplicate from the Server, but prevents extra mallocs by using the req directly
-func (ba *BlockAssembly) frpcStoreUtxos(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (err error) {
-	startUtxoTime := time.Now()
-	defer func() {
-		prometheusBlockAssemblerUtxoStoreDuration.Observe(time.Since(startUtxoTime).Seconds())
-	}()
-
-	utxoHashes := make([]*chainhash.Hash, len(req.Utxos))
-
-	var i int
-	var hashBytes []byte
-	for i, hashBytes = range req.Utxos {
-		utxoHashes[i], err = chainhash.NewHash(hashBytes)
-		if err != nil {
-			return err
-		}
-	}
-
-	if _, err = ba.utxoStore.BatchStore(ctx, utxoHashes, req.Locktime); err != nil {
-		return fmt.Errorf("error storing utxos: %w", err)
-	}
-
-	return nil
 }
 
 func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {

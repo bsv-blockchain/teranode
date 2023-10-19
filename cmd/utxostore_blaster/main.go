@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"crypto/rand"
-	"net/http"
-	_ "net/http/pprof"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
@@ -19,10 +18,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/scylla"
 
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -174,29 +173,35 @@ func worker(logger utils.Logger) {
 	ctx := context.Background()
 
 	for {
-		// Create a dummy txid
-		txid, _ := chainhash.NewHash(generateRandomBytes())
+		btTx := bt.NewTx()
+		_ = btTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 10000)
 
-		// Create a dummy utxoHash
-		utxoHash, _ := chainhash.NewHash(generateRandomBytes())
+		utxoHash, err := util.UTXOHashFromOutput(btTx.TxIDChainHash(), btTx.Outputs[0], 0)
+
+		spend := &utxo.Spend{
+			TxID:         btTx.TxIDChainHash(),
+			Vout:         0,
+			Hash:         utxoHash,
+			SpendingTxID: utxoHash,
+		}
 
 		// Delete the txid
 		timeStart := time.Now()
-		if _, err := utxostore.Delete(ctx, utxoHash); err != nil {
+		if err = utxostore.Delete(ctx, spend); err != nil {
 			panic(err)
 		}
 		prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Store the txid
 		timeStart = time.Now()
-		if _, err = utxostore.Store(ctx, utxoHash, 0); err != nil {
+		if err = utxostore.Store(ctx, btTx); err != nil {
 			panic(err)
 		}
 		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Spend the txid
 		timeStart = time.Now()
-		if _, err = utxostore.Spend(ctx, utxoHash, txid); err != nil {
+		if err = utxostore.Spend(ctx, []*utxo.Spend{spend}); err != nil {
 			panic(err)
 		}
 		prometheusUtxoStoreBlasterSpend.Observe(float64(time.Since(timeStart).Microseconds()))
