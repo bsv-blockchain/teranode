@@ -2,7 +2,10 @@ package redis
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,53 +19,99 @@ import (
 
 type Redis struct {
 	url                *url.URL
-	rdb                *redis.Client
+	rdb                redis.Cmdable
+	mode               string
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
 }
 
-// NewRedis returns a new Redis store.
-// We will use the chainhash.Hash as the key and the value will be a comma separated string of the following:
-// 1. The status of the UTXO
-// 2. The locktime of the UTXO
-// 3. The spending transaction ID 64-byte hex string if it is spent
-// For example:
-// 0,0 would be an unspent UTXO
-// 0,80000000 would be an unspent UTXO with a locktime of 80000000
+func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+	o := &redis.Options{
+		Addr: u.Host,
+	}
 
-func NewRedis(u *url.URL) (utxostore.Interface, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     u.Host,
-		Password: "TfocK5PCg7",
-	})
+	if len(password) > 0 && password[0] != "" {
+		o.Password = password[0]
+	}
+
+	rdb := redis.NewClient(o)
 
 	return &Redis{
-		url: u,
-		rdb: rdb,
+		url:  u,
+		mode: "client",
+		rdb:  rdb,
 	}, nil
 }
 
-func (rr *Redis) SetBlockHeight(height uint32) error {
-	rr.heightMutex.Lock()
-	defer rr.heightMutex.Unlock()
+func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
+	hosts := strings.Split(u.Host, ",")
 
-	rr.currentBlockHeight = height
+	addrs := make([]string, 0)
+	addrs = append(addrs, hosts...)
+
+	o := &redis.ClusterOptions{
+		Addrs: addrs,
+	}
+
+	if len(password) > 0 {
+		o.Password = password[0]
+	}
+
+	rdb := redis.NewClusterClient(o)
+
+	return &Redis{
+		url:  u,
+		mode: "cluster",
+		rdb:  rdb,
+	}, nil
+}
+
+func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+	hosts := strings.Split(u.Host, ",")
+
+	addrs := make(map[string]string)
+	for i, host := range hosts {
+		addrs[fmt.Sprintf("shard%d", i)] = host
+	}
+
+	o := &redis.RingOptions{
+		Addrs: addrs,
+	}
+
+	if len(password) > 0 {
+		o.Password = password[0]
+	}
+
+	rdb := redis.NewRing(o)
+
+	return &Redis{
+		url:  u,
+		mode: "ring",
+		rdb:  rdb,
+	}, nil
+}
+
+func (r *Redis) SetBlockHeight(height uint32) error {
+	r.heightMutex.Lock()
+	defer r.heightMutex.Unlock()
+
+	r.currentBlockHeight = height
 	return nil
 }
 
-func (rr *Redis) getBlockHeight() uint32 {
-	rr.heightMutex.RLock()
-	defer rr.heightMutex.RUnlock()
+func (r *Redis) getBlockHeight() uint32 {
+	r.heightMutex.RLock()
+	defer r.heightMutex.RUnlock()
 
-	return rr.currentBlockHeight
+	return r.currentBlockHeight
 }
 
-func (rr *Redis) Health(ctx context.Context) (int, string, error) {
-	return 0, "Redis Ring", nil
+func (r *Redis) Health(ctx context.Context) (int, string, error) {
+	return 0, fmt.Sprintf("Redis %s", r.mode), nil
 }
 
-func (rr *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
-	res := rr.rdb.Get(ctx, spend.Hash.String())
+func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+	res := r.rdb.Get(ctx, spend.Hash.String())
 
 	if res.Err() != nil {
 		return nil, res.Err()
@@ -81,7 +130,7 @@ func (rr *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Re
 		status = utxostore_api.Status_SPENT
 	} else if v.LockTime > 500000000 && int64(v.LockTime) > time.Now().UTC().Unix() {
 		status = utxostore_api.Status_LOCKED
-	} else if v.LockTime > 0 && v.LockTime < rr.getBlockHeight() {
+	} else if v.LockTime > 0 && v.LockTime < r.getBlockHeight() {
 		status = utxostore_api.Status_LOCKED
 	}
 
@@ -94,7 +143,7 @@ func (rr *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Re
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (rr *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	storeLockTime := tx.LockTime
 	if len(lockTime) > 0 {
 		storeLockTime = lockTime[0]
@@ -118,15 +167,11 @@ func (rr *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	}
 
 	for outputIdx, hash := range utxoHashes {
-		err := rr.storeUtxo(ctx, hash, value)
+		err := r.storeUtxo(ctx, hash, value)
 		if err != nil {
 			for i := 0; i < outputIdx; i++ {
 				// revert the created utxos
-				_ = rr.Delete(ctx, &utxostore.Spend{
-					TxID: txIDHash,
-					Vout: uint32(i),
-					Hash: hash,
-				})
+				r.rdb.Del(ctx, hash.String())
 			}
 			return err
 		}
@@ -135,8 +180,8 @@ func (rr *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	return nil
 }
 
-func (rr *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value string) error {
-	res := rr.rdb.SetNX(ctx, hash.String(), value, 0)
+func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value string) error {
+	res := r.rdb.SetNX(ctx, hash.String(), value, 0)
 	if res.Err() != nil {
 		return res.Err()
 	}
@@ -160,19 +205,9 @@ func (rr *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err erro
 	return nil
 }
 
-func (rr *Redis) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+func (r *Redis) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
 	for _, spend := range spends {
-		if err = rr.unSpend(ctx, spend); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (rr *Redis) unSpend(ctx context.Context, spend *utxostore.Spend) error {
-	err := rr.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		res := tx.Get(ctx, spend.Hash.String())
+		res := r.rdb.Get(ctx, spend.Hash.String())
 		if res.Err() != nil {
 			return res.Err()
 		}
@@ -181,30 +216,37 @@ func (rr *Redis) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 
 		v.SpendingTxID = nil
 
-		res2 := tx.Set(ctx, spend.Hash.String(), v.String(), 0)
+		res2 := r.rdb.Set(ctx, spend.Hash.String(), v.String(), 0)
 		if res2.Err() != nil {
 			return res2.Err()
 		}
-
-		return nil
-	}, spend.Hash.String())
-
-	if err != nil {
-		return err
 	}
 
 	return nil
 }
 
-func (rr *Redis) Delete(ctx context.Context, spend *utxostore.Spend) error {
-	res := rr.rdb.Del(ctx, spend.Hash.String())
+func (r *Redis) Delete(ctx context.Context, tx *bt.Tx) error {
+	if !tx.IsExtended() {
+		return errors.New("tx must be in extended format")
+	}
 
-	if res.Err() != nil {
-		return res.Err()
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 { // only do outputs with value
+			hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+			if err != nil {
+				return err
+			}
+
+			res := r.rdb.Del(ctx, hash.String())
+
+			if res.Err() != nil {
+				return res.Err()
+			}
+		}
 	}
 
 	return nil
 }
 
-func (rr *Redis) DeleteSpends(deleteSpends bool) {
+func (r *Redis) DeleteSpends(deleteSpends bool) {
 }

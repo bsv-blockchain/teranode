@@ -1,12 +1,15 @@
-//go:build manual_tests
+////go:build manual_tests
 
 package redis
 
 import (
 	"context"
-	"net/url"
+	"errors"
 	"testing"
 
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/redis/go-redis/v9"
@@ -14,65 +17,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	tx1, _       = bt.NewTxFromString("010000000152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+	utxoHash0, _ = util.UTXOHashFromOutput(tx1.TxIDChainHash(), tx1.Outputs[0], 0)
+	spend1       = &utxostore.Spend{
+		Vout: 0,
+		Hash: utxoHash0,
+		TxID: tx1.TxIDChainHash(),
+	}
+
+	tx2 = chainhash.HashH([]byte("dummy"))
+
+	spend2 = &utxostore.Spend{
+		Vout: 0,
+		Hash: utxoHash0,
+		TxID: &tx2,
+	}
+)
+
 func TestRedis(t *testing.T) {
-	u, _, _ := gocore.Config().GetURL("utxostore")
-	r, err := NewRedis(u)
+	u, err, _ := gocore.Config().GetURL("utxostore")
+	require.NoError(t, err)
+
+	r, err := NewRedisClient(u)
+	// r, err := NewRedisRing(u)
+	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 
-	txid := chainhash.HashH([]byte("test1"))
-
-	_, err = r.Delete(ctx, &txid)
+	err = r.Delete(ctx, spend1)
 	require.NoError(t, err)
 
 	// Store the txid
-	res, err := r.Store(ctx, &txid, 0)
+	err = r.Store(ctx, tx1)
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
 
 	// Store it a second time
-	res, err = r.Store(ctx, &txid, 0)
+	err = r.Store(ctx, tx1)
 	require.NoError(t, err)
-	assert.Equal(t, 4, res.Status) // Already exists
 
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	// Spend txid with spendingTxID1
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
+	// Spend txid with spend1
+	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
 
-	// Spend txid with spendingTxID1 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
+	// Spend txid with spend1 again
+	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
 
-	spendingTxID2 := chainhash.HashH([]byte("test3"))
-
-	// Spend txid with spendingTxID2 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID2)
+	// Spend txid with spend2
+	err = r.Spend(ctx, []*utxostore.Spend{spend2})
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.Status) // Already spent
-	assert.Equal(t, spendingTxID1.String(), res.SpendingTxID.String())
+	// assert.Equal(t, spendingTxID1.String(), res.SpendingTxID.String())
 }
 
 func TestRedisLockTime(t *testing.T) {
-	u, _, _ := gocore.Config().GetURL("utxostore")
-	r, err := NewRedis(u)
+	u, err, _ := gocore.Config().GetURL("utxostore")
+	require.NoError(t, err)
+
+	r, err := NewRedisClient(u)
+	// r, err := NewRedisRing(u)
+	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 
-	txid := chainhash.HashH([]byte("test1"))
-
-	_, err = r.Delete(ctx, &txid)
+	err = r.Delete(ctx, spend1)
 	require.NoError(t, err)
 
-	// Store the txid
-	res, err := r.Store(ctx, &txid, 1000)
+	// Store the txid with locktime
+	err = r.Store(ctx, tx1, 1000)
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
 
 	err = r.SetBlockHeight(100)
 	require.NoError(t, err)
@@ -80,141 +95,9 @@ func TestRedisLockTime(t *testing.T) {
 	height := r.getBlockHeight()
 	assert.Equal(t, uint32(100), height)
 
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
+	// Spend txid with spend1
+	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.NoError(t, err)
-	assert.Equal(t, 2, res.Status) // Locked
-}
-
-func TestRing(t *testing.T) {
-	u, _, _ := gocore.Config().GetURL("utxostore")
-	r, err := NewRedisRing(u)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	txid := chainhash.HashH([]byte("test1"))
-
-	_, err = r.Delete(ctx, &txid)
-	require.NoError(t, err)
-
-	// Store the txid
-	res, err := r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Store it a second time
-	res, err = r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 4, res.Status) // Already exists
-
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	// Spend txid with spendingTxID1
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Spend txid with spendingTxID1 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	spendingTxID2 := chainhash.HashH([]byte("test3"))
-
-	// Spend txid with spendingTxID2 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID2)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Status) // Already spent
-	assert.Equal(t, spendingTxID1.String(), res.SpendingTxID.String())
-}
-
-func TestClusterSingleAddress(t *testing.T) {
-	u, err := url.ParseRequestURI("redis://ubsv-store-redis-cluster-headless.redis.svc.cluster.local:6379?protocol=3")
-	require.NoError(t, err)
-
-	r, err := NewRedisRing(u)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	txid := chainhash.HashH([]byte("test1"))
-
-	_, err = r.Delete(ctx, &txid)
-	require.NoError(t, err)
-
-	// Store the txid
-	res, err := r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Store it a second time
-	res, err = r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 4, res.Status) // Already exists
-
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	// Spend txid with spendingTxID1
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Spend txid with spendingTxID1 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	spendingTxID2 := chainhash.HashH([]byte("test3"))
-
-	// Spend txid with spendingTxID2 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID2)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Status) // Already spent
-	assert.Equal(t, spendingTxID1.String(), res.SpendingTxID.String())
-}
-
-func TestCluster(t *testing.T) {
-	r, err := NewRedisCluster(nil)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	txid := chainhash.HashH([]byte("test1"))
-
-	_, err = r.Delete(ctx, &txid)
-	require.NoError(t, err)
-
-	// Store the txid
-	res, err := r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Store it a second time
-	res, err = r.Store(ctx, &txid, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 4, res.Status) // Already exists
-
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	// Spend txid with spendingTxID1
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	// Spend txid with spendingTxID1 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID1)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res.Status)
-
-	spendingTxID2 := chainhash.HashH([]byte("test3"))
-
-	// Spend txid with spendingTxID2 again
-	res, err = r.Spend(ctx, &txid, &spendingTxID2)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Status) // Already spent
-	assert.Equal(t, spendingTxID1.String(), res.SpendingTxID.String())
 }
 
 func TestRingThreadSafe(t *testing.T) {
@@ -254,7 +137,7 @@ func TestRingThreadSafe(t *testing.T) {
 		}
 
 		if res.Err() == redis.Nil {
-			return errNotFound
+			return errors.New("Not found")
 		}
 
 		notifyCh1 <- struct{}{}

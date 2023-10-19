@@ -23,16 +23,19 @@ if existingSpendingTxID ~= "" then
   end
 end
 
-local currentUnixTime = tonumber(redis.call('TIME')[1])
 
-if lockTime > 500000000 and lockTime > currentUnixTime then
-  return 'LOCKED'
+if lockTime > 500000000 then
+  local currentUnixTime = tonumber(redis.call('TIME')[1])
+  if lockTime > currentUnixTime then
+    return 'LOCKED'
+  end
 end
 
-blockHeight = tonumber(blockHeight)
-
-if lockTime > 0 and lockTime > blockHeight then
-  return 'LOCKED'
+if lockTime > 0 then
+  blockHeight = tonumber(blockHeight)
+  if lockTime > blockHeight then
+    return 'LOCKED'
+  end
 end
 
 -- Create new comma-separated value string
