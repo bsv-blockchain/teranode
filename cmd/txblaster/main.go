@@ -215,7 +215,7 @@ func main() {
 		panic("No suitable propagation server connection found")
 	}
 
-	logger.Infof("Using %d propagation servers: %s", len(propagationServers), propagationServers)
+	logger.Infof("Using %d propagation servers: %+v", len(propagationServers), propagationServers)
 
 	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
 	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)

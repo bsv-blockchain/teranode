@@ -10,41 +10,41 @@ export function humanTime(time) {
 
   if (days > 0) {
     difference += days
-    difference += ' day' + (days === 1 ? ', ' : 's, ')
+    difference += 'd'
     difference += hours
-    difference += ' hour' + (hours === 1 ? ', ' : 's, ')
+    difference += 'h'
     difference += minutes
-    difference += ' minute' + (minutes === 1 ? ' and ' : 's and ')
+    difference += 'm'
     difference += seconds
-    difference += ' second' + (seconds === 1 ? '' : 's')
+    difference += 's'
     return difference
   }
 
   if (hours > 0) {
     difference += hours
-    difference += ' hour' + (hours === 1 ? ', ' : 's, ')
+    difference += 'h'
     difference += minutes
-    difference += ' minute' + (minutes === 1 ? ' and ' : 's and ')
+    difference += 'm'
     difference += seconds
-    difference += ' second' + (seconds === 1 ? '' : 's')
+    difference += 's'
     return difference
   }
 
   if (minutes > 0) {
     difference += minutes
-    difference += ' minute' + (minutes === 1 ? ' and ' : 's and ')
+    difference += 'm'
     difference += seconds
-    difference += ' second' + (seconds === 1 ? '' : 's')
+    difference += 's'
     return difference
   }
 
   if (seconds > 0) {
     difference += seconds
-    difference += ' second' + (seconds === 1 ? '' : 's')
+    difference += 's'
     return difference
   }
 
-  return '0 seconds'
+  return '0s'
 }
 
 export function getHumanReadableTime(diff) {

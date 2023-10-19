@@ -48,7 +48,7 @@
         <th>Miner</th>
         <th>Latest hash</th>
         <th>Previous hash</th>
-        <th style="width:200px;">Last seen</th>
+        <th style="width:120px;">Last seen</th>
       </tr>
     </thead>
     <tbody>

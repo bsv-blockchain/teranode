@@ -21,7 +21,7 @@
   function shortHash(hash) {
     if (!hash) return ''
 
-    return hash.substring(0, 8) + '...' + hash.substring(hash.length - 8)
+    return hash.substring(0, 4) + '...' + hash.substring(hash.length - 8)
   }
 </script>
 

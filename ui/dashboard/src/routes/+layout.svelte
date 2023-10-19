@@ -1,7 +1,5 @@
 <script>
   import { onMount } from 'svelte'
-  import UpdateSpinner from '@components/UpdateSpinner.svelte'
-
   import {
     loading,
     lastUpdated,
@@ -113,7 +111,11 @@
       <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
         Viewer
       </a>
-      <a class="navbar-item" href="/txviewer" on:click={handleNavbarItemClick}>
+      <a
+        class="navbar-item"
+        href="/utxoviewer"
+        on:click={handleNavbarItemClick}
+      >
         UTXOInspector
       </a>
       <!-- <a class="navbar-item" href="/blocks" on:click={handleNavbarItemClick}> Blocks </a> -->
@@ -132,12 +134,6 @@
       <a class="navbar-item" href="/network" on:click={handleNavbarItemClick}>
         Network
       </a>
-    </div>
-
-    <div class="navbar-end">
-      <div class="navbar-item">
-        <UpdateSpinner flash={$loading} text={age} />
-      </div>
     </div>
   </div>
 </nav>
