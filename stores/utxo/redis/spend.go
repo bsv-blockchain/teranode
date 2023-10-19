@@ -40,12 +40,12 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 	}
 
 	if strings.HasPrefix(s, "SPENT") {
-		_, err := chainhash.NewHashFromStr(s[6:])
+		hash, err := chainhash.NewHashFromStr(s[6:])
 		if err != nil {
 			return err
 		}
 
-		return utxostore.ErrSpent
+		return utxostore.NewErrSpentExtra(hash)
 	}
 
 	return fmt.Errorf("unknown response from spend: %v", res)

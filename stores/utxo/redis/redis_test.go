@@ -1,4 +1,4 @@
-////go:build manual_tests
+//go:build manual_tests
 
 package redis
 

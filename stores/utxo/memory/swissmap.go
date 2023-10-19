@@ -149,6 +149,16 @@ func (m *SwissMap) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 
+func (m *SwissMap) unSpend(spend *utxostore.Spend) {
+	utxo, ok := m.m.Get(*spend.Hash)
+	if ok {
+		m.m.Put(*spend.Hash, UTXO{
+			Hash:     nil,
+			LockTime: utxo.LockTime,
+		})
+	}
+}
+
 func (m *SwissMap) Delete(_ context.Context, tx *bt.Tx) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

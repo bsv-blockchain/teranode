@@ -159,6 +159,18 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 
+func (m *Memory) unSpend(spend *utxostore.Spend) error {
+	utxo, ok := m.m[*spend.Hash]
+	if !ok {
+		return utxostore.ErrNotFound
+	}
+
+	utxo.Hash = nil
+	m.m[*spend.Hash] = utxo
+
+	return nil
+}
+
 func (m *Memory) Delete(_ context.Context, tx *bt.Tx) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
