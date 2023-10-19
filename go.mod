@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.1.0
+	github.com/gocql/gocql v1.6.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
@@ -98,7 +99,6 @@ require (
 	github.com/go-openapi/swag v0.22.3 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
-	github.com/gocql/gocql v1.6.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect

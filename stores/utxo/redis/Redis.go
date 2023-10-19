@@ -148,9 +148,9 @@ func (rr *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value stri
 	return nil
 }
 
-func (rr *Redis) _Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+func (rr *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
 	for idx, spend := range spends {
-		if err = rr.spend(ctx, spend); err != nil {
+		if err = spendUtxo(ctx, rr.rdb, spend, rr.getBlockHeight()); err != nil {
 			for i := 0; i < idx; i++ {
 				// revert the created utxos
 				_ = rr.Reset(ctx, spends[i])
@@ -160,10 +160,6 @@ func (rr *Redis) _Spend(ctx context.Context, spends []*utxostore.Spend) (err err
 	}
 
 	return nil
-}
-
-func (rr *Redis) Spend(ctx context.Context, hash *chainhash.Hash, spendingTxID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	return spend(ctx, rr.rdb, hash, spendingTxID, rr.getBlockHeight())
 }
 
 func (rr *Redis) Reset(ctx context.Context, spend *utxostore.Spend) error {
