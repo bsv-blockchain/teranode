@@ -39,61 +39,61 @@ var (
 func init() {
 	prometheusUtxoGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_get",
+			Name: "aerospike_map_utxo_get",
 			Help: "Number of utxo get calls done to aerospike",
 		},
 	)
 	prometheusUtxoStore = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_store",
+			Name: "aerospike_map_utxo_store",
 			Help: "Number of utxo store calls done to aerospike",
 		},
 	)
 	prometheusUtxoStoreSpent = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_store_spent",
+			Name: "aerospike_map_utxo_store_spent",
 			Help: "Number of utxo store calls that were already spent to aerospike",
 		},
 	)
 	prometheusUtxoReStore = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_restore",
+			Name: "aerospike_map_utxo_restore",
 			Help: "Number of utxo restore calls done to aerospike",
 		},
 	)
 	prometheusUtxoSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_spend",
+			Name: "aerospike_map_utxo_spend",
 			Help: "Number of utxo spend calls done to aerospike",
 		},
 	)
 	prometheusUtxoReSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_respend",
+			Name: "aerospike_map_utxo_respend",
 			Help: "Number of utxo respend calls done to aerospike",
 		},
 	)
 	prometheusUtxoSpendSpent = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_spend_spent",
+			Name: "aerospike_map_utxo_spend_spent",
 			Help: "Number of utxo spend calls that were already spent done to aerospike",
 		},
 	)
 	prometheusUtxoReset = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_reset",
+			Name: "aerospike_map_utxo_reset",
 			Help: "Number of utxo reset calls done to aerospike",
 		},
 	)
 	prometheusUtxoDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_delete",
+			Name: "aerospike_map_utxo_delete",
 			Help: "Number of utxo delete calls done to aerospike",
 		},
 	)
 	prometheusUtxoErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_errors",
+			Name: "aerospike_map_utxo_errors",
 			Help: "Number of utxo errors",
 		},
 		[]string{
