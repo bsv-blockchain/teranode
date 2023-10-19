@@ -40,7 +40,8 @@ jobs:
       - name: Install Kustomize
         run: |-
           # Set up kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" > "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
+          bash kustomize.sh -v
           chmod u+x ./kustomize
           cp ./kustomize /usr/local/bin
 
