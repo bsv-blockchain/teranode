@@ -72,10 +72,17 @@ func (m *XsyncMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 	}, nil
 }
 
-func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx) error {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
 	if err != nil {
 		return err
+	}
+
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
 	}
 
 	for _, hash := range utxoHashes {
@@ -88,7 +95,7 @@ func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx) error {
 		} else {
 			m.m.Store(*hash, UTXO{
 				Hash:     nil,
-				LockTime: tx.LockTime,
+				LockTime: storeLockTime,
 			})
 		}
 	}

@@ -99,7 +99,14 @@ func (rr *RedisRing) Get(ctx context.Context, spend *utxostore.Spend) (*utxostor
 	}, nil
 }
 
-func (rr *RedisRing) Store(ctx context.Context, tx *bt.Tx) error {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (rr *RedisRing) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
+	}
+
 	txIDHash := tx.TxIDChainHash()
 
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
@@ -115,7 +122,7 @@ func (rr *RedisRing) Store(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	for outputIdx, hash := range utxoHashes {
-		err := rr.storeUtxo(ctx, hash, tx.LockTime)
+		err := rr.storeUtxo(ctx, hash, storeLockTime)
 		if err != nil {
 			for i := 0; i < outputIdx; i++ {
 				// revert the created utxos

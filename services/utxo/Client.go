@@ -58,9 +58,15 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 	}, nil
 }
 
-func (s *Store) Store(ctx context.Context, tx *bt.Tx) error {
+func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
+	}
+
 	_, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
-		Tx: tx.Bytes(),
+		Tx:       tx.Bytes(),
+		LockTime: storeLockTime,
 	})
 	if err != nil {
 		return err

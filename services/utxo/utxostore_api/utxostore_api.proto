@@ -36,6 +36,7 @@ enum Status {
 // swagger:model StoreRequest
 message StoreRequest {
   bytes tx = 1;
+  uint32 lock_time = 2;
 }
 
 // swagger:model StoreResponse

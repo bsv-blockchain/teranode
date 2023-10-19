@@ -524,9 +524,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("error extracting coinbase height: %v", err)
 	}
 
-	tx := block.CoinbaseTx.Clone()
-	tx.LockTime = blockHeight + 100 // TODO should this not be in the coinbase tx??
-	if err = stp.utxoStore.Store(ctx, tx); err != nil {
+	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		// error will be handled below
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}

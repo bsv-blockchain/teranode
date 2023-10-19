@@ -29,7 +29,7 @@ func (m *NullStore) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.R
 	}, nil
 }
 
-func (m *NullStore) Store(_ context.Context, tx *bt.Tx) error {
+func (m *NullStore) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	return nil
 }
 

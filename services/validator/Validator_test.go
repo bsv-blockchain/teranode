@@ -31,7 +31,7 @@ func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostor
 	return nil, nil
 }
 
-func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx) error {
+func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	// fmt.Printf("Store(%s)\n", hash.String())
 	return nil
 }

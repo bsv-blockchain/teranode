@@ -126,7 +126,7 @@ func (u *UTXOStore) Store(ctx context.Context, req *utxostore_api.StoreRequest) 
 		return nil, err
 	}
 
-	err = u.store.Store(traceSpan.Ctx, tx)
+	err = u.store.Store(traceSpan.Ctx, tx, req.LockTime)
 	if err != nil {
 		return nil, err
 	}

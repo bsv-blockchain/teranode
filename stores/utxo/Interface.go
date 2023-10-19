@@ -27,7 +27,7 @@ type BatchResponse struct {
 type Interface interface {
 	Health(ctx context.Context) (int, string, error)
 	Get(ctx context.Context, spend *Spend) (*Response, error)
-	Store(ctx context.Context, tx *bt.Tx) error
+	Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	Spend(ctx context.Context, spend []*Spend) error
 	Reset(ctx context.Context, spend *Spend) error
 	Delete(ctx context.Context, spend *Spend) error

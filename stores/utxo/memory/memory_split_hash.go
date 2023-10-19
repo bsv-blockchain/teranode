@@ -61,10 +61,17 @@ func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore
 	}, nil
 }
 
-func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx) error {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
 	if err != nil {
 		return err
+	}
+
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
 	}
 
 	var ok bool
@@ -74,7 +81,7 @@ func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx) error {
 			return utxostore.ErrAlreadyExists
 		}
 
-		_, err = m.m[[1]byte{hash[0]}].Store(hash, tx.LockTime)
+		_, err = m.m[[1]byte{hash[0]}].Store(hash, storeLockTime)
 		if err != nil {
 			return err
 		}

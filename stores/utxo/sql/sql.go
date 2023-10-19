@@ -162,9 +162,7 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 		Scan(&lockTime, &txIdBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &utxostore.Response{
-				Status: int(utxostore_api.Status_NOT_FOUND),
-			}, nil
+			return nil, utxostore.ErrNotFound
 		}
 		return nil, err
 	}
@@ -189,10 +187,17 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 	}, nil
 }
 
-func (s *Store) Store(ctx context.Context, tx *bt.Tx) error {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
 	if err != nil {
 		return err
+	}
+
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
 	}
 
 	q := `
@@ -201,11 +206,10 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx) error {
 		VALUES
 	`
 
-	variables := make([]interface{}, 0, len(utxoHashes)+1)
-	variables = append(variables, tx.LockTime)
+	variables := make([]interface{}, 0, len(utxoHashes))
 	for _, hash := range utxoHashes {
 		variables = append(variables, hash[:])
-		q += fmt.Sprintf("($1, $%d),", len(variables))
+		q += fmt.Sprintf("(%d, $%d),", storeLockTime, len(variables))
 	}
 
 	// remove last comma from query
@@ -258,7 +262,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 				} else {
 					return utxostore.ErrSpent
 				}
-			} else if (utxo.LockTime > s.blockHeight && utxo.LockTime < 500000000) || utxo.LockTime > uint32(time.Now().Unix()) {
+			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
 				return utxostore.ErrLockTime
 			}
 		}

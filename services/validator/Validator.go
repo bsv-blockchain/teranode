@@ -109,15 +109,16 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 
 	// save new utxos
 	duplicateValidationRequest := false
-	if err = v.utxoStore.Store(traceSpan.Ctx, tx); err != nil {
-		if errors.Is(err, utxostore.ErrAlreadyExists) {
-			duplicateValidationRequest = true
-		} else {
-			v.reverseSpends(traceSpan, spentUtxos)
-			return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
-		}
-	}
+	//if err = v.utxoStore.Store(traceSpan.Ctx, tx); err != nil {
+	//	if errors.Is(err, utxostore.ErrAlreadyExists) {
+	//		duplicateValidationRequest = true
+	//	} else {
+	//		v.reverseSpends(traceSpan, spentUtxos)
+	//		return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
+	//	}
+	//}
 
+	// TODO how do we detect duplicate validation requests ???!!
 	if duplicateValidationRequest {
 		// this was a duplicate validation request, because the tx already existed in the utxo store
 		// we can just return here and will not send the tx to the block assembler
@@ -208,6 +209,8 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 			utxoSpan.RecordError(err)
 			return nil, fmt.Errorf("error getting input utxo hash: %s", err.Error())
 		}
+
+		// v.logger.Debugf("spending utxo %s:%d -> %s", input.PreviousTxIDChainHash().String(), input.PreviousTxOutIndex, hash.String())
 		spends[idx] = &utxostore.Spend{
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,

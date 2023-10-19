@@ -262,7 +262,9 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	}, nil
 }
 
-func (s *Store) Store(_ context.Context, tx *bt.Tx) error {
+// Store stores the utxos of the tx in aerospike
+// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
+func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -279,8 +281,13 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx) error {
 		return fmt.Errorf("Failed to get fees and utxo hashes: %v\n", err)
 	}
 
+	storeLockTime := tx.LockTime
+	if len(lockTime) > 0 {
+		storeLockTime = lockTime[0]
+	}
+
 	for _, hash := range utxoHashes {
-		err = s.storeUtxo(policy, hash, tx.LockTime)
+		err = s.storeUtxo(policy, hash, storeLockTime)
 		if err != nil {
 			// TODO reverse utxos that were already stored
 			return err
