@@ -22,13 +22,11 @@
       }
     })
 
-    nodes = Object.values(uniqueNodes)
-
     // sort the nodesData by name
-    nodes = nodes.sort((a, b) => {
-      if (a.name < b.name) {
+    nodes = Object.values(uniqueNodes).sort((a, b) => {
+      if (a.base_url < b.base_url) {
         return -1
-      } else if (a.name > b.name) {
+      } else if (a.base_url > b.base_url) {
         return 1
       } else {
         return 0
