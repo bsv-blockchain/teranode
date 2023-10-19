@@ -97,14 +97,12 @@ func (m *SwissMap) Spend(ctx context.Context, spends []*utxostore.Spend) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for idx, spend := range spends {
+	for _, spend := range spends {
 		err := m.spendUtxo(spend.Hash, spend.SpendingTxID)
 		if err != nil {
-			for i := 0; i < idx; i++ {
-				err = m.Reset(ctx, spends[i])
-				if err != nil {
-					fmt.Printf("ERROR: could not reset utxo %s: %s\n", spends[i].Hash, err)
-				}
+			err = m.UnSpend(ctx, spends)
+			if err != nil {
+				fmt.Printf("ERROR: could not reset utxo %s\n", err)
 			}
 			return err
 		}
@@ -142,16 +140,18 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 	return nil
 }
 
-func (m *SwissMap) Reset(_ context.Context, spend *utxostore.Spend) error {
+func (m *SwissMap) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	utxo, ok := m.m.Get(*spend.Hash)
-	if ok {
-		m.m.Put(*spend.Hash, UTXO{
-			Hash:     nil,
-			LockTime: utxo.LockTime,
-		})
+	for _, spend := range spends {
+		utxo, ok := m.m.Get(*spend.Hash)
+		if ok {
+			m.m.Put(*spend.Hash, UTXO{
+				Hash:     nil,
+				LockTime: utxo.LockTime,
+			})
+		}
 	}
 
 	return nil

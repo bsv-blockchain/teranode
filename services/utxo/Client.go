@@ -76,13 +76,11 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) error {
-	for idx, spend := range spends {
+	for _, spend := range spends {
 		err := s.spend(ctx, spend)
 		if err != nil {
-			for i := 0; i < idx; i++ {
-				// revert the created utxos
-				_ = s.Reset(ctx, spends[i])
-			}
+			// revert the created utxos
+			_ = s.UnSpend(ctx, spends)
 			return err
 		}
 	}
@@ -104,14 +102,16 @@ func (s *Store) spend(ctx context.Context, spend *utxostore.Spend) error {
 	return nil
 }
 
-func (s *Store) Reset(ctx context.Context, spend *utxostore.Spend) error {
-	_, err := s.db.Reset(ctx, &utxostore_api.Request{
-		TxId:     spend.TxID.CloneBytes(),
-		Vout:     spend.Vout,
-		UxtoHash: spend.Hash.CloneBytes(),
-	})
-	if err != nil {
-		return err
+func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+	for _, spend := range spends {
+		_, err := s.db.Reset(ctx, &utxostore_api.Request{
+			TxId:     spend.TxID.CloneBytes(),
+			Vout:     spend.Vout,
+			UxtoHash: spend.Hash.CloneBytes(),
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

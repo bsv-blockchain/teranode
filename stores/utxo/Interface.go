@@ -29,7 +29,7 @@ type Interface interface {
 	Get(ctx context.Context, spend *Spend) (*Response, error)
 	Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	Spend(ctx context.Context, spend []*Spend) error
-	Reset(ctx context.Context, spend *Spend) error
+	UnSpend(ctx context.Context, spend []*Spend) error
 	Delete(ctx context.Context, spend *Spend) error
 	DeleteSpends(deleteSpends bool)
 	SetBlockHeight(height uint32) error

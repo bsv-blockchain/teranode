@@ -37,7 +37,7 @@ func (m *NullStore) Spend(_ context.Context, spend []*utxostore.Spend) error {
 	return nil
 }
 
-func (m *NullStore) Reset(ctx context.Context, spend *utxostore.Spend) error {
+func (m *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 

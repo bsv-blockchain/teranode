@@ -139,17 +139,19 @@ func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 	return utxostore.ErrNotFound
 }
 
-func (m *Memory) Reset(_ context.Context, spend *utxostore.Spend) error {
+func (m *Memory) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	utxo, ok := m.m[*spend.Hash]
-	if !ok {
-		return utxostore.ErrNotFound
-	}
+	for _, spend := range spends {
+		utxo, ok := m.m[*spend.Hash]
+		if !ok {
+			return utxostore.ErrNotFound
+		}
 
-	utxo.Hash = nil
-	m.m[*spend.Hash] = utxo
+		utxo.Hash = nil
+		m.m[*spend.Hash] = utxo
+	}
 
 	return nil
 }

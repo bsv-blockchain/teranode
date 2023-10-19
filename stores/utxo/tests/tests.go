@@ -84,7 +84,7 @@ func Restore(t *testing.T, db utxostore.Interface) {
 	require.NoError(t, err)
 
 	// try to reset the utxo
-	err = db.Reset(ctx, testSpend0)
+	err = db.UnSpend(ctx, spends)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, testSpend0)
@@ -182,7 +182,7 @@ func Benchmark(b *testing.B, db utxostore.Interface) {
 			b.Fatal(err)
 		}
 
-		err = db.Reset(ctx, testSpend0)
+		err = db.UnSpend(ctx, spends)
 		if err != nil {
 			b.Fatal(err)
 		}

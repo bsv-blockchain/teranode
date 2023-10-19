@@ -114,12 +114,14 @@ func (m *SplitByHash) Spend(_ context.Context, spends []*utxostore.Spend) error 
 	return nil
 }
 
-func (m *SplitByHash) Reset(_ context.Context, spend *utxostore.Spend) error {
-	memMap := m.m[[1]byte{spend.Hash[0]}]
-	_, ok := memMap.Get(spend.Hash)
+func (m *SplitByHash) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
+	for _, spend := range spends {
+		memMap := m.m[[1]byte{spend.Hash[0]}]
+		_, ok := memMap.Get(spend.Hash)
 
-	if ok {
-		memMap.Set(spend.Hash, nil)
+		if ok {
+			memMap.Set(spend.Hash, nil)
+		}
 	}
 
 	return nil

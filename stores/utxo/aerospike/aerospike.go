@@ -451,7 +451,17 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend,
 	return nil
 }
 
-func (s *Store) Reset(_ context.Context, spend *utxostore.Spend) error {
+func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	for _, spend := range spends {
+		if err = s.unSpend(ctx, spend); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	readOptions := make([]util.AerospikeReadPolicyOptions, 0)
 	writeOptions := make([]util.AerospikeWritePolicyOptions, 0)
 

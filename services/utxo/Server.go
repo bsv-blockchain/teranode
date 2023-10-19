@@ -164,7 +164,7 @@ func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.Request) (*emp
 		return nil, err
 	}
 
-	err = u.store.Reset(traceSpan.Ctx, spend[0])
+	err = u.store.UnSpend(traceSpan.Ctx, spend)
 	if err != nil {
 		return nil, err
 	}

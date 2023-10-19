@@ -267,7 +267,17 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	return nil
 }
 
-func (s *Store) Reset(ctx context.Context, spend *utxostore.Spend) error {
+func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+	for _, spend := range spends {
+		if err := s.unSpend(ctx, spend); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 	q := `
 		UPDATE utxos
 		SET tx_id = NULL

@@ -179,11 +179,11 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, hash[:], utxoSpendTxID)
 
 		// try to reset the utxo
-		err = db.Reset(context.Background(), &utxostore.Spend{
+		err = db.UnSpend(context.Background(), []*utxostore.Spend{{
 			TxID: tx2.TxIDChainHash(),
 			Vout: 0,
 			Hash: utxoHash0,
-		})
+		}})
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)

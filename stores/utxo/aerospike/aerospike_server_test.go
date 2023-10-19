@@ -174,7 +174,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 
 		// try to reset the utxo
-		err = db.Reset(context.Background(), &utxostore.Spend{
+		err = db.UnSpend(context.Background(), &utxostore.Spend{
 			TxID: tx2.TxIDChainHash(),
 			Vout: 0,
 			Hash: utxoHash0,

@@ -275,11 +275,9 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
 	defer reverseUtxoSpan.Finish()
 
-	for _, spend := range spentUtxos {
-		if errReset := v.utxoStore.Reset(reverseUtxoSpan.Ctx, spend); errReset != nil {
-			reverseUtxoSpan.RecordError(errReset)
-			v.logger.Errorf("error resetting utxo %s:%d: %v", spend.TxID.String(), spend.Vout, errReset)
-		}
+	if errReset := v.utxoStore.UnSpend(reverseUtxoSpan.Ctx, spentUtxos); errReset != nil {
+		reverseUtxoSpan.RecordError(errReset)
+		v.logger.Errorf("error resetting utxos %v", errReset)
 	}
 }
 

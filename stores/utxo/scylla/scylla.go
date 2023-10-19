@@ -156,25 +156,23 @@ func (s *Scylla) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	return nil
 }
 
-func (s *Scylla) storeUtxo(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) error {
-
-	// TODO lock time
-	if err := s.session.Query(`INSERT INTO utxos (hash) VALUES (?)`,
-		hash[:]).Exec(); err != nil {
-		return utxostore.ErrAlreadyExists
-	}
-
-	return nil
-}
+//func (s *Scylla) storeUtxo(ctx context.Context, hash *chainhash.Hash, nLockTime uint32) error {
+//
+//	// TODO lock time
+//	if err := s.session.Query(`INSERT INTO utxos (hash) VALUES (?)`,
+//		hash[:]).Exec(); err != nil {
+//		return utxostore.ErrAlreadyExists
+//	}
+//
+//	return nil
+//}
 
 func (s *Scylla) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
 
-	for idx, spend := range spends {
+	for _, spend := range spends {
 		if err = s.spendUtxo(ctx, spend.Hash, spend.SpendingTxID); err != nil {
-			for i := 0; i < idx; i++ {
-				// revert the created utxos
-				_ = s.Reset(ctx, spends[i])
-			}
+			// revert the created utxos
+			_ = s.UnSpend(ctx, spends)
 			return err
 		}
 	}
@@ -212,12 +210,12 @@ func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId
 
 	iter := s.session.Query(query, spendingTxId[:], hash[:]).Iter()
 	if !iter.MapScan(resultMap) {
-		return fmt.Errorf("Could not scan result map")
+		return fmt.Errorf("could not scan result map")
 	}
 
 	applied, ok := resultMap["[applied]"].(bool)
 	if !ok {
-		return fmt.Errorf("Could not read applied status")
+		return fmt.Errorf("could not read applied status")
 	}
 
 	spendingTxIdFromDb, ok := resultMap["spendingtxid"].([]byte)
@@ -238,7 +236,17 @@ func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId
 	}
 }
 
-func (s *Scylla) Reset(_ context.Context, spend *utxostore.Spend) error {
+func (s *Scylla) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+	for _, spend := range spends {
+		if err := s.unSpend(ctx, spend); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Scylla) unSpend(_ context.Context, spend *utxostore.Spend) error {
 
 	if err := s.session.Query(`UPDATE utxos SET spendingTxId = null WHERE hash = ?`, spend.Hash[:]).Exec(); err != nil {
 		return err
