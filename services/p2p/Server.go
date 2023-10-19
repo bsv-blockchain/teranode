@@ -247,12 +247,7 @@ func (s *Server) Start(ctx context.Context) error {
 					if err := s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
-					s.notificationCh <- &notificationMsg{
-						Type:    "block",
-						Hash:    notification.Hash.String(),
-						BaseURL: s.blobServerHttpAddressURL,
-						PeerId:  s.host.ID().String(),
-					}
+
 				} else if notification.Type == model.NotificationType_Subtree {
 					// if it's a subtree notification send it on the subtree channel.
 					sm := SubtreeMessage{
@@ -267,12 +262,6 @@ func (s *Server) Start(ctx context.Context) error {
 					}
 					if err := s.topics[subtreeTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
-					}
-					s.notificationCh <- &notificationMsg{
-						Type:    "subtree",
-						Hash:    notification.Hash.String(),
-						BaseURL: s.blobServerHttpAddressURL,
-						PeerId:  s.host.ID().String(),
 					}
 				}
 			}
@@ -520,14 +509,22 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			s.logger.Errorf("error getting msg from block topic: %v", err)
 			continue
 		}
+		// decode request
+		msg := new(BlockMessage)
+		err = json.Unmarshal(m.Data, msg)
+		if err != nil {
+			s.logger.Errorf("json unmarshal error: ", err)
+			continue
+		}
+
+		s.notificationCh <- &notificationMsg{
+			Type:    "block",
+			Hash:    msg.Hash,
+			BaseURL: msg.DataHubUrl,
+			PeerId:  msg.PeerId,
+		}
+
 		if m.ReceivedFrom != s.host.ID() {
-			// decode request
-			msg := new(BlockMessage)
-			err = json.Unmarshal(m.Data, msg)
-			if err != nil {
-				s.logger.Errorf("json unmarshal error: ", err)
-				continue
-			}
 			s.logger.Debugf("BLOCK: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
 			validationClient := blockvalidation.NewClient(ctx)
 			hash, err := chainhash.NewHashFromStr(msg.Hash)
@@ -551,14 +548,22 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 			s.logger.Errorf("error getting msg from subtree topic: %v", err)
 			continue
 		}
+		// decode request
+		msg := new(SubtreeMessage)
+		err = json.Unmarshal(m.Data, msg)
+		if err != nil {
+			s.logger.Errorf("json unmarshal error: ", err)
+			continue
+		}
+
+		s.notificationCh <- &notificationMsg{
+			Type:    "subtree",
+			Hash:    msg.Hash,
+			BaseURL: msg.DataHubUrl,
+			PeerId:  msg.PeerId,
+		}
+
 		if m.ReceivedFrom != s.host.ID() {
-			// decode request
-			msg := new(SubtreeMessage)
-			err = json.Unmarshal(m.Data, msg)
-			if err != nil {
-				s.logger.Errorf("json unmarshal error: ", err)
-				continue
-			}
 			s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
 			validationClient := blockvalidation.NewClient(ctx)
 			hash, err := chainhash.NewHashFromStr(msg.Hash)
@@ -569,7 +574,6 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 			if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
 				s.logger.Errorf("[p2p] error validating subtree from %s: %s", msg.DataHubUrl, err)
 			}
-
 		} else {
 			s.logger.Debugf("subtree message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
 		}
