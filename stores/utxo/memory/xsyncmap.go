@@ -103,12 +103,14 @@ func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error
 }
 
 func (m *XsyncMap) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
-	for _, spend := range spends {
+	for idx, spend := range spends {
 		err = m.spendUtxo(spend.Hash, spend.SpendingTxID)
 		if err != nil {
-			err = m.UnSpend(ctx, spends)
-			if err != nil {
-				fmt.Printf("error resetting utxo: %s\n", err.Error())
+			for i := 0; i < idx; i++ {
+				err = m.unSpend(spends[i])
+				if err != nil {
+					fmt.Printf("error unspending utxo: %s\n", err.Error())
+				}
 			}
 			return err
 		}
@@ -143,16 +145,25 @@ func (m *XsyncMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 
 func (m *XsyncMap) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	for _, spend := range spends {
-		utxo, ok := m.m.Load(*spend.Hash)
-		if !ok {
-			return utxostore.ErrNotFound
+		err := m.unSpend(spend)
+		if err != nil {
+			return err
 		}
-
-		m.m.Store(*spend.Hash, UTXO{
-			Hash:     nil,
-			LockTime: utxo.LockTime,
-		})
 	}
+
+	return nil
+}
+
+func (m *XsyncMap) unSpend(spend *utxostore.Spend) error {
+	utxo, ok := m.m.Load(*spend.Hash)
+	if !ok {
+		return utxostore.ErrNotFound
+	}
+
+	m.m.Store(*spend.Hash, UTXO{
+		Hash:     nil,
+		LockTime: utxo.LockTime,
+	})
 
 	return nil
 }

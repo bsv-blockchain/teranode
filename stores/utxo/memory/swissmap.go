@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
@@ -97,12 +96,11 @@ func (m *SwissMap) Spend(ctx context.Context, spends []*utxostore.Spend) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, spend := range spends {
+	for idx, spend := range spends {
 		err := m.spendUtxo(spend.Hash, spend.SpendingTxID)
 		if err != nil {
-			err = m.UnSpend(ctx, spends)
-			if err != nil {
-				fmt.Printf("ERROR: could not reset utxo %s\n", err)
+			for i := 0; i < idx; i++ {
+				m.unSpend(spends[i])
 			}
 			return err
 		}
@@ -145,16 +143,20 @@ func (m *SwissMap) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	defer m.mu.Unlock()
 
 	for _, spend := range spends {
-		utxo, ok := m.m.Get(*spend.Hash)
-		if ok {
-			m.m.Put(*spend.Hash, UTXO{
-				Hash:     nil,
-				LockTime: utxo.LockTime,
-			})
-		}
+		m.unSpend(spend)
 	}
 
 	return nil
+}
+
+func (m *SwissMap) unSpend(spend *utxostore.Spend) {
+	utxo, ok := m.m.Get(*spend.Hash)
+	if ok {
+		m.m.Put(*spend.Hash, UTXO{
+			Hash:     nil,
+			LockTime: utxo.LockTime,
+		})
+	}
 }
 
 func (m *SwissMap) Delete(_ context.Context, spend *utxostore.Spend) error {

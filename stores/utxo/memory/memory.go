@@ -101,9 +101,15 @@ func (m *Memory) Spend(_ context.Context, spends []*utxostore.Spend) (err error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, spend := range spends {
+	for idx, spend := range spends {
 		err = m.spendUtxo(spend)
 		if err != nil {
+			for i := 0; i < idx; i++ {
+				err = m.unSpend(spends[i])
+				if err != nil {
+					return err
+				}
+			}
 			return err
 		}
 	}
@@ -144,14 +150,23 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	defer m.mu.Unlock()
 
 	for _, spend := range spends {
-		utxo, ok := m.m[*spend.Hash]
-		if !ok {
-			return utxostore.ErrNotFound
+		err := m.unSpend(spend)
+		if err != nil {
+			return err
 		}
-
-		utxo.Hash = nil
-		m.m[*spend.Hash] = utxo
 	}
+
+	return nil
+}
+
+func (m *Memory) unSpend(spend *utxostore.Spend) error {
+	utxo, ok := m.m[*spend.Hash]
+	if !ok {
+		return utxostore.ErrNotFound
+	}
+
+	utxo.Hash = nil
+	m.m[*spend.Hash] = utxo
 
 	return nil
 }
