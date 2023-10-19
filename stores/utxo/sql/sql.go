@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
@@ -175,13 +174,8 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 		}
 	}
 
-	status := utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)
-	if txHash != nil && spend.SpendingTxID.IsEqual(txHash) {
-		status = utxostore_api.Status_OK
-	}
-
 	return &utxostore.Response{
-		Status:       int(status),
+		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)),
 		LockTime:     lockTime,
 		SpendingTxID: txHash,
 	}, nil

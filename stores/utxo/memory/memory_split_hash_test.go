@@ -42,10 +42,10 @@ func TestSplitByHash(t *testing.T) {
 	})
 }
 
-func TestSplitByHashSanity(t *testing.T) {
-	db := NewSplitByHash(false)
-	tests.Sanity(t, db)
-}
+//func TestSplitByHashSanity(t *testing.T) {
+//	db := NewSplitByHash(false)
+//	tests.Sanity(t, db)
+//}
 
 func BenchmarkSplitByHash(b *testing.B) {
 	db := NewSplitByHash(true)

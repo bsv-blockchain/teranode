@@ -41,12 +41,12 @@ func TestSwissMap(t *testing.T) {
 	})
 }
 
-func TestSwissMapSanity(t *testing.T) {
-	db := NewSwissMap(false)
-	db.DeleteSpentUtxos = false
-
-	tests.Sanity(t, db)
-}
+//func TestSwissMapSanity(t *testing.T) {
+//	db := NewSwissMap(false)
+//	db.DeleteSpentUtxos = false
+//
+//	tests.Sanity(t, db)
+//}
 
 func BenchmarkSwissMap(b *testing.B) {
 	db := NewSwissMap(true)

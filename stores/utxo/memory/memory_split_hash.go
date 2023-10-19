@@ -42,11 +42,10 @@ func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore
 	memMap := m.m[[1]byte{spend.Hash[0]}]
 
 	if utxo, ok := memMap.Get(spend.Hash); ok {
-		if utxo.Hash == nil || utxo.Hash.IsEqual(spend.SpendingTxID) {
+		if utxo.Hash == nil {
 			return &utxostore.Response{
-				Status:       int(utxostore_api.Status_OK),
-				SpendingTxID: utxo.Hash,
-				LockTime:     utxo.LockTime,
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 		return &utxostore.Response{

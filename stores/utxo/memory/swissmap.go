@@ -44,11 +44,10 @@ func (m *SwissMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 	defer m.mu.Unlock()
 
 	if utxo, ok := m.m.Get(*spend.Hash); ok {
-		if utxo.Hash == nil || utxo.Hash.IsEqual(spend.SpendingTxID) {
+		if utxo.Hash == nil {
 			return &utxostore.Response{
-				Status:       int(utxostore_api.Status_OK),
-				SpendingTxID: utxo.Hash,
-				LockTime:     utxo.LockTime,
+				Status:   int(utxostore_api.Status_OK),
+				LockTime: utxo.LockTime,
 			}, nil
 		}
 

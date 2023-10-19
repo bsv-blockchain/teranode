@@ -119,42 +119,52 @@ func LockTime(t *testing.T, db utxostore.Interface) {
 
 	resp, err := db.Get(ctx, spends[0])
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
-	require.Equal(t, Hash, resp.SpendingTxID)
+	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+	require.Equal(t, *Hash, *resp.SpendingTxID)
 }
 
-// Sanity This does not work anymore, needs to be fixed
 func Sanity(t *testing.T, db utxostore.Interface) {
-	util.SkipLongTests(t)
 	ctx := context.Background()
 
 	var resp *utxostore.Response
 	var err error
-	//bs := make([]byte, 32)
-	for i := uint64(0); i < 1_000_000; i++ {
-		//binary.LittleEndian.PutUint64(bs, i)
-		//ii := chainhash.HashH(bs)
-		//binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		//iii := chainhash.HashH(bs)
-
-		err = db.Store(ctx, tx)
+	for i := uint64(0); i < 1_000; i++ {
+		stx := bt.NewTx()
+		err = stx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i+2_000_000)
 		require.NoError(t, err)
 
-		err = db.Spend(ctx, spends)
+		err = db.Store(ctx, stx)
+		require.NoError(t, err)
+
+		utxoHash, err := util.UTXOHashFromOutput(stx.TxIDChainHash(), stx.Outputs[0], 0)
+		require.NoError(t, err)
+
+		err = db.Spend(ctx, []*utxostore.Spend{{
+			TxID:         stx.TxIDChainHash(),
+			Vout:         0,
+			Hash:         utxoHash,
+			SpendingTxID: Hash,
+		}})
 		require.NoError(t, err)
 	}
 
-	for i := uint64(0); i < 1_000_000; i++ {
-		// check values
-		//binary.LittleEndian.PutUint64(bs, i)
-		//ii := chainhash.HashH(bs)
-		//binary.LittleEndian.PutUint64(bs, i+2_000_000)
-		//iii := chainhash.HashH(bs)
+	for i := uint64(0); i < 1_000; i++ {
+		stx := bt.NewTx()
+		err = stx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i+2_000_000)
+		require.NoError(t, err)
 
-		resp, err = db.Get(ctx, testSpend0)
+		utxoHash, err := util.UTXOHashFromOutput(stx.TxIDChainHash(), stx.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err = db.Get(ctx, &utxostore.Spend{
+			TxID:         stx.TxIDChainHash(),
+			Vout:         0,
+			Hash:         utxoHash,
+			SpendingTxID: Hash,
+		})
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
-		//require.Equal(t, iii, *resp.SpendingTxID)
+		require.Equal(t, *Hash, *resp.SpendingTxID)
 	}
 }
 

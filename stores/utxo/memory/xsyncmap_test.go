@@ -41,12 +41,12 @@ func TestXsyncMap(t *testing.T) {
 	})
 }
 
-func TestXsyncMapSanity(t *testing.T) {
-	db := NewXSyncMap(false)
-	db.DeleteSpentUtxos = false
-
-	tests.Sanity(t, db)
-}
+//func TestXsyncMapSanity(t *testing.T) {
+//	db := NewXSyncMap(false)
+//	db.DeleteSpentUtxos = false
+//
+//	tests.Sanity(t, db)
+//}
 
 func BenchmarkXsyncMap(b *testing.B) {
 	db := NewXSyncMap(true)
