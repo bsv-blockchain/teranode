@@ -341,15 +341,15 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	// TODO use a database transaction, when available in new version of aerospike
-	for idx, spend := range spends {
+	for _, spend := range spends {
 		err = s.spendUtxo(policy, spend)
 		if err != nil {
 			// error encountered, reverse all spends and return error
-			for i := 0; i < idx; i++ {
-				if resetErr := s.Reset(context.Background(), spends[i]); resetErr != nil {
-					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
-				}
-			}
+			// for i := 0; i < idx; i++ {
+			// 	if resetErr := s.Reset(context.Background(), spends[i]); resetErr != nil {
+			// 		s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
+			// 	}
+			// }
 
 			return err
 		}
