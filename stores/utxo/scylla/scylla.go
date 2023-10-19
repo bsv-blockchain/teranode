@@ -2,6 +2,7 @@ package scylla
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/url"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
+
+const batchSize = 200
 
 type UTXO struct {
 	Hash         []byte
@@ -71,7 +74,7 @@ func (s *Scylla) Health(ctx context.Context) (int, string, error) {
 func (s *Scylla) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	var res *UTXO
 
-	if err := s.session.Query(`SELECT * FROM utxos WHERE hash = ? LIMIT 1`, spend.Hash[:]).Scan(res.Hash, res.SpendingTxId, res.LockTime); err != nil {
+	if err := s.session.Query(`SELECT hash, spendingTxId, lockTime FROM utxos WHERE hash = ? LIMIT 1`, spend.Hash[:]).Scan(res.Hash, res.SpendingTxId, res.LockTime); err != nil {
 		return nil, err
 	}
 
@@ -102,7 +105,7 @@ func (s *Scylla) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Re
 	}, nil
 }
 
-// Store stores the utxos of the tx in aerospike
+// Store stores the utxos of the tx in scylla
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (s *Scylla) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	storeLockTime := tx.LockTime
@@ -112,33 +115,44 @@ func (s *Scylla) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 
 	txIDHash := tx.TxIDChainHash()
 
-	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
+	batch := s.session.NewBatch(gocql.LoggedBatch)
+
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 { // only do outputs with value
 			hash, err := util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 			if err != nil {
 				return err
 			}
+			batch.Query(`INSERT INTO utxos (hash, lockTime) VALUES (?,?)`, hash[:], storeLockTime)
 
-			utxoHashes[i] = hash
-		}
-	}
-
-	for outputIdx, hash := range utxoHashes {
-		err := s.storeUtxo(ctx, hash, storeLockTime)
-		if err != nil {
-			for i := 0; i < outputIdx; i++ {
-				// revert the created utxos
-				_ = s.Delete(ctx, &utxostore.Spend{
-					TxID: txIDHash,
-					Vout: uint32(i),
-					Hash: hash,
-				})
+			if batch.Size() >= batchSize {
+				if err := s.session.ExecuteBatch(batch); err != nil {
+					return err
+				}
+				batch = s.session.NewBatch(gocql.LoggedBatch)
 			}
-			return err
+			if batch.Size() > 0 {
+				if err := s.session.ExecuteBatch(batch); err != nil {
+					return err
+				}
+			}
 		}
-	}
 
+		// for outputIdx, hash := range utxoHashes {
+		// 	err := s.storeUtxo(ctx, hash, storeLockTime)
+		// 	if err != nil {
+		// 		for i := 0; i < outputIdx; i++ {
+		// 			// revert the created utxos
+		// 			_ = s.Delete(ctx, &utxostore.Spend{
+		// 				TxID: txIDHash,
+		// 				Vout: uint32(i),
+		// 				Hash: hash,
+		// 			})
+		// 		}
+		// 		return err
+		// 	}
+		// }
+	}
 	return nil
 }
 
@@ -154,6 +168,7 @@ func (s *Scylla) storeUtxo(ctx context.Context, hash *chainhash.Hash, nLockTime 
 }
 
 func (s *Scylla) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+
 	for idx, spend := range spends {
 		if err = s.spendUtxo(ctx, spend.Hash, spend.SpendingTxID); err != nil {
 			for i := 0; i < idx; i++ {
@@ -171,7 +186,7 @@ func (s *Scylla) Spend(ctx context.Context, spends []*utxostore.Spend) (err erro
 func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId *chainhash.Hash) error {
 	var res UTXO
 
-	if err := s.session.Query(`SELECT * FROM utxos WHERE hash = ? LIMIT 1`, hash[:]).Scan(&res.Hash, &res.SpendingTxId, &res.LockTime); err != nil {
+	if err := s.session.Query(`SELECT hash, spendingTxId, lockTime FROM utxos WHERE hash = ? LIMIT 1`, hash[:]).Scan(&res.Hash, &res.SpendingTxId, &res.LockTime); err != nil {
 		return utxostore.ErrNotFound
 	}
 
@@ -188,24 +203,38 @@ func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId
 	}
 
 	// spent by someone else
-	if string(res.SpendingTxId) != string(spendingTxId[:]) {
+	if string(res.SpendingTxId) != "" && string(res.SpendingTxId) != string(spendingTxId[:]) {
 		return utxostore.ErrSpent
 	}
 
 	query := `UPDATE utxos SET spendingTxId = ? WHERE hash = ? IF spendingTxId = null`
-	var applied bool
-	iter := s.session.Query(query, spendingTxId, hash).Iter()
-	iter.Scan(&applied)
-	if err := iter.Close(); err != nil {
-		return err
+	resultMap := make(map[string]interface{})
+
+	iter := s.session.Query(query, spendingTxId[:], hash[:]).Iter()
+	if !iter.MapScan(resultMap) {
+		return fmt.Errorf("Could not scan result map")
+	}
+
+	applied, ok := resultMap["[applied]"].(bool)
+	if !ok {
+		return fmt.Errorf("Could not read applied status")
+	}
+
+	spendingTxIdFromDb, ok := resultMap["spendingtxid"].([]byte)
+	if !ok {
+		log.Printf("Could not read spendingtxid from result map")
 	}
 
 	if applied {
-		log.Printf("Successfully set spendingTxId for UTXO with hash: %x", hash)
 		return nil
 	} else {
-		log.Printf("couldn't set spendingTxId for UTXO with hash: %x", hash)
-		return utxostore.ErrSpent
+		// log.Printf("resultMap: %+v", resultMap)
+		// log.Printf("applied: %+v", applied)
+		// log.Printf("spendingTxIdFromDb: %x", spendingTxIdFromDb)
+		if string(spendingTxIdFromDb) == string(hash[:]) {
+			return nil
+		}
+		return fmt.Errorf("couldn't set spendingTxId for UTXO with hash: %x", hash[:])
 	}
 }
 

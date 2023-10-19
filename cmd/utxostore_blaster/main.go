@@ -200,11 +200,11 @@ func worker(logger utils.Logger) {
 			panic(err)
 		}
 		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))
-
 		// Spend the txid
 		timeStart = time.Now()
 		if err = utxostore.Spend(ctx, []*utxo.Spend{spend}); err != nil {
-			panic(err)
+			logger.Errorf("couldn't spend utxo: %+v", err)
+			// panic(err)
 		}
 		prometheusUtxoStoreBlasterSpend.Observe(float64(time.Since(timeStart).Microseconds()))
 
