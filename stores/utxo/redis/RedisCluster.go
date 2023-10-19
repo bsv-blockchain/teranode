@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"strings"
 	"sync"
@@ -127,74 +126,7 @@ func (rr *RedisCluster) BatchStore(ctx context.Context, hashes []*chainhash.Hash
 }
 
 func (rr *RedisCluster) Spend(ctx context.Context, hash *chainhash.Hash, spendingTxID *chainhash.Hash) (*utxostore.UTXOResponse, error) {
-	var v *Value
-
-	err := rr.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		res := tx.Get(ctx, hash.String())
-
-		if res.Err() != nil {
-			return res.Err()
-		}
-
-		if res.Err() == redis.Nil {
-			return errNotFound
-		}
-
-		v = NewValueFromString(res.Val())
-
-		// Can we spend it?
-		if v.SpendingTxID != nil && v.SpendingTxID.String() != spendingTxID.String() {
-			return errSpent
-		}
-
-		if v.LockTime > 500000000 && int64(v.LockTime) > time.Now().UTC().Unix() {
-			return errLocked
-		}
-
-		if v.LockTime > 0 && v.LockTime < rr.getBlockHeight() {
-			return errLocked
-		}
-
-		// Spend it.
-		v.SpendingTxID = spendingTxID
-
-		// Operation is committed only if the watched keys remain unchanged.
-		_, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			res2 := pipe.Set(ctx, hash.String(), v.String(), 0)
-			return res2.Err()
-		})
-		if err != nil {
-			return err
-		}
-
-		return nil
-	}, hash.String())
-
-	if err != nil {
-		if errors.Is(err, errNotFound) {
-			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_NOT_FOUND),
-			}, nil
-		}
-
-		if errors.Is(err, errSpent) {
-			return &utxostore.UTXOResponse{
-				Status:       int(utxostore_api.Status_SPENT),
-				SpendingTxID: v.SpendingTxID,
-			}, nil
-		}
-
-		if errors.Is(err, errWatchFailed) {
-			// Someone else is spent it.
-			return &utxostore.UTXOResponse{
-				Status: int(utxostore_api.Status_SPENT),
-			}, nil
-		}
-	}
-
-	return &utxostore.UTXOResponse{
-		Status: int(utxostore_api.Status_OK),
-	}, nil
+	return spend(ctx, rr.rdb, hash, spendingTxID, rr.getBlockHeight())
 }
 
 func (rr *RedisCluster) Reset(ctx context.Context, hash *chainhash.Hash) (*utxostore.UTXOResponse, error) {
