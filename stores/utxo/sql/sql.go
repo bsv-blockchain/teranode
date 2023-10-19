@@ -292,12 +292,12 @@ func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, spend *utxostore.Spend) error {
+func (s *Store) Delete(ctx context.Context, tx *bt.Tx) error {
 	q := `
 		DELETE FROM utxos
 		WHERE hash = $1
 	`
-	if _, err := s.db.ExecContext(ctx, q, spend.Hash[:]); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, tx.TxIDChainHash()[:]); err != nil {
 		return err
 	}
 

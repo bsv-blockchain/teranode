@@ -127,9 +127,10 @@ func (m *SplitByHash) UnSpend(_ context.Context, spends []*utxostore.Spend) erro
 	return nil
 }
 
-func (m *SplitByHash) Delete(_ context.Context, spend *utxostore.Spend) error {
-	memMap := m.m[[1]byte{spend.Hash[0]}]
-	memMap.Delete(spend.Hash)
+func (m *SplitByHash) Delete(_ context.Context, tx *bt.Tx) error {
+	hash := tx.TxIDChainHash()
+	memMap := m.m[[1]byte{hash[0]}]
+	memMap.Delete(hash)
 
 	return nil
 }

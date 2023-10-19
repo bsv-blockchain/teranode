@@ -352,11 +352,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 					return fmt.Errorf("error creating utxo hash: %s", err.Error())
 				}
 
-				if err = stp.utxoStore.Delete(ctx, &utxostore.Spend{
-					TxID: block.CoinbaseTx.TxIDChainHash(),
-					Vout: uint32(outputIdx),
-					Hash: utxoHash,
-				}); err != nil {
+				if err := stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
 					return fmt.Errorf("error deleting utxo (%s): %s", utxoHash, err.Error())
 				}
 			}

@@ -9,7 +9,6 @@ import (
 	// "github.com/aerospike/aerospike-client-go/v6"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -37,7 +36,7 @@ func New(logger utils.Logger, timeout string, addr string, port int, namespace s
 	}
 }
 
-func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -55,33 +54,25 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 			case <-ctx.Done():
 				return
 			default:
-				// Generate a random hash
+				// Generate a dummy tx
 				tx := bt.NewTx()
-				_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i))
-				hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
-				if err != nil {
-					s.logger.Warnf("hash failed: %v\n", err)
-				}
+				hash := chainhash.HashH([]byte(fmt.Sprintf("%d:%d", id, i)))
+				_ = tx.AddOpReturnOutput(hash[:])
+				tx.Outputs[0].Satoshis = uint64(1000)
 
-				err = s.store.Delete(ctx, &utxostore.Spend{
-					TxID: tx.TxIDChainHash(),
-					Vout: 0,
-					Hash: hash,
-				})
-				if err != nil {
+				if err := s.store.Delete(ctx, tx); err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				err = s.store.Store(ctx, tx)
-				if err != nil {
+				if err := s.store.Store(ctx, tx); err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}
 
 				counter++
 
-				spenderCh <- hash
+				spenderCh <- tx
 			}
 		}
 
@@ -90,7 +81,7 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 
 }
 
-func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	spendingTxHash, err := chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
@@ -107,9 +98,9 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 			counterCh <- counter
 		}()
 
-		for hash := range spenderCh {
+		for tx := range spenderCh {
 			err = s.store.Spend(ctx, []*utxostore.Spend{{
-				Hash:         hash,
+				Hash:         tx.TxIDChainHash(),
 				SpendingTxID: spendingTxHash,
 			}})
 			if err != nil {
@@ -118,12 +109,12 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 
 			counter++
 
-			deleterCh <- hash
+			deleterCh <- tx.Clone()
 		}
 	}()
 }
 
-func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -136,9 +127,7 @@ func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *c
 		}()
 
 		for hash := range deleteCh {
-			err := s.store.Delete(ctx, &utxostore.Spend{
-				Hash: hash,
-			})
+			err := s.store.Delete(ctx, hash)
 			if err != nil {
 				s.logger.Warnf("delete failed: %v\n", err)
 			}

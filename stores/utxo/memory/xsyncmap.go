@@ -154,22 +154,8 @@ func (m *XsyncMap) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 
-func (m *XsyncMap) unSpend(spend *utxostore.Spend) error {
-	utxo, ok := m.m.Load(*spend.Hash)
-	if !ok {
-		return utxostore.ErrNotFound
-	}
-
-	m.m.Store(*spend.Hash, UTXO{
-		Hash:     nil,
-		LockTime: utxo.LockTime,
-	})
-
-	return nil
-}
-
-func (m *XsyncMap) Delete(_ context.Context, spend *utxostore.Spend) error {
-	m.m.Delete(*spend.Hash)
+func (m *XsyncMap) Delete(_ context.Context, tx *bt.Tx) error {
+	m.m.Delete(*tx.TxIDChainHash())
 
 	return nil
 }

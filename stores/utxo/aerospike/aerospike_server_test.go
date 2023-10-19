@@ -174,11 +174,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 
 		// try to reset the utxo
-		err = db.UnSpend(context.Background(), &utxostore.Spend{
-			TxID: tx2.TxIDChainHash(),
-			Vout: 0,
-			Hash: utxoHash0,
-		})
+		err = db.UnSpend(context.Background(), spends)
 		require.NoError(t, err)
 
 		key, _ := aero.NewKey(aerospikeNamespace, "utxo", utxoHash0.CloneBytes())

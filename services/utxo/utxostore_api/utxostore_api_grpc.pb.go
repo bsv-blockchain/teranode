@@ -37,7 +37,7 @@ type UtxoStoreAPIClient interface {
 	Store(ctx context.Context, in *StoreRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Spend(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Reset(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	Delete(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Get(ctx context.Context, in *Request, opts ...grpc.CallOption) (*GetResponse, error)
 }
 
@@ -85,7 +85,7 @@ func (c *utxoStoreAPIClient) Reset(ctx context.Context, in *Request, opts ...grp
 	return out, nil
 }
 
-func (c *utxoStoreAPIClient) Delete(ctx context.Context, in *Request, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *utxoStoreAPIClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, UtxoStoreAPI_Delete_FullMethodName, in, out, opts...)
 	if err != nil {
@@ -112,7 +112,7 @@ type UtxoStoreAPIServer interface {
 	Store(context.Context, *StoreRequest) (*emptypb.Empty, error)
 	Spend(context.Context, *Request) (*emptypb.Empty, error)
 	Reset(context.Context, *Request) (*emptypb.Empty, error)
-	Delete(context.Context, *Request) (*emptypb.Empty, error)
+	Delete(context.Context, *DeleteRequest) (*emptypb.Empty, error)
 	Get(context.Context, *Request) (*GetResponse, error)
 	mustEmbedUnimplementedUtxoStoreAPIServer()
 }
@@ -133,7 +133,7 @@ func (UnimplementedUtxoStoreAPIServer) Spend(context.Context, *Request) (*emptyp
 func (UnimplementedUtxoStoreAPIServer) Reset(context.Context, *Request) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Reset not implemented")
 }
-func (UnimplementedUtxoStoreAPIServer) Delete(context.Context, *Request) (*emptypb.Empty, error) {
+func (UnimplementedUtxoStoreAPIServer) Delete(context.Context, *DeleteRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedUtxoStoreAPIServer) Get(context.Context, *Request) (*GetResponse, error) {
@@ -225,7 +225,7 @@ func _UtxoStoreAPI_Reset_Handler(srv interface{}, ctx context.Context, dec func(
 }
 
 func _UtxoStoreAPI_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Request)
+	in := new(DeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func _UtxoStoreAPI_Delete_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: UtxoStoreAPI_Delete_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UtxoStoreAPIServer).Delete(ctx, req.(*Request))
+		return srv.(UtxoStoreAPIServer).Delete(ctx, req.(*DeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

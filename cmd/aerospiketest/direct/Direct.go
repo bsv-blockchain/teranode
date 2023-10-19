@@ -10,6 +10,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 )
@@ -61,7 +62,7 @@ func New(logger utils.Logger, timeoutStr string, addr string, port int, namespac
 	}
 }
 
-func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -91,10 +92,15 @@ func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitG
 				return
 			default:
 
-				// Generate a random hash
+				// Generate a dummy tx
+				tx := bt.NewTx()
+
 				hash := chainhash.HashH([]byte(fmt.Sprintf("%d:%d", id, i)))
 
-				key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
+				_ = tx.AddOpReturnOutput(hash[:])
+				tx.Outputs[0].Satoshis = uint64(1000)
+
+				key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 				if err != nil {
 					s.logger.Errorf("stored failed to create key: %v", err)
 					return
@@ -116,7 +122,7 @@ func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitG
 
 				counter++
 
-				spenderCh <- &hash
+				spenderCh <- tx
 			}
 		}
 
@@ -124,7 +130,7 @@ func (s *Direct) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitG
 	}()
 }
 
-func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	spendingTxHash, err := chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
@@ -152,8 +158,8 @@ func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *
 		policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-		for hash := range spenderCh {
-			key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
+		for tx := range spenderCh {
+			key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 			if err != nil {
 				s.logger.Warnf("spend failed to create key: %v\n", err)
 			}
@@ -206,12 +212,12 @@ func (s *Direct) Spender(_ context.Context, wg *sync.WaitGroup, spenderCh chan *
 				counter++
 			}
 
-			deleterCh <- hash
+			deleterCh <- tx
 		}
 	}()
 }
 
-func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -233,9 +239,9 @@ func (s *Direct) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *c
 		policy.TotalTimeout = 30 * time.Second
 		policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-		for hash := range deleteCh {
+		for tx := range deleteCh {
 
-			key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
+			key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 			if err != nil {
 				s.logger.Errorf("delete failed to create key: %v", err)
 				continue

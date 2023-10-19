@@ -174,16 +174,16 @@ func (u *UTXOStore) Reset(ctx context.Context, req *utxostore_api.Request) (*emp
 	return &emptypb.Empty{}, nil
 }
 
-func (u *UTXOStore) Delete(ctx context.Context, req *utxostore_api.Request) (*emptypb.Empty, error) {
+func (u *UTXOStore) Delete(ctx context.Context, req *utxostore_api.DeleteRequest) (*emptypb.Empty, error) {
 	traceSpan := tracing.Start(ctx, "UTXOStore:Delete")
 	defer traceSpan.Finish()
 
-	spends, err := u.getSpends(req)
+	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		return nil, err
 	}
 
-	err = u.store.Delete(traceSpan.Ctx, spends[0])
+	err = u.store.Delete(traceSpan.Ctx, tx)
 	if err != nil {
 		return nil, err
 	}

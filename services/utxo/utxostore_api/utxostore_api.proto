@@ -13,7 +13,7 @@ service UtxoStoreAPI {
   rpc Store (StoreRequest) returns (google.protobuf.Empty) {}
   rpc Spend (Request) returns (google.protobuf.Empty) {}
   rpc Reset (Request) returns (google.protobuf.Empty) {}
-  rpc Delete (Request) returns (google.protobuf.Empty) {}
+  rpc Delete (DeleteRequest) returns (google.protobuf.Empty) {}
   rpc Get (Request) returns (GetResponse) {}
 }
 
@@ -50,6 +50,11 @@ message Request {
   uint32 vout = 2;
   bytes uxto_hash = 3;
   bytes spending_txid = 4;
+}
+
+// swagger:model DeleteRequest
+message DeleteRequest {
+  bytes tx = 1;
 }
 
 // swagger:model SpendResponse

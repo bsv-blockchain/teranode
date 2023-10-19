@@ -504,7 +504,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	return s.storeUtxo(nil, spend.Hash, uint32(nLockTime))
 }
 
-func (s *Store) Delete(_ context.Context, spend *utxostore.Spend) error {
+func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -514,7 +514,7 @@ func (s *Store) Delete(_ context.Context, spend *utxostore.Spend) error {
 	policy := util.GetAerospikeWritePolicy(0, 0, options...)
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])
+	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
 		s.logger.Errorf("ERROR in aerospike Delete: %v\n", err)

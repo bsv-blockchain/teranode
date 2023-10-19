@@ -100,11 +100,13 @@ func main() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
+	password, _ := gocore.Config().Get("redis_password", "TfocK5PCg7")
+
 	switch storeType {
 	case "redis":
 		storeFn = func() (utxo.Interface, error) {
 			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedis(u)
+			return redis.NewRedisClient(u, password)
 		}
 		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
 	case "redis-ring":
@@ -189,7 +191,7 @@ func worker(logger utils.Logger) {
 
 		// Delete the txid
 		timeStart := time.Now()
-		if err = utxostore.Delete(ctx, spend); err != nil {
+		if err = utxostore.Delete(ctx, btTx); err != nil {
 			panic(err)
 		}
 		prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))

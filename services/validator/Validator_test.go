@@ -46,7 +46,7 @@ func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) err
 	return nil
 }
 
-func (ns *NullStore) Delete(ctx context.Context, spend *utxostore.Spend) error {
+func (ns *NullStore) Delete(ctx context.Context, tx *bt.Tx) error {
 	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
 	return nil
 }

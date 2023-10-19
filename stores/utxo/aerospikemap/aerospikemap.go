@@ -345,11 +345,9 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 		err = s.spendUtxo(policy, spend)
 		if err != nil {
 			// error encountered, reverse all spends and return error
-			// for i := 0; i < idx; i++ {
-			// 	if resetErr := s.Reset(context.Background(), spends[i]); resetErr != nil {
-			// 		s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
-			// 	}
-			// }
+			if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
+				s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
+			}
 
 			return err
 		}
@@ -489,7 +487,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	return err
 }
 
-func (s *Store) Delete(_ context.Context, spend *utxostore.Spend) error {
+func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -499,7 +497,7 @@ func (s *Store) Delete(_ context.Context, spend *utxostore.Spend) error {
 	policy := util.GetAerospikeWritePolicy(0, 0, options...)
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aerospike.NewKey(s.namespace, "utxo", spend.TxID[:])
+	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
 		s.logger.Errorf("ERROR panic in aerospike Delete: %v\n", err)

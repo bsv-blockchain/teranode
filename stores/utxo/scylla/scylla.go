@@ -255,8 +255,8 @@ func (s *Scylla) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	return nil
 }
 
-func (s *Scylla) Delete(_ context.Context, spend *utxostore.Spend) error {
-	if err := s.session.Query(`DELETE FROM utxos WHERE hash = ?`, spend.Hash[:]).Exec(); err != nil {
+func (s *Scylla) Delete(_ context.Context, tx *bt.Tx) error {
+	if err := s.session.Query(`DELETE FROM utxos WHERE hash = ?`, tx.TxIDChainHash()[:]).Exec(); err != nil {
 		return err
 	}
 

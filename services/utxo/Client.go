@@ -117,11 +117,9 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, spend *utxostore.Spend) error {
-	_, err := s.db.Delete(ctx, &utxostore_api.Request{
-		TxId:     spend.TxID.CloneBytes(),
-		Vout:     spend.Vout,
-		UxtoHash: spend.Hash.CloneBytes(),
+func (s *Store) Delete(ctx context.Context, tx *bt.Tx) error {
+	_, err := s.db.Delete(ctx, &utxostore_api.DeleteRequest{
+		Tx: tx.Bytes(),
 	})
 	if err != nil {
 		return err

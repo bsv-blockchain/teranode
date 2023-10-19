@@ -41,7 +41,7 @@ func (m *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) erro
 	return nil
 }
 
-func (m *NullStore) Delete(_ context.Context, spend *utxostore.Spend) error {
+func (m *NullStore) Delete(_ context.Context, tx *bt.Tx) error {
 	return nil
 }
 

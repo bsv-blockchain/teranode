@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
@@ -20,7 +20,7 @@ func New(logger utils.Logger) *Nothing {
 	}
 }
 
-func (s *Nothing) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Nothing) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -40,7 +40,7 @@ func (s *Nothing) Storer(ctx context.Context, id int, txCount int, wg *sync.Wait
 		}()
 
 		for i := 0; i < txCount; i++ {
-			elapsed, err := writeToChannel(ctx, spenderCh, &chainhash.Hash{})
+			elapsed, err := writeToChannel(ctx, spenderCh, &bt.Tx{})
 			if err != nil {
 				s.logger.Errorf("Storer %d: %v", id, err)
 				return
@@ -51,7 +51,7 @@ func (s *Nothing) Storer(ctx context.Context, id int, txCount int, wg *sync.Wait
 	}()
 }
 
-func (s *Nothing) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Nothing) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -98,7 +98,7 @@ func (s *Nothing) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh cha
 	}()
 }
 
-func (s *Nothing) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int) {
+func (s *Nothing) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {

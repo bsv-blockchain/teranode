@@ -18,14 +18,14 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 )
 
 type Strategy interface {
-	Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, counterCh chan int)
-	Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *chainhash.Hash, deleterCh chan *chainhash.Hash, counterCh chan int)
-	Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *chainhash.Hash, counterCh chan int)
+	Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int)
+	Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int)
+	Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int)
 }
 
 var (
@@ -46,8 +46,8 @@ var (
 	wgSpenders       *sync.WaitGroup
 	wgDeleters       *sync.WaitGroup
 	wgCounters       *sync.WaitGroup
-	spenderCh        chan *chainhash.Hash
-	deleterCh        chan *chainhash.Hash
+	spenderCh        chan *bt.Tx
+	deleterCh        chan *bt.Tx
 	storerCounterCh  chan int
 	spenderCounterCh chan int
 	deleterCounterCh chan int
@@ -162,8 +162,8 @@ func createChannels() {
 	wgSpenders = &sync.WaitGroup{}
 	wgDeleters = &sync.WaitGroup{}
 	wgCounters = &sync.WaitGroup{}
-	spenderCh = make(chan *chainhash.Hash, bufferSize)
-	deleterCh = make(chan *chainhash.Hash, bufferSize)
+	spenderCh = make(chan *bt.Tx, bufferSize)
+	deleterCh = make(chan *bt.Tx, bufferSize)
 	storerCounterCh = make(chan int)
 	spenderCounterCh = make(chan int)
 	deleterCounterCh = make(chan int)

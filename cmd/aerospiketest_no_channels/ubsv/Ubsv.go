@@ -9,7 +9,6 @@ import (
 	// "github.com/aerospike/aerospike-client-go/v6"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
@@ -57,23 +56,13 @@ func (s *Ubsv) Work(ctx context.Context, id int, txCount int, wg *sync.WaitGroup
 				// Generate a random hash
 				tx := bt.NewTx()
 				_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i))
-				hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
-				if err != nil {
-					s.logger.Warnf("hash failed: %v\n", err)
-				}
 
-				err = s.store.Delete(ctx, &utxostore.Spend{
-					TxID: hash,
-					Vout: 0,
-					Hash: hash,
-				})
-				if err != nil {
+				if err := s.store.Delete(ctx, tx); err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				err = s.store.Store(ctx, tx)
-				if err != nil {
+				if err := s.store.Store(ctx, tx); err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}
