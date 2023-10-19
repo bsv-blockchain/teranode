@@ -40,10 +40,12 @@ jobs:
       - name: Install Kustomize
         run: |-
           # Set up kustomize
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" > "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
-          bash kustomize.sh -v
+          mkdir kustomize
+          cd kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
           chmod u+x ./kustomize
           cp ./kustomize /usr/local/bin
+          cd ..
 
 
       # Deploy the Docker image to the GKE cluster
