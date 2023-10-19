@@ -10,18 +10,19 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
-	client       blockassembly_api.BlockAssemblyAPIClient
-	drpcClient   blockassembly_api.DRPCBlockAssemblyAPIClient
-	frpcClient   *blockassembly_api.Client
-	logger       utils.Logger
-	batchCh      chan *blockassembly_api.AddTxRequest
-	batchSize    int
-	batchTimeout int
+	client     blockassembly_api.BlockAssemblyAPIClient
+	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
+	frpcClient *blockassembly_api.Client
+	logger     utils.Logger
+	batchSize  int
+	batchCh    chan []*blockassembly_api.AddTxRequest
+	batcher    batcher.Batcher[blockassembly_api.AddTxRequest]
 }
 
 func NewClient(ctx context.Context, logger utils.Logger) *Client {
@@ -39,23 +40,30 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 		panic(err)
 	}
 
-	sendBatchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
+	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
 	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
 	sendBatchWorkers, _ := gocore.Config().GetInt("blockassembly_sendBatchWorkers", 1)
 
-	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
-		logger.Fatalf("expecting blockassembly_sendBatchWorkers > 0 when blockassembly_sendBatchSize = %d", sendBatchSize)
+	if batchSize > 0 && sendBatchWorkers <= 0 {
+		logger.Fatalf("expecting blockassembly_sendBatchWorkers > 0 when blockassembly_sendBatchSize = %d", batchSize)
 	}
-	if sendBatchSize > 0 {
-		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, workers: %d, timeout: %d", sendBatchSize, sendBatchWorkers, sendBatchTimeout)
+	if batchSize > 0 {
+		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, workers: %d, timeout: %d", batchSize, sendBatchWorkers, sendBatchTimeout)
 	}
 
+	duration := time.Duration(sendBatchTimeout) * time.Millisecond
+	batchCh := make(chan []*blockassembly_api.AddTxRequest)
+	sendBatch := func(batch []*blockassembly_api.AddTxRequest) {
+		batchCh <- batch
+	}
+	batcherInstance := *batcher.New[blockassembly_api.AddTxRequest](batchSize, duration, sendBatch, false)
+
 	client := &Client{
-		client:       blockassembly_api.NewBlockAssemblyAPIClient(baConn),
-		logger:       logger,
-		batchCh:      make(chan *blockassembly_api.AddTxRequest),
-		batchSize:    sendBatchSize,
-		batchTimeout: sendBatchTimeout,
+		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		logger:    logger,
+		batchSize: batchSize,
+		batchCh:   batchCh,
+		batcher:   batcherInstance,
 	}
 
 	// Connect to experimental DRPC server if configured
@@ -65,7 +73,7 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 	// fRPC has only been implemented for AddTx / Store
 	go client.connectFRPC()
 
-	if sendBatchSize > 0 {
+	if batchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
 			go client.batchWorker(ctx)
 		}
@@ -165,7 +173,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	} else {
 
 		/* batch mode */
-		s.batchCh <- req
+		s.batcher.Put(req)
 
 	}
 
@@ -217,24 +225,9 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 }
 
 func (s *Client) batchWorker(ctx context.Context) {
-	duration := time.Duration(s.batchTimeout) * time.Millisecond
-	ringBuffer := make([]*blockassembly_api.AddTxRequest, s.batchSize)
-	i := 0
 	for {
-		select {
-		case req := <-s.batchCh:
-			ringBuffer[i] = req
-			i++
-			if i == s.batchSize {
-				s.sendBatchToBlockAssembly(ctx, ringBuffer)
-				i = 0
-			}
-		case <-time.After(duration):
-			if i > 0 {
-				s.sendBatchToBlockAssembly(ctx, ringBuffer[:i])
-				i = 0
-			}
-		}
+		batch := <-s.batchCh
+		s.sendBatchToBlockAssembly(ctx, batch)
 	}
 }
 
