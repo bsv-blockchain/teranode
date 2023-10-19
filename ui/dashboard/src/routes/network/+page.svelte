@@ -10,21 +10,30 @@
       if (m.type !== 'block') return
 
       // Get the record for m.peer_id
-      const existing = uniqueNodes[m.peer_id]
+      const existing = uniqueNodes[m.base_url]
       if (!existing) {
-        uniqueNodes[m.peer_id] = m
+        uniqueNodes[m.base_url] = m
         return
       }
 
       if (m.height > existing.height) {
-        uniqueNodes[m.peer_id] = m
+        uniqueNodes[m.base_url] = m
         return
       }
     })
 
     nodes = Object.values(uniqueNodes)
 
-    console.log('NODES', nodes)
+    // sort the nodesData by name
+    nodes = nodes.sort((a, b) => {
+      if (a.name < b.name) {
+        return -1
+      } else if (a.name > b.name) {
+        return 1
+      } else {
+        return 0
+      }
+    })
   }
 </script>
 
@@ -34,16 +43,18 @@
   <table class="table">
     <thead>
       <tr>
-        <th>PeerID</th>
         <th>Address</th>
         <th class="right">Height</th>
+        <th class="right">TX Count</th>
+        <th class="right">Size</th>
+        <th>Miner</th>
         <th>Latest hash</th>
         <th>Previous hash</th>
-        <th>Last seen</th>
+        <th style="width:200px;">Last seen</th>
       </tr>
     </thead>
     <tbody>
-      {#each nodes as node}
+      {#each nodes as node (node.base_url)}
         <Node {node} />
       {/each}
     </tbody>

@@ -26,9 +26,11 @@
 </script>
 
 <tr>
-  <td title={node.peer_id}>{shortHash(node.peer_id)}</td>
   <td>{node.base_url}</td>
   <td class="right">{node.height}</td>
+  <td class="right">{node.txCount}</td>
+  <td class="right">{node.sizeInBytes}</td>
+  <td>{node.miner}</td>
   <td title={node.hash}>{shortHash(node.hash)}</td>
   <td title={node.previousblockhash}>{shortHash(node.previousblockhash)}</td>
   <td title={node.receivedAt}>{age} ago</td>
