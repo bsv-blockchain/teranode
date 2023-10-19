@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
@@ -177,6 +176,9 @@ func worker(logger utils.Logger) {
 		_ = btTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 10000)
 
 		utxoHash, err := util.UTXOHashFromOutput(btTx.TxIDChainHash(), btTx.Outputs[0], 0)
+		if err != nil {
+			panic(err)
+		}
 
 		spend := &utxo.Spend{
 			TxID:         btTx.TxIDChainHash(),
@@ -210,14 +212,14 @@ func worker(logger utils.Logger) {
 	}
 }
 
-func generateRandomBytes() []byte {
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
+//func generateRandomBytes() []byte {
+//	b := make([]byte, 32)
+//	_, err := rand.Read(b)
+//	if err != nil {
+//		panic(err)
+//	}
+//	return b
+//}
 
 func FormatFloat(f float64) string {
 	intPart := int(f)

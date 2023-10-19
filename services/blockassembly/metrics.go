@@ -22,9 +22,9 @@ var (
 	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
 	prometheusBlockAssemblerTransactions       prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
-	prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
-	prometheusBlockAssemblerReorg              prometheus.Counter
-	prometheusBlockAssemblerReorgDuration      prometheus.Histogram
+	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
+	prometheusBlockAssemblerReorg         prometheus.Counter
+	prometheusBlockAssemblerReorgDuration prometheus.Histogram
 )
 
 var prometheusMetricsInitialized = false
@@ -144,13 +144,13 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblerUtxoStoreDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockassembly",
-			Name:      "utxo_store_duration_v2",
-			Help:      "Duration of storing new utxos by block assembler",
-		},
-	)
+	//prometheusBlockAssemblerUtxoStoreDuration = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockassembly",
+	//		Name:      "utxo_store_duration_v2",
+	//		Help:      "Duration of storing new utxos by block assembler",
+	//	},
+	//)
 
 	prometheusBlockAssemblerReorg = promauto.NewCounter(
 		prometheus.CounterOpts{

@@ -3,7 +3,6 @@ package validator
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -160,22 +159,22 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	return nil
 }
 
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*utxostore.Spend) (bool, error) {
-	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
-	defer txMetaSpan.Finish()
-
-	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
-		if errors.Is(err, txmeta.ErrAlreadyExists) {
-			// this does not need to be a warning, it's just a duplicate validation request
-			return true, nil
-		}
-
-		v.reverseSpends(traceSpan, reservedUtxos)
-		return false, fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
-	}
-
-	return false, nil
-}
+//func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*utxostore.Spend) (bool, error) {
+//	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
+//	defer txMetaSpan.Finish()
+//
+//	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
+//		if errors.Is(err, txmeta.ErrAlreadyExists) {
+//			// this does not need to be a warning, it's just a duplicate validation request
+//			return true, nil
+//		}
+//
+//		v.reverseSpends(traceSpan, reservedUtxos)
+//		return false, fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
+//	}
+//
+//	return false, nil
+//}
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
 	basicSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:Basic")

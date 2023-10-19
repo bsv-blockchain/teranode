@@ -118,6 +118,7 @@ func LockTime(t *testing.T, db utxostore.Interface) {
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, spends[0])
+	require.NoError(t, err)
 	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
 	require.Equal(t, Hash, resp.SpendingTxID)
 }
