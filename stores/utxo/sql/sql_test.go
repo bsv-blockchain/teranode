@@ -23,7 +23,7 @@ func newDB(t *testing.T) (context.Context, *Store) {
 }
 
 func TestSQL(t *testing.T) {
-	t.Run("memory store", func(t *testing.T) {
+	t.Run("sql store", func(t *testing.T) {
 		ctx, db := newDB(t)
 		err := db.delete(ctx, tests.Hash)
 		require.NoError(t, err)
@@ -31,7 +31,7 @@ func TestSQL(t *testing.T) {
 		tests.Store(t, db)
 	})
 
-	t.Run("memory spend", func(t *testing.T) {
+	t.Run("sql spend", func(t *testing.T) {
 		ctx, db := newDB(t)
 		err := db.delete(ctx, tests.Hash)
 		require.NoError(t, err)
@@ -39,7 +39,7 @@ func TestSQL(t *testing.T) {
 		tests.Spend(t, db)
 	})
 
-	t.Run("memory reset", func(t *testing.T) {
+	t.Run("sql reset", func(t *testing.T) {
 		ctx, db := newDB(t)
 		err := db.delete(ctx, tests.Hash)
 		require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestSQL(t *testing.T) {
 		tests.Restore(t, db)
 	})
 
-	t.Run("memory lock time", func(t *testing.T) {
+	t.Run("sql lock time", func(t *testing.T) {
 		ctx, db := newDB(t)
 		err := db.delete(ctx, tests.Hash)
 		require.NoError(t, err)

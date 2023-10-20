@@ -345,16 +345,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 		if idx == 0 {
 			// process coinbase utxos
-			var utxoHash *chainhash.Hash
-			for outputIdx, output := range block.CoinbaseTx.Outputs {
-				utxoHash, err = util.UTXOHashFromOutput(block.CoinbaseTx.TxIDChainHash(), output, uint32(outputIdx))
-				if err != nil {
-					return fmt.Errorf("error creating utxo hash: %s", err.Error())
-				}
-
-				if err := stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
-					return fmt.Errorf("error deleting utxo (%s): %s", utxoHash, err.Error())
-				}
+			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
+				return fmt.Errorf("error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error())
 			}
 
 			// skip the first transaction of the first subtree (coinbase)

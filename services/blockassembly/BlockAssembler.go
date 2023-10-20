@@ -341,14 +341,6 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error getting reorg blocks: %w", err)
 	}
 
-	if len(moveDownBlocks) > b.maxBlockReorg {
-		return fmt.Errorf("reorg is too big, not handling: %d", len(moveDownBlocks))
-	}
-
-	if len(moveUpBlocks) > b.maxBlockCatchup {
-		return fmt.Errorf("catchup is too big, not handling: %d", len(moveUpBlocks))
-	}
-
 	// now do the reorg in the subtree processor
 	if err = b.subtreeProcessor.Reorg(moveDownBlocks, moveUpBlocks); err != nil {
 		return fmt.Errorf("error doing reorg: %w", err)
@@ -398,16 +390,16 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, fmt.Errorf("header is nil")
 	}
 
-	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), 100)
+	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorg))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting new chain: %w", err)
 	}
 
 	// moveUpBlockHeaders will contain all block headers we need to move up to get to the new tip from the common ancestor
-	moveUpBlockHeaders := make([]*model.BlockHeader, 0, 100)
+	moveUpBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockCatchup)
 
 	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
-	moveDownBlockHeaders := make([]*model.BlockHeader, 0, 100)
+	moveDownBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorg)
 
 	// find the first blockHeader that is the same in both chains
 	var commonAncestor *model.BlockHeader
@@ -420,6 +412,11 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 
 		moveUpBlockHeaders = append(moveUpBlockHeaders, blockHeader)
 	}
+
+	if commonAncestor == nil {
+		return nil, nil, fmt.Errorf("common ancestor not found, reorg not possible")
+	}
+
 	// reverse moveUpBlocks slice
 	for i := len(moveUpBlockHeaders)/2 - 1; i >= 0; i-- {
 		opp := len(moveUpBlockHeaders) - 1 - i

@@ -293,12 +293,15 @@ func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(ctx context.Context, tx *bt.Tx) error {
-	q := `
-		DELETE FROM utxos
-		WHERE hash = $1
-	`
-	if _, err := s.db.ExecContext(ctx, q, tx.TxIDChainHash()[:]); err != nil {
-		return err
+	for vOut, output := range tx.Outputs {
+		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(vOut))
+		if err != nil {
+			return err
+		}
+
+		if err = s.delete(ctx, utxoHash); err != nil {
+			return err
+		}
 	}
 
 	prometheusUtxoDelete.Inc()
