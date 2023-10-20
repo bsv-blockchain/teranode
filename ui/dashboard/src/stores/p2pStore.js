@@ -16,6 +16,10 @@ export function connectToP2PServer() {
 
     let socket = new WebSocket(url)
 
+    socket.onerror = (event) => {
+      console.log("WebSocket Error:", event);
+    }
+
     socket.onopen = () => {
       console.log(`p2pWS connection opened to ${url}`)
     }
@@ -27,9 +31,9 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
-        if (json.type==='block') {
+        if (json.type === 'block') {
           const loc = `${json.base_url}/header/${json.hash}/json`
-          try{
+          try {
             const res2 = await fetch(loc)
             const json2 = await res2.json()
             json = { ...json, ...json2 }
