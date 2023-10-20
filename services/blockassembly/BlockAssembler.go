@@ -41,37 +41,37 @@ type BlockAssembler struct {
 	currentChainMap          map[chainhash.Hash]uint32
 	currentChainMapMu        sync.RWMutex
 	blockchainSubscriptionCh chan *model.Notification
-	maxBlockReorg            int
-	maxBlockCatchup          int
+	maxBlockReorgRollback    int
+	maxBlockReorgCatchup     int
 }
 
 func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxostore.Interface,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
-	maxBlockReorg, _ := gocore.Config().GetInt("block_assembler_max_block_reorg", 100)
-	maxBlockCatchup, _ := gocore.Config().GetInt("block_assembler_max_block_catchup", 100)
+	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
+	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)
 
 	b := &BlockAssembler{
-		logger:            logger,
-		utxoStore:         utxoStore,
-		subtreeStore:      subtreeStore,
-		blockchainClient:  blockchainClient,
-		subtreeProcessor:  subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
-		miningCandidateCh: make(chan chan *miningCandidateResponse),
-		currentChainMap:   make(map[chainhash.Hash]uint32, 100),
-		maxBlockReorg:     maxBlockReorg,
-		maxBlockCatchup:   maxBlockCatchup,
+		logger:                logger,
+		utxoStore:             utxoStore,
+		subtreeStore:          subtreeStore,
+		blockchainClient:      blockchainClient,
+		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
+		miningCandidateCh:     make(chan chan *miningCandidateResponse),
+		currentChainMap:       make(map[chainhash.Hash]uint32, 100),
+		maxBlockReorgRollback: maxBlockReorgRollback,
+		maxBlockReorgCatchup:  maxBlockReorgCatchup,
 	}
 
 	return b
 }
 
 func (b *BlockAssembler) SetMaxBlockReorg(maxBlockReorg int) {
-	b.maxBlockReorg = maxBlockReorg
+	b.maxBlockReorgRollback = maxBlockReorg
 }
 
 func (b *BlockAssembler) SetMaxBlockCatchup(maxBlockCatchup int) {
-	b.maxBlockCatchup = maxBlockCatchup
+	b.maxBlockReorgCatchup = maxBlockCatchup
 }
 
 func (b *BlockAssembler) TxCount() uint64 {
@@ -390,16 +390,16 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, fmt.Errorf("header is nil")
 	}
 
-	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorg))
+	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorgCatchup))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting new chain: %w", err)
 	}
 
 	// moveUpBlockHeaders will contain all block headers we need to move up to get to the new tip from the common ancestor
-	moveUpBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockCatchup)
+	moveUpBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorgCatchup)
 
 	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
-	moveDownBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorg)
+	moveDownBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorgRollback)
 
 	// find the first blockHeader that is the same in both chains
 	var commonAncestor *model.BlockHeader
@@ -431,6 +431,10 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		}
 
 		moveDownBlockHeaders = append(moveDownBlockHeaders, blockHeader)
+	}
+
+	if len(moveDownBlockHeaders) > b.maxBlockReorgRollback {
+		return nil, nil, fmt.Errorf("reorg is too big, max block reorg: %d", b.maxBlockReorgRollback)
 	}
 
 	return moveDownBlockHeaders, moveUpBlockHeaders, nil
