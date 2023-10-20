@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -517,11 +518,27 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			continue
 		}
 
-		s.notificationCh <- &notificationMsg{
-			Type:    "block",
-			Hash:    msg.Hash,
-			BaseURL: msg.DataHubUrl,
-			PeerId:  msg.PeerId,
+		blockHeader, err := getBlockHeader(ctx, msg.Hash, msg.DataHubUrl)
+		if err != nil {
+			s.logger.Errorf("error getting block header: ", err)
+
+			s.notificationCh <- &notificationMsg{
+				Type:    "block",
+				Hash:    msg.Hash,
+				BaseURL: msg.DataHubUrl,
+				PeerId:  msg.PeerId,
+			}
+		} else {
+			s.notificationCh <- &notificationMsg{
+				Type:        "block",
+				Hash:        msg.Hash,
+				BaseURL:     msg.DataHubUrl,
+				PeerId:      msg.PeerId,
+				Height:      blockHeader.Height,
+				TxCount:     blockHeader.TxCount,
+				SizeInBytes: blockHeader.SizeInBytes,
+				Miner:       blockHeader.Miner,
+			}
 		}
 
 		if m.ReceivedFrom != s.host.ID() {
@@ -578,4 +595,26 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 			s.logger.Debugf("subtree message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
 		}
 	}
+}
+
+type blockHeaderResponse struct {
+	Hash        string `json:"hash"`
+	Height      uint32 `json:"height"`
+	TxCount     uint64 `json:"tx_count"`
+	SizeInBytes uint64 `json:"size_in_bytes"`
+	Miner       string `json:"miner"`
+}
+
+func getBlockHeader(ctx context.Context, hashStr string, baseUrl string) (*blockHeaderResponse, error) {
+	b, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/header/%s/json", baseUrl, hashStr))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get header %s from peer [%w]", hashStr, err)
+	}
+
+	var header blockHeaderResponse
+	if err := json.Unmarshal(b, &header); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal header %s from bytes [%w]", hashStr, err)
+	}
+
+	return &header, nil
 }
