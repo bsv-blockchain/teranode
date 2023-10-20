@@ -1,10 +1,11 @@
 .git
 .history
 .vscode
-data
-deploy
-docs
+data/
+deploy/
+docs/
 playground
-poc
-scripts
-3rdparty
+poc/
+scripts/
+3rdparty/
+.github/
