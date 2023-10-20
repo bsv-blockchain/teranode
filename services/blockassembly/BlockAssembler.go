@@ -58,7 +58,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxos
 		blockchainClient:      blockchainClient,
 		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
 		miningCandidateCh:     make(chan chan *miningCandidateResponse),
-		currentChainMap:       make(map[chainhash.Hash]uint32, 100),
+		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
 		maxBlockReorgRollback: maxBlockReorgRollback,
 		maxBlockReorgCatchup:  maxBlockReorgCatchup,
 	}
@@ -221,7 +221,7 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 }
 
 func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
-	b.currentChain, _, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Hash(), 100)
+	b.currentChain, _, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Hash(), uint64(b.maxBlockReorgCatchup))
 	if err != nil {
 		return fmt.Errorf("error getting block headers from blockchain: %v", err)
 	}
