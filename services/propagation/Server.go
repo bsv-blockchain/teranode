@@ -328,7 +328,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.Go(func() error {
 		if err = ps.storeTransaction(gCtx, btTx); err != nil {
-			return fmt.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
+			return fmt.Errorf("failed to save transaction %v: %v", btTx.TxIDChainHash(), err)
 		}
 		return nil
 	})
