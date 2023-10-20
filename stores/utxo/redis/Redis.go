@@ -166,13 +166,10 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		}
 	}
 
-	for outputIdx, hash := range utxoHashes {
+	for _, hash := range utxoHashes {
 		err := r.storeUtxo(ctx, hash, value)
 		if err != nil {
-			for i := 0; i < outputIdx; i++ {
-				// revert the created utxos
-				r.rdb.Del(ctx, hash.String())
-			}
+			_ = r.Delete(ctx, tx)
 			return err
 		}
 	}
