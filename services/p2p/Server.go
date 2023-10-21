@@ -530,14 +530,15 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			}
 		} else {
 			s.notificationCh <- &notificationMsg{
-				Type:        "block",
-				Hash:        msg.Hash,
-				BaseURL:     msg.DataHubUrl,
-				PeerId:      msg.PeerId,
-				Height:      blockHeader.Height,
-				TxCount:     blockHeader.TxCount,
-				SizeInBytes: blockHeader.SizeInBytes,
-				Miner:       blockHeader.Miner,
+				Type:              "block",
+				Hash:              msg.Hash,
+				BaseURL:           msg.DataHubUrl,
+				PeerId:            msg.PeerId,
+				PreviousBlockHash: blockHeader.PreviousBlockHash,
+				Height:            blockHeader.Height,
+				TxCount:           blockHeader.TxCount,
+				SizeInBytes:       blockHeader.SizeInBytes,
+				Miner:             blockHeader.Miner,
 			}
 		}
 
@@ -598,11 +599,12 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 }
 
 type blockHeaderResponse struct {
-	Hash        string `json:"hash"`
-	Height      uint32 `json:"height"`
-	TxCount     uint64 `json:"tx_count"`
-	SizeInBytes uint64 `json:"size_in_bytes"`
-	Miner       string `json:"miner"`
+	Hash              string `json:"hash"`
+	Height            uint32 `json:"height"`
+	TxCount           uint64 `json:"txCount"`
+	SizeInBytes       uint64 `json:"sizeInBytes"`
+	Miner             string `json:"miner"`
+	PreviousBlockHash string `json:"previousblockhash"`
 }
 
 func getBlockHeader(ctx context.Context, hashStr string, baseUrl string) (*blockHeaderResponse, error) {

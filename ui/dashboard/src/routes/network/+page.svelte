@@ -16,7 +16,7 @@
         return
       }
 
-      if (m.height > existing.height) {
+      if (m.receivedAt > existing.receivedAt) {
         uniqueNodes[m.base_url] = m
         return
       }
