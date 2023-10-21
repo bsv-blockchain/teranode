@@ -11,7 +11,7 @@ import (
 )
 
 type notificationMsg struct {
-	Timestamp         time.Time `json:"timestamp"`
+	Timestamp         time.Time `json:"timestamp,omitempty"`
 	Type              string    `json:"type"`
 	Hash              string    `json:"hash,omitempty"`
 	BaseURL           string    `json:"base_url,omitempty"`

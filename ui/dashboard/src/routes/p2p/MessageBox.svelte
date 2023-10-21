@@ -30,7 +30,10 @@
       </span>
     </div>
     <div class="message-box-content">
+      <div><span>Timestamp:</span><span>{message.timestamp}</span></div>
+      <div><span>ReceivedAt:</span><span>{message.receivedAt}</span></div>
       <div><span>Hash:</span><span>{message.hash}</span></div>
+      <div><span>PrevHash:</span><span>{message.previousblockhash}</span></div>
       <div><span>From:</span><span>{message.base_url}</span></div>
       <div><span>Peer:</span><span>{message.peer_id}</span></div>
       <div><span>Height:</span><span>{message.height}</span></div>
