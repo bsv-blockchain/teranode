@@ -110,7 +110,7 @@
 
   .message-box-content span:first-child {
     display: inline-block; /* This is necessary to set a fixed width */
-    width: 60px;
+    width: 80px;
   }
 
   .blue {
