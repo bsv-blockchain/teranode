@@ -16,7 +16,7 @@
         return
       }
 
-      if (m.receivedAt > existing.receivedAt) {
+      if (m.timestamp > existing.timestamp) {
         uniqueNodes[m.base_url] = m
         return
       }

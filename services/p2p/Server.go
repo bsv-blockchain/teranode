@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -523,13 +524,15 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			s.logger.Errorf("error getting block header: ", err)
 
 			s.notificationCh <- &notificationMsg{
-				Type:    "block",
-				Hash:    msg.Hash,
-				BaseURL: msg.DataHubUrl,
-				PeerId:  msg.PeerId,
+				Timestamp: time.Now().UTC(),
+				Type:      "block",
+				Hash:      msg.Hash,
+				BaseURL:   msg.DataHubUrl,
+				PeerId:    msg.PeerId,
 			}
 		} else {
 			s.notificationCh <- &notificationMsg{
+				Timestamp:         time.Now().UTC(),
 				Type:              "block",
 				Hash:              msg.Hash,
 				BaseURL:           msg.DataHubUrl,
