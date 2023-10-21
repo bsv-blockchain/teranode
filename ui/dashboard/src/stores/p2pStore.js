@@ -31,19 +31,8 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
-        // if (json.type === 'block') {
-        //   const loc = `${json.base_url}/header/${json.hash}/json`
-        //   try {
-        //     const res2 = await fetch(loc)
-        //     const json2 = await res2.json()
-        //     json = { ...json, ...json2 }
-        //   } catch (error) {
-        //     console.error(`p2pWS: Error fetching block header (${loc}):`, error)
-        //   }
-        // }
-
         let m = get(messages)
-        m = [json, ...m].slice(0, maxMessages)
+        m = ([json, ...m]).slice(0, maxMessages)
 
         messages.set(m)
 
