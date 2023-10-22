@@ -174,6 +174,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
+	// TODO - Remove this
+	if height, err := block.ExtractCoinbaseHeight(); err == nil {
+		b.logger.Warnf("Sending notification for height %d", height)
+	}
+
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),

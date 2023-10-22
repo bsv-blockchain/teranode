@@ -34,6 +34,8 @@ export function connectToP2PServer() {
         let m = get(messages)
         m = ([json, ...m]).slice(0, maxMessages)
 
+        console.log('p2pWS: Received message:', json)
+        console.log('p2pWS: Messages:', m)
         messages.set(m)
 
       } catch (error) {
