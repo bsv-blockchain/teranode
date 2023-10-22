@@ -460,6 +460,19 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 				continue
 			}
 
+			s.notificationCh <- &notificationMsg{
+				Timestamp:         time.Now().UTC(),
+				Type:              "bestblock",
+				Hash:              bh.Hash().String(),
+				BaseURL:           s.blobServerHttpAddressURL,
+				PeerId:            msg.PeerId,
+				PreviousBlockHash: bh.HashPrevBlock.String(),
+				Height:            h,
+				// TxCount:           bh.TxCount,
+				// SizeInBytes:       bh.SizeInBytes,
+				// Miner:             bh.Miner,
+			}
+
 			bbr := BlockMessage{
 				Hash:       bh.Hash().String(),
 				Height:     h,
