@@ -191,6 +191,11 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
 
+	err = b.setCurrentChain(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
+	}
+
 	b.startChannelListeners(ctx)
 
 	return nil
