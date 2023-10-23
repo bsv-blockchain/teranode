@@ -36,6 +36,7 @@ COPY --from=0 /app/propagationblaster.run .
 COPY --from=0 /app/blockassemblyblaster.run .
 COPY --from=0 /app/utxostoreblaster.run .
 COPY --from=0 /app/aerospiketest.run .
+COPY --from=0 /app/s3blaster.run .
 COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
