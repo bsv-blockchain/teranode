@@ -270,7 +270,7 @@ func (s *Server) Start(ctx context.Context) error {
 					}
 
 				} else if notification.Type == model.NotificationType_MiningOn {
-					header, meta, err := s.blockchainClient.GetBlockHeader(ctx, notification.Hash)
+					header, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						s.logger.Errorf("error getting block header for MiningOnMessage: ", err)
 						continue
