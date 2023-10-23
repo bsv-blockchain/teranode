@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -25,7 +26,7 @@ var (
 	counter     atomic.Int64
 	workerCount int
 	usePrefix   bool
-	txStore     blob.Store
+	txStoreUrl  *url.URL
 )
 var separator = []byte("/")
 
@@ -60,17 +61,14 @@ func main() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+	url, err, found := gocore.Config().GetURL("txstore")
 	if err != nil {
 		panic(err)
 	}
 	if !found {
-		panic("subtreestore config not found")
+		panic("txstore config not found")
 	}
-	txStore, err = blob.NewStore(txStoreUrl)
-	if err != nil {
-		panic(err)
-	}
+	txStoreUrl = url
 
 	go func() {
 		start := time.Now()
@@ -95,6 +93,11 @@ func main() {
 }
 
 func worker(logger utils.Logger) {
+	txStore, err := blob.NewStore(txStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+
 	payload := []byte("value")
 
 	for {
