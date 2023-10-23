@@ -77,8 +77,8 @@
 <nav class="navbar is-fixed-top is-dark" aria-label="main navigation">
   <div class="navbar-brand">
     <span class="navbar-item">
-      <a class="is-size-4 client centre" href="/">
-        <img src="/teranode_shadow.png" alt="Teranode" />
+      <a class="is-size-4 client centre no-highlight" href="/">
+        <img draggable="false" src="/teranode_shadow.png" alt="Teranode" />
       </a>
     </span>
   </div>
@@ -148,5 +148,12 @@
   .centre {
     display: flex;
     align-items: center;
+  }
+
+  .no-highlight {
+    user-select: none;
+    -webkit-user-select: none; /* Safari */
+    -moz-user-select: none; /* Firefox */
+    -ms-user-select: none; /* IE/Edge */
   }
 </style>

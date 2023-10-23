@@ -33,7 +33,7 @@
   <td>{node.miner}</td>
   <td title={node.hash}>{shortHash(node.hash)}</td>
   <td title={node.previousblockhash}>{shortHash(node.previousblockhash)}</td>
-  <td title={node.receivedAt}>{age} ago</td>
+  <td class="right" title={node.receivedAt}>{age} ago</td>
 </tr>
 
 <style>
