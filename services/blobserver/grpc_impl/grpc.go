@@ -289,17 +289,20 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlock
 	}, nil
 }
 
-func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.BestBlockHeaderResponse, error) {
+func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.GetBlockHeaderResponse, error) {
 	prometheusBlobServerGRPCGetBestBlockHeader.Inc()
 
-	blockHeader, height, err := g.repository.GetBestBlockHeader(ctx)
+	blockHeader, meta, err := g.repository.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &blobserver_api.BestBlockHeaderResponse{
+	return &blobserver_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
-		Height:      height,
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
 	}, nil
 }
 

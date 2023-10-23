@@ -38,7 +38,7 @@ type BlobServerAPIClient interface {
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
-	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error)
+	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetNodesResponse, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
@@ -87,8 +87,8 @@ func (c *blobServerAPIClient) GetBlockHeaders(ctx context.Context, in *GetBlockH
 	return out, nil
 }
 
-func (c *blobServerAPIClient) GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*BestBlockHeaderResponse, error) {
-	out := new(BestBlockHeaderResponse)
+func (c *blobServerAPIClient) GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error) {
+	out := new(GetBlockHeaderResponse)
 	err := c.cc.Invoke(ctx, BlobServerAPI_GetBestBlockHeader_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ type BlobServerAPIServer interface {
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
-	GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error)
+	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error)
 	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
@@ -168,7 +168,7 @@ func (UnimplementedBlobServerAPIServer) GetBlockHeader(context.Context, *GetBloc
 func (UnimplementedBlobServerAPIServer) GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaders not implemented")
 }
-func (UnimplementedBlobServerAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*BestBlockHeaderResponse, error) {
+func (UnimplementedBlobServerAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBestBlockHeader not implemented")
 }
 func (UnimplementedBlobServerAPIServer) GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error) {

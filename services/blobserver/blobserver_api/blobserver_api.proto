@@ -13,7 +13,7 @@ service BlobServerAPI {
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
-  rpc GetBestBlockHeader(google.protobuf.Empty) returns (BestBlockHeaderResponse) {}
+  rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetNodes(google.protobuf.Empty) returns (GetNodesResponse) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
 }
@@ -77,12 +77,6 @@ message GetBlockHeadersRequest {
 message GetBlockHeadersResponse {
   repeated bytes blockHeaders = 1;
   repeated uint32 heights = 2;
-}
-
-// swagger:model BestBlockHeaderResponse
-message BestBlockHeaderResponse {
-  bytes blockHeader = 1;
-  uint32 height = 2;
 }
 
 // swagger:model GetNodesResponse

@@ -101,13 +101,14 @@ func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, err
 	return c.client.Health(ctx, &emptypb.Empty{})
 }
 
-func (c Client) AddBlock(ctx context.Context, block *model.Block) error {
+func (c Client) AddBlock(ctx context.Context, block *model.Block, external bool) error {
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
 		SubtreeHashes:    make([][]byte, 0, len(block.Subtrees)),
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
+		External:         external,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -173,18 +174,25 @@ func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (
 	return resp.Exists, nil
 }
 
-func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
-	return header, resp.Height, nil
+	meta := &model.BlockHeaderMeta{
+		Height:      resp.Height,
+		TxCount:     resp.TxCount,
+		SizeInBytes: resp.SizeInBytes,
+		Miner:       resp.Miner,
+	}
+
+	return header, meta, nil
 }
 
 func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {

@@ -16,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -43,6 +42,7 @@ var (
 	blockTopicName     string
 	bestBlockTopicName string
 	subtreeTopicName   string
+	miningOnTopicName  string
 )
 
 type Server struct {
@@ -60,6 +60,17 @@ type Server struct {
 
 type BestBlockMessage struct {
 	PeerId string
+}
+
+type MiningOnMessage struct {
+	Hash         string
+	PreviousHash string
+	DataHubUrl   string
+	PeerId       string
+	Height       uint32
+	Miner        string
+	SizeInBytes  uint64
+	TxCount      uint64
 }
 
 type BlockMessage struct {
@@ -111,9 +122,16 @@ func NewServer(logger utils.Logger) *Server {
 	if !ok {
 		panic("p2p_bestblock_topic not set in config")
 	}
+
+	miningOntn, ok := gocore.Config().Get("p2p_mining_on_topic")
+	if !ok {
+		panic("p2p_mining_on_topic not set in config")
+	}
+
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
 	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
 	bestBlockTopicName = fmt.Sprintf("%s-%s", topicPrefix, bbtn)
+	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
 
 	h, err := libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", p2pIp, p2pPort)), libp2p.Identity(*pk))
 	if err != nil {
@@ -183,7 +201,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return
 		}
 	}()
-	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName}
+	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName, miningOnTopicName}
 	go s.discoverPeers(ctx, topicNames)
 
 	ps, err := pubsub.NewGossipSub(ctx, s.host)
@@ -214,6 +232,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.handleBestBlockTopic(ctx)
 	go s.handleBlockTopic(ctx)
 	go s.handleSubtreeTopic(ctx)
+	go s.handleMiningOnTopic(ctx)
 
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
@@ -247,6 +266,32 @@ func (s *Server) Start(ctx context.Context) error {
 						continue
 					}
 					if err := s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
+						s.logger.Errorf("publish error:", err)
+					}
+
+				} else if notification.Type == model.NotificationType_MiningOn {
+					header, meta, err := s.blockchainClient.GetBlockHeader(ctx, notification.Hash)
+					if err != nil {
+						s.logger.Errorf("error getting block header for MiningOnMessage: ", err)
+						continue
+					}
+
+					mm := MiningOnMessage{
+						Hash:         notification.Hash.String(),
+						PreviousHash: header.HashPrevBlock.String(),
+						DataHubUrl:   s.blobServerHttpAddressURL,
+						PeerId:       s.host.ID().String(),
+						Height:       meta.Height,
+						Miner:        meta.Miner,
+						SizeInBytes:  meta.SizeInBytes,
+						TxCount:      meta.TxCount,
+					}
+					msgBytes, err := json.Marshal(mm)
+					if err != nil {
+						s.logger.Errorf("json marshal error: ", err)
+						continue
+					}
+					if err := s.topics[miningOnTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
 
@@ -450,7 +495,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 			}
 
 			// get best block from blockchain service
-			bh, h, err := s.blockchainClient.GetBestBlockHeader(ctx)
+			bh, m, err := s.blockchainClient.GetBestBlockHeader(ctx)
 			if err != nil {
 				s.logger.Errorf("error getting best block header: ", err)
 				continue
@@ -460,22 +505,9 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 				continue
 			}
 
-			s.notificationCh <- &notificationMsg{
-				Timestamp:         time.Now().UTC(),
-				Type:              "bestblock",
-				Hash:              bh.Hash().String(),
-				BaseURL:           s.blobServerHttpAddressURL,
-				PeerId:            msg.PeerId,
-				PreviousBlockHash: bh.HashPrevBlock.String(),
-				Height:            h,
-				// TxCount:           bh.TxCount,
-				// SizeInBytes:       bh.SizeInBytes,
-				// Miner:             bh.Miner,
-			}
-
 			bbr := BlockMessage{
 				Hash:       bh.Hash().String(),
-				Height:     h,
+				Height:     m.Height,
 				DataHubUrl: s.blobServerHttpAddressURL,
 			}
 
@@ -532,30 +564,12 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			continue
 		}
 
-		blockHeader, err := getBlockHeader(ctx, msg.Hash, msg.DataHubUrl)
-		if err != nil {
-			s.logger.Errorf("error getting block header: ", err)
-
-			s.notificationCh <- &notificationMsg{
-				Timestamp: time.Now().UTC(),
-				Type:      "block",
-				Hash:      msg.Hash,
-				BaseURL:   msg.DataHubUrl,
-				PeerId:    msg.PeerId,
-			}
-		} else {
-			s.notificationCh <- &notificationMsg{
-				Timestamp:         time.Now().UTC(),
-				Type:              "block",
-				Hash:              msg.Hash,
-				BaseURL:           msg.DataHubUrl,
-				PeerId:            msg.PeerId,
-				PreviousBlockHash: blockHeader.PreviousBlockHash,
-				Height:            blockHeader.Height,
-				TxCount:           blockHeader.TxCount,
-				SizeInBytes:       blockHeader.SizeInBytes,
-				Miner:             blockHeader.Miner,
-			}
+		s.notificationCh <- &notificationMsg{
+			Timestamp: time.Now().UTC(),
+			Type:      "block",
+			Hash:      msg.Hash,
+			BaseURL:   msg.DataHubUrl,
+			PeerId:    msg.PeerId,
 		}
 
 		if m.ReceivedFrom != s.host.ID() {
@@ -614,25 +628,47 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 	}
 }
 
-type blockHeaderResponse struct {
-	Hash              string `json:"hash"`
-	Height            uint32 `json:"height"`
-	TxCount           uint64 `json:"txCount"`
-	SizeInBytes       uint64 `json:"sizeInBytes"`
-	Miner             string `json:"miner"`
-	PreviousBlockHash string `json:"previousblockhash"`
-}
+func (s *Server) handleMiningOnTopic(ctx context.Context) {
+	for {
+		m, err := s.subscriptions[miningOnTopicName].Next(ctx)
+		if err != nil {
+			s.logger.Errorf("error getting msg from miningOn topic: %v", err)
+			continue
+		}
+		// decode request
+		msg := new(MiningOnMessage)
+		err = json.Unmarshal(m.Data, msg)
+		if err != nil {
+			s.logger.Errorf("json unmarshal error: ", err)
+			continue
+		}
 
-func getBlockHeader(ctx context.Context, hashStr string, baseUrl string) (*blockHeaderResponse, error) {
-	b, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/header/%s/json", baseUrl, hashStr))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get header %s from peer [%w]", hashStr, err)
+		s.notificationCh <- &notificationMsg{
+			Timestamp:    time.Now().UTC(),
+			Type:         "mining_on",
+			Hash:         msg.Hash,
+			BaseURL:      msg.DataHubUrl,
+			PeerId:       msg.PeerId,
+			PreviousHash: msg.PreviousHash,
+			Height:       msg.Height,
+			Miner:        msg.Miner,
+			SizeInBytes:  msg.SizeInBytes,
+			TxCount:      msg.TxCount,
+		}
+
+		if m.ReceivedFrom != s.host.ID() {
+			s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
+			validationClient := blockvalidation.NewClient(ctx)
+			hash, err := chainhash.NewHashFromStr(msg.Hash)
+			if err != nil {
+				s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
+				continue
+			}
+			if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
+				s.logger.Errorf("[p2p] error validating subtree from %s: %s", msg.DataHubUrl, err)
+			}
+		} else {
+			s.logger.Debugf("subtree message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
+		}
 	}
-
-	var header blockHeaderResponse
-	if err := json.Unmarshal(b, &header); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal header %s from bytes [%w]", hashStr, err)
-	}
-
-	return &header, nil
 }

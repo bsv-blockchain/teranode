@@ -11,7 +11,7 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
 
-		blockHeader, height, err := h.repository.GetBestBlockHeader(c.Request().Context())
+		blockHeader, meta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
@@ -19,8 +19,11 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 
 		r := &blockHeaderResponse{
 			BlockHeader: blockHeader,
-			Height:      height,
 			Hash:        blockHeader.String(),
+			Height:      meta.Height,
+			TxCount:     meta.TxCount,
+			SizeInBytes: meta.SizeInBytes,
+			Miner:       meta.Miner,
 		}
 
 		switch mode {

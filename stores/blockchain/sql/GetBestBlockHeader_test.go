@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetChainTip(t *testing.T) {
+func TestSqlGetChainTip(t *testing.T) {
 	t.Run("block 0 - genesis block", func(t *testing.T) {
 		storeUrl, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
@@ -17,9 +17,9 @@ func TestSQL_GetChainTip(t *testing.T) {
 		s, err := New(storeUrl)
 		require.NoError(t, err)
 
-		tip, height, err := s.GetBestBlockHeader(context.Background())
+		tip, meta, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), height)
+		assert.Equal(t, uint32(0), meta.Height)
 		assert.Equal(t, uint32(1), tip.Version)
 
 		assertGenesis(t, tip)
@@ -38,11 +38,11 @@ func TestSQL_GetChainTip(t *testing.T) {
 		_, err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
-		tip, height, err := s.GetBestBlockHeader(context.Background())
+		tip, meta, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
 		// block 2 should be the tip
-		assert.Equal(t, uint32(2), height)
+		assert.Equal(t, uint32(2), meta.Height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 		assert.Equal(t, uint32(1), tip.Version)
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)
@@ -65,22 +65,22 @@ func TestSQL_GetChainTip(t *testing.T) {
 		_, err = s.StoreBlock(context.Background(), block2)
 		require.NoError(t, err)
 
-		tip, height, err := s.GetBestBlockHeader(context.Background())
+		tip, meta, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
 		// block 2 (000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd) should be the tip
-		assert.Equal(t, uint32(2), height)
+		assert.Equal(t, uint32(2), meta.Height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 
 		// add a block that should not become the new tip
 		_, err = s.StoreBlock(context.Background(), blockAlternative2)
 		require.NoError(t, err)
 
-		tip, height, err = s.GetBestBlockHeader(context.Background())
+		tip, meta, err = s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
 		// block 2 (000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd) should still be the tip
-		assert.Equal(t, uint32(2), height)
+		assert.Equal(t, uint32(2), meta.Height)
 		assert.Equal(t, "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", tip.Hash().String())
 		assert.Equal(t, uint32(1), tip.Version)
 		assert.Equal(t, *block1.Header.Hash(), *tip.HashPrevBlock)

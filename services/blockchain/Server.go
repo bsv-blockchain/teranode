@@ -174,9 +174,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
-	// TODO - Remove this
-	if height, err := block.ExtractCoinbaseHeight(); err == nil {
-		b.logger.Warnf("Sending notification for height %d", height)
+	if !request.External {
+		_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+			Type: model.NotificationType_MiningOn,
+			Hash: block.Hash().CloneBytes(),
+		})
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -246,17 +248,20 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 	}, nil
 }
 
-func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.BestBlockHeaderResponse, error) {
+func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
 	prometheusBlockchainGetBestBlockHeader.Inc()
 
-	chainTip, height, err := b.store.GetBestBlockHeader(ctx)
+	chainTip, meta, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &blockchain_api.BestBlockHeaderResponse{
+	return &blockchain_api.GetBlockHeaderResponse{
 		BlockHeader: chainTip.Bytes(),
-		Height:      height,
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
 	}, nil
 }
 

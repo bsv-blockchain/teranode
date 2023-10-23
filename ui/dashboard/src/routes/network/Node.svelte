@@ -28,8 +28,8 @@
 <tr>
   <td>{node.base_url}</td>
   <td class="right">{node.height}</td>
-  <td class="right">{node.txCount}</td>
-  <td class="right">{node.sizeInBytes}</td>
+  <td class="right">{node.tx_count}</td>
+  <td class="right">{node.size_in_bytes}</td>
   <td>{node.miner}</td>
   <td title={node.hash}>{shortHash(node.hash)}</td>
   <td title={node.previousblockhash}>{shortHash(node.previousblockhash)}</td>

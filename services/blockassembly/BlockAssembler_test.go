@@ -41,7 +41,7 @@ func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
 		CoinbaseTx:       &bt.Tx{},
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
-	})
+	}, false)
 }
 
 var (

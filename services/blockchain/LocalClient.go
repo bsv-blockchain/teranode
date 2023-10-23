@@ -29,7 +29,7 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 	}, nil
 }
 
-func (c LocalClient) AddBlock(ctx context.Context, block *model.Block) error {
+func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, external bool) error {
 	_, err := c.store.StoreBlock(ctx, block)
 	return err
 }
@@ -56,7 +56,7 @@ func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Ha
 	return exists, nil
 }
 
-func (c LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+func (c LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	return c.store.GetBestBlockHeader(ctx)
 }
 

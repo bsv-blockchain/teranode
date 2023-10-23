@@ -7,16 +7,18 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
 type getBestBlockHeaderCache struct {
 	blockHeader *model.BlockHeader
-	height      uint32
+	meta        *model.BlockHeaderMeta
 }
 
-func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
@@ -25,7 +27,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 	cached, ok := cache.Load("GetBestBlockHeader")
 	if ok {
 		s.logger.Debugf("GetBestBlockHeader cache hit")
-		return cached.(*getBestBlockHeaderCache).blockHeader, cached.(*getBestBlockHeaderCache).height, nil
+		return cached.(*getBestBlockHeaderCache).blockHeader, cached.(*getBestBlockHeaderCache).meta, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -42,17 +44,21 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 		,b.merkle_root
 		,b.n_bits
 		,b.height
+		,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
 		FROM blocks b
 		ORDER BY chain_work DESC, id ASC
 		LIMIT 1
 	`
 
 	blockHeader := &model.BlockHeader{}
+	blockHeaderMeta := &model.BlockHeaderMeta{}
 
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
-	var height uint32
 	var nBits []byte
+	var coinbaseBytes []byte
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q).Scan(
@@ -62,30 +68,45 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint3
 		&hashPrevBlock,
 		&hashMerkleRoot,
 		&nBits,
-		&height,
+		&blockHeaderMeta.Height,
+		&blockHeaderMeta.TxCount,
+		&blockHeaderMeta.SizeInBytes,
+		&coinbaseBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, 0, fmt.Errorf("error in GetBestBlockHeader: %w", err)
+			return nil, nil, fmt.Errorf("error in GetBestBlockHeader: %w", err)
 		}
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
 	}
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
 	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+	}
+
+	miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to extract miner: %w", err)
+	}
+
+	blockHeaderMeta.Miner = miner
 
 	// set cache
 	cache.Store("GetBestBlockHeader", &getBestBlockHeaderCache{
 		blockHeader: blockHeader,
-		height:      height,
+		meta:        blockHeaderMeta,
 	})
 
-	return blockHeader, height, nil
+	return blockHeader, blockHeaderMeta, nil
 }

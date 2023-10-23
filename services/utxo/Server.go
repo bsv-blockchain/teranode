@@ -64,12 +64,12 @@ func (u *UTXOStore) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, height, err := blockchainClient.GetBestBlockHeader(ctx)
+	_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		u.logger.Errorf("[UTXOServer] error getting best block header: %v", err)
 	} else {
-		u.logger.Debugf("[UTXOServer] setting block height to %d", height)
-		_ = u.store.SetBlockHeight(height)
+		u.logger.Debugf("[UTXOServer] setting block height to %d", meta.Height)
+		_ = u.store.SetBlockHeight(meta.Height)
 	}
 
 	u.logger.Infof("[UTXOServer] starting block height subscription")
@@ -81,13 +81,13 @@ func (u *UTXOStore) Start(ctx context.Context) error {
 				return
 			case notification := <-blockchainSubscriptionCh:
 				if notification.Type == model.NotificationType_Block {
-					_, height, err = blockchainClient.GetBestBlockHeader(ctx)
+					_, meta, err = blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						u.logger.Errorf("[UTXOServer] error getting best block header: %v", err)
 						continue
 					}
-					u.logger.Debugf("[UTXOServer] setting block height to %d", height)
-					_ = u.store.SetBlockHeight(height)
+					u.logger.Debugf("[UTXOServer] setting block height to %d", meta.Height)
+					_ = u.store.SetBlockHeight(meta.Height)
 				}
 			}
 		}

@@ -56,17 +56,16 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 				panic(err)
 			}
 
-			_, height, err := blockchainClient.GetBestBlockHeader(ctx)
+			_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 			if err != nil {
 				logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 			} else {
-				logger.Debugf("[UTXOStore] setting block height to %d", height)
-				_ = utxoStore.SetBlockHeight(height)
+				logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
+				_ = utxoStore.SetBlockHeight(meta.Height)
 			}
 
 			logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
 			go func() {
-				var height uint32
 				for {
 					select {
 					case <-ctx.Done():
@@ -74,13 +73,13 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 						return
 					case notification := <-blockchainSubscriptionCh:
 						if notification.Type == model.NotificationType_Block {
-							_, height, err = blockchainClient.GetBestBlockHeader(ctx)
+							_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 							if err != nil {
 								logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 								continue
 							}
-							logger.Debugf("[UTXOStore] setting block height to %d", height)
-							_ = utxoStore.SetBlockHeight(height)
+							logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
+							_ = utxoStore.SetBlockHeight(meta.Height)
 						}
 					}
 				}
@@ -105,7 +104,7 @@ func BlockHeightListener(ctx context.Context, logger utils.Logger, utxoStore utx
 	}
 
 	go func() {
-		var height uint32
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -113,12 +112,12 @@ func BlockHeightListener(ctx context.Context, logger utils.Logger, utxoStore utx
 				return
 			case notification := <-blockchainSubscriptionCh:
 				if notification.Type == model.NotificationType_Block {
-					_, height, err = blockchainClient.GetBestBlockHeader(ctx)
+					_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 						continue
 					}
-					_ = utxoStore.SetBlockHeight(height)
+					_ = utxoStore.SetBlockHeight(meta.Height)
 				}
 			}
 		}

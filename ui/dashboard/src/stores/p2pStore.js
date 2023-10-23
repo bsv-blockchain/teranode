@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store'
 
 export const messages = writable([])
+export const miningNodes = writable([])
 export const wsUrl = writable('')
 
 const maxMessages = 100
@@ -31,11 +32,32 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
+        if (json.type === 'mining_on') {
+          const uniqueNodes = {}
+          let mn = get(miningNodes)
+
+          for (const node of mn) {
+            uniqueNodes[node.base_url] = node
+          }
+
+          uniqueNodes[json.base_url] = json
+
+          const sorted = Object.values(uniqueNodes).sort((a, b) => {
+            if (a.base_url < b.base_url) {
+              return -1
+            } else if (a.base_url > b.base_url) {
+              return 1
+            } else {
+              return 0
+            }
+          })
+
+          miningNodes.set(sorted)
+        }
+
         let m = get(messages)
         m = ([json, ...m]).slice(0, maxMessages)
 
-        console.log('p2pWS: Received message:', json)
-        console.log('p2pWS: Messages:', m)
         messages.set(m)
 
       } catch (error) {

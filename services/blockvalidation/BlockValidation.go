@@ -109,7 +109,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	block.SizeInBytes = 80 + util.VarintSize(block.TransactionCount) + sizeInBytes
 
 	// if valid, store the block
-	if err = u.blockchainClient.AddBlock(ctx, block); err != nil {
+	if err = u.blockchainClient.AddBlock(ctx, block, true); err != nil {
 		return fmt.Errorf("failed to store block [%w]", err)
 	}
 

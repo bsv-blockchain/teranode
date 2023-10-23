@@ -28,6 +28,7 @@ const (
 	NotificationType_Ping    NotificationType = 0
 	NotificationType_Subtree NotificationType = 1
 	NotificationType_Block   NotificationType = 2
+	NotificationType_MiningOn   NotificationType = 3
 )
 
 // Enum value maps for NotificationType.

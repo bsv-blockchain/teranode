@@ -11,16 +11,16 @@ import (
 )
 
 type notificationMsg struct {
-	Timestamp         time.Time `json:"timestamp,omitempty"`
-	Type              string    `json:"type"`
-	Hash              string    `json:"hash,omitempty"`
-	BaseURL           string    `json:"base_url,omitempty"`
-	PeerId            string    `json:"peer_id,omitempty"`
-	Height            uint32    `json:"height,omitempty"`
-	TxCount           uint64    `json:"txCount,omitempty"`
-	SizeInBytes       uint64    `json:"sizeInBytes,omitempty"`
-	Miner             string    `json:"miner,omitempty"`
-	PreviousBlockHash string    `json:"previousblockhash,omitempty"`
+	Timestamp    time.Time `json:"timestamp,omitempty"`
+	Type         string    `json:"type"`
+	Hash         string    `json:"hash,omitempty"`
+	BaseURL      string    `json:"base_url,omitempty"`
+	PeerId       string    `json:"peer_id,omitempty"`
+	PreviousHash string    `json:"previousblockhash,omitempty"`
+	TxCount      uint64    `json:"tx_count,omitempty"`
+	Height       uint32    `json:"height,omitempty"`
+	SizeInBytes  uint64    `json:"size_in_bytes,omitempty"`
+	Miner        string    `json:"miner,omitempty"`
 }
 
 var (

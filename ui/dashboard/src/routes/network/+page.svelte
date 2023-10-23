@@ -1,38 +1,6 @@
 <script>
-  import { messages, wsUrl } from '@stores/p2pStore.js'
+  import { miningNodes, wsUrl } from '@stores/p2pStore.js'
   import Node from './Node.svelte'
-
-  const uniqueNodes = {}
-  let nodes = []
-
-  $: {
-    $messages.forEach((m) => {
-      if (m.type !== 'block') return
-
-      // Get the record for m.peer_id
-      const existing = uniqueNodes[m.base_url]
-      if (!existing) {
-        uniqueNodes[m.base_url] = m
-        return
-      }
-
-      if (m.timestamp > existing.timestamp) {
-        uniqueNodes[m.base_url] = m
-        return
-      }
-    })
-
-    // sort the nodesData by name
-    nodes = Object.values(uniqueNodes).sort((a, b) => {
-      if (a.base_url < b.base_url) {
-        return -1
-      } else if (a.base_url > b.base_url) {
-        return 1
-      } else {
-        return 0
-      }
-    })
-  }
 </script>
 
 <div class="url">{$wsUrl}</div>
@@ -52,7 +20,7 @@
       </tr>
     </thead>
     <tbody>
-      {#each nodes as node (node.base_url)}
+      {#each $miningNodes as node (node.base_url)}
         <Node {node} />
       {/each}
     </tbody>

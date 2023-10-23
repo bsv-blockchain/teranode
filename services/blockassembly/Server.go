@@ -589,7 +589,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockass
 
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain
-	if err = ba.blockchainClient.AddBlock(ctx, block); err != nil {
+	if err = ba.blockchainClient.AddBlock(ctx, block, false); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
 

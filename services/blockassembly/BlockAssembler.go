@@ -93,7 +93,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		// variables are defined here to prevent unnecessary allocations
 		var block *model.Block
 		var header *model.BlockHeader
-		var height uint32
+		var meta *model.BlockHeaderMeta
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -113,7 +114,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
-					header, height, err = b.blockchainClient.GetBestBlockHeader(ctx)
+					header, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 						continue
@@ -141,7 +142,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 
 					b.bestBlockHeader = header
-					b.bestBlockHeight = height
+					b.bestBlockHeight = meta.Height
 
 					err = b.SetState(ctx)
 					if err != nil {
@@ -174,11 +175,14 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	// we did not get any state back from the blockchain db, so we get the current best block header
 	if b.bestBlockHeader == nil || b.bestBlockHeight == 0 {
-		b.bestBlockHeader, b.bestBlockHeight, err = b.blockchainClient.GetBestBlockHeader(ctx)
+		header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 		} else {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Hash())
+
+			b.bestBlockHeader = header
+			b.bestBlockHeight = meta.Height
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
 		}
 	}

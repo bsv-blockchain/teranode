@@ -73,7 +73,7 @@ func main() {
 
 				for _, minerAddress := range minerList {
 					miner := miners[minerAddress]
-					blockHeader, height, err := miner.GetBestBlockHeader(ctx)
+					blockHeader, meta, err := miner.GetBestBlockHeader(ctx)
 					if err != nil {
 						table.Append([]string{
 							minerAddress,
@@ -84,7 +84,7 @@ func main() {
 					} else {
 						table.Append([]string{
 							minerAddress,
-							strconv.Itoa(int(height)),
+							strconv.Itoa(int(meta.Height)),
 							blockHeader.Hash().String(),
 							blockHeader.HashPrevBlock.String(),
 						})
