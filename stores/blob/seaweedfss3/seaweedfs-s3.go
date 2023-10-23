@@ -32,6 +32,12 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 		scheme = s3GatewayURL.Query().Get("scheme")
 	}
 
+	s3ForcePathStyle := false
+	if s3GatewayURL.Query().Get("S3ForcePathStyle") != "" {
+		s3ForcePathStyleString := s3GatewayURL.Query().Get("S3ForcePathStyle")
+		s3ForcePathStyle = s3ForcePathStyleString == "true"
+	}
+
 	serverURL := url.URL{
 		Scheme: scheme,
 		Host:   s3GatewayURL.Host,
@@ -41,7 +47,7 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(s3GatewayURL.Query().Get("region")),
 		Endpoint:         aws.String(serverURL.String()),
-		S3ForcePathStyle: aws.Bool(true), // Required when using a non-AWS S3 service
+		S3ForcePathStyle: aws.Bool(s3ForcePathStyle), // Required when using a non-AWS S3 service
 	}))
 
 	// Create an S3 client
