@@ -24,8 +24,10 @@ var (
 	commit      string
 	counter     atomic.Int64
 	workerCount int
+	usePrefix   bool
 	txStore     blob.Store
 )
+var separator = []byte("/")
 
 func init() {
 
@@ -50,6 +52,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
+	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key (in theory improves performance)")
 	flag.Parse()
 
 	logger := gocore.Log("s3_blaster")
@@ -80,6 +83,8 @@ func main() {
 		}
 	}()
 
+	log.Printf("Using %s as the tx store", txStoreUrl)
+	log.Print("Prefixing: ", usePrefix)
 	log.Printf("Starting %d broadcasting worker(s)", workerCount)
 
 	for i := 0; i < workerCount; i++ {
@@ -90,12 +95,19 @@ func main() {
 }
 
 func worker(logger utils.Logger) {
+	payload := []byte("value")
+
 	for {
 		// Create a dummy txid
 		txid := generateRandomBytes()
 		ctx := context.Background()
 
-		if err := txStore.Set(ctx, txid, []byte("bla")); err != nil {
+		if usePrefix {
+			prefix := []byte(calculatePrefix(txid))
+			txid = append(prefix, append(separator, txid...)...)
+		}
+
+		if err := txStore.Set(ctx, txid, payload); err != nil {
 			logger.Fatalf("Failed to broadcast tx: %v", err)
 		}
 		counter.Add(1)
@@ -133,4 +145,20 @@ func FormatFloat(f float64) string {
 	}
 
 	return fmt.Sprintf("%s.%02d", string(reversedIntPart), decimalPart)
+}
+
+const (
+	numPrefixes = 65535 // The number of prefixes to use
+)
+
+func calculatePrefix(s3Key []byte) []byte {
+	// Calculate the prefix index based on the first two bytes of the key
+	prefixIndex := (int(s3Key[0]) << 8) + int(s3Key[1])
+	prefixIndex = prefixIndex % numPrefixes
+
+	// Convert the prefix index to a byte slice
+	prefixBytes := []byte(fmt.Sprintf("prefix%d", prefixIndex))
+
+	// Combine the prefix and the key with a "/"
+	return append(prefixBytes, append(separator, s3Key...)...)
 }
