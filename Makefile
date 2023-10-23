@@ -265,8 +265,8 @@ clean:
 
 .PHONY: install-lint
 install-lint:
-	go install honnef.co/go/tools/cmd/staticcheck@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	brew install golangci-lint
+	brew install staticcheck
 
 .PHONY: lint
 lint: # todo enable coinbase tracker
@@ -276,7 +276,7 @@ lint: # todo enable coinbase tracker
 .PHONY: install
 install:
 	$(MAKE) install-lint
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+	brew install protoc-gen-go
+	brew install protoc-gen-go-grpc
 	brew install pre-commit
 	pre-commit install
