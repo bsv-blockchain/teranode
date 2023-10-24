@@ -1,9 +1,14 @@
 <script>
-  import { miningNodes, wsUrl } from '@stores/p2pStore.js'
+  import { miningNodes, wsUrl, error } from '@stores/p2pStore.js'
   import Node from './Node.svelte'
 </script>
 
-<div class="url">{$wsUrl}</div>
+<div class="url">
+  {$wsUrl}
+  {#if error}
+    <span class="error-message">{error}</span>
+  {/if}
+</div>
 
 <div class="card-content">
   <table class="table">
@@ -65,5 +70,9 @@
     margin-left: 25px;
     padding: 10px;
     font-size: 0.7rem;
+  }
+
+  .error-message {
+    color: red;
   }
 </style>

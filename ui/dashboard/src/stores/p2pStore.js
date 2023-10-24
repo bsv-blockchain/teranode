@@ -3,6 +3,7 @@ import { writable, get } from 'svelte/store'
 export const messages = writable([])
 export const miningNodes = writable([])
 export const wsUrl = writable('')
+export const error = writable(null)
 
 const maxMessages = 100
 
@@ -14,14 +15,17 @@ export function connectToP2PServer() {
     url.pathname = '/ws'
 
     wsUrl.set(url)
+    error.set(null)
 
     let socket = new WebSocket(url)
 
     socket.onerror = (event) => {
+      error.set(event)
       console.log("WebSocket Error:", event);
     }
 
     socket.onopen = () => {
+      error.set(null)
       console.log(`p2pWS connection opened to ${url}`)
     }
 
@@ -67,6 +71,7 @@ export function connectToP2PServer() {
 
 
     socket.onclose = () => {
+      error.set(new Error("closed"))
       console.log(`p2pWS connection closed by server (${url})`)
       socket = null
 
