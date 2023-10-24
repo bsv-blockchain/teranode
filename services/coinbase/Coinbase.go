@@ -11,7 +11,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -37,6 +39,7 @@ type Coinbase struct {
 	catchupCh        chan processBlockCatchup
 	logger           utils.Logger
 	mu               sync.Mutex
+	address          string
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -47,6 +50,21 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("unsupported database engine: %s", engine)
 	}
 
+	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_privkey")
+	if !found {
+		return nil, errors.New("coinbase_wallet_privkey not found in config")
+	}
+
+	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+	}
+
+	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+	if err != nil {
+		return nil, fmt.Errorf("can't create coinbase address: %v", err)
+	}
+
 	c := &Coinbase{
 		store:        store,
 		db:           store.GetDB(),
@@ -54,6 +72,7 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		blockFoundCh: make(chan processBlockFound, 100),
 		catchupCh:    make(chan processBlockCatchup),
 		logger:       logger,
+		address:      coinbaseAddr.AddressString,
 	}
 
 	return c, nil
@@ -328,11 +347,13 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 			return err
 		}
 
-		if _, err = c.db.ExecContext(ctx, `
+		if addresses[0] == c.address {
+			if _, err = c.db.ExecContext(ctx, `
 			INSERT INTO coinbase_utxos (block_id, block_hash, tx_id, vout, locking_script, satoshis, address)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`, blockId, blockHash[:], coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis, addresses[0]); err != nil {
-			return fmt.Errorf("could not insert coinbase utxo: %+v", err)
+				return fmt.Errorf("could not insert coinbase utxo: %+v", err)
+			}
 		}
 	}
 
