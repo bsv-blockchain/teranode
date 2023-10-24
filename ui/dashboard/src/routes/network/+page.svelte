@@ -5,8 +5,8 @@
 
 <div class="url">
   {$wsUrl}
-  {#if error}
-    <span class="error-message">{error}</span>
+  {#if $error && $error.message}
+    <span class="error-message">{$error.message}</span>
   {/if}
 </div>
 
