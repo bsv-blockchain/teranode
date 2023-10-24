@@ -204,7 +204,10 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		}
 
 		defer func() {
-			txn.Rollback()
+			err := txn.Rollback()
+			if err != nil {
+				fmt.Printf("ERROR: %v\n", err)
+			}
 		}()
 
 		stmt, err := txn.Prepare(pq.CopyIn("utxos", "lock_time", "hash"))
