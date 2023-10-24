@@ -2,7 +2,6 @@
   import { blobServerHTTPAddress } from '@stores/nodeStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
-
   import Spinner from '@components/Spinner.svelte'
 
   export let data
@@ -35,7 +34,7 @@
 
       res = d
 
-      goto(`/txviewer/utxos/${data.hash}/json`, { replaceState: true })
+      goto(`/utxoviewer/${data.hash}`, { replaceState: true })
     } catch (err) {
       error = err.message
     } finally {
@@ -89,9 +88,8 @@
   }
 
   .search-field {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
+    position: relative;
+    display: inline-block;
   }
 
   .search-input {
