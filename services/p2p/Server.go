@@ -655,20 +655,5 @@ func (s *Server) handleMiningOnTopic(ctx context.Context) {
 			SizeInBytes:  msg.SizeInBytes,
 			TxCount:      msg.TxCount,
 		}
-
-		if m.ReceivedFrom != s.host.ID() {
-			s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
-			validationClient := blockvalidation.NewClient(ctx)
-			hash, err := chainhash.NewHashFromStr(msg.Hash)
-			if err != nil {
-				s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
-				continue
-			}
-			if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
-				s.logger.Errorf("[p2p] error validating subtree from %s: %s", msg.DataHubUrl, err)
-			}
-		} else {
-			s.logger.Debugf("subtree message received from myself %s- ignoring\n", m.ReceivedFrom.ShortString())
-		}
 	}
 }
