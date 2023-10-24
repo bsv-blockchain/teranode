@@ -10,7 +10,7 @@ import (
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
-	_ "github.com/lib/pq"
+	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -194,23 +194,66 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		storeLockTime = lockTime[0]
 	}
 
-	q := `
+	switch s.engine {
+	case "postgres":
+
+		// Prepare the copy operation
+		txn, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			txn.Rollback()
+		}()
+
+		stmt, err := txn.Prepare(pq.CopyIn("utxos", "lock_time", "hash"))
+		if err != nil {
+			return err
+		}
+
+		for _, hash := range utxoHashes {
+			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
+				return err
+			}
+		}
+
+		// Execute the batch transaction
+		_, err = stmt.ExecContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+		if err := txn.Commit(); err != nil {
+			return err
+		}
+
+	case "sqlite", "sqlitememory":
+		// Prepare the copy operation
+		q := `
 		INSERT INTO utxos
 		    (lock_time, hash)
 		VALUES
 	`
 
-	variables := make([]interface{}, 0, len(utxoHashes))
-	for _, hash := range utxoHashes {
-		variables = append(variables, hash[:])
-		q += fmt.Sprintf("(%d, $%d),", storeLockTime, len(variables))
-	}
+		variables := make([]interface{}, 0, len(utxoHashes))
+		for _, hash := range utxoHashes {
+			variables = append(variables, hash[:])
+			q += fmt.Sprintf("(%d, $%d),", storeLockTime, len(variables))
+		}
 
-	// remove last comma from query
-	q = q[:len(q)-1]
+		// remove last comma from query
+		q = q[:len(q)-1]
 
-	if _, err = s.db.ExecContext(ctx, q, variables...); err != nil {
-		return err
+		if _, err = s.db.ExecContext(ctx, q, variables...); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unknown database engine: %s", s.engine)
 	}
 
 	prometheusUtxoStore.Add(float64(len(utxoHashes)))
