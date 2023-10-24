@@ -9,7 +9,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -18,12 +20,23 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 	// Create a new coinbase transaction
 
 	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
-	walletAddress, found := gocore.Config().Get("coinbase_wallet_address")
+
+	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_privkey")
 	if !found {
-		log.Fatal(errors.New("coinbase_wallet_address not found in config"))
+		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
 	}
 
-	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddress)
+	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+	}
+
+	walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+	if err != nil {
+		return nil, fmt.Errorf("can't create coinbase address: %v", err)
+	}
+
+	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddress.AddressString)
 	if err != nil {
 		return nil, fmt.Errorf("error creating coinbase transaction: %v", err)
 	}
