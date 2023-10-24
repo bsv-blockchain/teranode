@@ -3,7 +3,6 @@ package txmeta
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -43,13 +42,13 @@ func (s TxStatus) String() string {
 // Data struct for the transaction metadata
 // do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
-	FirstSeen      time.Time
 	UtxoHashes     []*chainhash.Hash
 	ParentTxHashes []*chainhash.Hash
 	BlockHashes    []*chainhash.Hash
 	Fee            uint64
 	SizeInBytes    uint64
 	Status         TxStatus
+	FirstSeen      uint32
 	BlockHeight    uint32
 	LockTime       uint32
 }

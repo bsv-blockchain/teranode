@@ -1,16 +1,14 @@
 // //go:build aerospike
 
-package aerospike
+package aerospikemap
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
-	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,6 +17,8 @@ import (
 )
 
 var (
+	setName = "utxo"
+
 	prometheusTxMetaGet      prometheus.Counter
 	prometheusTxMetaSet      prometheus.Counter
 	prometheusTxMetaSetMined prometheus.Counter
@@ -28,25 +28,25 @@ var (
 func init() {
 	prometheusTxMetaGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_get",
+			Name: "aerospike_map_txmeta_get",
 			Help: "Number of txmeta get calls done to aerospike",
 		},
 	)
 	prometheusTxMetaSet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set",
+			Name: "aerospike_map_txmeta_set",
 			Help: "Number of txmeta set calls done to aerospike",
 		},
 	)
 	prometheusTxMetaSetMined = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set_mined",
+			Name: "aerospike_map_txmeta_set_mined",
 			Help: "Number of txmeta set_mined calls done to aerospike",
 		},
 	)
 	prometheusTxMetaDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_delete",
+			Name: "aerospike_map_txmeta_delete",
 			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
@@ -88,7 +88,8 @@ func New(u *url.URL) (*Store, error) {
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 
-	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	// in the map implementation, we are using the utxo store for the data
+	key, aeroErr := aerospike.NewKey(s.namespace, setName, hash[:])
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -158,70 +159,31 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		nLockTime = uint32(value.Bins["lockTime"].(int))
 	}
 
+	var nFirstSeen uint32
+	if value.Bins["firstSeen"] != nil {
+		nFirstSeen = uint32(value.Bins["firstSeen"].(int))
+	}
+
 	// transform the aerospike interface{} into the correct types
 	status := &txmeta.Data{
 		Fee:            uint64(value.Bins["fee"].(int)),
 		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
-		ParentTxHashes: parentTxHashes,
-		UtxoHashes:     utxoHashes,
-		FirstSeen:      uint32(value.Bins["firstSeen"].(int)),
-		BlockHashes:    blockHashes,
 		LockTime:       nLockTime,
+		UtxoHashes:     utxoHashes,
+		ParentTxHashes: parentTxHashes,
+		BlockHashes:    blockHashes,
+		FirstSeen:      nFirstSeen,
 	}
 
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
-	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
-
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, 0, options...)
-	policy.RecordExistsAction = aerospike.CREATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
-	if err != nil {
-		return err
-	}
-
-	parentTxHashesInterface := make([]interface{}, len(parentTxHashes))
-	for i, v := range parentTxHashes {
-		parentTxHashesInterface[i] = v[:]
-	}
-
-	utxoHashesInterface := make([]interface{}, len(utxoHashes))
-	for i, v := range utxoHashes {
-		utxoHashesInterface[i] = v[:]
-	}
-
-	bins := []*aerospike.Bin{
-		aerospike.NewBin("fee", int(fee)),
-		aerospike.NewBin("sizeInBytes", int(sizeInBytes)),
-		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
-		aerospike.NewBin("utxoHashes", utxoHashesInterface),
-		aerospike.NewBin("firstSeen", time.Now().Unix()),
-		aerospike.NewBin("lockTime", int(nLockTime)),
-	}
-	err = s.client.PutBins(policy, key, bins...)
-	if err != nil {
-		aeroErr := &aerospike.AerospikeError{}
-		if ok := errors.As(err, &aeroErr); ok {
-			if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
-				return txmeta.ErrAlreadyExists
-			}
-		}
-
-		return err
-	}
+func (s *Store) Create(_ context.Context, _ *chainhash.Hash, _ uint64, _ uint64, _ []*chainhash.Hash,
+	_ []*chainhash.Hash, _ uint32) error {
 
 	prometheusTxMetaSet.Inc()
 
+	// this is a no-op for the map implementation - it is created in the utxo store
 	return nil
 }
 
@@ -231,7 +193,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	key, err := aerospike.NewKey(s.namespace, setName, hash[:])
 	if err != nil {
 		return err
 	}
@@ -260,21 +222,9 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	return nil
 }
 
-func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
-	policy := util.GetAerospikeWritePolicy(0, 0)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
-	if err != nil {
-		return err
-	}
-
-	_, err = s.client.Delete(policy, key)
-	if err != nil {
-		return err
-	}
-
+func (s *Store) Delete(_ context.Context, _ *chainhash.Hash) error {
 	prometheusTxMetaDelete.Inc()
 
+	// this is a no-op for the map implementation - it is deleted in the utxo store
 	return nil
 }

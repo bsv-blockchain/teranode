@@ -161,7 +161,7 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,
-		FirstSeen:      timestamppb.New(tx.FirstSeen),
+		FirstSeen:      tx.FirstSeen,
 		BlockHashes:    blockHashes,
 		BlockHeight:    tx.BlockHeight,
 	}, nil

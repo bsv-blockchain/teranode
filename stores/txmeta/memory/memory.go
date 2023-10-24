@@ -47,7 +47,7 @@ func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, siz
 		Status:         txmeta.Validated,
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
-		FirstSeen:      time.Now(),
+		FirstSeen:      uint32(time.Now().Unix()),
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,
 		LockTime:       nLockTime,

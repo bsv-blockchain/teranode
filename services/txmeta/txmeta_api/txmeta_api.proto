@@ -70,7 +70,7 @@ message GetResponse {
   uint64 Fee = 2;
   repeated bytes ParentTxHashes = 3;
   repeated bytes UtxoHashes = 4;
-  google.protobuf.Timestamp FirstSeen = 5;
+  uint32 FirstSeen = 5;
   repeated bytes BlockHashes = 6;
   uint32 BlockHeight = 7;
   uint64 SizeInBytes = 8;
