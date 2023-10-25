@@ -53,7 +53,7 @@ func init() {
 
 func main() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key (in theory improves performance)")
+	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key")
 	flag.Parse()
 
 	logger := gocore.Log("s3_blaster")
@@ -98,19 +98,19 @@ func worker(logger utils.Logger) {
 		panic(err)
 	}
 
+	ctx := context.Background()
 	payload := []byte("value")
 
 	for {
-		// Create a dummy txid
 		txid := generateRandomBytes()
-		ctx := context.Background()
 
 		if usePrefix {
 			prefix := []byte(calculatePrefix(txid))
 			txid = append(prefix, append(separator, txid...)...)
 		}
+
 		if err := txStore.Set(ctx, txid, payload); err != nil {
-			logger.Fatalf("Failed to broadcast tx: %v", err)
+			logger.Errorf("Failed to broadcast tx: %v", err)
 		}
 
 		counter.Add(1)
