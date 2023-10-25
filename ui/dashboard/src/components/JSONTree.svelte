@@ -1,5 +1,6 @@
 <script>
   export let data = {}
+  export let parentKey = ''
 
   function getType(value) {
     if (Array.isArray(value)) return 'array'
@@ -17,20 +18,20 @@
           {#if getType(value) === 'object' && value !== null}
             <svelte:self data={value} />
           {:else if getType(value) === 'array'}
+            [
             <ul>
               {#each value as item (item)}
-                <li><svelte:self data={item} /></li>
+                <li><svelte:self data={item} parentKey={key} /></li>
               {/each}
             </ul>
+            ]
           {:else if getType(value) === 'string'}
             {#if value.length === 64 && key.includes('txid')}
               <a href="/viewer/tx/{value}">"{value}"</a>
             {:else if value.length === 64 && key.includes('block')}
-              <a href="/viewer/block/{value}">"{value}""</a>
-            {:else if value.length === 64 && key.includes('subtrees')}
-              <a href="/viewer/subtree/{value}">"{value}""</a>
+              <a href="/viewer/block/{value}">"{value}"</a>
             {:else if value.length === 64 && key === 'utxoHash'}
-              <a href="/viewer/utxo/{value}">"{value}""</a>
+              <a href="/viewer/utxo/{value}">"{value}"</a>
             {:else}
               <span class="string">"{value}"</span>
             {/if}
@@ -43,6 +44,8 @@
       {/each}
     </ul>
     &#125;
+  {:else if data.length === 64 && parentKey === 'subtrees'}
+    <a href="/viewer/subtree/{data}">{data}</a>
   {:else}
     <span class={getType(data)}>{data}</span>
   {/if}
