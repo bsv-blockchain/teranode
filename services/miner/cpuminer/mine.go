@@ -21,22 +21,28 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 
 	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
 
-	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_privkey")
+	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
 	if !found {
-		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
+		log.Fatal(errors.New("miner_wallet_private_keys not found in config"))
 	}
 
-	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
-	if err != nil {
-		return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+	walletAddresses := make([]string, len(coinbasePrivKeys))
+
+	for i, coinbasePrivKey := range coinbasePrivKeys {
+		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		if err != nil {
+			return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+		}
+
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+		if err != nil {
+			return nil, fmt.Errorf("can't create coinbase address: %v", err)
+		}
+
+		walletAddresses[i] = walletAddress.AddressString
 	}
 
-	walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
-	if err != nil {
-		return nil, fmt.Errorf("can't create coinbase address: %v", err)
-	}
-
-	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddress.AddressString)
+	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddresses)
 	if err != nil {
 		return nil, fmt.Errorf("error creating coinbase transaction: %v", err)
 	}

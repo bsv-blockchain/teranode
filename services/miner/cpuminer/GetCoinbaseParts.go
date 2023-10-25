@@ -9,7 +9,7 @@ Here is a real example coinbase broken down...
 | 00000000000000000000000000000000 ...  Previous outpoint TXID
 | ffffffff ............................ Previous outpoint index
 |
-| 43 .................................. Input coinbase count of bytes (4 block height + 12 (extra nonces) + Arbitary data length)
+| 43 .................................. Input coinbase count of bytes (4 block height + 12 (extra nonces) + Arbitrary data length)
 | |
 | | 03 ................................ Bytes in height
 | | | bfea07 .......................... Height: 518847
@@ -40,8 +40,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-
-	"github.com/ordishs/gocore"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.
@@ -60,10 +58,10 @@ func BuildCoinbase(c1 []byte, c2 []byte, extraNonce1 string, extraNonce2 string)
 
 // GetCoinbaseParts returns the two split coinbase parts from coinbase metadata.
 // See https://arxiv.org/pdf/1703.06545.pdf section 2.2 for more info.
-func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, walletAddress string) (coinbase1 []byte, coinbase2 []byte, err error) {
+func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, walletAddresses []string) (coinbase1 []byte, coinbase2 []byte, err error) {
 	coinbase1 = makeCoinbase1(height, coinbaseText)
 
-	ot, err := makeCoinbaseOutputTransactions(coinbaseValue, walletAddress)
+	ot, err := makeCoinbaseOutputTransactions(coinbaseValue, walletAddresses)
 	if err != nil {
 		return
 	}
@@ -134,24 +132,25 @@ func AddressToScript(address string) (script []byte, err error) {
 	}
 }
 
-func makeCoinbaseOutputTransactions(coinbaseValue uint64, wallet string) ([]byte, error) {
+func makeCoinbaseOutputTransactions(coinbaseValue uint64, walletAddresses []string) ([]byte, error) {
 
-	lockingScript, err := AddressToScript(wallet)
-	if err != nil {
-		return nil, err
-	}
+	numberOfOutputs := uint64(len(walletAddresses))
 
-	numberOfOutputs, _ := gocore.Config().GetInt("coinbase_number_of_outputs", 1)
-	outputValue := coinbaseValue / uint64(numberOfOutputs)
-	outputChange := coinbaseValue % uint64(numberOfOutputs)
+	outputValue := coinbaseValue / numberOfOutputs
+	outputChange := coinbaseValue % numberOfOutputs
 
 	buf := make([]byte, 0)
 
 	// Add the number of outputs
 	buf = append(buf, VarInt(uint64(numberOfOutputs))...)
 
-	// Add each output (the first output may have any rounding error change added to it)
-	for i := 0; i < numberOfOutputs; i++ {
+	for i, walletAddress := range walletAddresses {
+		lockingScript, err := AddressToScript(walletAddress)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add each output (the first output may have any rounding error change added to it)
 		outputBytes := make([]byte, 8)
 
 		if i == 0 {

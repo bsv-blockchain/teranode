@@ -7,11 +7,10 @@ package coinbase_api;
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-service coinbaseAPI {
+service CoinbaseAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc GetUtxo (GetUtxoRequest) returns (Utxo) {}
-  rpc MarkUtxoSpent (MarkUtxoSpentRequest) returns (google.protobuf.Empty) {}
+  rpc RequestFunds(RequestFundsRequest) returns (RequestFundsResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -21,22 +20,12 @@ message HealthResponse {
   google.protobuf.Timestamp timestamp = 3;
 }
 
-// swagger:model GetUtxoRequest
-message GetUtxoRequest {
+// swagger:model RequestFundsRequest
+message RequestFundsRequest {
   string address = 1;
 }
 
-// swagger:model Utxo
-message Utxo {
-  bytes txId = 1;
-  uint32 vout = 2;
-  bytes script  = 3;
-  uint64 satoshis = 4;
-}
-
-// swagger:model MarkUtxoSpentRequest
-message MarkUtxoSpentRequest {
-  bytes txId = 1;
-  uint32 vout = 2;
-  bytes spentByTxId = 3;
+// swagger:model RequestFundsResponse
+message RequestFundsResponse {
+  bytes tx = 1;
 }

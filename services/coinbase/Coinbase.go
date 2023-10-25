@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blobserver"
+	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -30,16 +34,18 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db               *sql.DB
-	engine           util.SQLEngine
-	store            blockchain.Store
-	blobServerClient *blobserver.Client
-	running          bool
-	blockFoundCh     chan processBlockFound
-	catchupCh        chan processBlockCatchup
-	logger           utils.Logger
-	mu               sync.Mutex
-	address          string
+	db                 *sql.DB
+	engine             util.SQLEngine
+	store              blockchain.Store
+	blobServerClient   *blobserver.Client
+	propagationServers map[string]propagation_api.PropagationAPIClient
+	privateKey         *bec.PrivateKey
+	running            bool
+	blockFoundCh       chan processBlockFound
+	catchupCh          chan processBlockCatchup
+	logger             utils.Logger
+	mu                 sync.Mutex
+	address            string
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -50,9 +56,9 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("unsupported database engine: %s", engine)
 	}
 
-	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_privkey")
+	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_private_key")
 	if !found {
-		return nil, errors.New("coinbase_wallet_privkey not found in config")
+		return nil, errors.New("coinbase_wallet_private_key not found in config")
 	}
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
@@ -65,14 +71,18 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
+	ps := getPropagationServers(context.Background())
+
 	c := &Coinbase{
-		store:        store,
-		db:           store.GetDB(),
-		engine:       engine,
-		blockFoundCh: make(chan processBlockFound, 100),
-		catchupCh:    make(chan processBlockCatchup),
-		logger:       logger,
-		address:      coinbaseAddr.AddressString,
+		store:              store,
+		db:                 store.GetDB(),
+		engine:             engine,
+		blockFoundCh:       make(chan processBlockFound, 100),
+		catchupCh:          make(chan processBlockCatchup),
+		propagationServers: ps,
+		logger:             logger,
+		privateKey:         privateKey.PrivKey,
+		address:            coinbaseAddr.AddressString,
 	}
 
 	return c, nil
@@ -165,56 +175,46 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 
 func (c *Coinbase) createTables(ctx context.Context) error {
 	// Init coinbase tables in db
-	if c.engine == util.Postgres {
-		if _, err := c.db.ExecContext(ctx, `
-			CREATE TABLE IF NOT EXISTS coinbase_utxos (
-	    		id              BIGSERIAL PRIMARY KEY
-			    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
-				,block_hash     BYTEA NOT NULL
-				,tx_id          BYTEA NOT NULL
-				,vout           INTEGER NOT NULL
-				,locking_script BYTEA NOT NULL
-				,satoshis       BIGINT NOT NULL
-				,address        TEXT
-			    ,spendable      BOOLEAN NOT NULL DEFAULT FALSE
-				,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-				,reserved_at    TIMESTAMPTZ NULL
-				,spent_at       TIMESTAMPTZ NULL
-				,spent_by_tx_id BYTEA NULL
-			 )
+	if _, err := c.db.ExecContext(ctx, `
+		  CREATE TABLE IF NOT EXISTS coinbase_utxos (
+			 inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+	    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
+			,txid           BLOB NOT NULL
+			,vout           INTEGER NOT NULL
+			,locking_script BLOB NOT NULL
+			,satoshis       BIGINT NOT NULL
+			,processed_at   TIMESTAMPTZ
+		 )
 		`); err != nil {
-			return err
-		}
-	} else {
-		if _, err := c.db.ExecContext(ctx, `
-			CREATE TABLE IF NOT EXISTS coinbase_utxos (
-				id              INTEGER PRIMARY KEY AUTOINCREMENT
-			    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
-				,block_hash     BLOB NOT NULL
-				,tx_id          BLOB NOT NULL
-				,vout           INTEGER NOT NULL
-				,locking_script BLOB NOT NULL
-				,satoshis       BIGINT NOT NULL
-				,address        text
-			    ,spendable      BOOLEAN NOT NULL DEFAULT FALSE
-				,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-				,reserved_at    TEXT NULL
-				,spent_at       TEXT NULL
-				,spent_by_tx_id BLOB NULL
-			 )
-		`); err != nil {
-			return err
-		}
+		return err
 	}
 
-	if _, err := c.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_tx_id_vout ON coinbase_utxos (tx_id, vout);`); err != nil {
-		_ = c.db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	var idType string
+	switch c.engine {
+	case util.Postgres:
+		idType = "BIGSERIAL"
+	case util.Sqlite, util.SqliteMemory:
+		idType = "INTEGER PRIMARY KEY AUTOINCREMENT"
+	default:
+		return fmt.Errorf("unsupported database engine: %s", c.engine)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_block_spendable ON coinbase_utxos (block_id, spendable, address, reserved_at, id);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, fmt.Sprintf(`
+		  CREATE TABLE IF NOT EXISTS spendable_utxos (
+			 id						  %s
+			,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+	    ,txid           BLOB NOT NULL
+			,vout           INTEGER NOT NULL
+			,locking_script BLOB NOT NULL
+			,satoshis       BIGINT NOT NULL
+		 )
+		`, idType)); err != nil {
+		return err
+	}
+
+	if _, err := c.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
 		_ = c.db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
 	}
 
 	return nil
@@ -349,13 +349,16 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 
 		if addresses[0] == c.address {
 			if _, err = c.db.ExecContext(ctx, `
-			INSERT INTO coinbase_utxos (block_id, block_hash, tx_id, vout, locking_script, satoshis, address)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, blockId, blockHash[:], coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis, addresses[0]); err != nil {
+			INSERT INTO coinbase_utxos (block_id, txid, vout, locking_script, satoshis)
+			VALUES ($1, $2, $3, $4, $5)
+		`, blockId, coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis); err != nil {
 				return fmt.Errorf("could not insert coinbase utxo: %+v", err)
 			}
 		}
 	}
+
+	// Create a timestamp variable to insert into the TIMESTAMPTZ field
+	timestamp := time.Now().UTC()
 
 	// update everything 100 blocks old on this chain to spendable
 	q := `
@@ -367,8 +370,8 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 		)
 
 		UPDATE coinbase_utxos
-		SET spendable = true
-		WHERE spendable = false AND block_id IN (
+		SET processed_at = $1
+		WHERE processed_at IS NULL AND block_id IN (
 			WITH RECURSIVE ChainBlocks AS (
 				SELECT id, parent_id, height
 				FROM blocks
@@ -383,55 +386,263 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 			WHERE height < (SELECT height - 100 FROM LongestChainTip)
 		)
 	`
-	if _, err := c.db.ExecContext(ctx, q); err != nil {
-		return fmt.Errorf("could not update coinbase utxos to spendable: %+v", err)
+	if _, err := c.db.ExecContext(ctx, q, timestamp); err != nil {
+		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
+	}
+
+	go c.createSpendingUtxos(context.Background(), timestamp)
+
+	return nil
+}
+
+func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+	q := `
+	  SELECT
+	   txid
+	  ,vout
+	  ,locking_script
+  	,satoshis
+	  FROM coinbase_utxos
+	  WHERE processed_at = $1
+	`
+
+	rows, err := c.db.QueryContext(ctx, q, timestamp)
+	if err != nil {
+		c.logger.Errorf("could not get coinbase utxos: %+v", err)
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var txid []byte
+		var vout uint32
+		var lockingScript bscript.Script
+		var satoshis uint64
+
+		if err := rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
+			c.logger.Errorf("could not scan coinbase utxo: %+v", err)
+			return
+		}
+
+		hash, err := chainhash.NewHash(txid)
+		if err != nil {
+			c.logger.Errorf("could not create hash from txid: %+v", err)
+			continue
+		}
+
+		utxo := &bt.UTXO{
+			TxIDHash:      hash,
+			Vout:          vout,
+			LockingScript: &lockingScript,
+			Satoshis:      satoshis,
+		}
+
+		if err := c.splitUtxo(ctx, utxo); err != nil {
+			c.logger.Errorf("could not split utxo: %+v", err)
+		}
+	}
+}
+
+func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
+	tx := bt.NewTx()
+
+	if err := tx.FromUTXOs(utxo); err != nil {
+		return fmt.Errorf("error creating initial transaction: %v", err)
+	}
+
+	var splitSatoshis = uint64(10_000_000)
+	amountRemaining := utxo.Satoshis
+
+	for amountRemaining > splitSatoshis {
+
+		tx.AddOutput(&bt.Output{
+			LockingScript: utxo.LockingScript,
+			Satoshis:      splitSatoshis,
+		})
+
+		amountRemaining -= splitSatoshis
+	}
+
+	tx.AddOutput(&bt.Output{
+		LockingScript: utxo.LockingScript,
+		Satoshis:      amountRemaining,
+	})
+
+	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
+	if err := tx.FillAllInputs(ctx, &unlockerGetter); err != nil {
+		return fmt.Errorf("error filling initial inputs: %v", err)
+	}
+
+	if err := c.sendTransaction(ctx, tx); err != nil {
+		return fmt.Errorf("error sending initial transaction: %v", err)
+	}
+
+	// Insert the spendable utxos....
+	hash := tx.TxIDChainHash()[:]
+
+	for vout, output := range tx.Outputs {
+		if _, err := c.db.ExecContext(ctx, `
+			INSERT INTO spendable_utxos (txid, vout, locking_script, satoshis)
+			VALUES ($1, $2, $3, $4)
+		`, hash, vout, output.LockingScript, output.Satoshis); err != nil {
+			return fmt.Errorf("could not insert spendable utxo: %+v", err)
+		}
+	}
+	return nil
+}
+
+func (c *Coinbase) sendTransaction(ctx context.Context, tx *bt.Tx) error {
+	var wg sync.WaitGroup
+	errorCount := 0
+
+	for addr, propagationServer := range c.propagationServers {
+		a := addr // Create a local copy
+		p := propagationServer
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+				Tx: tx.ExtendedBytes(),
+			}); err != nil {
+				c.logger.Errorf("error sending transaction to %s: %v", a, err)
+				errorCount++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if float32(errorCount)/float32(len(c.propagationServers)) > 0.5 {
+		return fmt.Errorf("error sending transaction to more than half of the propagation servers")
 	}
 
 	return nil
 }
 
-func (c *Coinbase) ReserveUtxo(ctx context.Context, address string) (*bt.UTXO, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
 
-	utxo := &bt.UTXO{
-		SequenceNumber: 0xffffffff,
+	var utxo *bt.UTXO
+	var err error
+
+	switch c.engine {
+	case util.Postgres:
+		utxo, err = c.requestFundsPostgres(ctx, address)
+	case util.Sqlite, util.SqliteMemory:
+		utxo, err = c.requestFundsSqlite(ctx, address)
+	default:
+		return nil, fmt.Errorf("unsupported database engine: %s", c.engine)
 	}
 
-	var utxoBytes []byte
+	if err != nil {
+		return nil, fmt.Errorf("error requesting funds: %v", err)
+	}
 
-	var id uint64
+	tx := bt.NewTx()
+
+	if err = tx.FromUTXOs(utxo); err != nil {
+		return nil, fmt.Errorf("error creating initial transaction: %v", err)
+	}
+
+	if err = tx.PayToAddress(address, utxo.Satoshis); err != nil {
+		return nil, fmt.Errorf("error paying to address: %v", err)
+	}
+
+	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
+	if err = tx.FillAllInputs(ctx, &unlockerGetter); err != nil {
+		return nil, fmt.Errorf("error filling initial inputs: %v", err)
+	}
+
+	if err = c.sendTransaction(ctx, tx); err != nil {
+		return nil, fmt.Errorf("error sending initial transaction: %v", err)
+	}
+
+	c.logger.Debugf("Sent funding transaction %s", tx.TxIDChainHash().String())
+
+	return tx, nil
+}
+
+func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*bt.UTXO, error) {
+	// Get the oldest spendable utxo
+	var txid []byte
+	var vout uint32
+	var lockingScript *bscript.Script
+	var satoshis uint64
+
 	if err := c.db.QueryRowContext(ctx, `
-		SELECT u.id, u.tx_id, u.vout, u.locking_script, u.satoshis
-		FROM coinbase_utxos u, blocks b
-		WHERE u.block_id = b.id
-		  And u.spendable = true
-		  AND u.address = $1
-		  AND u.reserved_at IS NULL
-		ORDER BY u.id ASC
+	DELETE FROM spendable_utxos
+	WHERE id = (
+		SELECT id
+		FROM spendable_utxos
+		ORDER BY id
+		FOR UPDATE SKIP LOCKED
 		LIMIT 1
-	`, address).Scan(
-		&id,
-		&utxoBytes,
-		&utxo.Vout,
-		&utxo.LockingScript,
-		&utxo.Satoshis,
-	); err != nil {
+	)
+	RETURNING txid, vout, locking_script, satoshis;
+`).Scan(&txid, &vout, lockingScript, &satoshis); err != nil {
 		return nil, err
 	}
 
-	var err error
-	utxo.TxIDHash, err = chainhash.NewHash(utxoBytes)
+	hash, err := chainhash.NewHash(txid)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err = c.db.ExecContext(ctx, `
-		UPDATE coinbase_utxos
-		SET reserved_at = CURRENT_TIMESTAMP
-		WHERE id = $1
-	`, id); err != nil {
+	utxo := &bt.UTXO{
+		TxIDHash:      hash,
+		Vout:          vout,
+		LockingScript: lockingScript,
+		Satoshis:      satoshis,
+	}
+
+	return utxo, nil
+}
+func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.UTXO, error) {
+	txn, err := c.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.IsolationLevel(sql.LevelWriteCommitted),
+	})
+	if err != nil {
 		return nil, err
+	}
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	// Get the oldest spendable utxo
+	var txid []byte
+	var vout uint32
+	var lockingScript bscript.Script
+	var satoshis uint64
+
+	if err := txn.QueryRowContext(ctx, `
+		SELECT txid, vout, locking_script, satoshis
+		FROM spendable_utxos
+		ORDER BY inserted_at ASC
+		LIMIT 1
+	`).Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
+		return nil, err
+	}
+
+	if _, err := txn.ExecContext(ctx, `DELETE FROM spendable_utxos WHERE txid = $1 AND vout = $2`, txid, vout); err != nil {
+		return nil, err
+	}
+
+	if err := txn.Commit(); err != nil {
+		return nil, err
+	}
+
+	hash, err := chainhash.NewHash(txid)
+	if err != nil {
+		return nil, err
+	}
+
+	utxo := &bt.UTXO{
+		TxIDHash:      hash,
+		Vout:          vout,
+		LockingScript: &lockingScript,
+		Satoshis:      satoshis,
 	}
 
 	return utxo, nil
@@ -452,4 +663,28 @@ func (c *Coinbase) MarkUtxoAsSpent(ctx context.Context, txId *chainhash.Hash, vo
 	}
 
 	return nil
+}
+
+func getPropagationServers(ctx context.Context) map[string]propagation_api.PropagationAPIClient {
+	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
+
+	propagationGrpcAddresses, okGrpc := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+	if !okGrpc {
+		panic("no propagation_grpcAddresses setting found")
+	}
+
+	for _, propagationGrpcAddress := range propagationGrpcAddresses {
+		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
+			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+			MaxRetries:  3,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		propagationServers[propagationGrpcAddress] = propagation_api.NewPropagationAPIClient(pConn)
+	}
+
+	return propagationServers
 }

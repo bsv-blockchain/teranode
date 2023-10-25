@@ -8,7 +8,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -101,36 +100,15 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.Heal
 	}, nil
 }
 
-func (s *Server) GetUtxo(ctx context.Context, req *coinbase_api.GetUtxoRequest) (*coinbase_api.Utxo, error) {
-	prometheusGetUtxo.Inc()
-	utxo, err := s.coinbase.ReserveUtxo(ctx, req.Address)
+func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
+	prometheusRequestFunds.Inc()
+
+	fundingTx, err := s.coinbase.RequestFunds(ctx, req.Address)
 	if err != nil {
 		return nil, err
 	}
 
-	return &coinbase_api.Utxo{
-		TxId:     utxo.TxIDHash.CloneBytes(),
-		Vout:     utxo.Vout,
-		Script:   *utxo.LockingScript,
-		Satoshis: utxo.Satoshis,
+	return &coinbase_api.RequestFundsResponse{
+		Tx: fundingTx.ExtendedBytes(),
 	}, nil
-}
-
-func (s *Server) MarkUtxoSpent(ctx context.Context, req *coinbase_api.MarkUtxoSpentRequest) (*emptypb.Empty, error) {
-	prometheusMarkUtxoSpent.Inc()
-	previousTxID, err := chainhash.NewHash(req.TxId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse previous tx id: %w", err)
-	}
-
-	spentByTxID, err := chainhash.NewHash(req.SpentByTxId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse spent by tx id: %w", err)
-	}
-
-	if err = s.coinbase.MarkUtxoAsSpent(ctx, previousTxID, req.Vout, spentByTxID); err != nil {
-		return nil, fmt.Errorf("failed to mark utxo as spent: %w", err)
-	}
-
-	return &emptypb.Empty{}, nil
 }

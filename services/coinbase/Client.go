@@ -7,8 +7,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -64,34 +62,15 @@ func (c Client) Health(ctx context.Context) (*coinbase_api.HealthResponse, error
 	return c.client.Health(ctx, &emptypb.Empty{})
 }
 
-func (c Client) GetUtxo(ctx context.Context, address string) (*bt.UTXO, error) {
-	utxo, err := c.client.GetUtxo(ctx, &coinbase_api.GetUtxoRequest{
+// RequestFunds implements ClientI.
+func (c *Client) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+	res, err := c.client.RequestFunds(ctx, &coinbase_api.RequestFundsRequest{
 		Address: address,
 	})
+
 	if err != nil {
 		return nil, err
 	}
 
-	txHash, err := chainhash.NewHash(utxo.GetTxId())
-	if err != nil {
-		return nil, err
-	}
-
-	return &bt.UTXO{
-		TxIDHash:       txHash,
-		Vout:           utxo.Vout,
-		LockingScript:  bscript.NewFromBytes(utxo.Script),
-		Satoshis:       utxo.Satoshis,
-		SequenceNumber: 0xffffffff,
-	}, nil
-}
-
-func (c Client) MarkUtxoSpent(ctx context.Context, txId []byte, vout uint32, spentByTxId []byte) error {
-	_, err := c.client.MarkUtxoSpent(ctx, &coinbase_api.MarkUtxoSpentRequest{
-		TxId:        txId,
-		Vout:        vout,
-		SpentByTxId: spentByTxId,
-	})
-
-	return err
+	return bt.NewTxFromBytes(res.Tx)
 }

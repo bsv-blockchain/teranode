@@ -20,9 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	CoinbaseAPI_Health_FullMethodName        = "/coinbase_api.coinbaseAPI/Health"
-	CoinbaseAPI_GetUtxo_FullMethodName       = "/coinbase_api.coinbaseAPI/GetUtxo"
-	CoinbaseAPI_MarkUtxoSpent_FullMethodName = "/coinbase_api.coinbaseAPI/MarkUtxoSpent"
+	CoinbaseAPI_Health_FullMethodName       = "/coinbase_api.coinbaseAPI/Health"
+	CoinbaseAPI_RequestFunds_FullMethodName = "/coinbase_api.coinbaseAPI/RequestFunds"
 )
 
 // CoinbaseAPIClient is the client API for CoinbaseAPI service.
@@ -31,8 +30,7 @@ const (
 type CoinbaseAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	GetUtxo(ctx context.Context, in *GetUtxoRequest, opts ...grpc.CallOption) (*Utxo, error)
-	MarkUtxoSpent(ctx context.Context, in *MarkUtxoSpentRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	RequestFunds(ctx context.Context, in *RequestFundsRequest, opts ...grpc.CallOption) (*RequestFundsResponse, error)
 }
 
 type coinbaseAPIClient struct {
@@ -52,18 +50,9 @@ func (c *coinbaseAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts 
 	return out, nil
 }
 
-func (c *coinbaseAPIClient) GetUtxo(ctx context.Context, in *GetUtxoRequest, opts ...grpc.CallOption) (*Utxo, error) {
-	out := new(Utxo)
-	err := c.cc.Invoke(ctx, CoinbaseAPI_GetUtxo_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *coinbaseAPIClient) MarkUtxoSpent(ctx context.Context, in *MarkUtxoSpentRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, CoinbaseAPI_MarkUtxoSpent_FullMethodName, in, out, opts...)
+func (c *coinbaseAPIClient) RequestFunds(ctx context.Context, in *RequestFundsRequest, opts ...grpc.CallOption) (*RequestFundsResponse, error) {
+	out := new(RequestFundsResponse)
+	err := c.cc.Invoke(ctx, CoinbaseAPI_RequestFunds_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +65,7 @@ func (c *coinbaseAPIClient) MarkUtxoSpent(ctx context.Context, in *MarkUtxoSpent
 type CoinbaseAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	GetUtxo(context.Context, *GetUtxoRequest) (*Utxo, error)
-	MarkUtxoSpent(context.Context, *MarkUtxoSpentRequest) (*emptypb.Empty, error)
+	RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error)
 	mustEmbedUnimplementedCoinbaseAPIServer()
 }
 
@@ -88,11 +76,8 @@ type UnimplementedCoinbaseAPIServer struct {
 func (UnimplementedCoinbaseAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedCoinbaseAPIServer) GetUtxo(context.Context, *GetUtxoRequest) (*Utxo, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetUtxo not implemented")
-}
-func (UnimplementedCoinbaseAPIServer) MarkUtxoSpent(context.Context, *MarkUtxoSpentRequest) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method MarkUtxoSpent not implemented")
+func (UnimplementedCoinbaseAPIServer) RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestFunds not implemented")
 }
 func (UnimplementedCoinbaseAPIServer) mustEmbedUnimplementedCoinbaseAPIServer() {}
 
@@ -125,38 +110,20 @@ func _CoinbaseAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CoinbaseAPI_GetUtxo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetUtxoRequest)
+func _CoinbaseAPI_RequestFunds_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestFundsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CoinbaseAPIServer).GetUtxo(ctx, in)
+		return srv.(CoinbaseAPIServer).RequestFunds(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CoinbaseAPI_GetUtxo_FullMethodName,
+		FullMethod: CoinbaseAPI_RequestFunds_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoinbaseAPIServer).GetUtxo(ctx, req.(*GetUtxoRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _CoinbaseAPI_MarkUtxoSpent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MarkUtxoSpentRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CoinbaseAPIServer).MarkUtxoSpent(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: CoinbaseAPI_MarkUtxoSpent_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoinbaseAPIServer).MarkUtxoSpent(ctx, req.(*MarkUtxoSpentRequest))
+		return srv.(CoinbaseAPIServer).RequestFunds(ctx, req.(*RequestFundsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -173,12 +140,8 @@ var CoinbaseAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CoinbaseAPI_Health_Handler,
 		},
 		{
-			MethodName: "GetUtxo",
-			Handler:    _CoinbaseAPI_GetUtxo_Handler,
-		},
-		{
-			MethodName: "MarkUtxoSpent",
-			Handler:    _CoinbaseAPI_MarkUtxoSpent_Handler,
+			MethodName: "RequestFunds",
+			Handler:    _CoinbaseAPI_RequestFunds_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

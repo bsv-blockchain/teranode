@@ -15,13 +15,11 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/worker"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -34,23 +32,21 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
-var logger utils.Logger
-
-var printProgress uint64
-
-// Name used by build script for the binaries. (Please keep on single line)
 const progname = "tx-blaster"
 
 // // Version & commit strings injected at build with -ldflags -X...
 var version string
 var commit string
+
+var logger utils.Logger
+
+var printProgress uint64
+
 var kafkaProducer sarama.SyncProducer
 var kafkaTopic string
 var ipv6MulticastConn *net.UDPConn
-var coinbasePrivKey string
 var ipv6MulticastChan = make(chan worker.Ipv6MulticastMsg)
 var totalTransactions atomic.Uint64
 var startTime time.Time
@@ -60,12 +56,6 @@ func init() {
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger = gocore.Log("txblast", gocore.NewLogLevelFromString(logLevelStr))
-
-	var found bool
-	coinbasePrivKey, found = gocore.Config().Get("coinbase_wallet_privkey")
-	if !found {
-		log.Fatal(errors.New("coinbase_wallet_privkey not found in config"))
-	}
 }
 
 func main() {
@@ -90,7 +80,6 @@ func main() {
 	workers := flag.Int("workers", runtime.NumCPU(), "how many workers to use for blasting")
 	rateLimit := flag.Int("limit", -1, "rate limit tx/s")
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
-	bufferSize := flag.Int("buffer", -1, "buffer size for txs chan")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
 	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
 	ipv6Interface := flag.String("ipv6Interface", "en0", "IPv6 multicast interface - if applicable")
@@ -209,22 +198,12 @@ func main() {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
-	propagationServers := setPropagationServers(ctx)
+	propagationServers := getPropagationServers(ctx)
 	if len(propagationServers) == 0 {
 		panic("No suitable propagation server connection found")
 	}
 
 	logger.Infof("Using %d propagation servers: %+v", len(propagationServers), propagationServers)
-
-	numberOfOutputs, _ := gocore.Config().GetInt("number_of_outputs", 10_000)
-	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)
-	numberOfTransactions := uint32(1)
-
-	logger.Infof("Each worker will ask tracker to create %d transaction(s) with %d outputs of %d satoshis each",
-		numberOfTransactions,
-		numberOfOutputs,
-		satoshisPerOutput,
-	)
 
 	var rateLimiter *rate.Limiter
 
@@ -256,43 +235,43 @@ func main() {
 	logLevelStr, _ := gocore.Config().Get("logLevel", "INFO")
 
 	startTime = time.Now()
+
 	for i := 0; i < *workers; i++ {
 		i := i
+
+		logger.Infof("starting worker %d", i)
+		workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
+
+		w, err := worker.NewWorker(
+			workerLogger,
+			rateLimiter,
+			propagationServers,
+			kafkaProducer,
+			kafkaTopic,
+			ipv6MulticastConn,
+			ipv6MulticastChan,
+			printProgress,
+			logIdsFile,
+			&totalTransactions,
+			&startTime,
+		)
+		if err != nil {
+			logger.Errorf("Could not initialise worker %d: %w", i, err)
+			return
+		}
+
+		err = w.Init(ctx)
+		if err != nil {
+			logger.Errorf("Could not initialise worker %d: %w", i, err)
+			return
+		}
+
 		g.Go(func() error {
-			// run a worker forever
-			for {
-				logger.Infof("starting worker %d", i)
-				workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
-
-				w, err := worker.NewWorker(
-					workerLogger,
-					numberOfOutputs,
-					numberOfTransactions,
-					uint64(satoshisPerOutput),
-					coinbasePrivKey,
-					rateLimiter,
-					propagationServers,
-					kafkaProducer,
-					kafkaTopic,
-					ipv6MulticastConn,
-					ipv6MulticastChan,
-					printProgress,
-					logIdsFile,
-					&totalTransactions,
-					&startTime,
-					*bufferSize,
-				)
-				if err != nil {
-					return err
-				}
-
-				err = w.Start(ctx)
-				if err != nil {
-					logger.Errorf("error from worker: %v", err)
-				}
-
-				time.Sleep(1 * time.Second)
+			if err := w.Start(ctx); err != nil {
+				return fmt.Errorf("error from worker: %v", err)
 			}
+
+			return nil
 		})
 	}
 
@@ -307,8 +286,8 @@ func main() {
 	}
 }
 
-func setPropagationServers(ctx context.Context) map[string]extra.PropagationServer {
-	propagationServers := make(map[string]extra.PropagationServer)
+func getPropagationServers(ctx context.Context) map[string]propagation_api.PropagationAPIClient {
+	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
 
 	propagationGrpcAddresses, okGrpc := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	if !okGrpc {
@@ -325,49 +304,7 @@ func setPropagationServers(ctx context.Context) map[string]extra.PropagationServ
 			panic(err)
 		}
 
-		host := strings.Split(propagationGrpcAddress, ":")[0]
-		propagationServers[host] = extra.PropagationServer{
-			GRPC: propagation_api.NewPropagationAPIClient(pConn),
-		}
-	}
-
-	if propagationDrpcAddress, ok := gocore.Config().Get("propagation_drpcAddress"); ok {
-		rawConn, err := net.Dial("tcp", propagationDrpcAddress)
-		if err != nil {
-			panic(err)
-		}
-		conn := drpcconn.New(rawConn)
-		drpcClient := propagation_api.NewDRPCPropagationAPIClient(conn)
-
-		host := strings.Split(propagationDrpcAddress, ":")[0]
-		if p, ok := propagationServers[host]; ok {
-			p.DRPC = drpcClient
-		} else {
-			propagationServers[host] = extra.PropagationServer{
-				DRPC: drpcClient,
-			}
-		}
-	}
-
-	if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
-		client, err := propagation_api.NewClient(nil, nil)
-		if err != nil {
-			panic(err)
-		}
-
-		err = client.Connect(propagationFrpcAddress)
-		if err != nil {
-			panic(err)
-		} else {
-			host := strings.Split(propagationFrpcAddress, ":")[0]
-			if p, ok := propagationServers[host]; ok {
-				p.FRPC = client
-			} else {
-				propagationServers[host] = extra.PropagationServer{
-					FRPC: client,
-				}
-			}
-		}
+		propagationServers[propagationGrpcAddress] = propagation_api.NewPropagationAPIClient(pConn)
 	}
 
 	return propagationServers

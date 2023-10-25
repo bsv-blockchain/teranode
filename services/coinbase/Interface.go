@@ -7,6 +7,5 @@ import (
 )
 
 type ClientI interface {
-	GetUtxo(ctx context.Context, address string) (*bt.UTXO, error)
-	MarkUtxoSpent(ctx context.Context, txId []byte, vout uint32, spentByTxId []byte) error
+	RequestFunds(ctx context.Context, address string) (*bt.Tx, error)
 }
