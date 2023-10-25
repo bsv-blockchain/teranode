@@ -10,6 +10,9 @@ database subtreeStore
 participant blockassembly
 database txmetaStore
 database txStore
+actor Validator
+database utxoStore
+actor BlockAssembler
 
 
 p2p -[#blue]> BlockValidation : grpc:BlockFound(hash)
