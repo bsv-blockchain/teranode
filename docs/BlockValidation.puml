@@ -1,0 +1,54 @@
+@startuml overview
+actor p2p
+actor BlockValidation
+actor Blockchain
+database blockchainStore
+actor BlobServer
+participant blockValidation
+participant block
+database subtreeStore
+participant blockassembly
+database txmetaStore
+database txStore
+
+
+p2p -[#blue]> BlockValidation : grpc:BlockFound(hash)
+BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(hash)
+Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
+group processBlockFound(hash)
+BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(hash)
+Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
+group getBlock(hash)
+BlockValidation -> BlobServer : http:/block/<hash>
+BlobServer -> Blockchain : getBlock(hash)
+Blockchain -[#red]-> blockchainStore : GetBlock(hash)
+end
+BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(previous hash)
+Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
+BlockValidation -> blockValidation : ValidateBlock(block)
+
+loop each subtree
+blockValidation -> subtreeStore : Exists(subtree hash)
+blockValidation -> BlobServer : http:/subtree/<hash>
+BlobServer -[#red]-> subtreeStore : GetSubtree(hash)
+end
+
+blockValidation -[#blue]> Blockchain : grpc:getBlockHeaders(previous 100 blocks)
+Blockchain -[#red]-> blockchainStore : GetBlockHeaders(previous 100 blocks)
+blockValidation -[#red]-> txmetaStore : Create(coinbase tx)
+blockValidation -> block : Valid(block headers)
+blockValidation -[#blue]> Blockchain : grpc:AddBlock(block)
+Blockchain -[#red]-> blockchainStore : StoreBlock(block)
+blockValidation -> block : getSubtrees()
+loop each subtree
+block -[#red]-> subtreeStore : get
+
+end
+blockValidation -> blockassembly : UpdateTxMinedStatus(block)
+loop each subtree
+loop eace tx
+blockassembly -[#red]-> txmetaStore : SetMined(tx)
+end
+end
+blockValidation -[#red]-> txStore : Set(coinbase tx)
+end
