@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -19,7 +18,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
@@ -32,7 +30,7 @@ var (
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
 	prometheusWorkerErrors          *prometheus.CounterVec
-	prometheusTransactionErrors     *prometheus.CounterVec
+	// prometheusTransactionErrors     *prometheus.CounterVec
 )
 
 // ContextKey type
@@ -87,16 +85,16 @@ func init() {
 			"error",    // error returned
 		},
 	)
-	prometheusTransactionErrors = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "tx_blaster_errors",
-			Help: "Number of tx blaster errors",
-		},
-		[]string{
-			"function", //function raising the error
-			"error",    // error returned
-		},
-	)
+	// prometheusTransactionErrors = promauto.NewCounterVec(
+	// 	prometheus.CounterOpts{
+	// 		Name: "tx_blaster_errors",
+	// 		Help: "Number of tx blaster errors",
+	// 	},
+	// 	[]string{
+	// 		"function", //function raising the error
+	// 		"error",    // error returned
+	// 	},
+	// )
 }
 
 type Ipv6MulticastMsg struct {
@@ -219,8 +217,8 @@ func (w *Worker) Start(ctx context.Context) error {
 			}
 
 			tx := bt.NewTx()
-			tx.FromUTXOs(utxo)
-			tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
+			_ = tx.FromUTXOs(utxo)
+			_ = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
 
 			if err := tx.FillAllInputs(ctx, w.unlocker); err != nil {
 				prometheusInvalidTransactions.Inc()
@@ -249,52 +247,52 @@ func (w *Worker) Start(ctx context.Context) error {
 
 var counter atomic.Uint64
 
-func (w *Worker) publishToKafka(producer sarama.SyncProducer, topic string, txIDBytes []byte, txExtendedBytes []byte) error {
-	// partition is the first byte of the txid - max 2^8 partitions = 256
-	partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
-	partition := binary.LittleEndian.Uint32(txIDBytes) % uint32(partitions)
-	_, _, err := producer.SendMessage(&sarama.ProducerMessage{
-		Topic:     topic,
-		Partition: int32(partition),
-		Key:       sarama.ByteEncoder(txIDBytes),
-		Value:     sarama.ByteEncoder(txExtendedBytes),
-	})
-	if err != nil {
-		return err
-	}
+// func (w *Worker) publishToKafka(producer sarama.SyncProducer, topic string, txIDBytes []byte, txExtendedBytes []byte) error {
+// 	// partition is the first byte of the txid - max 2^8 partitions = 256
+// 	partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
+// 	partition := binary.LittleEndian.Uint32(txIDBytes) % uint32(partitions)
+// 	_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+// 		Topic:     topic,
+// 		Partition: int32(partition),
+// 		Key:       sarama.ByteEncoder(txIDBytes),
+// 		Value:     sarama.ByteEncoder(txExtendedBytes),
+// 	})
+// 	if err != nil {
+// 		return err
+// 	}
 
-	counterLoad := counter.Add(1)
-	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-		txPs := float64(0)
-		ts := time.Since(*w.globalStartTime).Seconds()
-		if ts > 0 {
-			txPs = float64(counterLoad) / ts
-		}
-		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
-	}
+// 	counterLoad := counter.Add(1)
+// 	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
+// 		txPs := float64(0)
+// 		ts := time.Since(*w.globalStartTime).Seconds()
+// 		if ts > 0 {
+// 			txPs = float64(counterLoad) / ts
+// 		}
+// 		fmt.Printf("Time for %d transactions to Kafka: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
-func (w *Worker) sendOnIpv6Multicast(conn *net.UDPConn, IDBytes []byte, txExtendedBytes []byte) error {
-	w.ipv6MulticastChan <- Ipv6MulticastMsg{
-		Conn:            conn,
-		IDBytes:         IDBytes,
-		TxExtendedBytes: txExtendedBytes,
-	}
+// func (w *Worker) sendOnIpv6Multicast(conn *net.UDPConn, IDBytes []byte, txExtendedBytes []byte) error {
+// 	w.ipv6MulticastChan <- Ipv6MulticastMsg{
+// 		Conn:            conn,
+// 		IDBytes:         IDBytes,
+// 		TxExtendedBytes: txExtendedBytes,
+// 	}
 
-	counterLoad := counter.Add(1)
-	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-		txPs := float64(0)
-		ts := time.Since(*w.globalStartTime).Seconds()
-		if ts > 0 {
-			txPs = float64(counterLoad) / ts
-		}
-		fmt.Printf("Time for %d transactions to ipv6: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
-	}
+// 	counterLoad := counter.Add(1)
+// 	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
+// 		txPs := float64(0)
+// 		ts := time.Since(*w.globalStartTime).Seconds()
+// 		if ts > 0 {
+// 			txPs = float64(counterLoad) / ts
+// 		}
+// 		fmt.Printf("Time for %d transactions to ipv6: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 func (w *Worker) sendTransaction(ctx context.Context, tx *bt.Tx) error {
 	traceSpan := tracing.Start(ctx, "txBlaster:sendTransaction")
