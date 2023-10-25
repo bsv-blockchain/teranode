@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,30 +30,34 @@ type SeaweedFS struct {
 func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 	logger := gocore.Log("seaweed")
 
-	scheme := "http"
-	if s3GatewayURL.Query().Get("scheme") != "" {
-		scheme = s3GatewayURL.Query().Get("scheme")
-	}
-
-	s3ForcePathStyle := false
-	if s3GatewayURL.Query().Get("S3ForcePathStyle") != "" {
-		s3ForcePathStyleString := s3GatewayURL.Query().Get("S3ForcePathStyle")
-		s3ForcePathStyle = s3ForcePathStyleString == "true"
-	}
+	scheme := getQueryParamString(s3GatewayURL, "scheme", "http")
+	s3ForcePathStyle := getQueryParamBool(s3GatewayURL, "S3ForcePathStyle", "false")
+	maxIdleConns := getQueryParamInt(s3GatewayURL, "MaxIdleConns", 100)
+	maxIdleConnsPerHost := getQueryParamInt(s3GatewayURL, "MaxIdleConnsPerHost", 100)
+	IdleConnTimeout := time.Duration(getQueryParamInt(s3GatewayURL, "IdleConnTimeoutSeconds", 100)) * time.Second
+	Timeout := time.Duration(getQueryParamInt(s3GatewayURL, "TimeoutSeconds", 30)) * time.Second
+	KeepAlive := time.Duration(getQueryParamInt(s3GatewayURL, "KeepAliveSeconds", 300)) * time.Second
 
 	serverURL := url.URL{
 		Scheme: scheme,
 		Host:   s3GatewayURL.Host,
 	}
 
-	// Initialize an AWS session with custom credentials pointing to SeaweedFS S3 Gateway
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(s3GatewayURL.Query().Get("region")),
 		Endpoint:         aws.String(serverURL.String()),
 		S3ForcePathStyle: aws.Bool(s3ForcePathStyle), // Required when using a non-AWS S3 service
-	}))
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        maxIdleConns,
+				MaxIdleConnsPerHost: maxIdleConnsPerHost,
+				IdleConnTimeout:     IdleConnTimeout * time.Second,
+				DialContext: (&net.Dialer{
+					Timeout:   Timeout,
+					KeepAlive: KeepAlive,
+				}).DialContext},
+		}}))
 
-	// Create an S3 client
 	svc := s3.New(sess)
 
 	s := &SeaweedFS{
@@ -60,6 +67,34 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 	}
 
 	return s, nil
+}
+
+func getQueryParamString(url *url.URL, key string, defaultValue string) string {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getQueryParamBool(url *url.URL, key string, defaultValue string) bool {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue == "true"
+	}
+	return value == "true"
+}
+
+func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	result, err := strconv.Atoi(value)
+	if err != nil {
+		panic(err)
+	}
+	return result
 }
 
 func (s *SeaweedFS) Health(ctx context.Context) (int, string, error) {
@@ -81,19 +116,18 @@ func (s *SeaweedFS) generateKey(key []byte) string {
 }
 
 func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	start := gocore.CurrentNanos()
-	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("Set").AddTime(start)
-	}()
-	traceSpan := tracing.Start(ctx, "seaweedfs:Set")
-	defer traceSpan.Finish()
+	// start := gocore.CurrentNanos()
+	// defer func() {
+	// 	gocore.NewStat("prop_store_seaweedfs").NewStat("Set").AddTime(start)
+	// }()
+	// traceSpan := tracing.Start(ctx, "seaweedfs:Set")
+	// defer traceSpan.Finish()
 
 	objectKey := s.generateKey(key)
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(s.bucketName),
-		// Key:    aws.String(fmt.Sprintf("%s/%s", s.bucketName, objectKey)),
-		Key:  aws.String(objectKey),
-		Body: bytes.NewReader(value),
+		Key:    aws.String(objectKey),
+		Body:   bytes.NewReader(value),
 	}
 
 	// Expires
@@ -106,7 +140,7 @@ func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...o
 	// Upload the value as an S3 object
 	_, err := s.s3Client.PutObject(uploadInput)
 	if err != nil {
-		traceSpan.RecordError(err)
+		// traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set seaweedfs data: %w", err)
 	}
 
