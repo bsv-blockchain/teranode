@@ -87,9 +87,6 @@ func (m *Miner) Stop(ctx context.Context) error {
 func (m *Miner) mine(ctx context.Context) error {
 	timeStart := time.Now()
 
-	// wait is simulating a high difficulty
-	waitSeconds, _ := gocore.Config().GetInt("miner_waitSeconds", 30)
-
 	candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting mining candidate: %v", err)
@@ -108,7 +105,14 @@ func (m *Miner) mine(ctx context.Context) error {
 	}
 
 	// Wait a bit before submitting the solution to simulate high difficulty
-	if candidate.Height > 200 && waitSeconds > 0 { // SAO - Mine the first 200 blocks without delay
+	// wait is simulating a high difficulty
+	waitSeconds, _ := gocore.Config().GetInt("miner_waitSeconds", 30)
+
+	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < 200 {
+		waitSeconds = 0
+	}
+
+	if waitSeconds > 0 { // SAO - Mine the first 200 blocks without delay
 		r := rand.New(rand.NewSource(int64(new(maphash.Hash).Sum64())))
 		randWait := r.Intn(waitSeconds)
 
