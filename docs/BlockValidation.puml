@@ -1,10 +1,10 @@
 @startuml overview
 actor p2p
 actor BlockValidation
+participant blockValidation
 actor Blockchain
 database blockchainStore
 actor BlobServer
-participant blockValidation
 participant block
 database subtreeStore
 participant blockassembly
@@ -19,20 +19,36 @@ group processBlockFound(hash)
 BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(hash)
 Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
 group getBlock(hash)
-BlockValidation -> BlobServer : http:/block/<hash>
-BlobServer -> Blockchain : getBlock(hash)
+BlockValidation -[#green]--> BlobServer : http:GetBlock(/block/<hash>))
+BlobServer -[#blue]> Blockchain : grpc:getBlock(hash)
 Blockchain -[#red]-> blockchainStore : GetBlock(hash)
 end
 BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(previous hash)
-Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
+Blockchain -[#red]-> blockchainStore : GetBlockExists(previous hash)
 BlockValidation -> blockValidation : ValidateBlock(block)
 
 loop each subtree
-blockValidation -> subtreeStore : Exists(subtree hash)
-blockValidation -> BlobServer : http:/subtree/<hash>
+blockValidation -[#red]-> subtreeStore : Exists(subtree hash)
+blockValidation -[#green]--> BlobServer : http:GetSubtree(/subtree/<hash>)
 BlobServer -[#red]-> subtreeStore : GetSubtree(hash)
+loop each tx
+blockValidation -[#red]-> txmetaStore : Get(tx hash)
+group blessMissingTransaction
+blockValidation -[#red]-> txStore: Get(tx hash)
+group if not found
+blockValidation -[#green]--> BlobServer : http:GetTransaction(/tx/<hash>)
+blockValidation -[#red]-> txStore : Set(tx)
 end
-
+blockValidation -[#blue]> Validator : grpc:Validate(tx)
+Validator -> Validator : Validate(tx)
+Validator -[#red]-> utxoStore : Spend(utxo)
+Validator -[#red]-> txmetaStore : Create(tx)
+Validator -[#blue]> BlockAssembler : Store(tx) ??? really?
+Validator -[#red]-> utxoStore : Store(tx)
+blockValidation -[#red]-> txmetaStore : Get(tx)
+end
+end
+end
 blockValidation -[#blue]> Blockchain : grpc:getBlockHeaders(previous 100 blocks)
 Blockchain -[#red]-> blockchainStore : GetBlockHeaders(previous 100 blocks)
 blockValidation -[#red]-> txmetaStore : Create(coinbase tx)
