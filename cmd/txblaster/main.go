@@ -92,7 +92,6 @@ func main() {
 	printFlag := flag.Int("print", 0, "print out progress every x transactions")
 	bufferSize := flag.Int("buffer", -1, "buffer size for txs chan")
 	kafka := flag.String("kafka", "", "Kafka server URL - if applicable")
-	seeder := flag.Bool("seeder", false, "Whether to use the seeder")
 	ipv6Address := flag.String("ipv6Address", "", "IPv6 multicast address - if applicable")
 	ipv6Interface := flag.String("ipv6Interface", "en0", "IPv6 multicast interface - if applicable")
 	profileAddress := flag.String("profile", "", "use this profile port instead of the default")
@@ -221,7 +220,7 @@ func main() {
 	satoshisPerOutput, _ := gocore.Config().GetInt("satoshis_per_output", 1000)
 	numberOfTransactions := uint32(1)
 
-	logger.Infof("Each worker will ask tracker/seeder to create %d transaction(s) with %d outputs of %d satoshis each",
+	logger.Infof("Each worker will ask tracker to create %d transaction(s) with %d outputs of %d satoshis each",
 		numberOfTransactions,
 		numberOfOutputs,
 		satoshisPerOutput,
@@ -254,35 +253,46 @@ func main() {
 		}()
 	}
 
+	logLevelStr, _ := gocore.Config().Get("logLevel", "INFO")
+
 	startTime = time.Now()
 	for i := 0; i < *workers; i++ {
 		i := i
 		g.Go(func() error {
-			logLevelStr, _ := gocore.Config().Get("logLevel", "INFO")
-			workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
-			w, err := worker.NewWorker(
-				workerLogger,
-				numberOfOutputs,
-				numberOfTransactions,
-				uint64(satoshisPerOutput),
-				coinbasePrivKey,
-				rateLimiter,
-				propagationServers,
-				kafkaProducer,
-				kafkaTopic,
-				ipv6MulticastConn,
-				ipv6MulticastChan,
-				printProgress,
-				logIdsFile,
-				&totalTransactions,
-				&startTime,
-				*bufferSize,
-			)
-			if err != nil {
-				return err
-			}
+			// run a worker forever
+			for {
+				logger.Infof("starting worker %d", i)
+				workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
 
-			return w.Start(ctx, *seeder)
+				w, err := worker.NewWorker(
+					workerLogger,
+					numberOfOutputs,
+					numberOfTransactions,
+					uint64(satoshisPerOutput),
+					coinbasePrivKey,
+					rateLimiter,
+					propagationServers,
+					kafkaProducer,
+					kafkaTopic,
+					ipv6MulticastConn,
+					ipv6MulticastChan,
+					printProgress,
+					logIdsFile,
+					&totalTransactions,
+					&startTime,
+					*bufferSize,
+				)
+				if err != nil {
+					return err
+				}
+
+				err = w.Start(ctx)
+				if err != nil {
+					logger.Errorf("error from worker: %v", err)
+				}
+
+				time.Sleep(1 * time.Second)
+			}
 		})
 	}
 

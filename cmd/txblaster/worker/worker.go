@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,9 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/extra"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
-	"github.com/bitcoin-sv/ubsv/services/seeder/seeder_api"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -27,7 +25,6 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -201,7 +198,7 @@ func NewWorker(
 	}, nil
 }
 
-func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
+func (w *Worker) Start(ctx context.Context) (err error) {
 	prometheusWorkers.Inc()
 	defer func() {
 		prometheusWorkers.Dec()
@@ -211,18 +208,9 @@ func (w *Worker) Start(ctx context.Context, withSeeder ...bool) (err error) {
 	}()
 
 	var keySet *extra.KeySet
-	if len(withSeeder) > 0 && withSeeder[0] {
-		w.logger.Infof("\U00002699  worker is running with SEEDER")
-		keySet, err = w.startWithSeeder(ctx)
-		if err != nil {
-			return err
-		}
-	} else {
-		w.logger.Infof("\U00002699  worker is running with TRACKER")
-		keySet, err = w.startWithCoinbaseTracker(ctx)
-		if err != nil {
-			return err
-		}
+	keySet, err = w.startWithCoinbaseTracker(ctx)
+	if err != nil {
+		return err
 	}
 
 	w.startTime = time.Now()
@@ -353,96 +341,6 @@ func (w *Worker) startWithCoinbaseTracker(ctx context.Context) (*extra.KeySet, e
 
 	if err = w.coinbaseClient.MarkUtxoSpent(ctx, utxo.TxIDHash.CloneBytes(), utxo.Vout, utxo.TxIDHash.CloneBytes()); err != nil {
 		return nil, fmt.Errorf("error marking utxo as spent: %v", err)
-	}
-
-	return keySet, nil
-}
-
-func (w *Worker) startWithSeeder(ctx context.Context) (*extra.KeySet, error) {
-
-	seederGrpcAddresses := make([]string, 0)
-	if addresses, ok := gocore.Config().Get("txblaster_seeder_grpcTargets", ":8083"); ok {
-		seederGrpcAddresses = append(seederGrpcAddresses, strings.Split(addresses, "|")...)
-	} else {
-		if address, ok := gocore.Config().Get("seeder_grpcAddress"); ok {
-			seederGrpcAddresses = append(seederGrpcAddresses, address)
-		} else {
-			return nil, fmt.Errorf("no seeder_grpcAddress setting found")
-		}
-	}
-
-	seederServers := make([]seeder_api.SeederAPIClient, 0)
-	for _, seederGrpcAddress := range seederGrpcAddresses {
-		sConn, err := util.GetGRPCClient(ctx, seederGrpcAddress, &util.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-			MaxRetries:  3,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to seeder server: %v", err)
-		}
-		seederServers = append(seederServers, seeder_api.NewSeederAPIClient(sConn))
-	}
-
-	if len(seederServers) == 0 {
-		return nil, fmt.Errorf("no seeder servers provided")
-	}
-
-	// create new private key
-	keySet, err := extra.New()
-	if err != nil {
-		prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-		return nil, fmt.Errorf("failed to create new key: %v", err)
-	}
-
-	var res *seeder_api.NextSpendableTransactionResponse
-	var script *bscript.Script
-	for _, seeder := range seederServers {
-		if _, err = seeder.CreateSpendableTransactions(ctx, &seeder_api.CreateSpendableTransactionsRequest{
-			PrivateKey:           keySet.PrivateKey.Serialise(),
-			NumberOfTransactions: w.numberOfTransactions,
-			NumberOfOutputs:      uint32(w.numberOfOutputs),
-			SatoshisPerOutput:    w.satoshisPerOutput,
-		}); err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			return nil, fmt.Errorf("failed to create spendable transaction: %v", err)
-		}
-
-		res, err = seeder.NextSpendableTransaction(ctx, &seeder_api.NextSpendableTransactionRequest{
-			PrivateKey: keySet.PrivateKey.Serialise(),
-		})
-		if err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			return nil, fmt.Errorf("failed to create next spendable transaction: %v", err)
-		}
-
-		privateKey, _ := bec.PrivKeyFromBytes(bec.S256(), res.PrivateKey)
-
-		script, err = bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
-		if err != nil {
-			prometheusTransactionErrors.WithLabelValues("Start", err.Error()).Inc()
-			return nil, fmt.Errorf("failed to create private key from pub key: %v", err)
-		}
-
-		go func(numberOfOutputs uint32) {
-			w.logger.Infof("Starting to send %d outputs to txChan", numberOfOutputs)
-			txIdHash, err := chainhash.NewHash(res.Txid)
-			if err != nil {
-				prometheusTransactionErrors.WithLabelValues("StartWithSeeder", err.Error()).Inc()
-				return
-			}
-			for i := uint32(0); i < numberOfOutputs; i++ {
-				u := &bt.UTXO{
-					TxIDHash:      txIdHash,
-					Vout:          i,
-					LockingScript: script,
-					Satoshis:      res.SatoshisPerOutput,
-				}
-
-				w.utxoChan <- u
-			}
-			w.logger.Infof("Done sending %d outputs to txChan", numberOfOutputs)
-		}(res.NumberOfOutputs)
 	}
 
 	return keySet, nil
@@ -638,19 +536,27 @@ func (w *Worker) sendTransaction(ctx context.Context, txID string, txExtendedByt
 	btTx, _ := bt.NewTxFromBytes(txExtendedBytes)
 	_ = btTx
 
-	g, ctx := errgroup.WithContext(traceSpan.Ctx)
-
+	var wg sync.WaitGroup
+	errorCount := 0
 	for addr, propagationServer := range w.propagationServers {
 		localAddr := addr // Create a local copy
 		p := propagationServer
 
-		g.Go(func() error {
-			return w.sendToPropagationServer(ctx, p, localAddr, txExtendedBytes) // Use localAddr here
-		})
-	}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-	if err := g.Wait(); err != nil {
-		return err
+			err := w.sendToPropagationServer(ctx, p, localAddr, txExtendedBytes) // Use localAddr here
+			if err != nil {
+				w.logger.Errorf("error sending transaction to %s: %v", localAddr, err)
+				errorCount++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if float32(errorCount)/float32(len(w.propagationServers)) > 0.5 {
+		return fmt.Errorf("error sending transaction to more than half of the propagation servers")
 	}
 
 	counterLoad := counter.Add(1)
