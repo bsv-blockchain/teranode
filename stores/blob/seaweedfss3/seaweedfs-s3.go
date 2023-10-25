@@ -34,9 +34,9 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 	s3ForcePathStyle := getQueryParamBool(s3GatewayURL, "S3ForcePathStyle", "false")
 	maxIdleConns := getQueryParamInt(s3GatewayURL, "MaxIdleConns", 100)
 	maxIdleConnsPerHost := getQueryParamInt(s3GatewayURL, "MaxIdleConnsPerHost", 100)
-	IdleConnTimeout := time.Duration(getQueryParamInt(s3GatewayURL, "IdleConnTimeoutSeconds", 100)) * time.Second
-	Timeout := time.Duration(getQueryParamInt(s3GatewayURL, "TimeoutSeconds", 30)) * time.Second
-	KeepAlive := time.Duration(getQueryParamInt(s3GatewayURL, "KeepAliveSeconds", 300)) * time.Second
+	idleConnTimeout := time.Duration(getQueryParamInt(s3GatewayURL, "IdleConnTimeoutSeconds", 100)) * time.Second
+	timeout := time.Duration(getQueryParamInt(s3GatewayURL, "TimeoutSeconds", 30)) * time.Second
+	keepAlive := time.Duration(getQueryParamInt(s3GatewayURL, "KeepAliveSeconds", 300)) * time.Second
 
 	serverURL := url.URL{
 		Scheme: scheme,
@@ -51,10 +51,10 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 			Transport: &http.Transport{
 				MaxIdleConns:        maxIdleConns,
 				MaxIdleConnsPerHost: maxIdleConnsPerHost,
-				IdleConnTimeout:     IdleConnTimeout * time.Second,
+				IdleConnTimeout:     idleConnTimeout * time.Second,
 				DialContext: (&net.Dialer{
-					Timeout:   Timeout,
-					KeepAlive: KeepAlive,
+					Timeout:   timeout,
+					KeepAlive: keepAlive,
 				}).DialContext},
 		}}))
 
@@ -67,34 +67,6 @@ func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
 	}
 
 	return s, nil
-}
-
-func getQueryParamString(url *url.URL, key string, defaultValue string) string {
-	value := url.Query().Get(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-func getQueryParamBool(url *url.URL, key string, defaultValue string) bool {
-	value := url.Query().Get(key)
-	if value == "" {
-		return defaultValue == "true"
-	}
-	return value == "true"
-}
-
-func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
-	value := url.Query().Get(key)
-	if value == "" {
-		return defaultValue
-	}
-	result, err := strconv.Atoi(value)
-	if err != nil {
-		panic(err)
-	}
-	return result
 }
 
 func (s *SeaweedFS) Health(ctx context.Context) (int, string, error) {
@@ -237,4 +209,32 @@ func (s *SeaweedFS) Del(ctx context.Context, hash []byte) error {
 	}
 
 	return nil
+}
+
+func getQueryParamString(url *url.URL, key string, defaultValue string) string {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getQueryParamBool(url *url.URL, key string, defaultValue string) bool {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue == "true"
+	}
+	return value == "true"
+}
+
+func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	result, err := strconv.Atoi(value)
+	if err != nil {
+		panic(err)
+	}
+	return result
 }

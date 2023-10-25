@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,12 +38,44 @@ var (
 func New(s3URL *url.URL) (*S3, error) {
 	logger := gocore.Log("s3")
 
-	// connect to aws s3 server
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(s3URL.Query().Get("region"))},
-	)
+	scheme := getQueryParamString(s3URL, "scheme", "http")
+	s3ForcePathStyle := getQueryParamBool(s3URL, "S3ForcePathStyle", "false")
+	maxIdleConns := getQueryParamInt(s3URL, "MaxIdleConns", 100)
+	maxIdleConnsPerHost := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
+	idleConnTimeout := time.Duration(getQueryParamInt(s3URL, "IdleConnTimeoutSeconds", 100)) * time.Second
+	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
+	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
 
-	// Create S3 service client
+	// connect to aws s3 server
+	config := &aws.Config{
+		Region: aws.String(s3URL.Query().Get("region")),
+	}
+
+	if s3URL.Host != "" {
+		serverURL := url.URL{
+			Scheme: scheme,
+			Host:   s3URL.Host,
+		}
+		config.Endpoint = aws.String(serverURL.String())
+		config.S3ForcePathStyle = aws.Bool(s3ForcePathStyle) // Required when using a non-AWS S3 service
+	}
+
+	config.HTTPClient = &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns:        maxIdleConns,
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			IdleConnTimeout:     idleConnTimeout,
+			DialContext: (&net.Dialer{
+				Timeout:   timeout,
+				KeepAlive: keepAlive,
+			}).DialContext},
+	}
+
+	sess, err := session.NewSession(config)
+	if err != nil {
+		return nil, err
+	}
+
 	client := s3.New(sess)
 
 	// Setup the S3 Upload Manager. Also see the SDK doc for the Upload Manager
@@ -50,11 +85,6 @@ func New(s3URL *url.URL) (*S3, error) {
 	uploader := s3manager.NewUploader(sess)
 
 	downloader := s3manager.NewDownloader(sess)
-
-	//client, err := s
-	if err != nil {
-		return nil, err
-	}
 
 	s := &S3{
 		client:     client,
@@ -241,4 +271,32 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	}
 
 	return nil
+}
+
+func getQueryParamString(url *url.URL, key string, defaultValue string) string {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getQueryParamBool(url *url.URL, key string, defaultValue string) bool {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue == "true"
+	}
+	return value == "true"
+}
+
+func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
+	value := url.Query().Get(key)
+	if value == "" {
+		return defaultValue
+	}
+	result, err := strconv.Atoi(value)
+	if err != nil {
+		panic(err)
+	}
+	return result
 }
