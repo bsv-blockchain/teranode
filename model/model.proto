@@ -32,6 +32,7 @@ enum NotificationType {
   Ping = 0;
   Subtree = 1;
   Block = 2;
+  MiningOn = 3;
 }
 
 // swagger:model BlockInfo

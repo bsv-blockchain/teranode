@@ -27,6 +27,8 @@
               <a href="/viewer/tx/{value}">"{value}"</a>
             {:else if value.length === 64 && key.includes('block')}
               <a href="/viewer/block/{value}">"{value}""</a>
+            {:else if value.length === 64 && key.includes('subtrees')}
+              <a href="/viewer/subtree/{value}">"{value}""</a>
             {:else if value.length === 64 && key === 'utxoHash'}
               <a href="/viewer/utxo/{value}">"{value}""</a>
             {:else}
