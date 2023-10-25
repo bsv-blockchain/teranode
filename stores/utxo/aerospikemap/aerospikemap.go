@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospikemap
 
@@ -24,10 +24,10 @@ import (
 )
 
 var (
-	prometheusUtxoGet        prometheus.Counter
-	prometheusUtxoStore      prometheus.Counter
-	prometheusUtxoReStore    prometheus.Counter
-	prometheusUtxoStoreSpent prometheus.Counter
+	prometheusUtxoGet   prometheus.Counter
+	prometheusUtxoStore prometheus.Counter
+	//prometheusUtxoReStore    prometheus.Counter
+	//prometheusUtxoStoreSpent prometheus.Counter
 	prometheusUtxoSpend      prometheus.Counter
 	prometheusUtxoReSpend    prometheus.Counter
 	prometheusUtxoSpendSpent prometheus.Counter
@@ -49,18 +49,18 @@ func init() {
 			Help: "Number of utxo store calls done to aerospike",
 		},
 	)
-	prometheusUtxoStoreSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_store_spent",
-			Help: "Number of utxo store calls that were already spent to aerospike",
-		},
-	)
-	prometheusUtxoReStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_restore",
-			Help: "Number of utxo restore calls done to aerospike",
-		},
-	)
+	//prometheusUtxoStoreSpent = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_map_utxo_store_spent",
+	//		Help: "Number of utxo store calls that were already spent to aerospike",
+	//	},
+	//)
+	//prometheusUtxoReStore = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_map_utxo_restore",
+	//		Help: "Number of utxo restore calls done to aerospike",
+	//	},
+	//)
 	prometheusUtxoSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_map_utxo_spend",
@@ -458,11 +458,11 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 }
 
 func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
-	readOptions := make([]util.AerospikeReadPolicyOptions, 0)
+	// readOptions := make([]util.AerospikeReadPolicyOptions, 0)
 	writeOptions := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
-		readOptions = append(readOptions, util.WithTotalTimeout(s.timeout))
+		// readOptions = append(readOptions, util.WithTotalTimeout(s.timeout))
 		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
 	}
 
@@ -528,7 +528,7 @@ func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, fmt.Errorf("Failed to get fees and utxo hashes: %v\n", err)
+		return nil, fmt.Errorf("failed to get fees and utxo hashes: %v", err)
 	}
 
 	utxos := make(map[interface{}]interface{})
