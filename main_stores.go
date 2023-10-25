@@ -5,10 +5,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
-	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -62,7 +62,7 @@ func getUtxoStore(ctx context.Context, logger utils.Logger) utxostore.Interface 
 	if !found {
 		panic("no utxostore setting found")
 	}
-	utxoStore, err = validator_utxostore.NewStore(ctx, logger, utxoStoreURL, "main")
+	utxoStore, err = utxo_factory.NewStore(ctx, logger, utxoStoreURL, "main")
 	if err != nil {
 		panic(err)
 	}

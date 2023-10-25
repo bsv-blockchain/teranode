@@ -8,10 +8,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
-	validator_utxostore "github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -84,7 +84,7 @@ func main() {
 	if !found {
 		panic("utxostore config not found")
 	}
-	utxoStore, err := validator_utxostore.NewStore(context.Background(), logger, utxoStoreURL, "main", false)
+	utxoStore, err := utxostore_factory.NewStore(context.Background(), logger, utxoStoreURL, "main", false)
 	if err != nil {
 		panic(err)
 	}

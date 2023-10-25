@@ -15,8 +15,8 @@ import (
 	seeder_api "github.com/bitcoin-sv/ubsv/services/seeder/seeder_api"
 	"github.com/bitcoin-sv/ubsv/services/seeder/store"
 	"github.com/bitcoin-sv/ubsv/services/seeder/store/memory"
-	"github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -90,7 +90,7 @@ func (v *Server) Init(ctx context.Context) error {
 	}
 
 	// TODO online it seems the Seeder keeps connecting to aerospike
-	v.utxoStore, err = utxo.NewStore(ctx, v.logger, utxostoreURL, "Seeder")
+	v.utxoStore, err = utxostore_factory.NewStore(ctx, v.logger, utxostoreURL, "Seeder")
 	if err != nil {
 		return fmt.Errorf("could not create utxo store [%w]", err)
 	}

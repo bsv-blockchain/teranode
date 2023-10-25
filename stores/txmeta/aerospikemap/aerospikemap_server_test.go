@@ -9,12 +9,9 @@ import (
 	"time"
 
 	aero "github.com/aerospike/aerospike-client-go/v6"
-	"github.com/bitcoin-sv/ubsv/services/validator/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,9 +29,9 @@ func TestAerospike(t *testing.T) {
 	db, err = New(aeroURL)
 	require.NoError(t, err)
 
-	var utxoDb utxostore.Interface
-	utxoDb, err = utxo.NewStore(context.Background(), p2p.TestLogger{}, aeroURL, "test", false)
-	_ = utxoDb
+	//var utxoDb utxostore.Interface
+	//utxoDb, err = utxo.NewStore(context.Background(), p2p.TestLogger{}, aeroURL, "test", false)
+	//_ = utxoDb
 
 	var hash *chainhash.Hash
 	hash, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")

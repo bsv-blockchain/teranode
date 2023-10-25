@@ -1,4 +1,4 @@
-package utxo
+package _factory
 
 import (
 	"context"
@@ -8,13 +8,13 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/ordishs/go-utils"
 )
 
-var availableDatabases = map[string]func(url *url.URL) (utxostore.Interface, error){}
+var availableDatabases = map[string]func(url *url.URL) (utxo.Interface, error){}
 
-func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxostore.Interface, error) {
+func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Interface, error) {
 
 	var port int
 	var err error
@@ -28,7 +28,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 
 	dbInit, ok := availableDatabases[storeUrl.Scheme]
 	if ok {
-		var utxoStore utxostore.Interface
+		var utxoStore utxo.Interface
 		var blockchainClient blockchain.ClientI
 		var blockchainSubscriptionCh chan *model.Notification
 
@@ -92,7 +92,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func BlockHeightListener(ctx context.Context, logger utils.Logger, utxoStore utxostore.Interface, source string) {
+func BlockHeightListener(ctx context.Context, logger utils.Logger, utxoStore utxo.Interface, source string) {
 	// get the latest block height to compare against lock time utxos
 	blockchainClient, err := blockchain.NewClient(ctx)
 	if err != nil {

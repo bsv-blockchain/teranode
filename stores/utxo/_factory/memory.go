@@ -1,6 +1,6 @@
 // //go:build memory
 
-package utxo
+package _factory
 
 import (
 	"context"
