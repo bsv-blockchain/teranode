@@ -277,7 +277,7 @@ func (s *Server) Start(ctx context.Context) error {
 					}
 
 					mm := MiningOnMessage{
-						Hash:         notification.Hash.String(),
+						Hash:         header.Hash().String(),
 						PreviousHash: header.HashPrevBlock.String(),
 						DataHubUrl:   s.blobServerHttpAddressURL,
 						PeerId:       s.host.ID().String(),
