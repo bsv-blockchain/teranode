@@ -37,3 +37,27 @@ func (e *ErrSpentExtra) Error() string {
 func (e *ErrSpentExtra) Unwrap() error {
 	return e.Err
 }
+
+type ErrLockTimeExtra struct {
+	Err         error
+	LockTime    uint32
+	BlockHeight uint32
+}
+
+func NewErrLockTimeExtra(lockTime uint32, blockHeight uint32) *ErrLockTimeExtra {
+	return &ErrLockTimeExtra{
+		Err:         ErrLockTime,
+		LockTime:    lockTime,
+		BlockHeight: blockHeight,
+	}
+}
+func (e *ErrLockTimeExtra) Error() string {
+	if e.LockTime == 0 {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("%s : locktime %d (height check: %d)", e.Err, e.LockTime, e.BlockHeight)
+}
+
+func (e *ErrLockTimeExtra) Unwrap() error {
+	return e.Err
+}

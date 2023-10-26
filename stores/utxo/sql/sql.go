@@ -300,7 +300,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 					return utxostore.ErrSpent
 				}
 			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
-				return utxostore.ErrLockTime
+				return utxostore.NewErrLockTimeExtra(utxo.LockTime, s.blockHeight)
 			}
 		}
 
