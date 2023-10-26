@@ -89,7 +89,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 
 func (u *Server) Init(ctx context.Context) (err error) {
 	if u.blockchainClient, err = blockchain.NewClient(ctx); err != nil {
-		return fmt.Errorf("failed to create blockchain client [%w]", err)
+		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
 	}
 
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient)
@@ -102,20 +102,20 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
-					u.logger.Infof("processing catchup on channel [%s]", c.block.Hash().String())
+					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err = u.catchup(ctx, c.block, c.baseURL); err != nil {
-						u.logger.Errorf("failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
+						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
-					u.logger.Infof("processing catchup on channel DONE [%s]", c.block.Hash().String())
+					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 				}
 			case b := <-u.blockFoundCh:
 				{
 					// TODO optimize this for the valid chain, not processing everything ???
-					u.logger.Infof("processing block found on channel [%s]", b.hash.String())
+					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
 					if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
-						u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
+						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
-					u.logger.Infof("processing block found on channel DONE [%s]", b.hash.String())
+					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
 				}
 			}
 		}
@@ -152,10 +152,10 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	timeStart := time.Now()
 	prometheusBlockValidationBlockFound.Inc()
-	u.logger.Infof("BlockFound called [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
+	u.logger.Infof("[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
 
 	if u.catchingUp.Load() {
-		u.logger.Infof("BlockFound canceled, we are catching up [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
+		u.logger.Infof("[BlockFound][%s] canceled, we are catching up", utils.ReverseAndHexEncodeSlice(req.Hash))
 		return &emptypb.Empty{}, nil
 	}
 
@@ -167,7 +167,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check if block exists [%w]", err)
+		return nil, fmt.Errorf("[BlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
 	if exists {
 		//u.logger.Warnf("block found that already exists [%s]", hash.String())
@@ -176,7 +176,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {
-		u.logger.Infof("BlockFound add on channel [%s]", hash.String())
+		u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 		u.blockFoundCh <- processBlockFound{
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
@@ -190,15 +190,15 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
 	timeStart := time.Now()
-	u.logger.Infof("processing block found [%s]", hash.String())
+	u.logger.Infof("[processBlockFound][%s] processing block found", hash.String())
 
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
 	if err != nil {
-		return fmt.Errorf("failed to check if block exists [%w]", err)
+		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
 	if exists {
-		u.logger.Warnf("not processing block that already was found [%s]", hash.String())
+		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
 		return nil
 	}
 
@@ -210,13 +210,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// catchup if we are missing the parent block
 	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return fmt.Errorf("failed to check if parent block %s exists [%w]", block.Header.HashPrevBlock.String(), err)
+		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
 	if !parentExists {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
-			u.logger.Infof("processBlockFound add to catchup channel [%s]", hash.String())
+			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: baseUrl,
@@ -227,6 +227,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 
 	// validate the block
+	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
 	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
@@ -240,16 +241,16 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block %s from peer [%w]", hash.String(), err)
+		return nil, fmt.Errorf("[getBlock][%s] failed to get block from peer [%w]", hash.String(), err)
 	}
 
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create block %s from bytes [%w]", hash.String(), err)
+		return nil, fmt.Errorf("[getBlock][%s] failed to create block from bytes [%w]", hash.String(), err)
 	}
 
 	if block == nil {
-		return nil, fmt.Errorf("block could not be created from bytes: %v", blockBytes)
+		return nil, fmt.Errorf("[getBlock][%s] block could not be created from bytes: %v", hash.String(), blockBytes)
 	}
 
 	return block, nil
@@ -258,7 +259,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
 	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block headers %s from peer [%w]", hash.String(), err)
+		return nil, fmt.Errorf("[getBlockHeaders][%s] failed to get block headers from peer [%w]", hash.String(), err)
 	}
 
 	blockHeaders := make([]*model.BlockHeader, 0, len(blockHeadersBytes)/model.BlockHeaderSize)
@@ -267,7 +268,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 	for i := 0; i < len(blockHeadersBytes); i += model.BlockHeaderSize {
 		blockHeader, err = model.NewBlockHeaderFromBytes(blockHeadersBytes[i : i+model.BlockHeaderSize])
 		if err != nil {
-			return nil, fmt.Errorf("failed to create block header %s from bytes [%w]", hash.String(), err)
+			return nil, fmt.Errorf("[getBlockHeaders][%s] failed to create block header from bytes [%w]", hash.String(), err)
 		}
 		blockHeaders = append(blockHeaders, blockHeader)
 	}
@@ -279,7 +280,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	timeStart := time.Now()
 	prometheusBlockValidationCatchup.Inc()
 
-	u.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
+	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
 	u.catchingUp.Store(true)
 	defer func() {
 		u.catchingUp.Store(false)
@@ -288,7 +289,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	// first check whether this block already exists, which would mean we caught up from another peer
 	exists, err := u.blockchainClient.GetBlockExists(ctx, fromBlock.Hash())
 	if err != nil {
-		return fmt.Errorf("failed to check if block exists [%w]", err)
+		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 	}
 	if exists {
 		return nil
@@ -298,22 +299,23 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 
 	fromBlockHeaderHash := fromBlock.Header.HashPrevBlock
 
+	var blockHeaders []*model.BlockHeader
 LOOP:
 	for {
-		u.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
-		blockHeaders, err := u.getBlockHeaders(ctx, fromBlockHeaderHash, baseURL)
+		u.logger.Debugf("[catchup][%s] getting block headers for catchup from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
+		blockHeaders, err = u.getBlockHeaders(ctx, fromBlockHeaderHash, baseURL)
 		if err != nil {
 			return err
 		}
 
 		if len(blockHeaders) == 0 {
-			return fmt.Errorf("failed to get block headers from [%s]", fromBlockHeaderHash.String())
+			return fmt.Errorf("[catchup][%s] failed to get block headers from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
 		}
 
 		for _, blockHeader := range blockHeaders {
 			exists, err = u.blockchainClient.GetBlockExists(ctx, blockHeader.Hash())
 			if err != nil {
-				return fmt.Errorf("failed to check if block exists [%w]", err)
+				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 			}
 			if exists {
 				break LOOP
@@ -323,24 +325,25 @@ LOOP:
 
 			fromBlockHeaderHash = blockHeader.HashPrevBlock
 			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
-				return fmt.Errorf("failed to find parent block header, last was: %s", blockHeader.String())
+				return fmt.Errorf("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
 			}
 		}
 	}
 
-	u.logger.Infof("catching up from [%s] to [%s]", catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+	u.logger.Infof("[catchup][%s] catching up from [%s] to [%s]", fromBlock.Hash().String(), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
 	// process the catchup block headers in reverse order
+	var block *model.Block
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, err := u.getBlock(ctx, blockHeader.Hash(), baseURL)
+		block, err = u.getBlock(ctx, blockHeader.Hash(), baseURL)
 		if err != nil {
-			return errors.Join(fmt.Errorf("failed to get block [%s] [%v]", blockHeader.String(), err))
+			return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s] [%v]", fromBlock.Hash().String(), blockHeader.String(), err))
 		}
 
 		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL); err != nil {
-			return errors.Join(fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err))
+			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s] [%v]", fromBlock.Hash().String(), block.String(), err))
 		}
 	}
 
@@ -352,12 +355,11 @@ LOOP:
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
 	timeStart := time.Now()
 	prometheusBlockValidationSubtreeFound.Inc()
-
-	u.logger.Infof("processing subtree found [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
+	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
 
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create subtree hash from bytes [%w]", err)
+		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	}
 
 	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
@@ -368,16 +370,16 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {
-		return nil, fmt.Errorf("failed to check if subtree exists [%w]", err)
+		return nil, fmt.Errorf("[SubtreeFound][%s] failed to check if subtree exists [%w]", subtreeHash.String(), err)
 	}
 
 	if exists {
-		u.logger.Warnf("subtree found that already exists [%s]", subtreeHash.String())
+		u.logger.Warnf("[SubtreeFound][%s] subtree found that already exists", subtreeHash.String())
 		return &emptypb.Empty{}, nil
 	}
 
 	if req.GetBaseUrl() == "" {
-		return nil, fmt.Errorf("base url is empty")
+		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
 	}
 
 	// validate the subtree in the background
@@ -387,7 +389,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		processing, ok := u.processingSubtree[*subtreeHash]
 		if ok && processing {
 			u.processingSubtreeMu.Unlock()
-			u.logger.Warnf("subtree found that is already being processed [%s]", subtreeHash.String())
+			u.logger.Warnf("[SubtreeFound][%s] subtree found that is already being processed", subtreeHash.String())
 			return
 		}
 
@@ -404,7 +406,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 		err = u.blockValidation.validateSubtree(context.TODO(), subtreeHash, req.GetBaseUrl())
 		if err != nil {
-			u.logger.Errorf("invalid subtree found [%s]: %v", subtreeHash.String(), err)
+			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 			return
 		}
 	}()
