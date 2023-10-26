@@ -22,8 +22,8 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/worker"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -198,7 +198,7 @@ func main() {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
-	propagationServers := getPropagationServers(ctx)
+	propagationServers := distributor.GetPropagationGRPCAddresses()
 	if len(propagationServers) == 0 {
 		panic("No suitable propagation server connection found")
 	}
@@ -245,7 +245,6 @@ func main() {
 		w, err := worker.NewWorker(
 			workerLogger,
 			rateLimiter,
-			propagationServers,
 			kafkaProducer,
 			kafkaTopic,
 			ipv6MulticastConn,
@@ -284,28 +283,4 @@ func main() {
 	if err := g.Wait(); err != nil {
 		logger.Errorf("error occurred in tx blaster: %v", err)
 	}
-}
-
-func getPropagationServers(ctx context.Context) map[string]propagation_api.PropagationAPIClient {
-	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
-
-	propagationGrpcAddresses, okGrpc := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	if !okGrpc {
-		panic("no propagation_grpcAddresses setting found")
-	}
-
-	for _, propagationGrpcAddress := range propagationGrpcAddresses {
-		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-			MaxRetries:  3,
-		})
-		if err != nil {
-			panic(err)
-		}
-
-		propagationServers[propagationGrpcAddress] = propagation_api.NewPropagationAPIClient(pConn)
-	}
-
-	return propagationServers
 }

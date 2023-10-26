@@ -5,14 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blobserver"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -34,18 +33,17 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db                 *sql.DB
-	engine             util.SQLEngine
-	store              blockchain.Store
-	blobServerClient   *blobserver.Client
-	propagationServers map[string]propagation_api.PropagationAPIClient
-	privateKey         *bec.PrivateKey
-	running            bool
-	blockFoundCh       chan processBlockFound
-	catchupCh          chan processBlockCatchup
-	logger             utils.Logger
-	mu                 sync.Mutex
-	address            string
+	db               *sql.DB
+	engine           util.SQLEngine
+	store            blockchain.Store
+	blobServerClient *blobserver.Client
+	distributor      *distributor.Distributor
+	privateKey       *bec.PrivateKey
+	running          bool
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	logger           utils.Logger
+	address          string
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -71,18 +69,21 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	ps := getPropagationServers(context.Background())
+	d, err := distributor.NewDistributor(logger)
+	if err != nil {
+		return nil, fmt.Errorf("could not create distributor: %v", err)
+	}
 
 	c := &Coinbase{
-		store:              store,
-		db:                 store.GetDB(),
-		engine:             engine,
-		blockFoundCh:       make(chan processBlockFound, 100),
-		catchupCh:          make(chan processBlockCatchup),
-		propagationServers: ps,
-		logger:             logger,
-		privateKey:         privateKey.PrivKey,
-		address:            coinbaseAddr.AddressString,
+		store:        store,
+		db:           store.GetDB(),
+		engine:       engine,
+		blockFoundCh: make(chan processBlockFound, 100),
+		catchupCh:    make(chan processBlockCatchup),
+		distributor:  d,
+		logger:       logger,
+		privateKey:   privateKey.PrivKey,
+		address:      coinbaseAddr.AddressString,
 	}
 
 	return c, nil
@@ -479,7 +480,7 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 		return fmt.Errorf("error filling initial inputs: %v", err)
 	}
 
-	if err := c.sendTransaction(ctx, tx); err != nil {
+	if err := c.distributor.SendTransaction(ctx, tx); err != nil {
 		return fmt.Errorf("error sending initial transaction: %v", err)
 	}
 
@@ -494,35 +495,6 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 			return fmt.Errorf("could not insert spendable utxo: %+v", err)
 		}
 	}
-	return nil
-}
-
-func (c *Coinbase) sendTransaction(ctx context.Context, tx *bt.Tx) error {
-	var wg sync.WaitGroup
-	errorCount := 0
-
-	for addr, propagationServer := range c.propagationServers {
-		a := addr // Create a local copy
-		p := propagationServer
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-				Tx: tx.ExtendedBytes(),
-			}); err != nil {
-				c.logger.Errorf("error sending transaction to %s: %v", a, err)
-				errorCount++
-			}
-		}()
-	}
-	wg.Wait()
-
-	if float32(errorCount)/float32(len(c.propagationServers)) > 0.5 {
-		return fmt.Errorf("error sending transaction to more than half of the propagation servers")
-	}
-
 	return nil
 }
 
@@ -559,7 +531,7 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, er
 		return nil, fmt.Errorf("error filling initial inputs: %v", err)
 	}
 
-	if err = c.sendTransaction(ctx, tx); err != nil {
+	if err = c.distributor.SendTransaction(ctx, tx); err != nil {
 		return nil, fmt.Errorf("error sending initial transaction: %v", err)
 	}
 
@@ -651,45 +623,4 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 	}
 
 	return utxo, nil
-}
-
-func (c *Coinbase) MarkUtxoAsSpent(ctx context.Context, txId *chainhash.Hash, vout uint32, spentByTxID *chainhash.Hash) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if _, err := c.db.ExecContext(ctx, `
-		UPDATE coinbase_utxos
-		SET spent_at = CURRENT_TIMESTAMP
-		  , spent_by_tx_id = $1
-		WHERE tx_id = $2
-		  AND vout = $3
-	`, spentByTxID[:], txId[:], vout); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func getPropagationServers(ctx context.Context) map[string]propagation_api.PropagationAPIClient {
-	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
-
-	propagationGrpcAddresses, okGrpc := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	if !okGrpc {
-		panic("no propagation_grpcAddresses setting found")
-	}
-
-	for _, propagationGrpcAddress := range propagationGrpcAddresses {
-		pConn, err := util.GetGRPCClient(ctx, propagationGrpcAddress, &util.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-			MaxRetries:  3,
-		})
-		if err != nil {
-			panic(err)
-		}
-
-		propagationServers[propagationGrpcAddress] = propagation_api.NewPropagationAPIClient(pConn)
-	}
-
-	return propagationServers
 }

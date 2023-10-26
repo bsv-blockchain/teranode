@@ -2,17 +2,14 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -104,27 +101,26 @@ type Ipv6MulticastMsg struct {
 }
 
 type Worker struct {
-	logger             utils.Logger
-	rateLimiter        *rate.Limiter
-	propagationServers map[string]propagation_api.PropagationAPIClient
-	kafkaProducer      sarama.SyncProducer
-	kafkaTopic         string
-	ipv6MulticastConn  *net.UDPConn
-	ipv6MulticastChan  chan Ipv6MulticastMsg
-	printProgress      uint64
-	logIdsCh           chan string
-	totalTransactions  *atomic.Uint64
-	globalStartTime    *time.Time
-	utxoChan           chan *bt.UTXO
-	startTime          time.Time
-	unlocker           bt.UnlockerGetter
-	address            *bscript.Address
+	logger            utils.Logger
+	rateLimiter       *rate.Limiter
+	distributor       *distributor.Distributor
+	kafkaProducer     sarama.SyncProducer
+	kafkaTopic        string
+	ipv6MulticastConn *net.UDPConn
+	ipv6MulticastChan chan Ipv6MulticastMsg
+	printProgress     uint64
+	logIdsCh          chan string
+	totalTransactions *atomic.Uint64
+	globalStartTime   *time.Time
+	utxoChan          chan *bt.UTXO
+	startTime         time.Time
+	unlocker          bt.UnlockerGetter
+	address           *bscript.Address
 }
 
 func NewWorker(
 	logger utils.Logger,
 	rateLimiter *rate.Limiter,
-	propagationServers map[string]propagation_api.PropagationAPIClient,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -148,21 +144,26 @@ func NewWorker(
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
+	d, err := distributor.NewDistributor(logger)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Worker{
-		logger:             logger,
-		rateLimiter:        rateLimiter,
-		propagationServers: propagationServers,
-		kafkaProducer:      kafkaProducer,
-		kafkaTopic:         kafkaTopic,
-		ipv6MulticastConn:  ipv6MulticastConn,
-		ipv6MulticastChan:  ipv6MulticastChan,
-		unlocker:           &unlocker,
-		printProgress:      printProgress,
-		totalTransactions:  totalTransactions,
-		logIdsCh:           logIdsCh,
-		globalStartTime:    globalStartTime,
-		address:            address,
-		utxoChan:           make(chan *bt.UTXO, 10),
+		logger:            logger,
+		rateLimiter:       rateLimiter,
+		distributor:       d,
+		kafkaProducer:     kafkaProducer,
+		kafkaTopic:        kafkaTopic,
+		ipv6MulticastConn: ipv6MulticastConn,
+		ipv6MulticastChan: ipv6MulticastChan,
+		unlocker:          &unlocker,
+		printProgress:     printProgress,
+		totalTransactions: totalTransactions,
+		logIdsCh:          logIdsCh,
+		globalStartTime:   globalStartTime,
+		address:           address,
+		utxoChan:          make(chan *bt.UTXO, 10),
 	}, nil
 }
 
@@ -225,8 +226,18 @@ func (w *Worker) Start(ctx context.Context) error {
 				return fmt.Errorf("error filling initial inputs: %v", err)
 			}
 
-			if err := w.sendTransaction(ctx, tx); err != nil {
+			if err := w.distributor.SendTransaction(ctx, tx); err != nil {
 				return fmt.Errorf("error sending initial transaction: %v", err)
+			}
+
+			counterLoad := counter.Add(1)
+			if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
+				txPs := float64(0)
+				ts := time.Since(*w.globalStartTime).Seconds()
+				if ts > 0 {
+					txPs = float64(counterLoad) / ts
+				}
+				fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
 			}
 
 			// increment prometheus counter
@@ -293,54 +304,3 @@ var counter atomic.Uint64
 
 // 	return nil
 // }
-
-func (w *Worker) sendTransaction(ctx context.Context, tx *bt.Tx) error {
-	traceSpan := tracing.Start(ctx, "txBlaster:sendTransaction")
-	defer traceSpan.Finish()
-
-	traceSpan.SetTag("progname", "txblaster")
-	traceSpan.SetTag("txid", tx.TxIDChainHash().String())
-	traceSpan.SetTag("transport", "grpc")
-
-	var wg sync.WaitGroup
-	errorCount := 0
-
-	for address, propagationServer := range w.propagationServers {
-		a := address
-		p := propagationServer
-
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			_, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-				Tx: tx.ExtendedBytes(),
-			})
-
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					w.logger.Errorf("error sending transaction to %s: %v", a, err)
-					errorCount++
-				}
-			}
-		}()
-	}
-	wg.Wait()
-
-	if float32(errorCount)/float32(len(w.propagationServers)) > 0.5 {
-		return fmt.Errorf("error sending transaction to more than half of the propagation servers")
-	}
-
-	counterLoad := counter.Add(1)
-	if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-		txPs := float64(0)
-		ts := time.Since(*w.globalStartTime).Seconds()
-		if ts > 0 {
-			txPs = float64(counterLoad) / ts
-		}
-		fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
-	}
-
-	return nil
-}
