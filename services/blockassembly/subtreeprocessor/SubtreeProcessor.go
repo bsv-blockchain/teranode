@@ -164,7 +164,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 					}
 
 					//stp.logger.Debugf("[SubtreeProcessor] addNode tx: %s", txReq.node.Hash.String())
-					err = stp.addNode(txReq.node)
+					err = stp.addNode(txReq.node, false)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					}
@@ -195,7 +195,7 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 	return len(stp.chainedSubtrees) + 1
 }
 
-func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification ...bool) (err error) {
+func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification bool) (err error) {
 	prometheusSubtreeProcessorAddTx.Inc()
 
 	err = stp.currentSubtree.AddSubtreeNode(node)
@@ -209,7 +209,7 @@ func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification ..
 		stp.logger.Infof("[SubtreeProcessor] append subtree: %s", stp.currentSubtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 
-		if len(skipNotification) == 0 || !skipNotification[0] {
+		if !skipNotification {
 			// Send the subtree to the newSubtreeChan
 			stp.newSubtreeChan <- stp.currentSubtree
 		}
@@ -289,7 +289,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 
 	for idx, block := range moveUpBlocks {
 		// we skip the notifications for all but the last block
-		err := stp.moveUpBlock(ctx, block, idx != len(moveUpBlocks)-1)
+		lastBlock := idx == len(moveUpBlocks)-1
+		err := stp.moveUpBlock(ctx, block, !lastBlock)
 		if err != nil {
 			return err
 		}

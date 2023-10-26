@@ -92,7 +92,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 		// variables are defined here to prevent unnecessary allocations
 		var block *model.Block
-		var header *model.BlockHeader
+		var bestBlockchainBlockHeader *model.BlockHeader
 		var meta *model.BlockHeaderMeta
 
 		for {
@@ -114,23 +114,23 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
-					header, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
+					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 						continue
 					}
 
-					if header.Hash().IsEqual(b.bestBlockHeader.Hash()) {
+					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
 						// we already have this block, nothing to do
 						continue
-					} else if !header.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
-						err = b.handleReorg(ctx, header)
+					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
+						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler] error handling reorg: %v", err)
 							continue
 						}
 					} else {
-						if block, err = b.blockchainClient.GetBlock(ctx, header.Hash()); err != nil {
+						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
 							continue
 						}
@@ -141,7 +141,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						}
 					}
 
-					b.bestBlockHeader = header
+					b.bestBlockHeader = bestBlockchainBlockHeader
 					b.bestBlockHeight = meta.Height
 
 					err = b.SetState(ctx)

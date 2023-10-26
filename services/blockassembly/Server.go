@@ -431,8 +431,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	startTime := time.Now()
 
+	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
+
 	prometheusBlockAssemblySubmitMiningSolution.Inc()
-	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %x", req.Id)
+	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %s", jobID)
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
@@ -463,6 +465,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockass
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
+		ba.logger.Infof("[BlockAssembly] submit job %s has subtrees: %d", jobID, len(job.Subtrees))
 		for i, subtree := range job.Subtrees {
 			// the job subtree hash needs to be stored for the block, before the coinbase is replaced in the first
 			// subtree, which changes the id of the subtree
@@ -501,6 +504,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockass
 	if len(subtreesInJob) == 0 {
 		hashMerkleRoot = coinbaseTxIDHash
 	} else {
+		ba.logger.Infof("[BlockAssembly] calculating merkle proof for job %s", jobID)
 		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
 		if err != nil {
 			return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)

@@ -102,19 +102,20 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
+					u.logger.Infof("processing catchup on channel [%s]", c.block.Hash().String())
 					if err = u.catchup(ctx, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
+					u.logger.Infof("processing catchup on channel DONE [%s]", c.block.Hash().String())
 				}
 			case b := <-u.blockFoundCh:
 				{
-					if u.processBlockNotify.Get(*b.hash) == nil {
-						// set the processing flag for 1 minute, so we don't process the same block multiple times
-						u.processBlockNotify.Set(*b.hash, true, 1*time.Minute)
-						if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
-							u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
-						}
+					// TODO optimize this for the valid chain, not processing everything ???
+					u.logger.Infof("processing block found on channel [%s]", b.hash.String())
+					if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
+						u.logger.Errorf("failed to process block [%s] [%v]", b.hash.String(), err)
 					}
+					u.logger.Infof("processing block found on channel DONE [%s]", b.hash.String())
 				}
 			}
 		}
@@ -151,8 +152,10 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
 	timeStart := time.Now()
 	prometheusBlockValidationBlockFound.Inc()
+	u.logger.Infof("BlockFound called [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
 
 	if u.catchingUp.Load() {
+		u.logger.Infof("BlockFound canceled, we are catching up [%s]", utils.ReverseAndHexEncodeSlice(req.Hash))
 		return &emptypb.Empty{}, nil
 	}
 
@@ -173,6 +176,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {
+		u.logger.Infof("BlockFound add on channel [%s]", hash.String())
 		u.blockFoundCh <- processBlockFound{
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
@@ -212,6 +216,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if !parentExists {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
+			u.logger.Infof("processBlockFound add to catchup channel [%s]", hash.String())
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: baseUrl,
@@ -382,6 +387,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		processing, ok := u.processingSubtree[*subtreeHash]
 		if ok && processing {
 			u.processingSubtreeMu.Unlock()
+			u.logger.Warnf("subtree found that is already being processed [%s]", subtreeHash.String())
 			return
 		}
 
