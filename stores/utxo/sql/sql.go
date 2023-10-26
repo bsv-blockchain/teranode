@@ -280,7 +280,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 		`
 		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight, time.Now().Unix())
 		if err != nil {
-			return err
+			return fmt.Errorf("[Spend][%s] error spending utxo: %s", spend.Hash.String(), err.Error())
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {

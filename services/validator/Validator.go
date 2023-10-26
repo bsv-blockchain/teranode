@@ -82,29 +82,29 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 				v.reverseSpends(tracing.Start(ctx, "Validator:Validate:Recover"), *reservedUtxos)
 			}
 
-			v.logger.Errorf("[VALIDATOR] Validate recover: %v", r)
+			v.logger.Errorf("[Validate][%s] Validate recover: %v", tx.TxID(), r)
 		}
 	}(&spentUtxos)
 
 	if tx.IsCoinbase() {
-		return fmt.Errorf("coinbase transactions are not supported: %s", tx.TxIDChainHash().String())
+		return fmt.Errorf("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
 	}
 
 	// get the fees and utxoHashes, before we spend the utxos
 	fees, parentTxHashes, err := v.getFeesAndUtxoHashes(tx)
 	if err != nil {
-		return fmt.Errorf("error getting fees and utxo hashes: %v", err)
+		return fmt.Errorf("[Validate][%s] error getting fees and utxo hashes: %v", tx.TxID(), err)
 	}
 
 	if err = v.validateTransaction(traceSpan, tx); err != nil {
-		return err
+		return fmt.Errorf("[Validate][%s] error validating transaction: %v", tx.TxID(), err)
 	}
 
 	// this will reverse the spends if there is an error
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(traceSpan, tx); err != nil {
-		return err
+		return fmt.Errorf("[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
 	// TODO should this be here? or should it be in block assembly?

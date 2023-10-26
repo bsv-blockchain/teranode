@@ -308,17 +308,17 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("failed to parse transaction from bytes: %s", err.Error())
+		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %s", err.Error())
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("received coinbase transaction: %s", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
 	}
 
 	if !btTx.IsExtended() {
-		return nil, fmt.Errorf("transaction is not extended: %s", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended", btTx.TxID())
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -328,14 +328,14 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.Go(func() error {
 		if err = ps.storeTransaction(gCtx, btTx); err != nil {
-			return fmt.Errorf("failed to save transaction %v: %v", btTx.TxIDChainHash(), err)
+			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v", btTx.TxIDChainHash(), err)
 		}
 		return nil
 	})
 
 	if err = ps.validator.Validate(traceSpan.Ctx, btTx); err != nil {
 		// TODO send REJECT message to peers if invalid tx
-		ps.logger.Errorf("received invalid transaction: %s", err.Error())
+		ps.logger.Errorf("[ProcessTransaction][%s] received invalid transaction: %s", btTx.TxID(), err.Error())
 		prometheusInvalidTransactions.Inc()
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	if err = g.Wait(); err != nil {
 		// TODO: we failed storing the tx in the store, what should we do now?
 		//       maybe store in a local badger or a kafka stream and have a process that retries?
-		ps.logger.Errorf("failed to store transaction: %s", err.Error())
+		ps.logger.Errorf("[ProcessTransaction][%s] failed to store transaction: %s", btTx.TxID(), err.Error())
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
