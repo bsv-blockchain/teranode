@@ -12,7 +12,7 @@ import (
 )
 
 type SubtreeNode struct {
-	Hash        chainhash.Hash `json:"hash"`
+	Hash        chainhash.Hash `json:"txid"` // This is called txid so that the UI knows to add a link to /tx/<txid>
 	Fee         uint64         `json:"fee"`
 	SizeInBytes uint64         `json:"size"`
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,18 +20,20 @@ type Repository struct {
 	logger           utils.Logger
 	UtxoStore        utxo.Interface
 	TxStore          blob.Store
+	TxMetaStore      txmeta.Store
 	SubtreeStore     blob.Store
 	BlockchainClient blockchain.ClientI
 }
 
-func NewRepository(logger utils.Logger, utxoStore utxo.Interface, TxStore blob.Store,
+func NewRepository(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
 	blockchainClient blockchain.ClientI, SubtreeStore blob.Store) (*Repository, error) {
 
 	return &Repository{
 		logger:           logger,
 		BlockchainClient: blockchainClient,
 		UtxoStore:        utxoStore,
-		TxStore:          TxStore,
+		TxStore:          txStore,
+		TxMetaStore:      txMetaStore,
 		SubtreeStore:     SubtreeStore,
 	}, nil
 }
@@ -78,6 +81,16 @@ func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) (
 	}
 
 	return tx, nil
+}
+
+func (r *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
+	txMeta, err := r.TxMetaStore.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return txMeta, nil
 }
 
 func (r *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {

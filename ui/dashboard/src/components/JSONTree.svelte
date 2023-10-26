@@ -28,10 +28,8 @@
           {:else if getType(value) === 'string'}
             {#if value.length === 64 && key.includes('txid')}
               <a href="/viewer/tx/{value}">"{value}"</a>
-            {:else if value.length === 64 && key === 'hash'}
+            {:else if value.length === 64 && (key.includes('block') || key === 'hash')}
               <a href="/viewer/block/{value}">"{value}"</a>
-            {:else if value.length === 64 && key.includes('block')}
-              <a href="/viewer/header/{value}">"{value}"</a>
             {:else if value.length === 64 && key === 'utxoHash'}
               <a href="/viewer/utxo/{value}">"{value}"</a>
             {:else}

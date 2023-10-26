@@ -6,10 +6,14 @@
   }
 </script>
 
-<td style="text-align: right">
+<td>
+  <a class="has-text-right" href={`/viewer/header/${block.hash}`}>
+    {block.height}
+  </a>
+</td>
+<td>
   <a class="has-text-right" href={`/viewer/block/${block.hash}`}>
-    {block.height}<br/>
-    <small>{block.hash.substring(0, 8)}</small>
+    {block.hash.substring(0, 8)}
   </a>
 </td>
 

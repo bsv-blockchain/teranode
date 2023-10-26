@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
@@ -31,6 +32,7 @@ type Server struct {
 	utxoStore      utxo.Interface
 	txStore        blob.Store
 	subtreeStore   blob.Store
+	txMetaStore    txmeta.Store
 	grpcAddr       string
 	httpAddr       string
 	grpcServer     *grpc_impl.GRPC
@@ -47,11 +49,12 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, subtreeStore blob.Store) *Server {
+func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
 	s := &Server{
 		logger:         logger,
 		utxoStore:      utxoStore,
 		txStore:        txStore,
+		txMetaStore:    txMetaStore,
 		subtreeStore:   subtreeStore,
 		peers:          make(map[string]peerWithContext),
 		notificationCh: make(chan *blobserver_api.Notification, 100),
@@ -74,7 +77,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.txMetaStore, blockchainClient, v.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}

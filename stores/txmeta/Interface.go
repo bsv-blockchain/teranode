@@ -42,15 +42,15 @@ func (s TxStatus) String() string {
 // Data struct for the transaction metadata
 // do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
-	UtxoHashes     []*chainhash.Hash
-	ParentTxHashes []*chainhash.Hash
-	BlockHashes    []*chainhash.Hash
-	Fee            uint64
-	SizeInBytes    uint64
-	Status         TxStatus
-	FirstSeen      uint32
-	BlockHeight    uint32
-	LockTime       uint32
+	UtxoHashes     []*chainhash.Hash `json:"utxoHashes"`
+	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
+	BlockHashes    []*chainhash.Hash `json:"blockHashes"`
+	Fee            uint64            `json:"fee"`
+	SizeInBytes    uint64            `json:"sizeInBytes"`
+	Status         TxStatus          `json:"status"`
+	FirstSeen      uint32            `json:"firstSeen"`
+	BlockHeight    uint32            `json:"blockHeight"`
+	LockTime       uint32            `json:"lockTime"`
 }
 
 type Store interface {

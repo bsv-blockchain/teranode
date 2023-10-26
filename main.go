@@ -265,6 +265,7 @@ func main() {
 			gocore.Log("blob"),
 			getUtxoStore(ctx, logger),
 			getTxStore(),
+			getTxMetaStore(logger),
 			getSubtreeStore(),
 		)); err != nil {
 			panic(err)

@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -35,6 +36,8 @@ func TestTransaction(t *testing.T) {
 
 	txStore := getMemoryStore(t)
 
+	txMetaStore := memory.New()
+
 	blockChainStore, err := blockchain_store.NewStore(p2p.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(p2p.TestLogger{}, blockChainStore)
@@ -50,7 +53,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -91,6 +94,7 @@ func TestSubtree(t *testing.T) {
 
 	subtreeStore := getMemoryStore(t)
 	txStore := getMemoryStore(t)
+	txMetaStore := memory.New()
 
 	blockChainStore, err := blockchain_store.NewStore(p2p.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
@@ -107,7 +111,7 @@ func TestSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the subtree node bytes from the repository

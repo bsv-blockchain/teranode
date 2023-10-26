@@ -9,7 +9,8 @@
 <table class="table">
   <thead>
     <tr>
-      <th>Height<br/>Hash</th>
+      <th>Height</th>
+      <th>Hash</th>
       <th>Timestamp (UTC)</th>
       <th>Age</th>
       <th>Delta Time</th>
