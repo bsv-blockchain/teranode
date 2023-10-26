@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -26,13 +27,14 @@ func TestBlock_Bytes(t *testing.T) {
 			Header:           blockHeader,
 			CoinbaseTx:       &bt.Tx{},
 			TransactionCount: 1,
+			SizeInBytes:      123,
 			Subtrees:         []*chainhash.Hash{},
 		}
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		assert.Equal(t, 92, len(blockBytes))
+		assert.Equal(t, 93, len(blockBytes))
 	})
 
 	t.Run("test block bytes", func(t *testing.T) {
@@ -44,6 +46,7 @@ func TestBlock_Bytes(t *testing.T) {
 			Header:           blockHeader,
 			CoinbaseTx:       coinbaseTx,
 			TransactionCount: 1,
+			SizeInBytes:      123,
 			Subtrees:         []*chainhash.Hash{},
 		}
 
@@ -60,6 +63,8 @@ func TestBlock_Bytes(t *testing.T) {
 
 		assert.Equal(t, "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", block.Hash().String())
 		assert.Equal(t, block.Hash().String(), blockFromBytes.Hash().String())
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.Equal(t, uint64(123), block.SizeInBytes)
 
 		assert.NoError(t, block.CheckMerkleRoot())
 	})
@@ -73,6 +78,7 @@ func TestBlock_Bytes(t *testing.T) {
 			Header:           blockHeader,
 			CoinbaseTx:       coinbaseTx,
 			TransactionCount: 1,
+			SizeInBytes:      uint64(len(coinbaseTx.Bytes())) + 80 + util.VarintSize(1),
 			Subtrees: []*chainhash.Hash{
 				hash1,
 				hash2,
@@ -88,5 +94,7 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Len(t, blockFromBytes.Subtrees, 2)
 		assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
 		assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.Equal(t, uint64(215), block.SizeInBytes)
 	})
 }

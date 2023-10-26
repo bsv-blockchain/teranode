@@ -57,15 +57,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	var sizeInBytes uint64
-	sizeInBytesCh := make(chan uint64)
-
-	go func() {
-		for s := range sizeInBytesCh {
-			sizeInBytes += s
-		}
-	}()
-
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 	for _, subtreeHash := range block.Subtrees {
 		st := subtreeHash
@@ -76,15 +67,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), st.String()), err)
 			}
 
-			sizeInBytesCh <- 0 // TODO get the size all the transactions of the subtree
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return err
 	}
-
-	close(sizeInBytesCh)
 
 	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
@@ -99,17 +87,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
-	sizeInBytes += uint64(block.CoinbaseTx.Size())
-
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
 	if ok, err := block.Valid(ctx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
 		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 	}
-
-	// Store the size of the block
-	block.SizeInBytes = 80 + util.VarintSize(block.TransactionCount) + sizeInBytes
 
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -132,6 +133,12 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 
 	// read the transaction count
 	block.TransactionCount, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// read the size in bytes
+	block.SizeInBytes, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -397,6 +404,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var subtreeBytes []byte
 	var err error
 
+	var sizeInBytes atomic.Uint64
+	var txCount atomic.Uint64
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for i, subtreeHash := range b.Subtrees {
 		i := i
@@ -424,6 +434,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 
 			b.SubtreeSlices[i] = subtree
 
+			sizeInBytes.Add(subtree.SizeInBytes)
+			txCount.Add(uint64(subtree.Length()))
+
 			return nil
 		})
 
@@ -431,6 +444,10 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 			return fmt.Errorf("failed to get and validate subtrees: %v", err)
 		}
 	}
+
+	b.TransactionCount = txCount.Load()
+	// header + transaction count + size in bytes
+	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount)
 
 	// TODO something with conflicts
 
@@ -558,6 +575,12 @@ func (b *Block) Bytes() ([]byte, error) {
 
 	// write the transaction count
 	err := wire.WriteVarInt(buf, 0, b.TransactionCount)
+	if err != nil {
+		return nil, err
+	}
+
+	// write the size in bytes
+	err = wire.WriteVarInt(buf, 0, b.SizeInBytes)
 	if err != nil {
 		return nil, err
 	}
