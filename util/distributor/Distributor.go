@@ -95,6 +95,8 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	if errorCount > 0 {
 		d.logger.Debugf("Error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), errors.String())
+	} else {
+		d.logger.Debugf("Successfully distributed transaction %s", tx.TxIDChainHash().String())
 	}
 
 	if float32(errorCount)/float32(len(d.propagationServers)) > 0.5 {
