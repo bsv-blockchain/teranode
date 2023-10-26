@@ -99,7 +99,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		d.logger.Debugf("Successfully distributed transaction %s", tx.TxIDChainHash().String())
 	}
 
-	if float32(errorCount)/float32(len(d.propagationServers)) > 0.5 {
+	if float32(errorCount)/float32(len(d.propagationServers)) <= 0.5 {
 		return fmt.Errorf("error sending transaction to more than half of the propagation servers")
 	}
 
