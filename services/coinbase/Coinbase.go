@@ -572,7 +572,7 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 	// Get the oldest spendable utxo
 	var txid []byte
 	var vout uint32
-	var lockingScript *bscript.Script
+	var lockingScript bscript.Script
 	var satoshis uint64
 
 	if err := c.db.QueryRowContext(ctx, `
@@ -585,7 +585,7 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 		LIMIT 1
 	)
 	RETURNING txid, vout, locking_script, satoshis;
-`).Scan(&txid, &vout, lockingScript, &satoshis); err != nil {
+`).Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
 		return nil, err
 	}
 
@@ -597,7 +597,7 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 	utxo := &bt.UTXO{
 		TxIDHash:      hash,
 		Vout:          vout,
-		LockingScript: lockingScript,
+		LockingScript: &lockingScript,
 		Satoshis:      satoshis,
 	}
 
