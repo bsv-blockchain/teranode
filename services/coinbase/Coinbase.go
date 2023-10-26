@@ -174,41 +174,46 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 }
 
 func (c *Coinbase) createTables(ctx context.Context) error {
-	// Init coinbase tables in db
-	if _, err := c.db.ExecContext(ctx, `
-		  CREATE TABLE IF NOT EXISTS coinbase_utxos (
-			 inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-	    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
-			,txid           BLOB NOT NULL
-			,vout           INTEGER NOT NULL
-			,locking_script BLOB NOT NULL
-			,satoshis       BIGINT NOT NULL
-			,processed_at   TIMESTAMPTZ
-		 )
-		`); err != nil {
-		return err
-	}
 
 	var idType string
+	var bType string
+
 	switch c.engine {
 	case util.Postgres:
 		idType = "BIGSERIAL"
+		bType = "BYTEA"
 	case util.Sqlite, util.SqliteMemory:
 		idType = "INTEGER PRIMARY KEY AUTOINCREMENT"
+		bType = "BLOB"
 	default:
 		return fmt.Errorf("unsupported database engine: %s", c.engine)
+	}
+
+	// Init coinbase tables in db
+	if _, err := c.db.ExecContext(ctx, fmt.Sprintf(`
+		  CREATE TABLE IF NOT EXISTS coinbase_utxos (
+			 inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+	    ,block_id 	    BIGINT NOT NULL REFERENCES blocks (id)
+			,txid           %s NOT NULL
+			,vout           INTEGER NOT NULL
+			,locking_script %s NOT NULL
+			,satoshis       BIGINT NOT NULL
+			,processed_at   TIMESTAMPTZ
+		 )
+		`, bType, bType)); err != nil {
+		return err
 	}
 
 	if _, err := c.db.ExecContext(ctx, fmt.Sprintf(`
 		  CREATE TABLE IF NOT EXISTS spendable_utxos (
 			 id						  %s
 			,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-	    ,txid           BLOB NOT NULL
+	    ,txid           %s NOT NULL
 			,vout           INTEGER NOT NULL
-			,locking_script BLOB NOT NULL
+			,locking_script %s NOT NULL
 			,satoshis       BIGINT NOT NULL
 		 )
-		`, idType)); err != nil {
+		`, idType, bType, bType)); err != nil {
 		return err
 	}
 
