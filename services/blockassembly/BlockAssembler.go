@@ -119,17 +119,21 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 						continue
 					}
+					b.logger.Infof("[BlockAssembler] new best block header: %d: %s", meta.Height, bestBlockchainBlockHeader.Hash())
 
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
+						b.logger.Infof("[BlockAssembler] best block header is the same as the current best block header: %s", b.bestBlockHeader.Hash())
 						// we already have this block, nothing to do
 						continue
 					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
+						b.logger.Infof("[BlockAssembler] best block header is not the same as the previous best block header, reorging: %s", b.bestBlockHeader.Hash())
 						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler] error handling reorg: %v", err)
 							continue
 						}
 					} else {
+						b.logger.Infof("[BlockAssembler] best block header is the same as the previous best block header, moving up: %s", b.bestBlockHeader.Hash())
 						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
 							continue
