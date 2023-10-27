@@ -371,19 +371,27 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 		WITH LongestChainTip AS (
 			SELECT id, height
 			FROM blocks
-			ORDER BY chain_work DESC, id ASC
+			ORDER BY chain_work DESC, inserted_at ASC
 			LIMIT 1
 		)
 
 		UPDATE coinbase_utxos
-		SET processed_at = $1
-		WHERE processed_at IS NULL AND block_id IN (
+		SET
+		 processed_at = $1
+		WHERE processed_at IS NULL
+		AND block_id IN (
 			WITH RECURSIVE ChainBlocks AS (
-				SELECT id, parent_id, height
+				SELECT
+				 id
+				,parent_id
+				,height
 				FROM blocks
 				WHERE id = (SELECT id FROM LongestChainTip)
 				UNION ALL
-				SELECT b.id, b.parent_id, b.height
+				SELECT
+				 b.id
+				,b.parent_id
+				,b.height
 				FROM blocks b
 				JOIN ChainBlocks cb ON b.id = cb.parent_id
 				WHERE b.id != cb.id
@@ -552,7 +560,7 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 	WHERE id = (
 		SELECT id
 		FROM spendable_utxos
-		ORDER BY id
+		ORDER BY inserted_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 	)
