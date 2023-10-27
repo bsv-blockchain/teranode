@@ -111,13 +111,7 @@
       <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
         Viewer
       </a>
-      <a
-        class="navbar-item"
-        href="/utxoviewer"
-        on:click={handleNavbarItemClick}
-      >
-        UTXOInspector
-      </a>
+
       <!-- <a class="navbar-item" href="/blocks" on:click={handleNavbarItemClick}> Blocks </a> -->
       <!-- <a class="navbar-item" href="/listener" on:click={handleNavbarItemClick}>Listener</a> -->
       <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>

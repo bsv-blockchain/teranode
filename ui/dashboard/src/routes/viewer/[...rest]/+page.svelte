@@ -23,7 +23,15 @@
     url = ''
   }
 
-  const itemTypes = ['block', 'header', 'subtree', 'tx', 'utxo', 'txmeta']
+  const itemTypes = [
+    'block',
+    'header',
+    'subtree',
+    'tx',
+    'utxo',
+    'utxos',
+    'txmeta',
+  ]
 
   function reverse() {
     if (data && data.hash && data.hash.length === 64) {
