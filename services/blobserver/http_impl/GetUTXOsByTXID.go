@@ -59,15 +59,13 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		utxoCh := make(chan *UTXOItem)
 		utxos := make([]*UTXOItem, 0, len(tx.Outputs))
 
+		waitCh := make(chan struct{})
+
 		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case utxo := <-utxoCh:
-					utxos = append(utxos, utxo)
-				}
+			for utxo := range utxoCh {
+				utxos = append(utxos, utxo)
 			}
+			close(waitCh)
 		}()
 
 		// Create a goroutine for each output in the transaction.
@@ -75,42 +73,36 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 			safeI, safeOutput := i, output
 
 			g.Go(func() error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-
-					// Get the UTXOHash for this output.
-					utxoHash, err := util.UTXOHash(hash, uint32(safeI), *safeOutput.LockingScript, safeOutput.Satoshis)
-					if err != nil {
-						return err
-					}
-
-					// Get the UTXO for this output.
-					utxoRes, err := h.repository.GetUtxo(ctx, utxoHash)
-					if err != nil {
-						return err
-					}
-
-					utxoItem := &UTXOItem{
-						Txid:          hash,
-						Vout:          uint32(safeI),
-						LockingScript: safeOutput.LockingScript,
-						Satoshis:      safeOutput.Satoshis,
-						UtxoHash:      utxoHash,
-					}
-
-					if utxoRes != nil && utxoRes.Status != int(utxostore_api.Status_NOT_FOUND) {
-						utxoItem.Status = utxostore_api.Status(utxoRes.Status).String()
-						utxoItem.SpendingTxID = utxoRes.SpendingTxID
-						utxoItem.LockTime = utxoRes.LockTime
-					} else {
-						utxoItem.Status = utxostore_api.Status_NOT_FOUND.String()
-					}
-
-					// Send the UTXO to the channel.
-					utxoCh <- utxoItem
+				// Get the UTXOHash for this output.
+				utxoHash, err := util.UTXOHash(hash, uint32(safeI), *safeOutput.LockingScript, safeOutput.Satoshis)
+				if err != nil {
+					return err
 				}
+
+				// Get the UTXO for this output.
+				utxoRes, err := h.repository.GetUtxo(ctx, utxoHash)
+				if err != nil {
+					return err
+				}
+
+				utxoItem := &UTXOItem{
+					Txid:          hash,
+					Vout:          uint32(safeI),
+					LockingScript: safeOutput.LockingScript,
+					Satoshis:      safeOutput.Satoshis,
+					UtxoHash:      utxoHash,
+				}
+
+				if utxoRes != nil && utxoRes.Status != int(utxostore_api.Status_NOT_FOUND) {
+					utxoItem.Status = utxostore_api.Status(utxoRes.Status).String()
+					utxoItem.SpendingTxID = utxoRes.SpendingTxID
+					utxoItem.LockTime = utxoRes.LockTime
+				} else {
+					utxoItem.Status = utxostore_api.Status_NOT_FOUND.String()
+				}
+
+				// Send the UTXO to the channel.
+				utxoCh <- utxoItem
 
 				return nil
 			})
@@ -119,6 +111,11 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		if err = g.Wait(); err != nil {
 			return err
 		}
+
+		close(utxoCh)
+
+		// Now we have to wait for the answers to be added to the slice.
+		<-waitCh
 
 		// Sort the UTXOs by the vout.
 		sort.SliceStable(utxos, func(i, j int) bool {
