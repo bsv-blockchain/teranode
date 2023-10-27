@@ -11,10 +11,10 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
 )
 
 type Peer struct {
-	peer             blobserver_api.BlobServerAPIClient
 	source           string
 	validationClient *blockvalidation.Client
 	logger           utils.Logger
@@ -35,41 +35,33 @@ func NewPeer(ctx context.Context, source string, addr string, notificationCh cha
 }
 
 func (c *Peer) Start(ctx context.Context) error {
-	conn, err := util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
-	})
-	if err != nil {
-		return err
-	}
-
-	c.peer = blobserver_api.NewBlobServerAPIClient(conn)
-
 	// define here to prevent malloc
 	var stream blobserver_api.BlobServerAPI_SubscribeClient
 	var resp *blobserver_api.Notification
 	var hash *chainhash.Hash
 
+	var conn *grpc.ClientConn
+	var err error
 	go func() {
-		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing peer")
-		c.running = false
-		err = conn.Close()
-		if err != nil {
-			c.logger.Errorf("[BlobServer] failed to close connection", err)
-		}
-	}()
-
-	go func() {
-
 		for c.running {
-			c.logger.Infof("starting new subscription to blobserver: %v", c.address)
-			stream, err = c.peer.Subscribe(ctx, &blobserver_api.SubscribeRequest{
+			c.logger.Infof("connecting to blob server at %s", c.address)
+			conn, err = util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{
+				OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+				Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+				MaxRetries:  3,
+			})
+			if err != nil {
+				c.logger.Errorf("could not connect to blob server at %s: %v", c.address, err)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+
+			c.logger.Infof("starting new subscription to blob server: %v", c.address)
+			stream, err = blobserver_api.NewBlobServerAPIClient(conn).Subscribe(ctx, &blobserver_api.SubscribeRequest{
 				Source: c.source,
 			})
 			if err != nil {
-				c.logger.Errorf("could not subscribe to blobserver at %s: %v", c.address, err)
+				c.logger.Errorf("could not subscribe to blob server at %s: %v", c.address, err)
 				time.Sleep(10 * time.Second)
 				continue
 			}
@@ -113,6 +105,18 @@ func (c *Peer) Start(ctx context.Context) error {
 
 				// If we reach here, the incoming message has validated successfully: pass it to the notification channel...
 				c.notificationCh <- resp
+			}
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		c.logger.Infof("[BlobServer] context done, closing peer")
+		c.running = false
+		if conn != nil {
+			err = conn.Close()
+			if err != nil {
+				c.logger.Errorf("[BlobServer] failed to close connection", err)
 			}
 		}
 	}()
