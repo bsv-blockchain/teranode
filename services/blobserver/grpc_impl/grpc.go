@@ -151,6 +151,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 			case notification := <-g.notifications:
 				for sub := range g.subscribers {
 					go func(s subscriber) {
+						g.logger.Debugf("Sending %s/%s notification: %s to subscriber %s", blobserver_api.Type(notification.Type).String(), notification.BaseUrl, utils.ReverseAndHexEncodeSlice(notification.Hash), s.source)
 						if err := s.subscription.Send(notification); err != nil {
 							g.deadSubscriptions <- s
 						}

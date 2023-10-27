@@ -200,6 +200,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 					continue
 				}
 
+				c.logger.Debugf("[BlobServer] received notification %s: %s", model.NotificationType(resp.Type).String(), hash.String())
 				ch <- &model.Notification{
 					Type:    model.NotificationType(resp.Type),
 					Hash:    hash,
