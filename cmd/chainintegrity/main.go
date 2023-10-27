@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
@@ -29,7 +30,18 @@ type BlockSubtree struct {
 }
 
 func main() {
-	_ = os.Chdir("../../")
+
+	path, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+
+	// check whether path contains cmd/chainintegrity or not
+	if strings.Contains(path, "cmd/chainintegrity") {
+		if err = os.Chdir("../../"); err != nil {
+			panic(err)
+		}
+	}
 
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()

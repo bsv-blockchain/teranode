@@ -32,11 +32,15 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-build: build-dashboard build-ubsv build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster
+build: build-dashboard build-ubsv build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+
+.PHONY: build-chainintegrity
+build-chainintegrity: set_debug_flags
+	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags
