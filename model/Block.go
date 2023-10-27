@@ -197,7 +197,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}()
 
 	// 1. Check that the block header hash is less than the target difficulty.
-	headerValid, err := b.Header.HasMetTargetDifficulty()
+	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if !headerValid {
 		return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
 	}

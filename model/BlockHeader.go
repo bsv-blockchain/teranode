@@ -122,7 +122,7 @@ func (bh *BlockHeader) StringDump() string {
 	return sb.String()
 }
 
-func (bh *BlockHeader) HasMetTargetDifficulty() (bool, error) {
+func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {
 	target := bh.Bits.CalculateTarget()
 
 	var bn = big.NewInt(0)
@@ -130,10 +130,10 @@ func (bh *BlockHeader) HasMetTargetDifficulty() (bool, error) {
 
 	compare := bn.Cmp(target)
 	if compare <= 0 {
-		return true, nil
+		return true, bh.Hash(), nil
 	}
 
-	return false, fmt.Errorf("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
+	return false, nil, fmt.Errorf("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }
 
 func (bh *BlockHeader) Bytes() []byte {

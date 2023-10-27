@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -116,7 +117,9 @@ func (m *Miner) mine(ctx context.Context) error {
 		r := rand.New(rand.NewSource(int64(new(maphash.Hash).Sum64())))
 		randWait := r.Intn(waitSeconds)
 
-		m.logger.Warnf("[Miner] Found block on job %s, waiting %ds before submitting", candidateId, randWait)
+		blockHash, _ := chainhash.NewHash(solution.BlockHash)
+
+		m.logger.Warnf("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
 
 	MineWait:
 		for {
@@ -132,7 +135,9 @@ func (m *Miner) mine(ctx context.Context) error {
 			}
 		}
 	} else {
-		m.logger.Warnf("[Miner] Found block on job %s, submitting", candidateId)
+		blockHash, _ := chainhash.NewHash(solution.BlockHash)
+
+		m.logger.Warnf("[Miner] Found block solution %s, submitting", blockHash.String())
 	}
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)

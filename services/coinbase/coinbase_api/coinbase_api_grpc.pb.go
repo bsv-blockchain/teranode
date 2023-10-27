@@ -20,8 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	CoinbaseAPI_Health_FullMethodName       = "/coinbase_api.coinbaseAPI/Health"
-	CoinbaseAPI_RequestFunds_FullMethodName = "/coinbase_api.coinbaseAPI/RequestFunds"
+	CoinbaseAPI_Health_FullMethodName       = "/coinbase_api.CoinbaseAPI/Health"
+	CoinbaseAPI_RequestFunds_FullMethodName = "/coinbase_api.CoinbaseAPI/RequestFunds"
 )
 
 // CoinbaseAPIClient is the client API for CoinbaseAPI service.
@@ -132,7 +132,7 @@ func _CoinbaseAPI_RequestFunds_Handler(srv interface{}, ctx context.Context, dec
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var CoinbaseAPI_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "coinbase_api.coinbaseAPI",
+	ServiceName: "coinbase_api.CoinbaseAPI",
 	HandlerType: (*CoinbaseAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

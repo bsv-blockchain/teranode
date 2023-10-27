@@ -64,6 +64,7 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
 	var nonce uint32
+	var blockHash *chainhash.Hash
 
 miningLoop:
 	for {
@@ -80,7 +81,9 @@ miningLoop:
 				Nonce:          nonce,
 			}
 
-			headerValid, _ := blockHeader.HasMetTargetDifficulty()
+			var headerValid bool
+
+			headerValid, blockHash, _ = blockHeader.HasMetTargetDifficulty()
 			if headerValid { // header is valid if the hash is less than the target
 				break miningLoop
 			}
@@ -89,11 +92,12 @@ miningLoop:
 		}
 	}
 	return &model.MiningSolution{
-		Id:       candidate.Id,
-		Nonce:    nonce,
-		Time:     candidate.Time,
-		Coinbase: coinbaseTx.Bytes(),
-		Version:  candidate.Version,
+		Id:        candidate.Id,
+		Nonce:     nonce,
+		Time:      candidate.Time,
+		Coinbase:  coinbaseTx.Bytes(),
+		Version:   candidate.Version,
+		BlockHash: blockHash.CloneBytes(),
 	}, nil
 	// m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
 	// err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), candidate.Id, coinbaseTx.Bytes(), candidate.Time, nonce, 1)
