@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -48,7 +47,6 @@ type Server struct {
 
 	blockFoundCh        chan processBlockFound
 	catchupCh           chan processBlockCatchup
-	catchingUp          atomic.Bool
 	blockValidation     *BlockValidation
 	processingSubtreeMu sync.Mutex
 	processingSubtree   map[chainhash.Hash]bool
@@ -77,8 +75,8 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 		txStore:              txStore,
 		txMetaStore:          txMetaStore,
 		validatorClient:      validatorClient,
-		blockFoundCh:         make(chan processBlockFound, 100),
-		catchupCh:            make(chan processBlockCatchup, 100),
+		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
+		catchupCh:            make(chan processBlockCatchup, 10),
 		processingSubtree:    make(map[chainhash.Hash]bool),
 		processBlockNotify:   ttlcache.New[chainhash.Hash, bool](),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
@@ -153,11 +151,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	timeStart := time.Now()
 	prometheusBlockValidationBlockFound.Inc()
 	u.logger.Infof("[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
-
-	if u.catchingUp.Load() {
-		u.logger.Infof("[BlockFound][%s] canceled, we are catching up", utils.ReverseAndHexEncodeSlice(req.Hash))
-		return &emptypb.Empty{}, nil
-	}
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
@@ -281,10 +274,6 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	prometheusBlockValidationCatchup.Inc()
 
 	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
-	u.catchingUp.Store(true)
-	defer func() {
-		u.catchingUp.Store(false)
-	}()
 
 	// first check whether this block already exists, which would mean we caught up from another peer
 	exists, err := u.blockchainClient.GetBlockExists(ctx, fromBlock.Hash())
