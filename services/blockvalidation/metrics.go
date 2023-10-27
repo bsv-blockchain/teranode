@@ -8,8 +8,10 @@ import (
 
 var (
 	prometheusBlockValidationHealth                          prometheus.Counter
+	prometheusBlockValidationBlockFoundCh                    prometheus.Gauge
 	prometheusBlockValidationBlockFound                      prometheus.Counter
 	prometheusBlockValidationBlockFoundDuration              prometheus.Histogram
+	prometheusBlockValidationCatchupCh                       prometheus.Gauge
 	prometheusBlockValidationCatchup                         prometheus.Counter
 	prometheusBlockValidationCatchupDuration                 prometheus.Histogram
 	prometheusBlockValidationProcessBlockFoundDuration       prometheus.Histogram
@@ -38,6 +40,14 @@ func initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockValidationBlockFoundCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "block_found_ch",
+			Help:      "Number of blocks found buffered in the block found channel",
+		},
+	)
+
 	prometheusBlockValidationBlockFound = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
@@ -52,6 +62,14 @@ func initPrometheusMetrics() {
 			Name:      "block_found_duration",
 			Help:      "Duration of block found",
 			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockValidationCatchupCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "catchup_ch",
+			Help:      "Number of catchups buffered in the catchup channel",
 		},
 	)
 

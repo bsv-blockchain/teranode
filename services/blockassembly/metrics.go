@@ -7,11 +7,14 @@ import (
 )
 
 var (
+
+	// in Server
 	prometheusBlockAssemblyHealth                       prometheus.Counter
 	prometheusBlockAssemblyAddTx                        prometheus.Counter
 	prometheusBlockAssemblyAddTxDuration                prometheus.Histogram
 	prometheusBlockAssemblyGetMiningCandidate           prometheus.Counter
 	prometheusBlockAssemblyGetMiningCandidateDuration   prometheus.Histogram
+	prometheusBlockAssemblySubmitMiningSolutionCh       prometheus.Gauge
 	prometheusBlockAssemblySubmitMiningSolution         prometheus.Counter
 	prometheusBlockAssemblySubmitMiningSolutionDuration prometheus.Histogram
 	prometheusBlockAssemblyUpdateSubtreesTTL            prometheus.Histogram
@@ -73,6 +76,14 @@ func initPrometheusMetrics() {
 			Name:      "get_mining_candidate_duration_v2",
 			Help:      "Duration of GetMiningCandidate in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockAssemblySubmitMiningSolutionCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "submit_mining_solution_ch",
+			Help:      "Number of items in the SubmitMiningSolution channel in the blockassembly service",
 		},
 	)
 

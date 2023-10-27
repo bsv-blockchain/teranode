@@ -133,6 +133,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				if _, err = ba.submitMiningSolution(ctx, blockSubmission); err != nil {
 					ba.logger.Errorf("Failed to submit block [%s]", err)
 				}
+				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 			}
 		}
 	}()
@@ -422,6 +423,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 	// we don't have the processing to handle multiple huge blocks at the same time, so we limit it to 1
 	// at a time, this is a temporary solution for now
 	ba.blockSubmissionChan <- req
+	prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,

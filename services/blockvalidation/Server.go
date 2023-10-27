@@ -105,6 +105,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
+					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 				}
 			case b := <-u.blockFoundCh:
 				{
@@ -114,6 +115,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
 					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
+					prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 				}
 			}
 		}
@@ -174,6 +176,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
 		}
+		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
 
 	prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
@@ -214,6 +217,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 				block:   block,
 				baseURL: baseUrl,
 			}
+			prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 		}()
 		return nil
 
