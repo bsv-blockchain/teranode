@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc"
@@ -70,6 +71,12 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.Health
 func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) (*txmeta_api.CreateResponse, error) {
 	prometheusTxMetaSet.Inc()
 
+	tx, err := bt.NewTxFromBytes(request.Tx)
+
+	if err != nil {
+		return nil, err
+	}
+
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -95,7 +102,7 @@ func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) 
 		parentTxHashes[index] = parentTxHash
 	}
 
-	err = u.store.Create(ctx, hash, request.Fee, request.SizeInBytes, parentTxHashes, utxoHashes, request.LockTime)
+	err = u.store.Create(ctx, tx, hash, request.Fee, request.SizeInBytes, parentTxHashes, utxoHashes, request.LockTime)
 	if err != nil {
 		return nil, err
 	}

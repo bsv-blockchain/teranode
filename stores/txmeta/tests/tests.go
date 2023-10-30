@@ -18,7 +18,7 @@ func Store(t *testing.T, db txmeta.Store) {
 	t.Run("simple smoke test", func(t *testing.T) {
 		_ = db.Delete(ctx, Hash)
 
-		err := db.Create(ctx, Hash, 100, 1, nil, nil, 0)
+		err := db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
 		require.NoError(t, err)
 
 		resp, err := db.Get(ctx, Hash)
@@ -30,7 +30,7 @@ func Store(t *testing.T, db txmeta.Store) {
 		assert.Len(t, resp.UtxoHashes, 0)
 		assert.Equal(t, uint32(0), resp.LockTime)
 
-		err = db.Create(ctx, Hash, 100, 1, nil, nil, 0)
+		err = db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
@@ -45,7 +45,7 @@ func Store(t *testing.T, db txmeta.Store) {
 			Hash,
 			Hash2,
 		}
-		err := db.Create(ctx, Hash, 123, 1, parentTxHashes, utxoHashes, 101)
+		err := db.Create(ctx, nil, Hash, 123, 1, parentTxHashes, utxoHashes, 101)
 		require.NoError(t, err)
 
 		resp, err := db.Get(ctx, Hash)
@@ -63,14 +63,14 @@ func Store(t *testing.T, db txmeta.Store) {
 		}
 		assert.Equal(t, uint32(101), resp.LockTime)
 
-		err = db.Create(ctx, Hash, 100, 1, nil, nil, 0)
+		err = db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
 	t.Run("mined", func(t *testing.T) {
 		_ = db.Delete(ctx, Hash)
 
-		err := db.Create(ctx, Hash, 100, 1, nil, nil, 0)
+		err := db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
 		require.NoError(t, err)
 
 		err = db.SetMined(ctx, Hash, Hash2)
@@ -99,7 +99,7 @@ func Benchmark(b *testing.B, db txmeta.Store) {
 
 			bHash, _ := chainhash.NewHash(buf)
 
-			err = db.Create(ctx, bHash, 100, 1, nil, nil, 0)
+			err = db.Create(ctx, nil, bHash, 100, 1, nil, nil, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

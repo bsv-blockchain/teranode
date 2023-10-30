@@ -11,6 +11,7 @@ import (
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -178,7 +179,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, _ *chainhash.Hash, _ uint64, _ uint64, _ []*chainhash.Hash,
+func (s *Store) Create(_ context.Context, _ *bt.Tx, _ *chainhash.Hash, _ uint64, _ uint64, _ []*chainhash.Hash,
 	_ []*chainhash.Hash, _ uint32) error {
 
 	prometheusTxMetaSet.Inc()

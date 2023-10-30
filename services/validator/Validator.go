@@ -158,7 +158,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fee
 	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
+	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
 			return nil

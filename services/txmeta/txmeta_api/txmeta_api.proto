@@ -35,12 +35,13 @@ enum Status {
 
 // swagger:model SetRequest
 message CreateRequest {
-  bytes hash = 1;
-  uint64 fee = 2;
-  repeated bytes ParentTxHashes = 3;
-  repeated bytes utxoHashes = 4;
-  uint32 lockTime = 5;
-  uint64 sizeInBytes = 6;
+  bytes tx = 1;
+  bytes hash = 2;
+  uint64 fee = 3;
+  repeated bytes ParentTxHashes = 4;
+  repeated bytes utxoHashes = 5;
+  uint32 lockTime = 6;
+  uint64 sizeInBytes = 7;
 }
 
 // swagger:model SetResponse

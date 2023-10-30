@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -42,6 +43,7 @@ func (s TxStatus) String() string {
 // Data struct for the transaction metadata
 // do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
+	Tx             *bt.Tx            `json:"tx"`
 	UtxoHashes     []*chainhash.Hash `json:"utxoHashes"`
 	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
 	BlockHashes    []*chainhash.Hash `json:"blockHashes"`
@@ -55,7 +57,7 @@ type Data struct {
 
 type Store interface {
 	Get(ctx context.Context, hash *chainhash.Hash) (*Data, error)
-	Create(ctx context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error
+	Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error
 	SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 }

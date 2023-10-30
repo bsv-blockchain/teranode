@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -158,7 +159,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	}, nil
 }
 
-func (s *Store) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 	q := `
 		INSERT INTO txmeta
 		    (hash, status, fee, size_in_bytes, parents, utxos, lock_time)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -32,7 +33,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
 	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 
 	m.mu.Lock()
@@ -44,6 +45,7 @@ func (m *Memory) Create(_ context.Context, hash *chainhash.Hash, fee uint64, siz
 	}
 
 	s := txmeta.Data{
+		Tx:             tx,
 		Status:         txmeta.Validated,
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,

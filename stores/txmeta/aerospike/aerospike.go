@@ -13,6 +13,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -172,7 +173,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
+func (s *Store) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
 	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 
 	options := make([]util.AerospikeWritePolicyOptions, 0)

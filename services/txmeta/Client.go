@@ -6,6 +6,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -83,7 +84,7 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 	}, nil
 }
 
-func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
+func (c *Client) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
 	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 
 	var parentTxHashesBytes [][]byte
@@ -97,6 +98,7 @@ func (c *Client) Create(ctx context.Context, hash *chainhash.Hash, fee uint64, s
 	}
 
 	_, err := c.client.Create(ctx, &txmeta_api.CreateRequest{
+		Tx:             tx.Bytes(),
 		Hash:           hash[:],
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
