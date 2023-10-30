@@ -138,6 +138,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 		Size:          uint64(tx.Size()),
 		LockTime:      tx.LockTime,
 	}, spentUtxos); err != nil {
+		// TODO remove from tx meta store
 		v.reverseSpends(traceSpan, spentUtxos)
 		traceSpan.RecordError(err)
 		return fmt.Errorf("error sending tx to block assembler: %v", err)
@@ -145,6 +146,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 
 	// then we store the new utxos from the tx
 	if err = v.utxoStore.Store(traceSpan.Ctx, tx); err != nil {
+		// TODO remove from tx meta store
 		v.reverseSpends(traceSpan, spentUtxos)
 		return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
 	}
