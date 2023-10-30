@@ -167,6 +167,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 
 	// transform the aerospike interface{} into the correct types
 	status := &txmeta.Data{
+		Tx:             value.Bins["tx"].(*bt.Tx),
 		Fee:            uint64(value.Bins["fee"].(int)),
 		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
 		LockTime:       nLockTime,

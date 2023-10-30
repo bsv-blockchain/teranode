@@ -544,6 +544,7 @@ func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
 	blockIds := make([][]byte, 0)
 
 	bins := []*aerospike.Bin{
+		aerospike.NewBin("tx", tx),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("size", aerospike.NewIntegerValue(tx.Size())),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(lockTime))),
