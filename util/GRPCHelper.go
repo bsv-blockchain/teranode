@@ -114,6 +114,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallSendMsgSize(connectionOptions.MaxMessageSize),
 		),
+		grpc.WithDisableServiceConfig(),
 	}
 
 	if connectionOptions.SecurityLevel == 0 {
