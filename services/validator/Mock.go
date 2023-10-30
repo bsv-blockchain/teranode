@@ -10,6 +10,10 @@ type MockValidatorClient struct {
 	Errors []error
 }
 
+func (m *MockValidatorClient) Health(ctx context.Context) (int, string, error) {
+	return 0, "MockValidator", nil
+}
+
 func (m *MockValidatorClient) Validate(_ context.Context, _ *bt.Tx) error {
 	if len(m.Errors) > 0 {
 		// return error and pop of stack

@@ -71,6 +71,10 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 	return validator, nil
 }
 
+func (v *Validator) Health(ctx context.Context) (int, string, error) {
+	return 0, "LocalValidator", nil
+}
+
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend

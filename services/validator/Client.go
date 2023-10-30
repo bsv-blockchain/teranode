@@ -85,6 +85,15 @@ func (c *Client) Stop() {
 	// TODO
 }
 
+func (c *Client) Health(ctx context.Context) (int, string, error) {
+	_, err := c.client.Health(ctx, &validator_api.EmptyMessage{})
+	if err != nil {
+		return -1, "Validator", err
+	}
+
+	return 0, "Validator", nil
+}
+
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize == 0 {
 		if c.frpcClient != nil {

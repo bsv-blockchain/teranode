@@ -3,6 +3,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -36,6 +38,7 @@ var (
 
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
+	status atomic.Uint32
 	propagation_api.UnsafePropagationAPIServer
 	logger    utils.Logger
 	txStore   blob.Store
@@ -59,6 +62,7 @@ func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Inte
 }
 
 func (ps *PropagationServer) Init(_ context.Context) (err error) {
+	ps.status.Store(1)
 	return nil
 }
 
@@ -102,6 +106,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 			ps.logger.Errorf("failed to start fRPC server: %v", err)
 		}
 	}
+
+	ps.status.Store(2)
 
 	// this will block
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
@@ -291,8 +297,63 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ps *PropagationServer) Health(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, error) {
+	var sb strings.Builder
+	errs := make([]error, 0)
+
+	code, details, err := ps.txStore.Health(ctx)
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("TxStore: BAD %d - %q: %v\n", code, details, err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("TxStore: GOOD %d - %q\n", code, details))
+	}
+
+	code, details, err = ps.validator.Health(ctx)
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("Validator: BAD %d - %q: %v\n", code, details, err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("Validator: GOOD %d - %q\n", code, details))
+	}
+
+	if len(errs) > 0 {
+		return -1, sb.String(), errors.New("Health errors occurred")
+	}
+
+	return 0, sb.String(), nil
+}
+
+func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	prometheusHealth.Inc()
+
+	status := ps.status.Load()
+
+	if status != 2 {
+		return &propagation_api.HealthResponse{
+			Ok:        false,
+			Details:   fmt.Sprintf("Propagation server is not ready (Status=%d)", status),
+			Timestamp: uint32(time.Now().Unix()),
+		}, nil
+	}
+
+	code, details, err := ps.storeHealth(ctx)
+	if err != nil {
+		return &propagation_api.HealthResponse{
+			Ok:        false,
+			Details:   details,
+			Timestamp: uint32(time.Now().Unix()),
+		}, err
+	}
+
+	if code != 0 {
+		return &propagation_api.HealthResponse{
+			Ok:        false,
+			Details:   details,
+			Timestamp: uint32(time.Now().Unix()),
+		}, nil
+	}
+
 	return &propagation_api.HealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
