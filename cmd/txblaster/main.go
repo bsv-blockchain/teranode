@@ -207,7 +207,7 @@ func main() {
 
 	var rateLimiter *rate.Limiter
 
-	if *rateLimit > 1 {
+	if *rateLimit > 0 {
 
 		rateLimitDuration := time.Duration(*workers) * time.Second / time.Duration(*rateLimit)
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
