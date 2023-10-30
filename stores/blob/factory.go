@@ -3,9 +3,11 @@ package blob
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
+	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/gcs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/kinesiss3"
@@ -16,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
+	"github.com/ordishs/gocore"
 )
 
 func NewStore(storeUrl *url.URL) (store Store, err error) {
@@ -76,6 +79,26 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
+	}
+
+	if storeUrl.Query().Get("batch") == "true" {
+		logger := gocore.Log("batcher")
+
+		sizeInBytes := int64(4 * 1024 * 1024) // 4MB
+		sizeString := storeUrl.Query().Get("sizeInBytes")
+		if sizeString != "" {
+			sizeInBytes, err = strconv.ParseInt(sizeString, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing batch size: %v", err)
+			}
+		}
+
+		writeKeys := false
+		if storeUrl.Query().Get("writeKeys") == "true" {
+			writeKeys = true
+		}
+
+		store = batcher.New(logger, store, int(sizeInBytes), writeKeys)
 	}
 
 	return

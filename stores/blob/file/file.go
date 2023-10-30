@@ -49,6 +49,11 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 
 	// TODO: handle options
 	// TTL is not supported by file store
+	fileOptions := options.NewSetOptions(opts...)
+
+	if fileOptions.Extension != "" {
+		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
+	}
 
 	// write bytes to file
 	if err := os.WriteFile(fileName, value, 0644); err != nil {

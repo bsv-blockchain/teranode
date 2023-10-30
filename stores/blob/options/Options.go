@@ -7,7 +7,8 @@ import (
 type Options func(s *SetOptions)
 
 type SetOptions struct {
-	TTL time.Duration
+	TTL       time.Duration
+	Extension string
 }
 
 func NewSetOptions(opts ...Options) *SetOptions {
@@ -23,5 +24,11 @@ func NewSetOptions(opts ...Options) *SetOptions {
 func WithTTL(ttl time.Duration) Options {
 	return func(s *SetOptions) {
 		s.TTL = ttl
+	}
+}
+
+func WithFileExtension(extension string) Options {
+	return func(s *SetOptions) {
+		s.Extension = extension
 	}
 }
