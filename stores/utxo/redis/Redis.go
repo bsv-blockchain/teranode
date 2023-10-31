@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -23,6 +24,7 @@ type Redis struct {
 	mode               string
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
+	spentUtxoTtl       time.Duration
 }
 
 func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
@@ -36,10 +38,13 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewClient(o)
 
+	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+
 	return &Redis{
-		url:  u,
-		mode: "client",
-		rdb:  rdb,
+		url:          u,
+		mode:         "client",
+		rdb:          rdb,
+		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
 	}, nil
 }
 
@@ -59,10 +64,13 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewClusterClient(o)
 
+	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+
 	return &Redis{
-		url:  u,
-		mode: "cluster",
-		rdb:  rdb,
+		url:          u,
+		mode:         "cluster",
+		rdb:          rdb,
+		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
 	}, nil
 }
 
@@ -84,10 +92,13 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewRing(o)
 
+	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+
 	return &Redis{
-		url:  u,
-		mode: "ring",
-		rdb:  rdb,
+		url:          u,
+		mode:         "ring",
+		rdb:          rdb,
+		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
 	}, nil
 }
 
@@ -112,12 +123,11 @@ func (r *Redis) Health(ctx context.Context) (int, string, error) {
 
 func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	res := r.rdb.Get(ctx, spend.Hash.String())
-
-	if res.Err() != nil {
+	if res.Err() != nil && res.Err() != redis.Nil {
 		return nil, res.Err()
 	}
 
-	if res.Val() == string(redis.Nil) {
+	if res.Val() == string(redis.Nil) || res.Err() == redis.Nil {
 		return &utxostore.Response{
 			Status: int(utxostore_api.Status_NOT_FOUND),
 		}, nil
@@ -197,6 +207,7 @@ func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			_ = r.UnSpend(ctx, spends)
 			return err
 		}
+		r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
 	}
 
 	return nil

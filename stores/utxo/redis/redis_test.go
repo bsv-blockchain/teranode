@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -103,4 +104,34 @@ func TestRedisLockTime(t *testing.T) {
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.Error(t, err)
 	assert.Equal(t, "utxo not spendable yet, due to lock time", err.Error())
+}
+
+func TestRedisTTL(t *testing.T) {
+	u, err, _ := gocore.Config().GetURL("utxostore")
+	require.NoError(t, err)
+
+	r, err := NewRedisClient(u)
+	// r, err := NewRedisRing(u)
+	// r, err := NewRedisCluster(u)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	err = r.Delete(ctx, tx1)
+	require.NoError(t, err)
+
+	// Store the txid
+	err = r.Store(ctx, tx1)
+	require.NoError(t, err)
+
+	_, err = r.Get(ctx, spend1)
+	require.NoError(t, err)
+
+	// Spend txid with spend1
+	err = r.Spend(ctx, []*utxostore.Spend{spend1})
+	require.NoError(t, err)
+
+	// check the ttl
+	dur := r.rdb.TTL(ctx, utxoHash0.String())
+	assert.Greater(t, dur.Val(), time.Duration(0)*time.Second)
 }
