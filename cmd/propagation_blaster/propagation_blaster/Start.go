@@ -1,5 +1,3 @@
-//// go:build native
-
 package propagation_blaster
 
 import (
@@ -18,7 +16,6 @@ import (
 	"net/url"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
-	"github.com/bitcoin-sv/ubsv/native"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -45,18 +42,16 @@ var (
 	prometheusProcessedTransactions prometheus.Counter
 	workerCount                     int
 	grpcClient                      propagation_api.PropagationAPIClient
-	streamClient                    *propagation.StreamingClient
-	drpcClient                      propagation_api.DRPCPropagationAPIClient
-	frpcClient                      *propagation_api.Client
-	broadcastProtocol               string
-	httpUrl                         *url.URL
-	errorCh                         chan error
-	bufferSize                      int
+	// streamClient                    *propagation.StreamingClient
+	drpcClient        propagation_api.DRPCPropagationAPIClient
+	frpcClient        *propagation_api.Client
+	broadcastProtocol string
+	httpUrl           *url.URL
+	// errorCh                         chan error
+	bufferSize int
 )
 
 func Init() {
-	unlocker.InjectExternalSignerFn(native.SignMessage)
-
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "tx_blaster_workers",
