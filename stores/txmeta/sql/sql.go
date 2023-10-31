@@ -92,6 +92,7 @@ func New(storeUrl *url.URL) (*Store, error) {
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	q := `
 	SELECT
+			txBytes,
 	    status,
 	    fee,
 			size_in_bytes,
@@ -102,6 +103,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	FROM txmeta
 	WHERE hash = $1`
 
+	var txBytes []byte
 	var status int
 	var fee uint64
 	var sizeInBytes uint64
@@ -110,12 +112,17 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	var blocks []byte
 	var lockTime uint32
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&status, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &status, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, txmeta.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to get txmeta: %+v", err)
+	}
+
+	tx, err := bt.NewTxFromBytes(txBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	var h *chainhash.Hash
@@ -149,6 +156,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	prometheusTxMetaGet.Inc()
 
 	return &txmeta.Data{
+		Tx:             tx,
 		Status:         txmeta.TxStatus(status),
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
@@ -162,8 +170,10 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
 	q := `
 		INSERT INTO txmeta
-		    (hash, status, fee, size_in_bytes, parents, utxos, lock_time)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		    (txBytes, hash, status, fee, size_in_bytes, parents, utxos, lock_time)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+
+	txBytes := tx.Bytes()
 
 	parents := make([]byte, 0, len(parentTxHashes)*chainhash.HashSize)
 	for _, parent := range parentTxHashes {
@@ -175,7 +185,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee
 		utxos = append(utxos, utxo[:]...)
 	}
 
-	_, err := s.db.ExecContext(ctx, q, hash[:], txmeta.Validated, fee, sizeInBytes, parents, utxos, nLockTime)
+	_, err := s.db.ExecContext(ctx, q, txBytes, hash[:], txmeta.Validated, fee, sizeInBytes, parents, utxos, nLockTime)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
 			return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
@@ -230,6 +240,7 @@ func createPostgresSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
     CREATE TABLE IF NOT EXISTS txmeta (
 	   id            BIGSERIAL PRIMARY KEY
+		,txBytes       BYTEA NULL
 	  ,hash          BYTEA NOT NULL
 		,status        INT NOT NULL
 	  ,fee           BIGINT NOT NULL
@@ -257,6 +268,7 @@ func createSqliteSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS txmeta (
 		 id            INTEGER PRIMARY KEY AUTOINCREMENT
+		,txBytes       BLOB NULL
 	  ,hash          BLOB NOT NULL
 		,status        INT NOT NULL
     ,fee    		   BIGINT NOT NULL
