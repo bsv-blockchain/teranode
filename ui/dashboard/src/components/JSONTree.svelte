@@ -46,6 +46,8 @@
     &#125;
   {:else if data.length === 64 && parentKey === 'subtrees'}
     <a href="/viewer/subtree/{data}">{data}</a>
+  {:else if data.length === 64 && parentKey.includes('block')}
+    <a href="/viewer/block/{data}">{data}</a>
   {:else}
     <span class={getType(data)}>{data}</span>
   {/if}
