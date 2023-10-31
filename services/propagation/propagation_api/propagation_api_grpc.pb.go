@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	PropagationAPI_Health_FullMethodName                   = "/propagation_api.PropagationAPI/Health"
 	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
+	PropagationAPI_ProcessTransactionHex_FullMethodName    = "/propagation_api.PropagationAPI/ProcessTransactionHex"
 	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
 	PropagationAPI_ProcessTransactionDebug_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionDebug"
 )
@@ -32,6 +33,7 @@ type PropagationAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error)
 	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
@@ -56,6 +58,15 @@ func (c *propagationAPIClient) Health(ctx context.Context, in *EmptyMessage, opt
 func (c *propagationAPIClient) ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
 	out := new(EmptyMessage)
 	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransaction_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *propagationAPIClient) ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransactionHex_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +120,7 @@ type PropagationAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
+	ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error)
 	ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error
 	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedPropagationAPIServer()
@@ -123,6 +135,9 @@ func (UnimplementedPropagationAPIServer) Health(context.Context, *EmptyMessage) 
 }
 func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransaction not implemented")
+}
+func (UnimplementedPropagationAPIServer) ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionHex not implemented")
 }
 func (UnimplementedPropagationAPIServer) ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ProcessTransactionStream not implemented")
@@ -175,6 +190,24 @@ func _PropagationAPI_ProcessTransaction_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PropagationAPIServer).ProcessTransaction(ctx, req.(*ProcessTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PropagationAPI_ProcessTransactionHex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProcessTransactionHexRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PropagationAPIServer).ProcessTransactionHex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PropagationAPI_ProcessTransactionHex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PropagationAPIServer).ProcessTransactionHex(ctx, req.(*ProcessTransactionHexRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -237,6 +270,10 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProcessTransaction",
 			Handler:    _PropagationAPI_ProcessTransaction_Handler,
+		},
+		{
+			MethodName: "ProcessTransactionHex",
+			Handler:    _PropagationAPI_ProcessTransactionHex_Handler,
 		},
 		{
 			MethodName: "ProcessTransactionDebug",

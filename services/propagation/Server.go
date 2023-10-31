@@ -3,6 +3,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -358,6 +359,17 @@ func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.Empt
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
 	}, nil
+}
+
+func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
+	txBytes, err := hex.DecodeString(req.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+		Tx: txBytes,
+	})
 }
 
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
