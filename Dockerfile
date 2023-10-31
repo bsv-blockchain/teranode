@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v2
+FROM ubuntu:latest
 ARG GITHUB_SHA
 
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
@@ -21,7 +21,7 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 # Build the Go libraries of the project
 RUN make build -j3
 
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+FROM ubuntu:latest
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .
