@@ -80,7 +80,7 @@ func main() {
 	case "status":
 		status.Start()
 		return
-	case "txblaster":
+	case "blaster":
 		txblaster.Start()
 		return
 	case "utxostore_blaster":
