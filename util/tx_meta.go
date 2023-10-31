@@ -26,13 +26,18 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 	// 	parentTxHashes[index] = parentTxHash
 	// }
 
-	parentTxHashes := make([]*chainhash.Hash, len(tx.Inputs))
-	for index, input := range tx.Inputs {
-		parentTxHash, err := UTXOHashFromInput(input)
-		if err != nil {
-			return nil, err
+	var parentTxHashes []*chainhash.Hash
+	if tx.IsCoinbase() {
+		parentTxHashes = make([]*chainhash.Hash, 0)
+	} else {
+		parentTxHashes = make([]*chainhash.Hash, len(tx.Inputs))
+		for index, input := range tx.Inputs {
+			parentTxHash, err := UTXOHashFromInput(input)
+			if err != nil {
+				return nil, err
+			}
+			parentTxHashes[index] = parentTxHash
 		}
-		parentTxHashes[index] = parentTxHash
 	}
 
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
