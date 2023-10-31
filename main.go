@@ -7,10 +7,20 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
+	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
+	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
+	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/status/status"
+	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
 	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -48,6 +58,36 @@ func init() {
 }
 
 func main() {
+	switch path.Base(os.Args[0]) {
+	case "aerospiketest":
+		aerospiketest.Start()
+		return
+	case "bare":
+		bare.Start()
+		return
+	case "blockassembly_blaster":
+		blockassembly_blaster.Start()
+		return
+	case "chainintegrity":
+		chainintegrity.Start()
+		return
+	case "propagation_blaster":
+		propagation_blaster.Start()
+		return
+	case "s3_blaster":
+		s3_blaster.Start()
+		return
+	case "status":
+		status.Start()
+		return
+	case "txblaster":
+		txblaster.Start()
+		return
+	case "utxostore_blaster":
+		utxostore_blaster.Start()
+		return
+	}
+
 	logger := gocore.Log(progname)
 
 	stats := gocore.Config().Stats()

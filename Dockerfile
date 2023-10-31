@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v2
+FROM ubuntu:latest
 ARG GITHUB_SHA
 
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
@@ -21,7 +21,7 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 # Build the Go libraries of the project
 RUN make build -j3
 
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+FROM ubuntu:latest
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .
@@ -30,15 +30,16 @@ COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
-COPY --from=0 /app/blaster.run .
-COPY --from=0 /app/status.run .
-COPY --from=0 /app/propagationblaster.run .
-COPY --from=0 /app/blockassemblyblaster.run .
-COPY --from=0 /app/utxostoreblaster.run .
-COPY --from=0 /app/aerospiketest.run .
-COPY --from=0 /app/s3blaster.run .
 COPY --from=0 /app/ubsv.run .
-COPY --from=0 /app/chainintegrity.run .
+
+RUN ln -s ubsv.run chainintegrity.run
+RUN ln -s ubsv.run blaster.run
+RUN ln -s ubsv.run status.run
+RUN ln -s ubsv.run propagationblaster.run
+RUN ln -s ubsv.run blockassemblyblaster.run
+RUN ln -s ubsv.run utxostoreblaster.run
+RUN ln -s ubsv.run aerospiketest.run
+RUN ln -s ubsv.run s3blaster.run
 
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
