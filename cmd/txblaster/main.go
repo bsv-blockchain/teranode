@@ -239,38 +239,41 @@ func main() {
 	for i := 0; i < *workers; i++ {
 		i := i
 
-		logger.Infof("starting worker %d", i)
-		workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
-
-		w, err := worker.NewWorker(
-			workerLogger,
-			rateLimiter,
-			kafkaProducer,
-			kafkaTopic,
-			ipv6MulticastConn,
-			ipv6MulticastChan,
-			printProgress,
-			logIdsFile,
-			&totalTransactions,
-			&startTime,
-		)
-		if err != nil {
-			logger.Errorf("Could not initialise worker %d: %w", i, err)
-			return
-		}
-
-		err = w.Init(ctx)
-		if err != nil {
-			logger.Errorf("Could not initialise worker %d: %w", i, err)
-			return
-		}
-
 		g.Go(func() error {
-			if err := w.Start(ctx); err != nil {
-				return fmt.Errorf("error from worker: %v", err)
-			}
+			for {
+				logger.Infof("starting worker %d", i)
+				workerLogger := gocore.Log(fmt.Sprintf("wrk_%d", i), gocore.NewLogLevelFromString(logLevelStr))
 
-			return nil
+				w, err := worker.NewWorker(
+					workerLogger,
+					rateLimiter,
+					kafkaProducer,
+					kafkaTopic,
+					ipv6MulticastConn,
+					ipv6MulticastChan,
+					printProgress,
+					logIdsFile,
+					&totalTransactions,
+					&startTime,
+				)
+				if err != nil {
+					logger.Errorf("Could not initialise worker %d: %w", i, err)
+					continue
+				}
+
+				err = w.Init(ctx)
+				if err != nil {
+					logger.Errorf("Could not initialise worker %d: %w", i, err)
+					continue
+				}
+
+				// start will only return if an error occurs
+				if err = w.Start(ctx); err != nil {
+					logger.Errorf("error from worker: %v", err)
+				}
+
+				time.Sleep(1 * time.Second)
+			}
 		})
 	}
 

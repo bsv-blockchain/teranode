@@ -137,7 +137,7 @@ func NewWorker(
 		return nil, err
 	}
 
-	unlocker := unlocker.Getter{PrivateKey: privateKey}
+	unlockerGetter := unlocker.Getter{PrivateKey: privateKey}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
@@ -157,7 +157,7 @@ func NewWorker(
 		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,
 		ipv6MulticastChan: ipv6MulticastChan,
-		unlocker:          &unlocker,
+		unlocker:          &unlockerGetter,
 		printProgress:     printProgress,
 		totalTransactions: totalTransactions,
 		logIdsCh:          logIdsCh,
@@ -213,10 +213,6 @@ func (w *Worker) Start(ctx context.Context) error {
 			return ctx.Err()
 
 		case utxo := <-w.utxoChan:
-			if w.rateLimiter != nil {
-				_ = w.rateLimiter.Wait(ctx)
-			}
-
 			tx := bt.NewTx()
 			_ = tx.FromUTXOs(utxo)
 			_ = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
@@ -251,6 +247,10 @@ func (w *Worker) Start(ctx context.Context) error {
 				Vout:          0,
 				LockingScript: tx.Outputs[0].LockingScript,
 				Satoshis:      tx.Outputs[0].Satoshis,
+			}
+
+			if w.rateLimiter != nil {
+				_ = w.rateLimiter.Wait(ctx)
 			}
 		}
 	}
