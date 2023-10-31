@@ -3,9 +3,9 @@ package memory
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -33,31 +33,24 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
-	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, ok := m.txStatus[*hash]
+	s, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	_, ok := m.txStatus[*tx.TxIDChainHash()]
 	if ok {
-		return txmeta.ErrAlreadyExists
+		return s, txmeta.ErrAlreadyExists
 	}
 
-	s := txmeta.Data{
-		Tx:             tx,
-		Status:         txmeta.Validated,
-		Fee:            fee,
-		SizeInBytes:    sizeInBytes,
-		FirstSeen:      uint32(time.Now().Unix()),
-		ParentTxHashes: parentTxHashes,
-		UtxoHashes:     utxoHashes,
-		LockTime:       nLockTime,
-	}
+	m.txStatus[*tx.TxIDChainHash()] = *s
 
-	m.txStatus[*hash] = s
-
-	return nil
+	return s, nil
 }
 
 func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
@@ -69,13 +62,10 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 		s = txmeta.Data{}
 	}
 
-	s.Status = txmeta.Confirmed
-
 	if s.BlockHashes == nil {
 		s.BlockHashes = make([]*chainhash.Hash, 0)
 	}
 
-	s.Status = txmeta.Confirmed
 	s.BlockHashes = append(s.BlockHashes, blockHash)
 
 	m.txStatus[*hash] = s

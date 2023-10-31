@@ -11,6 +11,7 @@ import (
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,12 +30,14 @@ func TestAerospike(t *testing.T) {
 	db, err = New(aeroURL)
 	require.NoError(t, err)
 
-	var hash *chainhash.Hash
-	hash, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
+	tx := bt.NewTx()
+	tx.LockTime = 0
+	hash := tx.TxIDChainHash()
 	require.NoError(t, err)
 
-	var parentTxHash *chainhash.Hash
-	parentTxHash, err = chainhash.NewHashFromStr("3e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
+	parentTx := bt.NewTx()
+	parentTx.LockTime = 1
+	parentTxHash := parentTx.TxIDChainHash()
 	require.NoError(t, err)
 
 	var utxoHash *chainhash.Hash
@@ -61,7 +64,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), nil, hash, 101, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		_, err = db.Create(context.Background(), tx)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -78,7 +81,7 @@ func TestAerospike(t *testing.T) {
 		assert.LessOrEqual(t, int(time.Now().Unix()), value.Bins["firstSeen"].(int))
 		assert.Nil(t, value.Bins["blockHashes"])
 
-		err = db.Create(context.Background(), nil, hash, 102, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		_, err = db.Create(context.Background(), tx)
 		// not allowed
 		require.Error(t, err)
 
@@ -103,7 +106,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key)
-		err = db.Create(context.Background(), nil, hash, 103, 1, []*chainhash.Hash{parentTxHash}, []*chainhash.Hash{utxoHash}, 0)
+		_, err = db.Create(context.Background(), tx)
 		require.NoError(t, err)
 
 		var value *txmeta.Data

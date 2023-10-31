@@ -15,73 +15,77 @@ import (
 func Store(t *testing.T, db txmeta.Store) {
 	ctx := context.Background()
 
+	hash1 := Tx1.TxIDChainHash()
+	hash2 := Tx2.TxIDChainHash()
+
 	t.Run("simple smoke test", func(t *testing.T) {
-		_ = db.Delete(ctx, Hash)
+		_ = db.Delete(ctx, hash1)
 
-		err := db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
+		_, err := db.Create(ctx, Tx1)
 		require.NoError(t, err)
 
-		resp, err := db.Get(ctx, Hash)
+		resp, err := db.Get(ctx, hash1)
 		require.NoError(t, err)
-		require.Equal(t, txmeta.Validated, resp.Status)
-		require.Equal(t, uint64(100), resp.Fee)
-		require.Equal(t, uint64(1), resp.SizeInBytes)
-		assert.Len(t, resp.ParentTxHashes, 0)
-		assert.Len(t, resp.UtxoHashes, 0)
+		require.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(328), resp.SizeInBytes)
+		assert.Len(t, resp.ParentTxHashes, 1)
+		assert.Len(t, resp.UtxoHashes, 5)
 		assert.Equal(t, uint32(0), resp.LockTime)
 
-		err = db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
+		_, err = db.Create(ctx, Tx1)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
 	t.Run("extended tests", func(t *testing.T) {
-		_ = db.Delete(ctx, Hash)
+		_ = db.Delete(ctx, hash1)
 
-		parentTxHashes := []*chainhash.Hash{
-			Hash2,
-			Hash,
+		parentTxHashes := make([]*chainhash.Hash, len(Tx1.Inputs))
+		for index, input := range Tx1.Inputs {
+			parentTxHash, _ := util.UTXOHashFromInput(input)
+			parentTxHashes[index] = parentTxHash
 		}
-		utxoHashes := []*chainhash.Hash{
-			Hash,
-			Hash2,
+
+		utxoHashes := make([]*chainhash.Hash, len(Tx1.Outputs))
+		for index, output := range Tx1.Outputs {
+			utxoHash, _ := util.UTXOHashFromOutput(hash1, output, uint32(index))
+			utxoHashes[index] = utxoHash
 		}
-		err := db.Create(ctx, nil, Hash, 123, 1, parentTxHashes, utxoHashes, 101)
+
+		_, err := db.Create(ctx, Tx1)
 		require.NoError(t, err)
 
-		resp, err := db.Get(ctx, Hash)
+		resp, err := db.Get(ctx, hash1)
 		require.NoError(t, err)
-		require.Equal(t, txmeta.Validated, resp.Status)
-		require.Equal(t, uint64(123), resp.Fee)
-		require.Equal(t, uint64(1), resp.SizeInBytes)
-		assert.Len(t, resp.ParentTxHashes, 2)
+		require.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(328), resp.SizeInBytes)
+		assert.Len(t, resp.ParentTxHashes, 1)
 		for i, h := range resp.ParentTxHashes {
 			assert.Equal(t, parentTxHashes[i], h)
 		}
-		assert.Len(t, resp.UtxoHashes, 2)
+		assert.Len(t, resp.UtxoHashes, 5)
 		for i, h := range resp.UtxoHashes {
 			assert.Equal(t, utxoHashes[i], h)
 		}
-		assert.Equal(t, uint32(101), resp.LockTime)
+		assert.Equal(t, uint32(0), resp.LockTime)
 
-		err = db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
+		_, err = db.Create(ctx, Tx1)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
 	})
 
 	t.Run("mined", func(t *testing.T) {
-		_ = db.Delete(ctx, Hash)
+		_ = db.Delete(ctx, hash1)
 
-		err := db.Create(ctx, nil, Hash, 100, 1, nil, nil, 0)
+		_, err := db.Create(ctx, Tx1)
 		require.NoError(t, err)
 
-		err = db.SetMined(ctx, Hash, Hash2)
+		err = db.SetMined(ctx, hash1, hash2)
 		require.NoError(t, err)
 
-		resp, err := db.Get(ctx, Hash)
+		resp, err := db.Get(ctx, hash1)
 		require.NoError(t, err)
 
-		require.Equal(t, txmeta.Confirmed, resp.Status)
 		require.Len(t, resp.BlockHashes, 1)
-		assert.Equal(t, Hash2, resp.BlockHashes[0])
+		assert.Equal(t, hash2, resp.BlockHashes[0])
 	})
 }
 
@@ -99,17 +103,15 @@ func Benchmark(b *testing.B, db txmeta.Store) {
 
 			bHash, _ := chainhash.NewHash(buf)
 
-			err = db.Create(ctx, nil, bHash, 100, 1, nil, nil, 0)
+			/* todo */
+			_, err = db.Create(ctx, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
 
-			status, err := db.Get(ctx, bHash)
+			_, err = db.Get(ctx, bHash)
 			if err != nil {
 				b.Fatal(err)
-			}
-			if status.Status != txmeta.Validated {
-				b.Fatal(status)
 			}
 		}
 	})

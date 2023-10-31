@@ -94,12 +94,6 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 		return fmt.Errorf("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
 	}
 
-	// get the fees and utxoHashes, before we spend the utxos
-	fees, parentTxHashes, err := v.getFeesAndUtxoHashes(tx)
-	if err != nil {
-		return fmt.Errorf("[Validate][%s] error getting fees and utxo hashes: %v", tx.TxID(), err)
-	}
-
 	if err = v.validateTransaction(traceSpan, tx); err != nil {
 		return fmt.Errorf("[Validate][%s] error validating transaction: %v", tx.TxID(), err)
 	}
@@ -112,7 +106,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	}
 
 	// TODO should this be here? or should it be in block assembly?
-	if err = v.registerTxInMetaStore(traceSpan, tx, fees, parentTxHashes, spentUtxos); err != nil {
+	txMetaData, err := v.registerTxInMetaStore(traceSpan, tx, spentUtxos)
+	if err != nil {
 		v.reverseSpends(traceSpan, spentUtxos)
 		return fmt.Errorf("error registering tx in meta utxoStore: %v", err)
 	}
@@ -134,7 +129,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	// first we send the tx to the block assembler
 	if err = v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
 		TxIDChainHash: tx.TxIDChainHash(),
-		Fee:           fees,
+		Fee:           txMetaData.Fee,
 		Size:          uint64(tx.Size()),
 		LockTime:      tx.LockTime,
 	}, spentUtxos); err != nil {
@@ -154,21 +149,22 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	return nil
 }
 
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, fees uint64, parentTxHashes []*chainhash.Hash, reservedUtxos []*utxostore.Spend) error {
+func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxostore.Spend) (*txmeta.Data, error) {
 	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	if err := v.txMetaStore.Create(txMetaSpan.Ctx, tx, tx.TxIDChainHash(), fees, uint64(tx.Size()), parentTxHashes, nil, tx.LockTime); err != nil {
+	data, err := v.txMetaStore.Create(txMetaSpan.Ctx, tx)
+	if err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
-			return nil
+			return data, nil
 		}
 
-		v.reverseSpends(traceSpan, reservedUtxos)
-		return fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
+		v.reverseSpends(traceSpan, spentUtxos)
+		return data, fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 	}
 
-	return nil
+	return data, nil
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
@@ -221,30 +217,6 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 	}
 
 	return spends, nil
-}
-
-func (v *Validator) getFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	var fees uint64
-	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
-
-	for _, input := range tx.Inputs {
-		fees += input.PreviousTxSatoshis
-	}
-
-	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 {
-			fees -= output.Satoshis
-
-			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-			if utxoErr != nil {
-				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
-			}
-
-			utxoHashes = append(utxoHashes, utxoHash)
-		}
-	}
-
-	return fees, utxoHashes, nil
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxostore.Spend) error {

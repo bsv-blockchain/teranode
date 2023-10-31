@@ -45,19 +45,32 @@ func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
 }
 
 var (
-	tx0, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
-	tx1, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
-	tx2, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
-	tx3, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-	tx4, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000004")
-	tx5, _ = chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000005")
+	tx0 = newTx(0)
+	tx1 = newTx(1)
+	tx2 = newTx(2)
+	tx3 = newTx(3)
+	tx4 = newTx(4)
+	tx5 = newTx(5)
+
+	hash0 = tx0.TxIDChainHash()
+	hash1 = tx1.TxIDChainHash()
+	hash2 = tx2.TxIDChainHash()
+	hash3 = tx3.TxIDChainHash()
+	hash4 = tx4.TxIDChainHash()
+	hash5 = tx5.TxIDChainHash()
 
 	utxo1, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000001")
 	utxo2, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000002")
 	utxo3, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000003")
 	utxo4, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000004")
-	utxo5, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000005")
+	// utxo5, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000005")
 )
+
+func newTx(lockTime uint32) *bt.Tx {
+	tx := bt.NewTx()
+	tx.LockTime = lockTime
+	return tx
+}
 
 func TestBlockAssembly_AddTx(t *testing.T) {
 	t.Run("AddTx", func(t *testing.T) {
@@ -81,24 +94,29 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, nil, tx1, 111, 0, []*chainhash.Hash{tx0}, []*chainhash.Hash{utxo1}, 0))
-		err := testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *tx1, Fee: 111})
+		_, err := testItems.txMetaStore.Create(ctx, tx1)
+		require.NoError(t, err)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *hash1, Fee: 111})
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, nil, tx2, 222, 0, []*chainhash.Hash{tx1}, []*chainhash.Hash{utxo2}, 0))
-		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *tx2, Fee: 222})
+		_, err = testItems.txMetaStore.Create(ctx, tx2)
+		require.NoError(t, err)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *hash2, Fee: 222})
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, nil, tx3, 333, 0, []*chainhash.Hash{tx2}, []*chainhash.Hash{utxo3}, 0))
-		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *tx3, Fee: 333})
+		_, err = testItems.txMetaStore.Create(ctx, tx3)
+		require.NoError(t, err)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *hash3, Fee: 333})
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, nil, tx4, 444, 0, []*chainhash.Hash{tx3}, []*chainhash.Hash{utxo4}, 0))
-		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *tx4, Fee: 444})
+		_, err = testItems.txMetaStore.Create(ctx, tx4)
+		require.NoError(t, err)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *hash4, Fee: 444})
 		require.NoError(t, err)
 
-		require.NoError(t, testItems.txMetaStore.Create(ctx, nil, tx5, 555, 0, []*chainhash.Hash{tx4}, []*chainhash.Hash{utxo5}, 0))
-		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *tx5, Fee: 555})
+		_, err = testItems.txMetaStore.Create(ctx, tx5)
+		require.NoError(t, err)
+		err = testItems.blockAssembler.AddTx(&util.SubtreeNode{Hash: *hash5, Fee: 555})
 		require.NoError(t, err)
 
 		wg.Wait()

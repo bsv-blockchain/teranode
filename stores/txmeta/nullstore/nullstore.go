@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -17,7 +18,6 @@ func New() *NullStore {
 
 func (m *NullStore) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	status := txmeta.Data{
-		Status: txmeta.Validated,
 		// Fee:            fee,
 		// SizeInBytes:    sizeInBytes,
 		// FirstSeen:      time.Now(),
@@ -28,9 +28,12 @@ func (m *NullStore) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	return &status, nil
 }
 
-func (m *NullStore) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
-	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
-	return nil
+func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+	txMeta, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return txMeta, err
+	}
+	return txMeta, nil
 }
 
 func (m *NullStore) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {

@@ -93,7 +93,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	q := `
 	SELECT
 			txBytes,
-	    status,
 	    fee,
 			size_in_bytes,
 	    parents,
@@ -104,7 +103,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	WHERE hash = $1`
 
 	var txBytes []byte
-	var status int
 	var fee uint64
 	var sizeInBytes uint64
 	var parents []byte
@@ -112,7 +110,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	var blocks []byte
 	var lockTime uint32
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &status, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, txmeta.ErrNotFound
@@ -157,7 +155,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 
 	return &txmeta.Data{
 		Tx:             tx,
-		Status:         txmeta.TxStatus(status),
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
 		UtxoHashes:     utxoHashes,
@@ -167,35 +164,40 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	}, nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash, utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	q := `
 		INSERT INTO txmeta
-		    (txBytes, hash, status, fee, size_in_bytes, parents, utxos, lock_time)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		    (txBytes, hash, fee, size_in_bytes, parents, utxos, lock_time)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
 	txBytes := tx.Bytes()
+	hash := tx.TxIDChainHash()
+	data, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
 
-	parents := make([]byte, 0, len(parentTxHashes)*chainhash.HashSize)
-	for _, parent := range parentTxHashes {
+	parents := make([]byte, 0, len(data.ParentTxHashes)*chainhash.HashSize)
+	for _, parent := range data.ParentTxHashes {
 		parents = append(parents, parent[:]...)
 	}
 
-	utxos := make([]byte, 0, len(utxoHashes)*chainhash.HashSize)
-	for _, utxo := range utxoHashes {
+	utxos := make([]byte, 0, len(data.UtxoHashes)*chainhash.HashSize)
+	for _, utxo := range data.UtxoHashes {
 		utxos = append(utxos, utxo[:]...)
 	}
 
-	_, err := s.db.ExecContext(ctx, q, txBytes, hash[:], txmeta.Validated, fee, sizeInBytes, parents, utxos, nLockTime)
+	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, utxos, data.LockTime)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
-			return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
+			return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
 		}
-		return errors.Join(fmt.Errorf("failed to insert txmeta: %+v", err))
+		return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", err))
 	}
 
 	prometheusTxMetaSet.Inc()
 
-	return nil
+	return data, nil
 }
 
 func (s *Store) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
@@ -204,15 +206,15 @@ func (s *Store) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *c
 	if s.engine == "postgres" {
 		q = `
 		UPDATE txmeta
-		SET blocks = COALESCE(blocks, '') || $2, status = $3
+		SET blocks = COALESCE(blocks, '') || $2
 		WHERE hash = $1`
 	} else {
 		q = `
 		UPDATE txmeta
-		SET blocks = ifnull(blocks, "") || $2, status = $3
+		SET blocks = ifnull(blocks, "") || $2
 		WHERE hash = $1`
 	}
-	_, err := s.db.ExecContext(ctx, q, hash[:], blockHash[:], int(txmeta.Confirmed))
+	_, err := s.db.ExecContext(ctx, q, hash[:], blockHash[:])
 	if err != nil {
 		return fmt.Errorf("failed to update txmeta: %+v", err)
 	}
@@ -242,7 +244,6 @@ func createPostgresSchema(db *sql.DB) error {
 	   id            BIGSERIAL PRIMARY KEY
 		,txBytes       BYTEA NULL
 	  ,hash          BYTEA NOT NULL
-		,status        INT NOT NULL
 	  ,fee           BIGINT NOT NULL
 		,size_in_bytes BIGINT NOT NULL
 	  ,parents       BYTEA NULL
@@ -270,7 +271,6 @@ func createSqliteSchema(db *sql.DB) error {
 		 id            INTEGER PRIMARY KEY AUTOINCREMENT
 		,txBytes       BLOB NULL
 	  ,hash          BLOB NOT NULL
-		,status        INT NOT NULL
     ,fee    		   BIGINT NOT NULL
 		,size_in_bytes BIGINT NOT NULL
 	  ,parents       BLOB NULL

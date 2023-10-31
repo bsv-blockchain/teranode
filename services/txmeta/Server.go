@@ -77,11 +77,6 @@ func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) 
 		return nil, err
 	}
 
-	hash, err := chainhash.NewHash(request.Hash)
-	if err != nil {
-		return nil, err
-	}
-
 	utxoHashes := make([]*chainhash.Hash, len(request.UtxoHashes))
 	var utxoHash *chainhash.Hash
 	for index, utxoHashBytes := range request.UtxoHashes {
@@ -102,7 +97,7 @@ func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) 
 		parentTxHashes[index] = parentTxHash
 	}
 
-	err = u.store.Create(ctx, tx, hash, request.Fee, request.SizeInBytes, parentTxHashes, utxoHashes, request.LockTime)
+	_, err = u.store.Create(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +159,6 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 	}
 
 	return &txmeta_api.GetResponse{
-		Status:         txmeta_api.Status(tx.Status),
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,

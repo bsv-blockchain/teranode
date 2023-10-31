@@ -12,7 +12,7 @@ func TestMemory(t *testing.T) {
 
 	t.Run("memory set", func(t *testing.T) {
 		db := New()
-		err := db.Delete(context.Background(), tests.Hash)
+		err := db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
 		require.NoError(t, err)
 
 		tests.Store(t, db)

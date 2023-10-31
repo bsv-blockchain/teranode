@@ -16,7 +16,7 @@ func TestMemory(t *testing.T) {
 		db, err := New(storeUrl)
 		require.NoError(t, err)
 
-		err = db.Delete(context.Background(), tests.Hash)
+		err = db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
 		require.NoError(t, err)
 
 		tests.Store(t, db)

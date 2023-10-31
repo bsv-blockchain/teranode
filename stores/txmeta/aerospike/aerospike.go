@@ -174,8 +174,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
-	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
@@ -187,45 +186,51 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx, hash *chainhash.Hash, fee u
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	hash := tx.TxIDChainHash()
+	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	parentTxHashesInterface := make([]interface{}, len(parentTxHashes))
-	for i, v := range parentTxHashes {
+	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	if err != nil {
+		return nil, err
+	}
+
+	parentTxHashesInterface := make([]interface{}, len(txMeta.ParentTxHashes))
+	for i, v := range txMeta.ParentTxHashes {
 		parentTxHashesInterface[i] = v[:]
 	}
 
-	utxoHashesInterface := make([]interface{}, len(utxoHashes))
-	for i, v := range utxoHashes {
+	utxoHashesInterface := make([]interface{}, len(txMeta.UtxoHashes))
+	for i, v := range txMeta.UtxoHashes {
 		utxoHashesInterface[i] = v[:]
 	}
 
 	bins := []*aerospike.Bin{
 		aerospike.NewBin("tx", tx),
-		aerospike.NewBin("fee", int(fee)),
-		aerospike.NewBin("sizeInBytes", int(sizeInBytes)),
+		aerospike.NewBin("fee", int(txMeta.Fee)),
+		aerospike.NewBin("sizeInBytes", int(txMeta.SizeInBytes)),
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
 		aerospike.NewBin("utxoHashes", utxoHashesInterface),
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
-		aerospike.NewBin("lockTime", int(nLockTime)),
+		aerospike.NewBin("lockTime", int(txMeta.LockTime)),
 	}
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		aeroErr := &aerospike.AerospikeError{}
 		if ok := errors.As(err, &aeroErr); ok {
 			if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
-				return txmeta.ErrAlreadyExists
+				return txMeta, txmeta.ErrAlreadyExists
 			}
 		}
 
-		return err
+		return txMeta, err
 	}
 
 	prometheusTxMetaSet.Inc()
 
-	return nil
+	return txMeta, nil
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {

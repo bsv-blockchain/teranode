@@ -11,7 +11,7 @@ import (
 func TestData_Bytes(t *testing.T) {
 	t.Run("should return the correct bytes", func(t *testing.T) {
 		d := &Data{
-			TxIDChainHash: tx0,
+			TxIDChainHash: hash0,
 			Fee:           1,
 			Size:          2,
 			LockTime:      3,

@@ -74,7 +74,6 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 	}
 
 	return &txmeta.Data{
-		Status:         txmeta.TxStatus(resp.Status),
 		Fee:            resp.Fee,
 		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
@@ -84,33 +83,35 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 	}, nil
 }
 
-func (c *Client) Create(ctx context.Context, tx *bt.Tx, hash *chainhash.Hash, fee uint64, sizeInBytes uint64, parentTxHashes []*chainhash.Hash,
-	utxoHashes []*chainhash.Hash, nLockTime uint32) error {
+func (c *Client) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
+	txMeta, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
 	var parentTxHashesBytes [][]byte
-	for _, parentTxHash := range parentTxHashes {
+	for _, parentTxHash := range txMeta.ParentTxHashes {
 		parentTxHashesBytes = append(parentTxHashesBytes, parentTxHash[:])
 	}
 
 	var utxoHashesBytes [][]byte
-	for _, utxoHash := range utxoHashes {
+	for _, utxoHash := range txMeta.UtxoHashes {
 		utxoHashesBytes = append(utxoHashesBytes, utxoHash[:])
 	}
 
-	_, err := c.client.Create(ctx, &txmeta_api.CreateRequest{
+	_, err = c.client.Create(ctx, &txmeta_api.CreateRequest{
 		Tx:             tx.Bytes(),
-		Hash:           hash[:],
-		Fee:            fee,
-		SizeInBytes:    sizeInBytes,
+		Fee:            txMeta.Fee,
+		SizeInBytes:    txMeta.SizeInBytes,
 		ParentTxHashes: parentTxHashesBytes,
 		UtxoHashes:     utxoHashesBytes,
-		LockTime:       nLockTime,
+		LockTime:       txMeta.LockTime,
 	})
 	if err != nil {
-		return err
+		return txMeta, err
 	}
 
-	return nil
+	return txMeta, nil
 }
 
 func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
