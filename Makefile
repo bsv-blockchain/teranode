@@ -32,7 +32,8 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-build: build-dashboard build-ubsv #build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
