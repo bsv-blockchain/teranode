@@ -18,6 +18,29 @@ import (
 type Distributor struct {
 	logger             utils.Logger
 	propagationServers map[string]propagation_api.PropagationAPIClient
+	attempts           int
+	backoff            time.Duration
+	failureTolerance   int
+}
+
+type DistributorOption func(*Distributor)
+
+func WithBackoffDuration(t time.Duration) DistributorOption {
+	return func(opts *Distributor) {
+		opts.backoff = t
+	}
+}
+
+func WithRetryAttempts(r int) DistributorOption {
+	return func(opts *Distributor) {
+		opts.attempts = r
+	}
+}
+
+func WithFailureTolerance(r int) DistributorOption {
+	return func(opts *Distributor) {
+		opts.failureTolerance = r
+	}
 }
 
 func GetPropagationGRPCAddresses() []string {
@@ -25,7 +48,7 @@ func GetPropagationGRPCAddresses() []string {
 	return addresses
 }
 
-func NewDistributor(logger utils.Logger) (*Distributor, error) {
+func NewDistributor(logger utils.Logger, opts ...DistributorOption) (*Distributor, error) {
 	addresses := GetPropagationGRPCAddresses()
 
 	if len(addresses) == 0 {
@@ -47,10 +70,18 @@ func NewDistributor(logger utils.Logger) (*Distributor, error) {
 		propagationServers[address] = propagation_api.NewPropagationAPIClient(pConn)
 	}
 
-	return &Distributor{
+	d := &Distributor{
 		logger:             logger,
 		propagationServers: propagationServers,
-	}, nil
+		attempts:           1,
+		failureTolerance:   50,
+	}
+
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	return d, nil
 }
 
 type errorWrapper struct {
@@ -68,17 +99,19 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		p := propagationServer
 
 		wg.Add(1)
+
 		go func() {
 			defer wg.Done()
 			attempts := 0
-			backoff := 200 * time.Millisecond
+			backoff := d.backoff
+
 			for {
 				if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 					Tx: tx.ExtendedBytes(),
 				}); err == nil {
 					break
 				} else {
-					if attempts < 3 {
+					if attempts < d.attempts {
 						attempts++
 						time.Sleep(backoff)
 						backoff *= 2
@@ -112,9 +145,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		d.logger.Debugf("Successfully distributed transaction %s", tx.TxIDChainHash().String())
 	}
 
-	percentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
-	if percentage > 50 {
-		return fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), percentage)
+	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
+	if failurePercentage > float32(d.failureTolerance) {
+		return fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage)
 	}
 
 	return nil

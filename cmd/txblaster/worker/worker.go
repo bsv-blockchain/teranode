@@ -144,7 +144,7 @@ func NewWorker(
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	d, err := distributor.NewDistributor(logger)
+	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(200*time.Millisecond), distributor.WithRetryAttempts(3))
 	if err != nil {
 		return nil, err
 	}

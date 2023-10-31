@@ -69,7 +69,7 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	d, err := distributor.NewDistributor(logger)
+	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
 	if err != nil {
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
@@ -397,7 +397,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 				WHERE b.id != cb.id
 			)
 			SELECT id FROM ChainBlocks
-			WHERE height < (SELECT height - 100 FROM LongestChainTip)
+			WHERE height < (SELECT height - 110 FROM LongestChainTip)
 		)
 	`
 	if _, err := c.db.ExecContext(ctx, q, timestamp); err != nil {
@@ -485,11 +485,11 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
 	if err := tx.FillAllInputs(ctx, &unlockerGetter); err != nil {
-		return fmt.Errorf("error filling initial inputs: %v", err)
+		return fmt.Errorf("error filling splitting inputs: %v", err)
 	}
 
 	if err := c.distributor.SendTransaction(ctx, tx); err != nil {
-		return fmt.Errorf("error sending initial transaction: %v", err)
+		return fmt.Errorf("error sending splitting transaction: %v", err)
 	}
 
 	// Insert the spendable utxos....
