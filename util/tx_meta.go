@@ -58,7 +58,6 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 		FirstSeen:      uint32(time.Now().Unix()),
 		ParentTxHashes: parentTxHashes,
 		UtxoHashes:     utxoHashes,
-		LockTime:       tx.LockTime,
 	}
 
 	return &s, nil

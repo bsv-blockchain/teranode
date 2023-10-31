@@ -30,7 +30,6 @@ func Store(t *testing.T, db txmeta.Store) {
 		require.Equal(t, uint64(328), resp.SizeInBytes)
 		assert.Len(t, resp.ParentTxHashes, 1)
 		assert.Len(t, resp.UtxoHashes, 5)
-		assert.Equal(t, uint32(0), resp.LockTime)
 
 		_, err = db.Create(ctx, Tx1)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
@@ -66,7 +65,6 @@ func Store(t *testing.T, db txmeta.Store) {
 		for i, h := range resp.UtxoHashes {
 			assert.Equal(t, utxoHashes[i], h)
 		}
-		assert.Equal(t, uint32(0), resp.LockTime)
 
 		_, err = db.Create(ctx, Tx1)
 		require.Error(t, err, txmeta.ErrAlreadyExists)

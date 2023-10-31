@@ -160,7 +160,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		BlockHashes:    blockHashes,
-		LockTime:       lockTime,
 	}, nil
 }
 
@@ -187,7 +186,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		utxos = append(utxos, utxo[:]...)
 	}
 
-	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, utxos, data.LockTime)
+	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, utxos, tx.LockTime)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
 			return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))

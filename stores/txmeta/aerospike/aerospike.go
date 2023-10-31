@@ -154,11 +154,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		}
 	}
 
-	var nLockTime uint32
-	if value.Bins["lockTime"] != nil {
-		nLockTime = uint32(value.Bins["lockTime"].(int))
-	}
-
 	// transform the aerospike interface{} into the correct types
 	status := &txmeta.Data{
 		Tx:             value.Bins["tx"].(*bt.Tx),
@@ -168,7 +163,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		UtxoHashes:     utxoHashes,
 		FirstSeen:      uint32(value.Bins["firstSeen"].(int)),
 		BlockHashes:    blockHashes,
-		LockTime:       nLockTime,
 	}
 
 	return status, nil
@@ -214,7 +208,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
 		aerospike.NewBin("utxoHashes", utxoHashesInterface),
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
-		aerospike.NewBin("lockTime", int(txMeta.LockTime)),
+		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {

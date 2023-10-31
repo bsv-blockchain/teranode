@@ -24,7 +24,6 @@ type Data struct {
 	SizeInBytes    uint64            `json:"sizeInBytes"`
 	FirstSeen      uint32            `json:"firstSeen"`
 	BlockHeight    uint32            `json:"blockHeight"`
-	LockTime       uint32            `json:"lockTime"`
 }
 
 type Store interface {

@@ -105,7 +105,6 @@ func (c *Client) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		SizeInBytes:    txMeta.SizeInBytes,
 		ParentTxHashes: parentTxHashesBytes,
 		UtxoHashes:     utxoHashesBytes,
-		LockTime:       txMeta.LockTime,
 	})
 	if err != nil {
 		return txMeta, err

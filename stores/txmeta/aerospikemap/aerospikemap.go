@@ -155,11 +155,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		}
 	}
 
-	var nLockTime uint32
-	if value.Bins["lockTime"] != nil {
-		nLockTime = uint32(value.Bins["lockTime"].(int))
-	}
-
 	var nFirstSeen uint32
 	if value.Bins["firstSeen"] != nil {
 		nFirstSeen = uint32(value.Bins["firstSeen"].(int))
@@ -170,7 +165,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		Tx:             value.Bins["tx"].(*bt.Tx),
 		Fee:            uint64(value.Bins["fee"].(int)),
 		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
-		LockTime:       nLockTime,
 		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		BlockHashes:    blockHashes,
