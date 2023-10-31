@@ -26,14 +26,16 @@
             </ul>
             ]
           {:else if getType(value) === 'string'}
-            {#if value.length === 64 && key.includes('txid')}
-              <a href="/viewer/tx/{value}">"{value}"</a>
-            {:else if value.length === 64 && (key.includes('block') || key === 'hash')}
-              <a href="/viewer/block/{value}">"{value}"</a>
-            {:else if value.length === 64 && key.includes === 'utxoHash'}
-              <a href="/viewer/utxo/{value}">"{value}"</a>
-            {:else}
-              <span class="string">"{value}"</span>
+            {#if value.length === 64}
+              {#if key.toLowerCase().includes('txid')}
+                <a href="/viewer/tx/{value}">"{value}"</a>
+              {:else if key.includes('block') || key === 'hash'}
+                <a href="/viewer/block/{value}">"{value}"</a>
+              {:else if key === 'utxoHash'}
+                <a href="/viewer/utxo/{value}">"{value}"</a>
+              {:else}
+                <span class="string">"{value}"</span>
+              {/if}
             {/if}
           {:else if getType(value) === 'number'}
             <span class="string2">{value}</span>

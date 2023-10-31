@@ -1,11 +1,5 @@
 <script>
   import { onMount } from 'svelte'
-  import {
-    loading,
-    lastUpdated,
-    connectToBlobServer,
-    blobServerHTTPAddress,
-  } from '@stores/nodeStore.js'
 
   import { connectToP2PServer } from '@stores/p2pStore.js'
 
@@ -19,24 +13,7 @@
     isActive = false
   }
 
-  let age = 0
-  let cancel = null
-
-  // Create an interval to update the age
-  $: {
-    if (cancel) {
-      clearInterval(cancel)
-    }
-
-    age = 0
-
-    cancel = setInterval(() => {
-      age = Math.floor((new Date() - $lastUpdated) / 1000)
-    }, 500)
-  }
-
   onMount(async () => {
-    connectToBlobServer($blobServerHTTPAddress)
     connectToP2PServer()
   })
 </script>
@@ -101,19 +78,10 @@
 
   <div id="navbarBasicExample" class="navbar-menu" class:is-active={isActive}>
     <div class="navbar-start">
-      <!-- <a
-        class="navbar-item"
-        href="/blockchain"
-        on:click={handleNavbarItemClick}
-      >
-        Blockchain
-      </a> -->
       <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
         Viewer
       </a>
 
-      <!-- <a class="navbar-item" href="/blocks" on:click={handleNavbarItemClick}> Blocks </a> -->
-      <!-- <a class="navbar-item" href="/listener" on:click={handleNavbarItemClick}>Listener</a> -->
       <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
         Chain
       </a>
