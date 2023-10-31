@@ -30,7 +30,7 @@
               <a href="/viewer/tx/{value}">"{value}"</a>
             {:else if value.length === 64 && (key.includes('block') || key === 'hash')}
               <a href="/viewer/block/{value}">"{value}"</a>
-            {:else if value.length === 64 && key === 'utxoHash'}
+            {:else if value.length === 64 && key.includes === 'utxoHash'}
               <a href="/viewer/utxo/{value}">"{value}"</a>
             {:else}
               <span class="string">"{value}"</span>
@@ -48,6 +48,10 @@
     <a href="/viewer/subtree/{data}">{data}</a>
   {:else if data.length === 64 && parentKey.includes('block')}
     <a href="/viewer/block/{data}">{data}</a>
+  {:else if data.length === 64 && parentKey.includes('utxo')}
+    <a href="/viewer/utxo/{data}">{data}</a>
+  {:else if data.length === 64 && parentKey.includes('parentTx')}
+    <a href="/viewer/tx/{data}">{data}</a>
   {:else}
     <span class={getType(data)}>{data}</span>
   {/if}
