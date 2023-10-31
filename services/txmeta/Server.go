@@ -164,7 +164,6 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		UtxoHashes:     utxoHashes,
 		FirstSeen:      tx.FirstSeen,
 		BlockHashes:    blockHashes,
-		BlockHeight:    tx.BlockHeight,
 	}, nil
 }
 

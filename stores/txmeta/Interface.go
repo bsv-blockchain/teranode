@@ -23,7 +23,6 @@ type Data struct {
 	Fee            uint64            `json:"fee"`
 	SizeInBytes    uint64            `json:"sizeInBytes"`
 	FirstSeen      uint32            `json:"firstSeen"`
-	BlockHeight    uint32            `json:"blockHeight"`
 }
 
 type Store interface {
