@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -69,13 +70,25 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-				Tx: tx.ExtendedBytes(),
-			}); err != nil {
-				errorWrapperCh <- errorWrapper{
-					addr: a,
-					err:  err,
+			attempts := 0
+			backoff := 200 * time.Millisecond
+			for {
+				if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+					Tx: tx.ExtendedBytes(),
+				}); err == nil {
+					break
+				} else {
+					if attempts < 3 {
+						attempts++
+						time.Sleep(backoff)
+						backoff *= 2
+					} else {
+						errorWrapperCh <- errorWrapper{
+							addr: a,
+							err:  err,
+						}
+						break
+					}
 				}
 			}
 		}()
