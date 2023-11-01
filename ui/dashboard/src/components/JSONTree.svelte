@@ -33,9 +33,9 @@
                 <a href="/viewer/block/{value}">"{value}"</a>
               {:else if key === 'utxoHash'}
                 <a href="/viewer/utxo/{value}">"{value}"</a>
-              {:else}
-                <span class="string">"{value}"</span>
               {/if}
+            {:else}
+              <span class="string">"{value}"</span>
             {/if}
           {:else if getType(value) === 'number'}
             <span class="string2">{value}</span>
