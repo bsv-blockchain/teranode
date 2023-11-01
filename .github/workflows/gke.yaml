@@ -6,7 +6,7 @@ on:
       - staging
 jobs:
   go-lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
     name: Go Lint and Test
     steps:
       - uses: actions/checkout@v3
@@ -26,7 +26,7 @@ jobs:
 
       - name: Run Go tests
         run: make longtests
-        
+
       - uses: twingate/github-action@v1
         with:
           service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
@@ -39,7 +39,7 @@ jobs:
 
   build-docker:
     name: Build Docker image
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
 
     steps:
       - uses: actions/checkout@v3
