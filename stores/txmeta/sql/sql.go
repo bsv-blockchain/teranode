@@ -169,7 +169,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		    (txBytes, hash, fee, size_in_bytes, parents, utxos, lock_time)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
-	txBytes := tx.Bytes()
+	txBytes := tx.ExtendedBytes()
 	hash := tx.TxIDChainHash()
 	data, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
