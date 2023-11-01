@@ -5,6 +5,10 @@ on:
       - master
       - staging
 jobs:
+  # This will cause the workflow to terminate if any job fails
+  strategy:
+    fail-fast: true
+
   go-lint-and-test:
     runs-on: ubsv-runner
     name: Go Lint and Test
