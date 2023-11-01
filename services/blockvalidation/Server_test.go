@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -211,4 +213,19 @@ func TestMerkleRoot(t *testing.T) {
 	// err = blockValidationService.CheckMerkleRoot(block)
 	err = block.CheckMerkleRoot()
 	assert.NoError(t, err)
+}
+
+func TestTtlCache(t *testing.T) {
+
+	cache := ttlcache.New[chainhash.Hash, bool](
+	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
+	)
+	for _, txId := range txIds {
+		hash, _ := chainhash.NewHashFromStr(txId)
+		cache.Set(*hash, true, 1*time.Second)
+	}
+	go cache.Start()
+	assert.Equal(t, 4, cache.Len())
+	time.Sleep(2 * time.Second)
+	assert.Equal(t, 0, cache.Len())
 }
