@@ -172,7 +172,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 
 			case s := <-g.deadSubscriptions:
 				delete(g.subscribers, s)
-				close(s.done)
+				safeClose(s.done)
 				g.logger.Infof("[BlobServer] Subscription removed [%s] (Total=%d).", s.source, len(g.subscribers))
 			}
 		}
