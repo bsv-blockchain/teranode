@@ -179,7 +179,6 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	for _, hash := range utxoHashes {
 		err := r.storeUtxo(ctx, hash, value)
 		if err != nil {
-			_ = r.Delete(ctx, tx)
 			return err
 		}
 	}
@@ -201,11 +200,16 @@ func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value strin
 }
 
 func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	spentSpends := make([]*utxostore.Spend, 0, len(spends))
+
 	for _, spend := range spends {
 		if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight()); err != nil {
-			// revert the created utxos
-			_ = r.UnSpend(ctx, spends)
+
+			// revert the spent utxos
+			_ = r.UnSpend(ctx, spentSpends)
 			return err
+		} else {
+			spentSpends = append(spentSpends, spend)
 		}
 		r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
 	}

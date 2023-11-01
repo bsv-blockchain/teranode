@@ -14,6 +14,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,10 +29,18 @@ var (
 
 	tx2 = chainhash.HashH([]byte("dummy"))
 
-	spend2 = &utxostore.Spend{
+	spend1_2 = &utxostore.Spend{
 		Vout:         0,
 		Hash:         utxoHash0,
 		SpendingTxID: &tx2,
+	}
+
+	utxoHash1, _ = util.UTXOHashFromOutput(tx1.TxIDChainHash(), tx1.Outputs[1], 1)
+
+	spend2 = &utxostore.Spend{
+		Vout:         1,
+		Hash:         utxoHash1,
+		SpendingTxID: tx1.TxIDChainHash(),
 	}
 )
 
@@ -66,8 +75,8 @@ func TestRedis(t *testing.T) {
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.NoError(t, err)
 
-	// Spend txid with spend2
-	err = r.Spend(ctx, []*utxostore.Spend{spend2})
+	// Spend txid with spend1_2
+	err = r.Spend(ctx, []*utxostore.Spend{spend1_2})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, utxostore.ErrSpent))
 
@@ -134,4 +143,36 @@ func TestRedisTTL(t *testing.T) {
 	// check the ttl
 	dur := r.rdb.TTL(ctx, utxoHash0.String())
 	assert.Greater(t, dur.Val(), time.Duration(0)*time.Second)
+}
+
+func TestRollbackSpend(t *testing.T) {
+	u, err, _ := gocore.Config().GetURL("utxostore")
+	require.NoError(t, err)
+
+	r, err := NewRedisClient(u)
+	// r, err := NewRedisRing(u)
+	// r, err := NewRedisCluster(u)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	err = r.Delete(ctx, tx1)
+	require.NoError(t, err)
+
+	// Store the txid
+	err = r.Store(ctx, tx1)
+	require.NoError(t, err)
+
+	// Spend txid with spend1
+	err = r.Spend(ctx, []*utxostore.Spend{spend1})
+	require.NoError(t, err)
+
+	// Spend txid with spend2 and spend1_2
+	err = r.Spend(ctx, []*utxostore.Spend{spend2, spend1_2})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, utxostore.ErrSpent))
+
+	errSpentExtra, ok := err.(*utxostore.ErrSpentExtra)
+	require.True(t, ok)
+	assert.Equal(t, errSpentExtra.SpendingTxID.String(), spend1.SpendingTxID.String())
 }
