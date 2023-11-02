@@ -13,16 +13,20 @@
   - [Running specific services locally in development](#running-specific-services-locally-in-development)
   - [Running specific commands locally in development](#running-specific-commands-locally-in-development)
   - [Running UI Dashboard locally:](#running-ui-dashboard-locally)
-- [_Advanced usage (protoc, settings (SETTINGS_CONTEXT),  flags, etc)_  [ TO-DO ]](#advanced-usage-protoc-settings-settingscontext--flags-etc---to-do-)
+- [_Advanced Usage_  [ TO-DO ]](#advanced-usage---to-do-)
+  - [Settings](#settings)
   - [Makefile](#makefile)
     - [Proto buffers (protoc)](#proto-buffers-protoc)
     - [Running Tests](#running-tests)
+  - [gRPC Logging](#grpc-logging)
 - [_Architecture_  [ TO-DO ]](#architecture---to-do-)
-- [_Technology (gRPC, Go,...)_  [ TO-DO ]](#technology-grpc-go---to-do-)
+- [_Technology_  [ TO-DO ]](#technology---to-do-)
 - [_Project Structure and Coding Conventions_](#project-structure-and-coding-conventions)
   - [Project Structure](#project-structure)
   - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
   - [Coding Conventions](#coding-conventions)
+  - [TODO ERROR HANDLING, LOGGING, ...???????](#todo---error-handling-logging-)
+  - [Testing Conventions [TODO]](#testing-conventions---todo)
 - [_License_](#license)
 
 ## _Introduction_
@@ -215,6 +219,8 @@ Diagram...
 ...List of services and link to specific README.md per service
 
 ....List of commands
+
+-- UI dashboard
 
 
 ---
