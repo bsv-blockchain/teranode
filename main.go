@@ -260,6 +260,16 @@ func main() {
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
+			// create a local validator client
+			validatorClient, err := validator.New(ctx,
+				logger,
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+			)
+			if err != nil {
+				logger.Fatalf("could not create validator [%v]", err)
+			}
+
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
 				getUtxoStore(ctx, logger),

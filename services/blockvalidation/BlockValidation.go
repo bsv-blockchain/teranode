@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +29,6 @@ type BlockValidation struct {
 	txStore          blob.Store
 	txMetaStore      txmeta.Store
 	validatorClient  validator.Interface
-	httpClient       *http.Client
 }
 
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -44,7 +41,6 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 		txStore:          txStore,
 		txMetaStore:      txMetaStore,
 		validatorClient:  validatorClient,
-		httpClient:       &http.Client{},
 	}
 
 	return bv
@@ -58,13 +54,23 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	g, gCtx := errgroup.WithContext(ctx)
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
-	for _, subtreeHash := range block.Subtrees {
-		st := subtreeHash
-
+	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
+	missingSubtreesMu := sync.Mutex{}
+	for idx, subtreeHash := range block.Subtrees {
+		subtreeHash := subtreeHash
+		idx := idx
+		// first check all the subtrees exist or not in our store, in parallel, and gather what is missing
 		g.Go(func() error {
-			err := u.validateSubtree(gCtx, st, baseUrl)
+			// get subtree from store
+			subtreeExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:])
 			if err != nil {
-				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), st.String()), err)
+				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
+			}
+			if !subtreeExists {
+				// subtree already exists in store, which means it's valid
+				missingSubtreesMu.Lock()
+				missingSubtrees[idx] = subtreeHash
+				missingSubtreesMu.Unlock()
 			}
 
 			return nil
@@ -72,6 +78,16 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	if err := g.Wait(); err != nil {
 		return err
+	}
+
+	// validate the missing subtrees in series, transactions might rely on each other
+	for _, subtreeHash := range missingSubtrees {
+		if subtreeHash != nil {
+			err := u.validateSubtree(ctx, subtreeHash, baseUrl)
+			if err != nil {
+				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
+			}
+		}
 	}
 
 	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
@@ -105,6 +121,23 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	subtrees, err := block.GetSubtrees(u.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+	}
+
+	// update the subtree TTLs
+	g, gCtx = errgroup.WithContext(ctx)
+	for _, subtreeHash := range block.Subtrees {
+		subtreeHash := subtreeHash
+		g.Go(func() error {
+			err = u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0)
+			if err != nil {
+				return errors.Join(errors.New("failed to update subtree TTL"), err)
+			}
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
 	}
 
 	// add the transactions in this block to the txMeta block hashes
@@ -179,9 +212,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(1024) // max 1024 concurrent requests
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
-	missingTxHashes := make([]*chainhash.Hash, 0, len(txHashes))
-	for _, txHash := range txHashes {
+	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
+	var missingTxHashesMu sync.Mutex
+	for idx, txHash := range txHashes {
 		txHash := txHash
+		idx := idx
 		g.Go(func() error {
 			var txMeta *txmeta.Data
 			var err error
@@ -199,7 +234,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
 						// collect all missing transactions for processing in order
-						missingTxHashes = append(missingTxHashes, txHash)
+						missingTxHashesMu.Lock()
+						missingTxHashes[idx] = txHash
+						missingTxHashesMu.Unlock()
 						return nil
 					} else {
 						return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
@@ -226,11 +263,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		// process all the missing transactions in order, there might be parent / child dependencies
 		// TODO get these in batches
 		for _, txHash := range missingTxHashes {
-			txMeta, err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
-			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
+			if txHash != nil {
+				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
+				if err != nil {
+					return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
+				}
+				txMetaMap.Store(txHash, txMeta)
 			}
-			txMetaMap.Store(txHash, txMeta)
 		}
 	}
 
@@ -293,24 +332,9 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 		// do http request to baseUrl + txHash.String()
 		u.logger.Infof("[blessMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		txBytes, err = util.DoHTTPRequest(ctx, url)
 		if err != nil {
-			return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to create http request [%s]", txHash.String(), err.Error())
-		}
-
-		resp, err := u.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to do http request [%s]", txHash.String(), err.Error())
-		}
-		defer resp.Body.Close()
-
-		txBytes, err = io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to read http response body [%s]", txHash.String(), err.Error())
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("[blessMissingTransaction][%s] http response status code [%d]: %s", txHash.String(), resp.StatusCode, resp.Status)
+			return nil, errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to do http request", txHash.String()), err)
 		}
 	}
 

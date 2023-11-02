@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,12 +12,12 @@ func DoHTTPRequest(ctx context.Context, url string) ([]byte, error) {
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create http request [%s]", err.Error())
+		return nil, errors.Join(errors.New("failed to create http request"), err)
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to do http request [%s]", err.Error())
+		return nil, errors.Join(errors.New("failed to do http request"), err)
 	}
 	defer resp.Body.Close()
 
@@ -26,7 +27,7 @@ func DoHTTPRequest(ctx context.Context, url string) ([]byte, error) {
 
 	blockBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read http response body [%s]", err.Error())
+		return nil, errors.Join(errors.New("failed to read http response body"), err)
 	}
 
 	return blockBytes, nil
