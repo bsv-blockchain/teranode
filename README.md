@@ -33,7 +33,7 @@ The Bitcoin (BTC) _scalability issue_ refers to the challenge faced by the histo
 
 **UBSV** is BSV’s solution to the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
 
-UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**.
+UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, white strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of microservices, each handling specific functionalities of the BSV network.
 
 ---
@@ -161,8 +161,13 @@ make dev-dashboard
 
 ---
 
-## _Advanced usage (protoc, settings (SETTINGS_CONTEXT),  flags, etc)_  [ TO-DO ]
+## _Advanced Usage_  [ TO-DO ]
 
+### Settings
+
+All services accept settings allowing local and remote servers to have their own specific configuration.
+
+For more information on how to create and use settings, please check the [Settings Documentation](docs/settings.md).
 
 ### Makefile
 
@@ -194,12 +199,9 @@ make test  # Executes Go tests excluding the playground and PoC directories.
 make testall  # Executes Go tests excluding the playground and PoC directories.
 ```
 
+### gRPC Logging
 
----
-
-...
-...
-Additional detail - logs produced when run with the following environment variables set: GRPC_VERBOSITY=debug GRPC_TRACE=client_channel,round_robin
+Additional logs can be produced when the node is run with the following environment variables set: `GRPC_VERBOSITY=debug GRPC_TRACE=client_channel,round_robin`
 
 
 ---
@@ -217,13 +219,15 @@ Diagram...
 
 ---
 
-## _Technology (gRPC, Go,...)_  [ TO-DO ]
+## _Technology_  [ TO-DO ]
 
 ---
 
 
 * Go
 * grpc
+  -- gRPC vs IPV6 multicast
+  -- — https://grpc.io/docs/what-is-grpc/introduction/
 * protobuf
 * Stores (options)
 * Docker
@@ -249,8 +253,6 @@ ubsv/
 ├── main.go                       # Start the services.
 │
 ├── main_native.go                # Start the services in native secp256k1 mode.
-│
-├── main_stores.go                # ???????????????????
 │
 ├── Makefile                      # This Makefile facilitates a variety of development and build tasks for our project.
 │
@@ -307,7 +309,7 @@ ubsv/
 ├── tracing/                      # Tracing, Stats and Metric utilities
 │
 ├── ui/
-│   └── dashboard/                # Terranode Dashboard UI
+│   └── dashboard/                # Teranode Dashboard UI
 │
 └── util/                         # Utilities
 
@@ -317,6 +319,14 @@ ubsv/
 ### Coding Conventions
 
 For naming conventions please check the [Naming Conventions](docs/guidelines/namingConventions.md).
+
+### TODO - ERROR HANDLING, LOGGING, ...???????
+
+xxx
+
+### Testing Conventions - [TODO]
+
+xxxx
 
 ---
 
