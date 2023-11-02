@@ -31,7 +31,7 @@ func New(u *url.URL, password ...string) (*Redis, error) {
 	}
 
 	if u.Path != "" {
-		db, err := strconv.Atoi(u.Path)
+		db, err := strconv.Atoi(u.Path[1:])
 		if err != nil {
 			return nil, fmt.Errorf("path must be an integer: %v", err)
 		}
