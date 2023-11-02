@@ -11,4 +11,12 @@ func init() {
 	availableDatabases["redis"] = func(url *url.URL) (txmeta.Store, error) {
 		return redis.New(url)
 	}
+
+	// availableDatabases["redis-cluster"] = func(url *url.URL) (txmeta.Store, error) {
+	// 	return redis.New(url)
+	// }
+
+	// availableDatabases["redis-ring"] = func(url *url.URL) (txmeta.Store, error) {
+	// 	return redis.New(url)
+	// }
 }

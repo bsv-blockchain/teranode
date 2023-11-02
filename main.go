@@ -60,30 +60,39 @@ func init() {
 func main() {
 	switch path.Base(os.Args[0]) {
 	case "aerospiketest.run":
+		// aerospiketest.Init()
 		aerospiketest.Start()
 		return
 	case "bare.run":
+		// bare.Init()
 		bare.Start()
 		return
 	case "blockassemblyblaster.run":
+		blockassembly_blaster.Init()
 		blockassembly_blaster.Start()
 		return
 	case "chainintegrity.run":
+		// chainintegrity.Init()
 		chainintegrity.Start()
 		return
 	case "propagationblaster.run":
+		propagation_blaster.Init()
 		propagation_blaster.Start()
 		return
 	case "s3blaster.run":
+		s3_blaster.Init()
 		s3_blaster.Start()
 		return
 	case "status.run":
+		status.Init()
 		status.Start()
 		return
 	case "blaster.run":
+		// txblaster.Init()
 		txblaster.Start()
 		return
 	case "utxostoreblaster.run":
+		utxostore_blaster.Init()
 		utxostore_blaster.Start()
 		return
 	}

@@ -17,7 +17,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/scylla"
 
@@ -173,9 +175,19 @@ func worker(logger utils.Logger) {
 
 	ctx := context.Background()
 
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		panic(err)
+	}
+
+	walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		panic(fmt.Errorf("can't create coinbase address: %v", err))
+	}
+
 	for {
 		btTx := bt.NewTx()
-		_ = btTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 10000)
+		_ = btTx.PayToAddress(walletAddress.AddressString, 10000)
 
 		utxoHash, err := util.UTXOHashFromOutput(btTx.TxIDChainHash(), btTx.Outputs[0], 0)
 		if err != nil {
