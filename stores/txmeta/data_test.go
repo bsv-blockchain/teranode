@@ -1,0 +1,70 @@
+package txmeta
+
+import (
+	"testing"
+
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+var (
+	hash1, _ = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hash2, _ = chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+	hash3, _ = chainhash.NewHashFromStr("300000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hash4, _ = chainhash.NewHashFromStr("400000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+	hash5, _ = chainhash.NewHashFromStr("500000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hash6, _ = chainhash.NewHashFromStr("600000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+)
+
+func Test_NewDataFromBytes(t *testing.T) {
+	t.Run("test simple", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			FirstSeen:   300,
+			BlockHeight: 400,
+			LockTime:    500,
+			UtxoHashes: []*chainhash.Hash{
+				hash1,
+				hash2,
+			},
+			ParentTxHashes: []*chainhash.Hash{
+				hash3,
+				hash4,
+			},
+			BlockHashes: []*chainhash.Hash{
+				hash5,
+				hash6,
+			},
+			Tx: &bt.Tx{},
+		}
+
+		b := data.Bytes()
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+
+		assert.Equal(t, data.Fee, d.Fee)
+		assert.Equal(t, data.SizeInBytes, d.SizeInBytes)
+		assert.Equal(t, data.FirstSeen, d.FirstSeen)
+		assert.Equal(t, data.BlockHeight, d.BlockHeight)
+		assert.Equal(t, data.LockTime, d.LockTime)
+
+		require.Len(t, data.UtxoHashes, 2)
+		require.Equal(t, len(data.UtxoHashes), len(d.UtxoHashes))
+		assert.Equal(t, data.UtxoHashes[0].String(), d.UtxoHashes[0].String())
+		assert.Equal(t, data.UtxoHashes[1].String(), d.UtxoHashes[1].String())
+
+		require.Len(t, data.ParentTxHashes, 2)
+		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))
+		assert.Equal(t, data.ParentTxHashes[0].String(), d.ParentTxHashes[0].String())
+		assert.Equal(t, data.ParentTxHashes[1].String(), d.ParentTxHashes[1].String())
+
+		require.Len(t, data.BlockHashes, 2)
+		require.Equal(t, len(data.BlockHashes), len(d.BlockHashes))
+		assert.Equal(t, data.BlockHashes[0].String(), d.BlockHashes[0].String())
+		assert.Equal(t, data.BlockHashes[1].String(), d.BlockHashes[1].String())
+	})
+}
