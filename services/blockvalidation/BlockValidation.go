@@ -133,7 +133,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// get subtree from store
 	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store [%s]", subtreeHash.String()), err)
+		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 	}
 	if subtreeExists {
 		// subtree already exists in store, which means it's valid
