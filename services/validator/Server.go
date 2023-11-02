@@ -192,7 +192,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 		}
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			return v.logError(status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err))
+			return status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err)
 		}
 
 		chunk := req.GetTransactionData()
@@ -200,14 +200,14 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 		_, err = transactionData.Write(chunk)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			return v.logError(status.Errorf(codes.Internal, "cannot write chunk data: %v", err))
+			return status.Errorf(codes.Internal, "cannot write chunk data: %v", err)
 		}
 	}
 
 	var tx bt.Tx
 	if _, err := tx.ReadFrom(bytes.NewReader(transactionData.Bytes())); err != nil {
 		prometheusInvalidTransactions.Inc()
-		return v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
+		return status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
 	// increment prometheus counter
@@ -229,14 +229,14 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return nil, v.logError(status.Errorf(codes.Internal, "cannot read transaction data: %v", err))
+		return nil, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
 	err = v.validator.Validate(traceSpan.Ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return nil, v.logError(status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err))
+		return nil, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
@@ -263,13 +263,6 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 		Valid:   true,
 		Reasons: errReasons,
 	}, nil
-}
-
-func (v *Server) logError(err error) error {
-	if err != nil {
-		v.logger.Errorf("%v", err)
-	}
-	return err
 }
 
 func (v *Server) drpcServer(ctx context.Context, drpcAddress string) error {

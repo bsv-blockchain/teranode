@@ -171,7 +171,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, tx.LockTime)
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+		postgresErr := "duplicate key value violates unique constraint"
+		sqLiteErr := "UNIQUE constraint failed"
+		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
 			return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
 		}
 		return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", err))
