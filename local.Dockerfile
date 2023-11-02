@@ -40,7 +40,7 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 
 # Build the Go libraries of the project
 # todo change to make build
-RUN make build -j3
+RUN make build -j
 
 
 
