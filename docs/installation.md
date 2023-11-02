@@ -148,14 +148,60 @@ make install
 ---
 
 
-## 7. Run the Node
+## 7. Configure Your Node Dev Settings
+
+Follow these steps to add the required settings to the `settings_local.conf` file when first setting up your computer:
+
+1. **Open the `settings_local.conf` file** in your text editor (e.g., Visual Studio Code, Goland, Atom, Sublime, etc.).
+
+2. **Locate the template settings**. They will look like:
+
+   ```conf
+   coinbase_arbitrary_text.dev.NEW_USER_TEMPLATE=/NEW_USER_TEMPLATE/ # template for future new users (referenced in documentation)
+   blobserver_httpAddress.dev.NEW_USER_TEMPLATE=https://bastion.ubsv.dev:18x90 # template for future new users (referenced in documentation)
+   blobserver_clientName.dev.NEW_USER_TEMPLATE=NEW_USER_TEMPLATE # template for future new users (referenced in documentation)
+   ```
+
+3. **Duplicate each line** and replace `NEW_USER_TEMPLATE` with your first name. If there's already another user with the same first name, use both your first name and last name.
+
+   **Example**:
+   If your name is `John Doe`, and there's no existing user named `John`, your modified settings would look like:
+
+   ```conf
+   settings_local.conf:coinbase_arbitrary_text.dev.John=/John/
+   settings_local.conf:blobserver_httpAddress.dev.John=https://bastion.ubsv.dev:18x90
+   settings_local.conf:blobserver_clientName.dev.John=John
+   ```
+
+   If there's already a user named `John`, then use:
+
+   ```conf
+   settings_local.conf:coinbase_arbitrary_text.dev.JohnDoe=/JohnDoe/
+   settings_local.conf:blobserver_httpAddress.dev.JohnDoe=https://bastion.ubsv.dev:18x90
+   settings_local.conf:blobserver_clientName.dev.JohnDoe=JohnDoe
+   ```
+
+4. **Save the file**.
+
+5. **Commit the changes to the repository**:
+
+   ```bash
+   git commit -m "Added required Dev settings for [Your Name]"
+   git push
+   ```
+
+   Replace `[Your Name]` with your actual name in the commit message.
+
+----
+
+## 8. Run the Node
 
 ---
 
 You can run the entire node with the following command:
 
 ```bash
-SETTINGS_CONTEXT=dev go run .
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
 If no errors are seen, you have successfully installed the project and are ready to start working on the project or running the node.
