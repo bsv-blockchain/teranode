@@ -39,9 +39,8 @@ message CreateRequest {
   bytes hash = 2;
   uint64 fee = 3;
   repeated bytes ParentTxHashes = 4;
-  repeated bytes utxoHashes = 5;
-  uint32 lockTime = 6;
-  uint64 sizeInBytes = 7;
+  uint32 lockTime = 5;
+  uint64 sizeInBytes = 6;
 }
 
 // swagger:model SetResponse
@@ -70,11 +69,10 @@ message GetResponse {
   Status status = 1;
   uint64 Fee = 2;
   repeated bytes ParentTxHashes = 3;
-  repeated bytes UtxoHashes = 4;
-  uint32 FirstSeen = 5;
-  repeated bytes BlockHashes = 6;
-  uint32 BlockHeight = 7;
-  uint64 SizeInBytes = 8;
+  uint32 FirstSeen = 4;
+  repeated bytes BlockHashes = 5;
+  uint32 BlockHeight = 6;
+  uint64 SizeInBytes = 7;
 }
 
 // swagger:model DeleteRequest

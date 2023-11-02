@@ -129,20 +129,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		}
 	}
 
-	var utxoHashes []*chainhash.Hash
-	if value.Bins["utxoHashes"] != nil {
-		utxoHashesInterface, ok := value.Bins["utxoHashes"].([]interface{})
-		if ok {
-			utxoHashes = make([]*chainhash.Hash, len(utxoHashesInterface))
-			for i, v := range utxoHashesInterface {
-				utxoHashes[i], err = chainhash.NewHash(v.([]byte))
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-
 	var blockHashes []*chainhash.Hash
 	if value.Bins["blockHashes"] != nil {
 		blockHashesInterface := value.Bins["blockHashes"].([]interface{})
@@ -165,7 +151,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		Tx:             value.Bins["tx"].(*bt.Tx),
 		Fee:            uint64(value.Bins["fee"].(int)),
 		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
-		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		BlockHashes:    blockHashes,
 		FirstSeen:      nFirstSeen,

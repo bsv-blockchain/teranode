@@ -10,8 +10,6 @@ import (
 )
 
 var (
-	hash1, _ = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	hash2, _ = chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 	hash3, _ = chainhash.NewHashFromStr("300000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	hash4, _ = chainhash.NewHashFromStr("400000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 	hash5, _ = chainhash.NewHashFromStr("500000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -26,10 +24,6 @@ func Test_NewDataFromBytes(t *testing.T) {
 			FirstSeen:   300,
 			BlockHeight: 400,
 			LockTime:    500,
-			UtxoHashes: []*chainhash.Hash{
-				hash1,
-				hash2,
-			},
 			ParentTxHashes: []*chainhash.Hash{
 				hash3,
 				hash4,
@@ -51,11 +45,6 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.Equal(t, data.FirstSeen, d.FirstSeen)
 		assert.Equal(t, data.BlockHeight, d.BlockHeight)
 		assert.Equal(t, data.LockTime, d.LockTime)
-
-		require.Len(t, data.UtxoHashes, 2)
-		require.Equal(t, len(data.UtxoHashes), len(d.UtxoHashes))
-		assert.Equal(t, data.UtxoHashes[0].String(), d.UtxoHashes[0].String())
-		assert.Equal(t, data.UtxoHashes[1].String(), d.UtxoHashes[1].String())
 
 		require.Len(t, data.ParentTxHashes, 2)
 		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))

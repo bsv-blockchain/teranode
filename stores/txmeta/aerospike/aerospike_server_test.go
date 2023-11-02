@@ -40,10 +40,6 @@ func TestAerospike(t *testing.T) {
 	parentTxHash := parentTx.TxIDChainHash()
 	require.NoError(t, err)
 
-	var utxoHash *chainhash.Hash
-	utxoHash, err = chainhash.NewHashFromStr("3e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
-	require.NoError(t, err)
-
 	var blockHash *chainhash.Hash
 	blockHash, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 	require.NoError(t, err)
@@ -74,8 +70,6 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(101), uint64(value.Bins["fee"].(int)))
 		assert.Equal(t, uint64(1), uint64(value.Bins["sizeInBytes"].(int)))
-		assert.Len(t, value.Bins["utxoHashes"].([]interface{}), 1)
-		assert.Equal(t, []interface{}{utxoHash[:]}, value.Bins["utxoHashes"])
 		assert.Len(t, value.Bins["parentTxHashes"].([]interface{}), 1)
 		assert.Equal(t, []interface{}{parentTxHash[:]}, value.Bins["parentTxHashes"])
 		assert.LessOrEqual(t, int(time.Now().Unix()), value.Bins["firstSeen"].(int))
@@ -114,8 +108,6 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)
 		assert.Equal(t, uint64(1), value.SizeInBytes)
-		assert.Len(t, value.UtxoHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{utxoHash}, value.UtxoHashes)
 		assert.Len(t, value.ParentTxHashes, 1)
 		assert.Equal(t, []*chainhash.Hash{parentTxHash}, value.ParentTxHashes)
 		assert.Len(t, value.BlockHashes, 0)

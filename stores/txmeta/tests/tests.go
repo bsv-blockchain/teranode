@@ -29,7 +29,6 @@ func Store(t *testing.T, db txmeta.Store) {
 		require.Equal(t, uint64(215), resp.Fee)
 		require.Equal(t, uint64(328), resp.SizeInBytes)
 		assert.Len(t, resp.ParentTxHashes, 1)
-		assert.Len(t, resp.UtxoHashes, 5)
 
 		_, err = db.Create(ctx, Tx1)
 		require.Error(t, err, txmeta.ErrAlreadyExists)
@@ -44,12 +43,6 @@ func Store(t *testing.T, db txmeta.Store) {
 			parentTxHashes[index] = parentTxHash
 		}
 
-		utxoHashes := make([]*chainhash.Hash, len(Tx1.Outputs))
-		for index, output := range Tx1.Outputs {
-			utxoHash, _ := util.UTXOHashFromOutput(hash1, output, uint32(index))
-			utxoHashes[index] = utxoHash
-		}
-
 		_, err := db.Create(ctx, Tx1)
 		require.NoError(t, err)
 
@@ -60,10 +53,6 @@ func Store(t *testing.T, db txmeta.Store) {
 		assert.Len(t, resp.ParentTxHashes, 1)
 		for i, h := range resp.ParentTxHashes {
 			assert.Equal(t, parentTxHashes[i], h)
-		}
-		assert.Len(t, resp.UtxoHashes, 5)
-		for i, h := range resp.UtxoHashes {
-			assert.Equal(t, utxoHashes[i], h)
 		}
 
 		_, err = db.Create(ctx, Tx1)

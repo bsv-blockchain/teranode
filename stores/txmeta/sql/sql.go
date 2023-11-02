@@ -92,11 +92,10 @@ func New(storeUrl *url.URL) (*Store, error) {
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	q := `
 	SELECT
-			txBytes,
+		txBytes,
 	    fee,
-			size_in_bytes,
+		size_in_bytes,
 	    parents,
-	    utxos,
 	    blocks,
 	    lock_time
 	FROM txmeta
@@ -106,11 +105,10 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	var fee uint64
 	var sizeInBytes uint64
 	var parents []byte
-	var utxos []byte
 	var blocks []byte
 	var lockTime uint32
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &fee, &sizeInBytes, &parents, &utxos, &blocks, &lockTime)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &fee, &sizeInBytes, &parents, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, txmeta.ErrNotFound
@@ -133,15 +131,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 		parentTxHashes = append(parentTxHashes, h)
 	}
 
-	utxoHashes := make([]*chainhash.Hash, 0, len(utxos)/chainhash.HashSize)
-	for i := 0; i < len(utxos); i += chainhash.HashSize {
-		h, err = chainhash.NewHash(utxos[i : i+chainhash.HashSize])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse utxo hash: %+v", err)
-		}
-		utxoHashes = append(utxoHashes, h)
-	}
-
 	blockHashes := make([]*chainhash.Hash, 0, len(blocks)/chainhash.HashSize)
 	for i := 0; i < len(blocks); i += chainhash.HashSize {
 		h, err = chainhash.NewHash(blocks[i : i+chainhash.HashSize])
@@ -157,7 +146,6 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 		Tx:             tx,
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
-		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		BlockHashes:    blockHashes,
 	}, nil
@@ -166,8 +154,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	q := `
 		INSERT INTO txmeta
-		    (txBytes, hash, fee, size_in_bytes, parents, utxos, lock_time)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		    (txBytes, hash, fee, size_in_bytes, parents, lock_time)
+		VALUES ($1, $2, $3, $4, $5, $6)`
 
 	txBytes := tx.ExtendedBytes()
 	hash := tx.TxIDChainHash()
@@ -181,12 +169,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		parents = append(parents, parent[:]...)
 	}
 
-	utxos := make([]byte, 0, len(data.UtxoHashes)*chainhash.HashSize)
-	for _, utxo := range data.UtxoHashes {
-		utxos = append(utxos, utxo[:]...)
-	}
-
-	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, utxos, tx.LockTime)
+	_, err = s.db.ExecContext(ctx, q, txBytes, hash[:], data.Fee, data.SizeInBytes, parents, tx.LockTime)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
 			return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
@@ -246,14 +229,13 @@ func createPostgresSchema(db *sql.DB) error {
 	  ,fee           BIGINT NOT NULL
 		,size_in_bytes BIGINT NOT NULL
 	  ,parents       BYTEA NULL
-	  ,utxos         BYTEA NULL
 	  ,blocks        BYTEA NULL
 	  ,lock_time     BIGINT NOT NULL
     ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create utxos table - [%+v]", err)
+		return fmt.Errorf("could not create tx meta table - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_txmeta_hash ON txmeta (hash);`); err != nil {
@@ -273,14 +255,13 @@ func createSqliteSchema(db *sql.DB) error {
     ,fee    		   BIGINT NOT NULL
 		,size_in_bytes BIGINT NOT NULL
 	  ,parents       BLOB NULL
-	  ,utxos         BLOB NULL
 	  ,blocks        BLOB NULL
     ,lock_time	   BIGINT NOT NULL
     ,inserted_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create utxos table - [%+v]", err)
+		return fmt.Errorf("could not create tx meta table - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_txmeta_hash ON txmeta (hash);`); err != nil {

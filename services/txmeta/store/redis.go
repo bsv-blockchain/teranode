@@ -1,0 +1,15 @@
+package store
+
+import (
+	"net/url"
+
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/redis"
+)
+
+func init() {
+	availableDatabases["redis"] = func(url *url.URL) (txmeta.Store, error) {
+		s := redis.New(url)
+		return s, nil
+	}
+}

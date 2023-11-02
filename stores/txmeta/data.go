@@ -14,7 +14,6 @@ import (
 // do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
 	Tx             *bt.Tx            `json:"tx"`
-	UtxoHashes     []*chainhash.Hash `json:"utxoHashes"`
 	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
 	BlockHashes    []*chainhash.Hash `json:"blockHashes"`
 	Fee            uint64            `json:"fee"`
@@ -22,6 +21,12 @@ type Data struct {
 	FirstSeen      uint32            `json:"firstSeen"`
 	BlockHeight    uint32            `json:"blockHeight"`
 	LockTime       uint32            `json:"lockTime"`
+}
+
+type MetaData struct {
+	Fee         uint64 `json:"fee"`
+	SizeInBytes uint64 `json:"sizeInBytes"`
+	LockTime    uint32 `json:"lockTime"`
 }
 
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {
@@ -36,21 +41,8 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 
 	buf := bytes.NewReader(dataBytes[28:])
 
-	// read the utxo hashes
-	utxoHashesLen, _ := wire.ReadVarInt(buf, 0)
-	var hashBytes [32]byte
-	d.UtxoHashes = make([]*chainhash.Hash, utxoHashesLen)
-	for i := uint64(0); i < utxoHashesLen; i++ {
-		_, err := io.ReadFull(buf, hashBytes[:])
-		if err != nil {
-			return nil, err
-		}
-		if d.UtxoHashes[i], err = chainhash.NewHash(hashBytes[:]); err != nil {
-			return nil, err
-		}
-	}
-
 	// read the parent tx hashes
+	var hashBytes [32]byte
 	parentTxHashesLen, _ := wire.ReadVarInt(buf, 0)
 	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
@@ -100,12 +92,6 @@ func (d *Data) Bytes() []byte {
 	binary.LittleEndian.PutUint32(buf[16:20], d.FirstSeen)
 	binary.LittleEndian.PutUint32(buf[20:24], d.BlockHeight)
 	binary.LittleEndian.PutUint32(buf[24:28], d.LockTime)
-
-	// write a varint for the length and then all the utxo hashes
-	buf = append(buf, bt.VarInt(uint64(len(d.UtxoHashes))).Bytes()...)
-	for _, utxoHash := range d.UtxoHashes {
-		buf = append(buf, utxoHash.CloneBytes()...)
-	}
 
 	// write a varint for the length and then all the parent tx hashes
 	buf = append(buf, bt.VarInt(uint64(len(d.ParentTxHashes))).Bytes()...)

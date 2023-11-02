@@ -128,20 +128,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		}
 	}
 
-	var utxoHashes []*chainhash.Hash
-	if value.Bins["utxoHashes"] != nil {
-		utxoHashesInterface, ok := value.Bins["utxoHashes"].([]interface{})
-		if ok {
-			utxoHashes = make([]*chainhash.Hash, len(utxoHashesInterface))
-			for i, v := range utxoHashesInterface {
-				utxoHashes[i], err = chainhash.NewHash(v.([]byte))
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-
 	var blockHashes []*chainhash.Hash
 	if value.Bins["blockHashes"] != nil {
 		blockHashesInterface := value.Bins["blockHashes"].([]interface{})
@@ -160,7 +146,6 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		Fee:            uint64(value.Bins["fee"].(int)),
 		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
 		ParentTxHashes: parentTxHashes,
-		UtxoHashes:     utxoHashes,
 		FirstSeen:      uint32(value.Bins["firstSeen"].(int)),
 		BlockHashes:    blockHashes,
 	}
@@ -196,17 +181,11 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		parentTxHashesInterface[i] = v[:]
 	}
 
-	utxoHashesInterface := make([]interface{}, len(txMeta.UtxoHashes))
-	for i, v := range txMeta.UtxoHashes {
-		utxoHashesInterface[i] = v[:]
-	}
-
 	bins := []*aerospike.Bin{
 		aerospike.NewBin("tx", tx),
 		aerospike.NewBin("fee", int(txMeta.Fee)),
 		aerospike.NewBin("sizeInBytes", int(txMeta.SizeInBytes)),
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
-		aerospike.NewBin("utxoHashes", utxoHashesInterface),
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}

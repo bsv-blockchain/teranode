@@ -77,16 +77,6 @@ func (u *Server) Create(ctx context.Context, request *txmeta_api.CreateRequest) 
 		return nil, err
 	}
 
-	utxoHashes := make([]*chainhash.Hash, len(request.UtxoHashes))
-	var utxoHash *chainhash.Hash
-	for index, utxoHashBytes := range request.UtxoHashes {
-		utxoHash, err = chainhash.NewHash(utxoHashBytes)
-		if err != nil {
-			return nil, err
-		}
-		utxoHashes[index] = utxoHash
-	}
-
 	parentTxHashes := make([]*chainhash.Hash, len(request.ParentTxHashes))
 	var parentTxHash *chainhash.Hash
 	for index, parentTxHashBytes := range request.ParentTxHashes {
@@ -143,11 +133,6 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		return nil, err
 	}
 
-	utxoHashes := make([][]byte, len(tx.UtxoHashes))
-	for index, utxoHash := range tx.UtxoHashes {
-		utxoHashes[index] = utxoHash.CloneBytes()
-	}
-
 	parentTxHashes := make([][]byte, len(tx.ParentTxHashes))
 	for index, parentTxHash := range tx.ParentTxHashes {
 		parentTxHashes[index] = parentTxHash.CloneBytes()
@@ -161,7 +146,6 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 	return &txmeta_api.GetResponse{
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
-		UtxoHashes:     utxoHashes,
 		FirstSeen:      tx.FirstSeen,
 		BlockHashes:    blockHashes,
 	}, nil

@@ -55,12 +55,6 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 		return nil, err
 	}
 
-	var utxoHashes []*chainhash.Hash
-	utxoHashes, err = getChainHashesFromBytes(resp.UtxoHashes)
-	if err != nil {
-		return nil, err
-	}
-
 	var parentTxHashes []*chainhash.Hash
 	parentTxHashes, err = getChainHashesFromBytes(resp.ParentTxHashes)
 	if err != nil {
@@ -75,7 +69,6 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 
 	return &txmeta.Data{
 		Fee:            resp.Fee,
-		UtxoHashes:     utxoHashes,
 		ParentTxHashes: parentTxHashes,
 		FirstSeen:      resp.FirstSeen,
 		BlockHashes:    blockHashes,
@@ -93,17 +86,11 @@ func (c *Client) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		parentTxHashesBytes = append(parentTxHashesBytes, parentTxHash[:])
 	}
 
-	var utxoHashesBytes [][]byte
-	for _, utxoHash := range txMeta.UtxoHashes {
-		utxoHashesBytes = append(utxoHashesBytes, utxoHash[:])
-	}
-
 	_, err = c.client.Create(ctx, &txmeta_api.CreateRequest{
 		Tx:             tx.Bytes(),
 		Fee:            txMeta.Fee,
 		SizeInBytes:    txMeta.SizeInBytes,
 		ParentTxHashes: parentTxHashesBytes,
-		UtxoHashes:     utxoHashesBytes,
 	})
 	if err != nil {
 		return txMeta, err
@@ -132,8 +119,8 @@ func getChainHashesFromBytes(hashes [][]byte) (chainHashes []*chainhash.Hash, er
 	if len(hashes) > 0 {
 		chainHashes = make([]*chainhash.Hash, len(hashes))
 		var hash *chainhash.Hash
-		for index, utxoHashBytes := range hashes {
-			hash, err = chainhash.NewHash(utxoHashBytes)
+		for index, hashBytes := range hashes {
+			hash, err = chainhash.NewHash(hashBytes)
 			if err != nil {
 				return nil, err
 			}
