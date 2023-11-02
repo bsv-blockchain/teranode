@@ -163,7 +163,7 @@ func NewWorker(
 		logIdsCh:          logIdsCh,
 		globalStartTime:   globalStartTime,
 		address:           address,
-		utxoChan:          make(chan *bt.UTXO, 10),
+		utxoChan:          make(chan *bt.UTXO, 10000),
 	}, nil
 }
 
@@ -191,15 +191,17 @@ func (w *Worker) Init(ctx context.Context) error {
 		return fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
 	}
 
-	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s", tx.TxIDChainHash().String())
+	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s with %d outputs", tx.TxIDChainHash().String(), len(tx.Outputs))
 
-	// Put the first utxo on the channel
-	w.utxoChan <- &bt.UTXO{
-		TxIDHash:      tx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: tx.Outputs[0].LockingScript,
-		Satoshis:      tx.Outputs[0].Satoshis,
+	for i, output := range tx.Outputs {
+		w.utxoChan <- &bt.UTXO{
+			TxIDHash:      tx.TxIDChainHash(),
+			Vout:          uint32(i),
+			LockingScript: output.LockingScript,
+			Satoshis:      output.Satoshis,
+		}
 	}
+	// Put the first utxo on the channel
 
 	return nil
 }
@@ -222,32 +224,36 @@ func (w *Worker) Start(ctx context.Context) error {
 				return fmt.Errorf("error filling initial inputs: %v", err)
 			}
 
-			if err := w.distributor.SendTransaction(ctx, tx); err != nil {
-				return fmt.Errorf("error sending initial transaction: %v", err)
-			}
-
-			counterLoad := counter.Add(1)
-			if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-				txPs := float64(0)
-				ts := time.Since(*w.globalStartTime).Seconds()
-				if ts > 0 {
-					txPs = float64(counterLoad) / ts
+			go func() {
+				if err := w.distributor.SendTransaction(ctx, tx); err != nil {
+					w.logger.Errorf("error sending initial transaction: %v", err)
+					return
 				}
-				fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
-			}
 
-			// increment prometheus counter
-			prometheusProcessedTransactions.Inc()
-			prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
-			prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
-			w.totalTransactions.Add(1)
+				counterLoad := counter.Add(1)
+				if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
+					txPs := float64(0)
+					ts := time.Since(*w.globalStartTime).Seconds()
+					if ts > 0 {
+						txPs = float64(counterLoad) / ts
+					}
+					fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
+				}
 
-			w.utxoChan <- &bt.UTXO{
-				TxIDHash:      tx.TxIDChainHash(),
-				Vout:          0,
-				LockingScript: tx.Outputs[0].LockingScript,
-				Satoshis:      tx.Outputs[0].Satoshis,
-			}
+				// increment prometheus counter
+				prometheusProcessedTransactions.Inc()
+				prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
+				prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
+				w.totalTransactions.Add(1)
+
+				w.utxoChan <- &bt.UTXO{
+					TxIDHash:      tx.TxIDChainHash(),
+					Vout:          0,
+					LockingScript: tx.Outputs[0].LockingScript,
+					Satoshis:      tx.Outputs[0].Satoshis,
+				}
+
+			}()
 
 			if w.rateLimiter != nil {
 				_ = w.rateLimiter.Wait(ctx)
