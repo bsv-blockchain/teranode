@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,18 +55,8 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 }
 
 func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
-
 	ro := &redis.Options{
 		Addr: u.Host,
-	}
-
-	if u.Path != "" {
-		db, err := strconv.Atoi(u.Path[1:])
-		if err != nil {
-			return nil, fmt.Errorf("path must be an integer: %v", err)
-		}
-
-		ro.DB = db
 	}
 
 	if u.User != nil && u.User.Username() != "" {
