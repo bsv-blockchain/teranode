@@ -32,6 +32,12 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 		Addr: u.Host,
 	}
 
+	p, ok := u.User.Password()
+	if ok && p != "" {
+		o.Password = p
+	}
+
+	// If optional password is set, override...
 	if len(password) > 0 && password[0] != "" {
 		o.Password = password[0]
 	}
@@ -58,7 +64,13 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 		Addrs: addrs,
 	}
 
-	if len(password) > 0 {
+	p, ok := u.User.Password()
+	if ok && p != "" {
+		o.Password = p
+	}
+
+	// If optional password is set, override...
+	if len(password) > 0 && password[0] != "" {
 		o.Password = password[0]
 	}
 
@@ -86,7 +98,13 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 		Addrs: addrs,
 	}
 
-	if len(password) > 0 {
+	p, ok := u.User.Password()
+	if ok && p != "" {
+		o.Password = p
+	}
+
+	// If optional password is set, override...
+	if len(password) > 0 && password[0] != "" {
 		o.Password = password[0]
 	}
 
