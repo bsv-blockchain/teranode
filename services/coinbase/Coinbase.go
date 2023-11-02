@@ -470,7 +470,7 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 		return fmt.Errorf("error creating initial transaction: %v", err)
 	}
 
-	var splitSatoshis = uint64(10_000_000)
+	var splitSatoshis = uint64(1_000_000)
 	amountRemaining := utxo.Satoshis
 
 	for amountRemaining > splitSatoshis {
