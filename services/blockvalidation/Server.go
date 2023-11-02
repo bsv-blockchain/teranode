@@ -53,7 +53,6 @@ type Server struct {
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
-	processBlockNotify   *ttlcache.Cache[chainhash.Hash, bool]
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
 }
 
@@ -73,13 +72,19 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 		logger:               logger,
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
-		txMetaStore:          txMetaStore,
 		validatorClient:      validatorClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
 		processingSubtree:    make(map[chainhash.Hash]bool),
-		processBlockNotify:   ttlcache.New[chainhash.Hash, bool](),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+	}
+
+	// create a caching tx meta store
+	if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
+		logger.Infof("Using cached version of tx meta store")
+		bVal.txMetaStore = newTxMetaCache(txMetaStore)
+	} else {
+		bVal.txMetaStore = txMetaStore
 	}
 
 	return bVal
@@ -91,6 +96,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient)
+
+	go u.processSubtreeNotify.Start()
 
 	// process blocks found from channel
 	go func() {
@@ -137,6 +144,8 @@ func (u *Server) Start(ctx context.Context) error {
 }
 
 func (u *Server) Stop(_ context.Context) error {
+	u.processSubtreeNotify.Stop()
+
 	return nil
 }
 
