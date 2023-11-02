@@ -24,7 +24,31 @@ type Redis struct {
 	mode string
 }
 
-func New(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+	o := &redis.Options{
+		Addr: u.Host,
+	}
+
+	p, ok := u.User.Password()
+	if ok && p != "" {
+		o.Password = p
+	}
+
+	// If optional password is set, override...
+	if len(password) > 0 && password[0] != "" {
+		o.Password = password[0]
+	}
+
+	rdb := redis.NewClient(o)
+
+	return &Redis{
+		url:  u,
+		mode: "client",
+		rdb:  rdb,
+	}, nil
+}
+
+func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make([]string, 0)
@@ -49,6 +73,37 @@ func New(u *url.URL, password ...string) (*Redis, error) {
 	return &Redis{
 		url:  u,
 		mode: "cluster",
+		rdb:  rdb,
+	}, nil
+}
+
+func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+	hosts := strings.Split(u.Host, ",")
+
+	addrs := make(map[string]string)
+	for i, host := range hosts {
+		addrs[fmt.Sprintf("shard%d", i)] = host
+	}
+
+	o := &redis.RingOptions{
+		Addrs: addrs,
+	}
+
+	p, ok := u.User.Password()
+	if ok && p != "" {
+		o.Password = p
+	}
+
+	// If optional password is set, override...
+	if len(password) > 0 && password[0] != "" {
+		o.Password = password[0]
+	}
+
+	rdb := redis.NewRing(o)
+
+	return &Redis{
+		url:  u,
+		mode: "ring",
 		rdb:  rdb,
 	}, nil
 }
