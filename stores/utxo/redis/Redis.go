@@ -55,28 +55,23 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 }
 
 func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
-	ro := &redis.Options{
-		Addr: u.Host,
-	}
+	hosts := strings.Split(u.Host, ",")
 
-	if u.User != nil && u.User.Username() != "" {
-		ro.Username = u.User.Username()
+	addrs := make([]string, 0)
+	addrs = append(addrs, hosts...)
+
+	o := &redis.ClusterOptions{
+		Addrs: addrs,
 	}
 
 	p, ok := u.User.Password()
-	if ok {
-		ro.Password = p
+	if ok && p != "" {
+		o.Password = p
 	}
 
 	// If optional password is set, override...
 	if len(password) > 0 && password[0] != "" {
-		ro.Password = password[0]
-	}
-
-	o := &redis.ClusterOptions{
-		NewClient: func(opt *redis.Options) *redis.Client {
-			return redis.NewClient(ro)
-		},
+		o.Password = password[0]
 	}
 
 	rdb := redis.NewClusterClient(o)
