@@ -429,33 +429,45 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string) {
 
 	// Look for others who have announced and attempt to connect to them
 	anyConnected := false
-	for !anyConnected {
-		for _, topicName := range tn {
-			s.logger.Debugf("Searching for peers for topic %s..\n", topicName)
+ConnectLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("P2P service shutting down")
+			return
+		default:
+			if !anyConnected {
+				s.logger.Debugf("Searching for peers for topics %d\n", len(tn))
+				for _, topicName := range tn {
+					s.logger.Debugf("Searching for peers for topic %s..\n", topicName)
 
-			peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
-			if err != nil {
-				panic(err)
-			}
+					peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
+					if err != nil {
+						panic(err)
+					}
 
-			for peer := range peerChan {
-				if peer.ID == s.host.ID() {
-					continue // No self connection
+					for p := range peerChan {
+						if p.ID == s.host.ID() {
+							continue // No self connection
+						}
+						err = s.host.Connect(ctx, p)
+						if err != nil {
+							//  we fail to connect to a lot of peers. Just ignore it for now.
+							// s.logger.Debugf("Failed connecting to ", peer.ID.Pretty(), ", error:", err)
+						} else {
+							s.logger.Debugf("Connected to:", p.ID.String())
+							anyConnected = true
+						}
+					}
 				}
-				err := s.host.Connect(ctx, peer)
-				if err != nil {
-					//  we fail to connect to a lot of peers. Just ignore it for now.
-					// s.logger.Debugf("Failed connecting to ", peer.ID.Pretty(), ", error:", err)
-				} else {
-					s.logger.Debugf("Connected to:", peer.ID.Pretty())
-					anyConnected = true
-				}
+			} else {
+				s.logger.Debugf("Peer discovery complete")
+				s.logger.Debugf("connected to %d peers\n", len(s.host.Network().Peers()))
+				s.logger.Debugf("peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
+				break ConnectLoop
 			}
 		}
 	}
-	s.logger.Debugf("Peer discovery complete")
-	s.logger.Debugf("connected to %d peers\n", len(s.host.Network().Peers()))
-	s.logger.Debugf("peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
 }
 
 func (s *Server) handleBlockchainMessage(ns network.Stream) {

@@ -160,6 +160,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				for {
 					txReq = stp.queue.dequeue()
 					if txReq == nil || nrProcessed > batcherSize {
+						time.Sleep(10 * time.Millisecond)
 						break
 					}
 
