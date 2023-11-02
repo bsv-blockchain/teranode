@@ -108,6 +108,11 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	// TODO should this be here? or should it be in block assembly?
 	txMetaData, err := v.registerTxInMetaStore(traceSpan, tx, spentUtxos)
 	if err != nil {
+		if errors.Is(err, txmeta.ErrAlreadyExists) {
+			// stop all processing, this transaction has already been validated and passed into the block assembly
+			return nil
+		}
+
 		v.reverseSpends(traceSpan, spentUtxos)
 		return fmt.Errorf("error registering tx in meta utxoStore: %v", err)
 	}
@@ -157,11 +162,11 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	if err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
-			return data, nil
+			return nil, txmeta.ErrAlreadyExists
 		}
 
 		v.reverseSpends(traceSpan, spentUtxos)
-		return data, fmt.Errorf("error sending tx %s to tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
+		return data, errors.Join(fmt.Errorf("error sending tx %s to tx meta utxoStore", tx.TxIDChainHash().String()), err)
 	}
 
 	return data, nil
