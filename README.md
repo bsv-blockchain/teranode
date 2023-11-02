@@ -7,16 +7,21 @@
 - [_Getting Started_](#getting-started)
   - [Pre-requisites and Installation](#pre-requisites-and-installation)
   - [Running the node locally in development](#running-the-node-locally-in-development)
-    - [Running the node in native mode ](#running-the-node-in-native-mode-)
+    - [Running the node in native mode](#running-the-node-in-native-mode)
     - [Running the node with Aerospike support](#running-the-node-with-aerospike-support)
     - [Running the node with custom settings](#running-the-node-with-custom-settings)
   - [Running specific services locally in development](#running-specific-services-locally-in-development)
   - [Running specific commands locally in development](#running-specific-commands-locally-in-development)
+  - [Running UI Dashboard locally:](#running-ui-dashboard-locally)
 - [_Advanced usage (protoc, settings (SETTINGS_CONTEXT),  flags, etc)_  [ TO-DO ]](#advanced-usage-protoc-settings-settingscontext--flags-etc---to-do-)
   - [Makefile](#makefile)
+    - [Proto buffers (protoc)](#proto-buffers-protoc)
+    - [Running Tests](#running-tests)
 - [_Architecture_  [ TO-DO ]](#architecture---to-do-)
 - [_Technology (gRPC, Go,...)_  [ TO-DO ]](#technology-grpc-go---to-do-)
-- [_Project Structure and coding conventions_  [ TO-DO ]](#project-structure-and-coding-conventions---to-do-)
+- [_Project Structure and Coding Conventions_](#project-structure-and-coding-conventions)
+  - [Project Structure](#project-structure)
+  - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
   - [Coding Conventions](#coding-conventions)
 - [_License_](#license)
 
@@ -228,7 +233,7 @@ Diagram...
 
 ---
 
-## _Project Structure and Coding Conventions_  [ TO-DO ]
+## _Project Structure and Coding Conventions_
 
 ---
 
