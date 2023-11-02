@@ -57,7 +57,9 @@
         const prevBlockTime = new Date(prevBlock.timestamp)
         const blockTime = new Date(block.timestamp)
         const diff = blockTime - prevBlockTime
-        block.deltaTime = getHumanReadableTime(diff)
+
+        block.timeDiff = diff / 1000 // The time diff between blocks (in seconds)
+        block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
       })
 
       // Calculate the age of the block

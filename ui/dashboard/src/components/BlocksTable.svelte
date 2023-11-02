@@ -17,6 +17,7 @@
       <th>Miner</th>
       <th>Fees</th>
       <th>Number of Transactions</th>
+      <th>TPS</th>
       <th>Size (Bytes)</th>
     </tr>
   </thead>

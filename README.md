@@ -44,13 +44,13 @@ For installation instructions please check the [Installation Guide](docs/install
 You can run all services in 1 terminal window, using the following command:
 
 ```shell
-go run .
+SETTINGS_CONTEXT=dev go run .
 ```
 
 _Note - If you use badger or sqlite as the datastore, you need to delete the data directory before running._
 
 ```shell
-rm -rf data && go run .
+rm -rf data && SETTINGS_CONTEXT=dev go run .
 ```
 
 #### Running the node in native mode
@@ -58,7 +58,7 @@ rm -rf data && go run .
 In standard mode, the node will use the Go secp256k1 capabilities. However, you can enable the "native" mode, which uses the significantly faster native C secp256k1 library. Notice that this is not required or has any advantage in development mode.
 
 ```shell
-rm -rf data && go run -tags native .
+rm -rf data && SETTINGS_CONTEXT=dev go run -tags native .
 ```
 
 #### Running the node with Aerospike support
@@ -66,7 +66,7 @@ rm -rf data && go run -tags native .
 If you need support for Aerospike, you need to add "aerospike" to the tags:
 
 ```shell
-rm -rf data && go run -tags native,aerospike .
+rm -rf data && SETTINGS_CONTEXT=dev go run -tags native,aerospike .
 ```
 
 #### Running the node with custom settings
@@ -75,7 +75,7 @@ rm -rf data && go run -tags native,aerospike .
 You can start the node with custom settings by specifying which components of the node to run.
 
 ```shell
-rm -rf data && go run -tags native,aerospike . [OPTIONS]
+rm -rf data && SETTINGS_CONTEXT=dev go run -tags native,aerospike . [OPTIONS]
 ```
 
 Where `[OPTIONS]` are the desired components you want to start.
@@ -107,7 +107,7 @@ Each component can be activated by setting its value to `1`, or disabled with `0
 To start the node with only `Validator`, `UtxoStore`, `Propagation`, and `Seeder` components:
 
 ```shell
-rm -rf data && go run -tags native,aerospike . -Validator=1 -UtxoStore=1 -Propagation=1 -Seeder=1
+rm -rf data && SETTINGS_CONTEXT=dev go run -tags native,aerospike . -Validator=1 -UtxoStore=1 -Propagation=1 -Seeder=1
 ```
 
 Note - the variable names are not case-sensitive, and can be inputted in any case. For example, `-validator=1` is the same as `-Validator=1`.
@@ -126,7 +126,7 @@ cd services/validator
 and run the service using the following command:
 
 ```shell
-go run .
+SETTINGS_CONTEXT=dev go run .
 ```
 
 Details on each specific service can be found in their relevant documentation (see sections below  -- **LINK TO RELEVANT SECTIONS ONCE THEY EXIST** --).
@@ -137,11 +137,18 @@ Besides services, there are a number of commands that can be executed to perform
 
 ```shell
 cd cmd/txblaster
-go run .
+SETTINGS_CONTEXT=dev go run .
 ```
 
 Details on each specific command can be found in their relevant documentation (see sections below  -- **LINK TO RELEVANT SECTIONS ONCE THEY EXIST** --).
 
+### Running UI Dashboard locally:
+
+To run the UI Dashboard locally, run the following command:
+
+```shell
+make dev-dashboard
+```
 
 ---
 
