@@ -19,7 +19,7 @@ ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
 # Build the Go libraries of the project
-RUN make build -j3
+RUN make build -j 32
 
 FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
 WORKDIR /app
