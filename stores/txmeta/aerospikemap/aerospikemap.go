@@ -159,13 +159,11 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	return status, nil
 }
 
-func (s *Store) Create(_ context.Context, _ *bt.Tx, _ *chainhash.Hash, _ uint64, _ uint64, _ []*chainhash.Hash,
-	_ []*chainhash.Hash, _ uint32) error {
-
+func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	prometheusTxMetaSet.Inc()
 
 	// this is a no-op for the map implementation - it is created in the utxo store
-	return nil
+	return s.Get(ctx, tx.TxIDChainHash())
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
