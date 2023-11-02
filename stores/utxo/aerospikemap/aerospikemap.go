@@ -439,7 +439,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		}
 
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		return errors.Join(utxostore.ErrStore, fmt.Errorf("error in aerospike spend PutBins: %w", err))
+		return errors.Join(utxostore.ErrStore, errors.New("error in aerospike spend PutBins"), err)
 	}
 
 	prometheusUtxoSpend.Inc()
@@ -512,7 +512,7 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 		}
 
 		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
-		return errors.Join(fmt.Errorf("error in aerospike delete key: %v", err))
+		return errors.Join(errors.New("error in aerospike delete key"), err)
 	}
 
 	prometheusUtxoDelete.Inc()

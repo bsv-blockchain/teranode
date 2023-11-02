@@ -341,11 +341,11 @@ LOOP:
 
 		block, err = u.getBlock(ctx, blockHeader.Hash(), baseURL)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s] [%v]", fromBlock.Hash().String(), blockHeader.String(), err))
+			return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
 		}
 
 		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL); err != nil {
-			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s] [%v]", fromBlock.Hash().String(), block.String(), err))
+			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}
 

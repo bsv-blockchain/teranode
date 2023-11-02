@@ -174,9 +174,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		postgresErr := "duplicate key value violates unique constraint"
 		sqLiteErr := "UNIQUE constraint failed"
 		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
-			return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", txmeta.ErrAlreadyExists))
+			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.ErrAlreadyExists)
 		}
-		return data, errors.Join(fmt.Errorf("failed to insert txmeta: %+v", err))
+		return data, errors.Join(errors.New("failed to insert tx meta"), err)
 	}
 
 	prometheusTxMetaSet.Inc()

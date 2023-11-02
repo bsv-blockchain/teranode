@@ -277,7 +277,7 @@ LOOP:
 
 		block, err := c.blobServerClient.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
-			return errors.Join(fmt.Errorf("failed to get block [%s] [%v]", blockHeader.String(), err))
+			return errors.Join(fmt.Errorf("failed to get block [%s]", blockHeader.String()), err)
 		}
 
 		err = c.storeBlock(ctx, block)
