@@ -2,8 +2,9 @@ package redis
 
 import (
 	"context"
+	_ "embed"
+	"fmt"
 	"net/url"
-	"sync"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -12,13 +13,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+//go:embed update_blockhash.lua
+var scriptString string
+var luaScript = redis.NewScript(scriptString)
+
 type Redis struct {
-	mu                 sync.Mutex
-	url                *url.URL
-	rdb                redis.Cmdable
-	mode               string
-	heightMutex        sync.RWMutex
-	currentBlockHeight uint32
+	url  *url.URL
+	rdb  redis.Cmdable
+	mode string
 }
 
 func New(u *url.URL, password ...string) *Redis {
@@ -65,7 +67,7 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	}
 
 	res := r.rdb.SetNX(context.Background(), tx.TxIDChainHash().String(), data.Bytes(), 0)
-	if res.Val() == false {
+	if !res.Val() {
 		return nil, txmeta.ErrAlreadyExists
 	}
 	if res.Err() != nil {
@@ -75,25 +77,18 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-// SetMined TODO this should be improved to use a lua script or something more native in Redis
-func (r *Redis) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	res := r.rdb.Get(context.Background(), hash.String())
-	if res.Err() != nil {
-		return res.Err()
+// SetMined uses a lua script to update the block hash of a transaction
+func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockHash.CloneBytes()).Result()
+	if err != nil {
+		return err
 	}
-
-	if res.Val() == string(redis.Nil) {
-		return txmeta.ErrNotFound
+	s, ok := res.(string)
+	if !ok {
+		return fmt.Errorf("unknown response from spend: %v", res)
 	}
-
-	newBytes := append([]byte(res.Val()), blockHash.CloneBytes()...)
-
-	resSet := r.rdb.Set(context.Background(), hash.String(), newBytes, 0)
-	if resSet.Err() != nil {
-		return resSet.Err()
+	if s == "OK" {
+		return nil
 	}
 
 	return nil

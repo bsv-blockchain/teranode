@@ -84,6 +84,17 @@ func Store(t *testing.T, db txmeta.Store) {
 
 		require.Len(t, resp.BlockHashes, 1)
 		assert.Equal(t, hash2, resp.BlockHashes[0])
+
+		// set mined again
+		err = db.SetMined(ctx, hash1, hash1)
+		require.NoError(t, err)
+
+		resp, err = db.Get(ctx, hash1)
+		require.NoError(t, err)
+
+		require.Len(t, resp.BlockHashes, 2)
+		assert.Equal(t, hash2, resp.BlockHashes[0])
+		assert.Equal(t, hash1, resp.BlockHashes[1])
 	})
 }
 
