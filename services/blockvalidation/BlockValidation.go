@@ -177,8 +177,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// validate the subtree
 	txMetaMap := sync.Map{}
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(100) // max 100 concurrent requests
+	g.SetLimit(1024) // max 1024 concurrent requests
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
+	missingTxHashes := make([]*chainhash.Hash, 0, len(txHashes))
 	for _, txHash := range txHashes {
 		txHash := txHash
 		g.Go(func() error {
@@ -197,11 +198,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				txMeta, err = u.txMetaStore.Get(gCtx, txHash)
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
-						txMeta, err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
-						if err != nil {
-							return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
-						}
-						// there was no error, so the transaction has been blessed
+						// collect all missing transactions for processing in order
+						missingTxHashes = append(missingTxHashes, txHash)
+						return nil
 					} else {
 						return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
 					}
@@ -220,6 +219,19 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	if err = g.Wait(); err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
+	}
+
+	if len(missingTxHashes) > 0 {
+		var txMeta *txmeta.Data
+		// process all the missing transactions in order, there might be parent / child dependencies
+		// TODO get these in batches
+		for _, txHash := range missingTxHashes {
+			txMeta, err = u.blessMissingTransaction(gCtx, txHash, baseUrl)
+			if err != nil {
+				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
+			}
+			txMetaMap.Store(txHash, txMeta)
+		}
 	}
 
 	var ok bool
