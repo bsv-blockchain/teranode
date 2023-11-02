@@ -2,6 +2,19 @@
 
 This guide assists you in setting up the UBSV node project on your machine. The below assumes you are running a recent version of Mac OS.
 
+
+1. [Install Go](#1-install-go)
+2. [Set Go Environment Variables](#2-set-go-environment-variables)
+3. [Python & Dependencies](#3-python--dependencies)
+- [Python:](#python)
+- [Pip (Python Package Installer):](#pip-python-package-installer)
+- [PyYAML:](#pyyaml)
+4. [Project Dependencies](#4-project-dependencies)
+5. [Build & Install secp256k1](#5-build--install-secp256k1)
+6. [Clone the Project and Install Additional Dependencies](#6-clone-the-project-and-install-additional-dependencies)
+7. [Configure Your Node Dev Settings](#7-configure-your-node-dev-settings)
+8. [Run the Node](#8-run-the-node)
+
 ## 1. Install Go
 
 ---

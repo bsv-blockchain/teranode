@@ -35,6 +35,8 @@ The node has been designed as a collection of microservices, each handling speci
 
 ## _Getting Started_
 
+---
+
 ### Pre-requisites and Installation
 
 For installation instructions please check the [Installation Guide](docs/installation.md).
@@ -157,10 +159,38 @@ make dev-dashboard
 ## _Advanced usage (protoc, settings (SETTINGS_CONTEXT),  flags, etc)_  [ TO-DO ]
 
 
-#### Makefile
-To make the proto files run
+### Makefile
 
-```make gen```
+The Makefile facilitates a variety of development and build tasks for the UBSV project.
+
+Check the [Makefile Documentation](docs/makefile.md) for detailed documentation. Some use cases will be highlighted here:
+
+#### Proto buffers (protoc)
+
+You can generate the protobuf files by running the following command:
+
+```shell
+make gen
+```
+
+You can read more about proto buffers in the Technology section.
+
+For additional make commands, please check the [Makefile Documentation](docs/makefile.md).
+
+#### Running Tests
+
+There are 2 commands to run tests:
+
+```shell
+make test  # Executes Go tests excluding the playground and PoC directories.
+```
+
+```shell
+make testall  # Executes Go tests excluding the playground and PoC directories.
+```
+
+
+---
 
 ...
 ...
@@ -187,12 +217,96 @@ Diagram...
 ---
 
 
+* Go
+* grpc
+* protobuf
+* Stores (options)
+* Docker
+* Kubernetes
+  * [Kubernetes Resolver for gRPC](k8sresolver/README.md)
+
 
 ---
 
-## _Project Structure and coding conventions_  [ TO-DO ]
+## _Project Structure and Coding Conventions_  [ TO-DO ]
 
 ---
+
+### Project Structure
+
+Documenting a set of directories in Markdown can be efficiently done using a combination of nested lists and descriptions. Here's a structure that many developers find readable and straightforward:
+
+### Directory Structure and Descriptions:
+
+```
+ubsv/
+│
+├── main.go                       # Start the services.
+│
+├── main_native.go                # Start the services in native secp256k1 mode.
+│
+├── main_stores.go                # ???????????????????
+│
+├── Makefile                      # This Makefile facilitates a variety of development and build tasks for our project.
+│
+├── settings.conf                 # Global settings
+│
+├── settings_local.conf           # Local overridden settings
+│
+├── certs/                        # Project dev self-signed and ca certificates
+│
+├── cmd/                          # Directory containing all different Commands
+│   ├── chainintegrity/           # Utility to verify the integrity of the blockchain.
+│   ├── propagation_blaster/      # Utility to load test the Propagation service
+│   ├── s3_blaster/               # Utility to load test the S3 service
+│   ├── seeder_blaster/           # Utility to load test the Seeder service
+│   ├── sutos_blaster/            # Utility to load test the SUTOS service
+│   ├── txblaster_blaster/        # Utility to load test the TxBlaster service
+│   └── utxostore_blaster/        # Utility to load test the UTXO Store service
+│
+├── data/                         # Local node data directory, as required by local databases
+│
+├── deploy/                       # Deployment scripts for the project (Docker, k8s, Kafka, others)
+│
+├── docs/                         # Documentation for the project
+│
+├── k8sresolver/                  # Kubernetes resolver for gRPC.
+│
+├── model/                        # Key model definitions for the project
+│
+├── native/                       # Native signature implementation for secp256k1
+│
+├── scripts/                      # Various scripts
+│
+├── services/                     # Directory containing all different Services
+│   ├── blobserver/               # Blob Server Service
+│   ├── blockassembly/            # Block Assembly Service
+│   ├── blockchain/               # Blockchain Service
+│   ├── blockvalidation/          # Block Validation Service
+│   ├── bootstrap/                # Bootstrap Service
+│   ├── coinbase/                 # Coinbase Service
+│   ├── miner/                    # Miner Service
+│   ├── p2p/                      # P2P Service
+│   ├── propagation/              # Propagation Service
+│   ├── seeder/                   # Seeder Service
+│   ├── txmeta/                   # TXMeta Service
+│   ├── utxo/                     # UTXO Service
+│   └── validator/                # Validator Service
+│
+├── stores/                       # This directory contains the different stores used by the node.
+│   ├── blob/                     # A collection of supported or experimental stores for the Blob service.
+│   ├── blockchain/               # A collection of supported or experimental stores for the Blockchain service.
+│   ├── txmeta/                   # A collection of supported or experimental stores for the TXMeta service.
+│   └── utxo/                     # A collection of supported or experimental stores for the UTXO service.
+│
+├── tracing/                      # Tracing, Stats and Metric utilities
+│
+├── ui/
+│   └── dashboard/                # Terranode Dashboard UI
+│
+└── util/                         # Utilities
+
+```
 
 
 ### Coding Conventions
