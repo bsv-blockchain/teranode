@@ -9,7 +9,6 @@ import (
 
 func init() {
 	availableDatabases["redis"] = func(url *url.URL) (txmeta.Store, error) {
-		s := redis.New(url)
-		return s, nil
+		return redis.New(url)
 	}
 }
