@@ -131,7 +131,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case blockSubmission := <-ba.blockSubmissionChan:
 				if _, err = ba.submitMiningSolution(ctx, blockSubmission); err != nil {
-					ba.logger.Errorf("Failed to submit block [%s]", err)
+					ba.logger.Warnf("Failed to submit block [%s]", err)
 				}
 				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 			}
