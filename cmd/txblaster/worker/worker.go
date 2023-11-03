@@ -227,7 +227,7 @@ func (w *Worker) Start(ctx context.Context) error {
 						_, err = w.sendTransactionFromUtxo(ctx, previousUtxo)
 						if err == nil {
 							// parent was re-sent, re-send this transaction
-							tx, err = w.sendTransactionFromUtxo(ctx, utxo)
+							_, err = w.sendTransactionFromUtxo(ctx, utxo)
 							if err != nil {
 								w.logger.Errorf("error resending parent transaction: %v", err)
 								if retries > 3 {
