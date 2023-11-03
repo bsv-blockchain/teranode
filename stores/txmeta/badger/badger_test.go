@@ -2,6 +2,7 @@ package badger
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/tests"
@@ -9,8 +10,13 @@ import (
 )
 
 func TestMemory(t *testing.T) {
-
 	t.Run("memory set", func(t *testing.T) {
+		defer func() {
+			_ = os.RemoveAll("./test")
+		}()
+
+		_ = os.RemoveAll("./test")
+
 		db, err := New("./test")
 		require.NoError(t, err)
 
@@ -22,6 +28,12 @@ func TestMemory(t *testing.T) {
 }
 
 func TestMemorySanity(t *testing.T) {
+	defer func() {
+		_ = os.RemoveAll("./test")
+	}()
+
+	_ = os.RemoveAll("./test")
+
 	db, err := New("./test")
 	require.NoError(t, err)
 	tests.Sanity(t, db)
