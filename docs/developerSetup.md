@@ -1,4 +1,4 @@
-# 🖥 Pre-requisites and Installation
+# 🖥 Developer Setup - Pre-requisites and Installation
 
 This guide assists you in setting up the UBSV node project on your machine. The below assumes you are running a recent version of Mac OS.
 
@@ -204,6 +204,14 @@ Follow these steps to add the required settings to the `settings_local.conf` fil
    ```
 
    Replace `[Your Name]` with your actual name in the commit message.
+
+
+6. **Add an entry to your .zprofile / .bashprofile to export your settings identifier**:
+
+
+```bash
+export SETTINGS_CONTEXT=dev.[NEW_USER_TEMPLATE] # Example for John Doe: export SETTINGS_CONTEXT=dev.JohnDoe
+```
 
 ----
 
