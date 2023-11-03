@@ -15,6 +15,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var distributorStat = gocore.NewStat("distributor")
+
 type Distributor struct {
 	logger             utils.Logger
 	propagationServers map[string]propagation_api.PropagationAPIClient
@@ -101,7 +103,12 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		wg.Add(1)
 
 		go func() {
-			defer wg.Done()
+			start := gocore.CurrentNanos()
+			defer func() {
+				wg.Done()
+				distributorStat.NewStat(a).NewStat("ProcessTransaction").AddTime(start)
+			}()
+
 			attempts := 0
 			backoff := d.backoff
 
