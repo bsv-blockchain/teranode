@@ -100,7 +100,7 @@ func (d *Data) Bytes() []byte {
 	}
 
 	// write the tx data
-	buf = append(buf, d.Tx.Bytes()...)
+	buf = append(buf, d.Tx.ExtendedBytes()...)
 
 	// write a varint for the length and then all the block hashes
 	for _, blockHash := range d.BlockHashes {

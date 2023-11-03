@@ -87,7 +87,7 @@ func (c *Client) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	}
 
 	_, err = c.client.Create(ctx, &txmeta_api.CreateRequest{
-		Tx:             tx.Bytes(),
+		Tx:             tx.ExtendedBytes(),
 		Fee:            txMeta.Fee,
 		SizeInBytes:    txMeta.SizeInBytes,
 		ParentTxHashes: parentTxHashesBytes,

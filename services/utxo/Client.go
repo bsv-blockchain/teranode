@@ -65,7 +65,7 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	}
 
 	_, err := s.db.Store(ctx, &utxostore_api.StoreRequest{
-		Tx:       tx.Bytes(),
+		Tx:       tx.ExtendedBytes(),
 		LockTime: storeLockTime,
 	})
 	if err != nil {
