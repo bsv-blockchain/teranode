@@ -490,6 +490,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 }
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("RequestFunds").AddTime(start)
+	}()
 
 	var utxo *bt.UTXO
 	var err error

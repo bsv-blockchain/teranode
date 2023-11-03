@@ -32,7 +32,8 @@ import (
 )
 
 var (
-	jobTTL = 10 * time.Minute
+	blockAssemblyStat = gocore.NewStat("blockassembly")
+	jobTTL            = 10 * time.Minute
 )
 
 // BlockAssembly type carries the logger within it
@@ -325,6 +326,11 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	startTime := time.Now()
+
+	defer func() {
+		blockAssemblyStat.NewStat("AddTx").AddTime(startTime.UnixNano())
+	}()
+
 	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
 
 	prometheusBlockAssemblyAddTx.Inc()
