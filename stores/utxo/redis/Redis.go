@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -256,10 +255,6 @@ func (r *Redis) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 }
 
 func (r *Redis) Delete(ctx context.Context, tx *bt.Tx) error {
-	if !tx.IsExtended() {
-		return errors.New("tx must be in extended format")
-	}
-
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 { // only do outputs with value
 			hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
