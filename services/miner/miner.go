@@ -3,7 +3,6 @@ package miner
 import (
 	"context"
 	"fmt"
-	"hash/maphash"
 	"math/rand"
 	"time"
 
@@ -114,7 +113,7 @@ func (m *Miner) mine(ctx context.Context) error {
 	}
 
 	if waitSeconds > 0 { // SAO - Mine the first 200 blocks without delay
-		r := rand.New(rand.NewSource(int64(new(maphash.Hash).Sum64())))
+		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
 
 		blockHash, _ := chainhash.NewHash(solution.BlockHash)
