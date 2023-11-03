@@ -23,5 +23,5 @@
 <td>{block.miner}</td>
 <td class="has-text-right">{formatNumber(block.coinbaseValue)}</td>
 <td class="has-text-right">{formatNumber(block.transactionCount)}</td>
-<td class="has-text-right">{formatNumber(block.transactionCount / block.timeDiff)}</td>
+<td class="has-text-right">{block.tps}</td>
 <td class="has-text-right">{formatNumber(block.size)}</td>

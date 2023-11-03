@@ -326,7 +326,7 @@ ubsv/
 
 For naming conventions please check the [Naming Conventions](docs/guidelines/namingConventions.md).
 
-### TODO - ERROR HANDLING, LOGGING, ...???????
+### TODO - ERROR HANDLING, LOGGING, ...
 
 xxx
 

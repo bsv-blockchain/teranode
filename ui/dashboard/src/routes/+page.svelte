@@ -29,6 +29,23 @@
     }
   }
 
+  const getTps = (transactionCount, diff) => {
+
+    const timeDiff = diff / 1000 // The time diff between blocks (in seconds)
+
+    if (timeDiff === 0) {
+        return '';
+    } else {
+        const tps =  transactionCount / timeDiff;
+
+        if(tps < 1) {
+            return '<1';
+        } else {
+            return tps.toLocaleString(undefined, {maximumFractionDigits: 0, minimumFractionDigits: 0 });
+        }
+    }
+  }
+
   async function fetchData() {
     try {
       if (!$blobServerHTTPAddress) {
@@ -58,7 +75,8 @@
         const blockTime = new Date(block.timestamp)
         const diff = blockTime - prevBlockTime
 
-        block.timeDiff = diff / 1000 // The time diff between blocks (in seconds)
+        block.tps = getTps(block.transactionCount, diff);
+
         block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
       })
 
