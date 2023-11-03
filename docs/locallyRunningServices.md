@@ -1,52 +1,51 @@
 # ▶️ Developer Guides - Running the Services Locally
 
+This section will walk you through the commands and configurations needed to run your services locally for development purposes.
 
-## Running the node locally in development
+## 🚀 Quickstart: Run All Services
 
-You can run all services in 1 terminal window, using the following command:
+Execute all services in a single terminal window with the command below. Replace `[YOUR_USERNAME]` with your specific username.
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
-_Note - Please make sure you have created the relevant settings for your username ([YOUR_USERNAME]) as part of the installation steps. If you have not done so, please review the Installation Guide link above.
+> **📝 Note:** Confirm that settings for your username are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](developerSetup.md).
+>
+> **⚠️ Warning:** When using BadgerDB or SQLite, the data directory must be deleted before rerunning the services:
+>
+> ```shell
+> rm -rf data
+> ```
 
-_Note2 - If you use badger or sqlite as the datastore, you need to delete the data directory before running._
+## 🛠 Advanced Configuration
 
-```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
-```
+### Native Mode
 
-### Running the node in native mode
-
-In standard mode, the node will use the Go secp256k1 capabilities. However, you can enable the "native" mode, which uses the significantly faster native C secp256k1 library. Notice that this is not required or has any advantage in development mode.
+For a performance boost during development, enable native mode to use the C secp256k1 library. (This step is optional for development.)
 
 ```shell
 rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native .
 ```
 
-### Running the node with Aerospike support
+### Aerospike Integration
 
-If you need support for Aerospike, you need to add "aerospike" to the tags:
+Add Aerospike support by including the "aerospike" tag.
 
 ```shell
 rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native,aerospike .
 ```
 
-### Running the node with custom settings
+### Custom Settings
 
-
-You can start the node with custom settings by specifying which components of the node to run.
+Launch the node with specific components using the `[OPTIONS]` parameter.
 
 ```shell
 rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native,aerospike . [OPTIONS]
 ```
 
-Where `[OPTIONS]` are the desired components you want to start.
+Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
 
-#### Components Options
-
-Each component can be activated by setting its value to `1`, or disabled with `0`. Here's a table summarizing the available components:
 
 | Component       | Option          | Description                                         |
 |-----------------|-----------------|-----------------------------------------------------|
@@ -66,50 +65,51 @@ Each component can be activated by setting its value to `1`, or disabled with `0
 | Help            | `-help=1`           | Display the help information.                        |
 
 
-#### Example:
 
-To start the node with only `Validator`, `UtxoStore`, `Propagation`, and `Seeder` components:
+#### Example Usage:
 
-```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native,aerospike . -Validator=1 -UtxoStore=1 -Propagation=1 -Seeder=1
-```
+To initiate the node with only specific components, such as `Validator` and `UtxoStore`:
 
-Note - the variable names are not case-sensitive, and can be inputted in any case. For example, `-validator=1` is the same as `-Validator=1`.
+  ```shell
+  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native,aerospike . -Validator=1 -UtxoStore=1
+  ```
 
+## 🔧 Running Individual Services
 
-## Running specific services locally in development
+You can also run each service on its own:
 
-Although you can run specific services using the command above, you can also run each service individually.
+1. Navigate to a service's directory:
+   ```shell
+   cd services/validator
+   ```
+2. Run the service:
+   ```shell
+   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   ```
 
-To do this, go to a specific service location (any directory under _service/_). Example:
+Each service has dedicated documentation with more detailed instructions. [See service documentation (TODO)](#service-documentation-link).
 
-```shell
-cd services/validator
-```
+## 📜 Running Specific Commands
 
-and run the service using the following command:
+For executing particular tasks, use commands found under the _cmd/_ directory:
 
-```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
-```
+1. Change directory to the command's location:
+   ```shell
+   cd cmd/txblaster
+   ```
+2. Execute the command:
+   ```shell
+   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   ```
 
-Details on each specific service can be found in their relevant documentation (see sections below  -- **LINK TO RELEVANT SECTIONS ONCE THEY EXIST** --).
+More information on commands is available in their respective documentation. [See command documentation](#command-documentation-link).
 
-## Running specific commands locally in development
+## 🖥 Running UI Dashboard
 
-Besides services, there are a number of commands that can be executed to perform specific tasks. These commands are located under _cmd/_. Example:
-
-```shell
-cd cmd/txblaster
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
-```
-
-Details on each specific command can be found in their relevant documentation (see sections below  -- **LINK TO RELEVANT SECTIONS ONCE THEY EXIST** --).
-
-## Running UI Dashboard locally:
-
-To run the UI Dashboard locally, run the following command:
+For UI Dashboard:
 
 ```shell
 make dev-dashboard
 ```
+
+Remember to replace `[YOUR_USERNAME]` with your actual username throughout all commands. This guide aims to provide a streamlined process for running services and nodes during development. If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.
