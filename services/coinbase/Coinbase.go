@@ -23,6 +23,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var coinbaseStat = gocore.NewStat("coinbase")
+
 type processBlockFound struct {
 	hash    *chainhash.Hash
 	baseURL string
@@ -628,6 +630,11 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 }
 
 func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("insertCoinbaseUTXOs").AddTime(start)
+	}()
+
 	var txn *sql.Tx
 	var stmt *sql.Stmt
 	var err error
@@ -702,6 +709,11 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 }
 
 func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("insertSpendableUTXOs").AddTime(start)
+	}()
+
 	var txn *sql.Tx
 	var stmt *sql.Stmt
 	var err error
