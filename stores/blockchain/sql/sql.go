@@ -24,7 +24,8 @@ type SQL struct {
 }
 
 var (
-	cache = sync.Map{}
+	storeStat = gocore.NewStat("blockchain_store")
+	cache     = sync.Map{}
 )
 
 func init() {

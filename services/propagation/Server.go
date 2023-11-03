@@ -32,6 +32,8 @@ import (
 )
 
 var (
+	propagationStat = gocore.NewStat("propagation")
+
 	// ipv6 multicast constants
 	maxDatagramSize = 512 //100 * 1024 * 1024
 	ipv6Port        = 9999
@@ -373,6 +375,11 @@ func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *pro
 }
 
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("ProcessTransaction").AddTime(start)
+	}()
+
 	prometheusProcessedTransactions.Inc()
 	traceSpan := tracing.Start(ctx, "PropagationServer:Set")
 	defer traceSpan.Finish()

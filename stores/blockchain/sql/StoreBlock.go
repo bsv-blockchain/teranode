@@ -16,7 +16,7 @@ import (
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("blocktx").NewStat("InsertBlock").AddTime(start)
+		storeStat.NewStat("StoreBlock").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)
