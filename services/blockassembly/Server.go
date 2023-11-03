@@ -75,6 +75,8 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
+	go ba.jobStore.Start()
+
 	return ba
 }
 
@@ -308,6 +310,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
+	ba.jobStore.Stop()
 	return nil
 }
 

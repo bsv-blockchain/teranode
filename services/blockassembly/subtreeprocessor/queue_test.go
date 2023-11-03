@@ -1,6 +1,8 @@
 package subtreeprocessor
 
 import (
+	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +79,7 @@ func Test_queue2Threads(t *testing.T) {
 }
 
 func Test_queueLarge(t *testing.T) {
+	runtime.GC()
 	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 10_000, 1_000)
@@ -91,6 +94,8 @@ func Test_queueLarge(t *testing.T) {
 		items++
 	}
 	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
+	t.Logf("Mem used for queue: %s\n", printAlloc())
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10_000_000, items)
 
@@ -106,6 +111,10 @@ func Test_queueLarge(t *testing.T) {
 		items++
 	}
 	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
+	t.Logf("Mem used after dequeue: %s\n", printAlloc())
+	runtime.GC()
+	t.Logf("Mem used after dequeue after GC: %s\n", printAlloc())
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10_000_000, items)
 }
@@ -132,4 +141,10 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	}
 	wg.Wait()
 	t.Logf("Time: %s\n", time.Since(startTime))
+}
+
+func printAlloc() string {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return fmt.Sprintf("%d MB", m.Alloc/(1024*1024))
 }
