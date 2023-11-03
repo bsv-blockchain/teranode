@@ -118,6 +118,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 				}); err == nil {
 					break
 				} else {
+					d.logger.Debugf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
 					if attempts < d.attempts {
 						attempts++
 						time.Sleep(backoff)

@@ -106,11 +106,11 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 		return fmt.Errorf("[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
-	// TODO should this be here? or should it be in block assembly?
 	txMetaData, err := v.registerTxInMetaStore(traceSpan, tx, spentUtxos)
 	if err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
+			v.logger.Debugf("[Validate][%s] tx already exists in meta utxoStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
 			return nil
 		}
 
