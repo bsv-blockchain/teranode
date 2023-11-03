@@ -1,4 +1,4 @@
-//go:build manual_tests
+// //go:build manual_tests
 
 package redis
 
@@ -17,8 +17,9 @@ var (
 
 func TestRedis(t *testing.T) {
 	t.Run("Redis set", func(t *testing.T) {
-		db := New(redisUrl)
-		err := db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
+		db, err := NewRedisClient(redisUrl)
+		require.NoError(t, err)
+		err = db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
 		require.NoError(t, err)
 
 		tests.Store(t, db)
@@ -26,11 +27,13 @@ func TestRedis(t *testing.T) {
 }
 
 func TestRedisSanity(t *testing.T) {
-	db := New(redisUrl)
+	db, err := NewRedisClient(redisUrl)
+	require.NoError(t, err)
 	tests.Sanity(t, db)
 }
 
 func BenchmarkRedis(b *testing.B) {
-	db := New(redisUrl)
+	db, err := NewRedisClient(redisUrl)
+	require.NoError(b, err)
 	tests.Benchmark(b, db)
 }

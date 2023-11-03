@@ -134,11 +134,11 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	}
 
 	res := r.rdb.SetNX(context.Background(), tx.TxIDChainHash().String(), data.Bytes(), 0)
-	if !res.Val() {
-		return data, txmeta.ErrAlreadyExists
-	}
 	if res.Err() != nil {
 		return nil, res.Err()
+	}
+	if !res.Val() {
+		return data, txmeta.ErrAlreadyExists
 	}
 
 	return data, nil
