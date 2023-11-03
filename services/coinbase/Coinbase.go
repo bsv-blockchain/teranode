@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/lib/pq"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -347,25 +348,8 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
-	for vout, output := range coinbaseTx.Outputs {
-		if !output.LockingScript.IsP2PKH() {
-			c.logger.Warnf("only p2pkh coinbase outputs are supported: %s:%d", coinbaseTx.TxID(), vout)
-			continue
-		}
-
-		addresses, err := output.LockingScript.Addresses()
-		if err != nil {
-			return err
-		}
-
-		if addresses[0] == c.address {
-			if _, err = c.db.ExecContext(ctx, `
-			INSERT INTO coinbase_utxos (block_id, txid, vout, locking_script, satoshis)
-			VALUES ($1, $2, $3, $4, $5)
-		`, blockId, coinbaseTx.TxIDChainHash()[:], vout, output.LockingScript, output.Satoshis); err != nil {
-				return fmt.Errorf("could not insert coinbase utxo: %+v", err)
-			}
-		}
+	if err := c.insertCoinbaseUTXOs(ctx, blockId, coinbaseTx); err != nil {
+		return fmt.Errorf("could not insert coinbase utxos: %+v", err)
 	}
 
 	// Create a timestamp variable to insert into the TIMESTAMPTZ field
@@ -457,6 +441,8 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 			Satoshis:      satoshis,
 		}
 
+		c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", hash, vout)
+
 		if err := c.splitUtxo(ctx, utxo); err != nil {
 			c.logger.Errorf("could not split utxo: %+v", err)
 		}
@@ -498,17 +484,7 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 	}
 
 	// Insert the spendable utxos....
-	hash := tx.TxIDChainHash()[:]
-
-	for vout, output := range tx.Outputs {
-		if _, err := c.db.ExecContext(ctx, `
-			INSERT INTO spendable_utxos (txid, vout, locking_script, satoshis)
-			VALUES ($1, $2, $3, $4)
-		`, hash, vout, output.LockingScript, output.Satoshis); err != nil {
-			return fmt.Errorf("could not insert spendable utxo: %+v", err)
-		}
-	}
-	return nil
+	return c.insertSpendableUTXOs(ctx, tx)
 }
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
@@ -649,4 +625,140 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 	}
 
 	return utxo, nil
+}
+
+func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
+	var txn *sql.Tx
+	var stmt *sql.Stmt
+	var err error
+
+	hash := tx.TxIDChainHash()[:]
+
+	switch c.engine {
+	case util.Sqlite, util.SqliteMemory:
+		stmt, err = c.db.PrepareContext(ctx, `INSERT INTO coinbase_utxos (
+			block_id, txid, vout, locking_script, satoshis
+			)	VALUES (
+			$1, $2, $3, $4, $5
+			)`)
+		if err != nil {
+			return err
+		}
+
+	case util.Postgres:
+		// Prepare the copy operation
+		txn, err = c.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			_ = txn.Rollback()
+		}()
+
+		stmt, err = txn.Prepare(pq.CopyIn("coinbase_utxos", "block_id", "txid", "vout", "locking_script", "satoshis"))
+		if err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unsupported database engine: %s", c.engine)
+	}
+
+	for vout, output := range tx.Outputs {
+		if !output.LockingScript.IsP2PKH() {
+			c.logger.Warnf("only p2pkh coinbase outputs are supported: %s:%d", tx.TxIDChainHash().String(), vout)
+			continue
+		}
+
+		addresses, err := output.LockingScript.Addresses()
+		if err != nil {
+			return err
+		}
+
+		if addresses[0] == c.address {
+			if _, err = stmt.ExecContext(ctx, blockId, hash, vout, output.LockingScript, output.Satoshis); err != nil {
+				return fmt.Errorf("could not insert coinbase utxo: %+v", err)
+			}
+		}
+	}
+
+	if c.engine == util.Postgres {
+		// Execute the batch transaction
+		_, err = stmt.ExecContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+		if err := txn.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
+	var txn *sql.Tx
+	var stmt *sql.Stmt
+	var err error
+
+	hash := tx.TxIDChainHash()[:]
+
+	switch c.engine {
+	case util.Sqlite, util.SqliteMemory:
+		stmt, err = c.db.PrepareContext(ctx, `INSERT INTO spendable_utxos (
+			txid, vout, locking_script, satoshis
+			)	VALUES (
+			$1, $2, $3, $4
+			)`)
+		if err != nil {
+			return err
+		}
+
+	case util.Postgres:
+		// Prepare the copy operation
+		txn, err = c.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			_ = txn.Rollback()
+		}()
+
+		stmt, err = txn.Prepare(pq.CopyIn("spendable_utxos", "txid", "vout", "locking_script", "satoshis"))
+		if err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unsupported database engine: %s", c.engine)
+	}
+
+	for vout, output := range tx.Outputs {
+		if _, err := stmt.ExecContext(ctx, hash, vout, output.LockingScript, output.Satoshis); err != nil {
+			return fmt.Errorf("could not insert spendable utxo: %+v", err)
+		}
+	}
+
+	if c.engine == util.Postgres {
+		// Execute the batch transaction
+		_, err = stmt.ExecContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+		if err := txn.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
