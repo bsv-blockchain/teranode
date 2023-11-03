@@ -209,57 +209,95 @@ func (w *Worker) Init(ctx context.Context) error {
 func (w *Worker) Start(ctx context.Context) error {
 	start := time.Now()
 
+	var previousUtxo *bt.UTXO
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
 		case utxo := <-w.utxoChan:
-			tx := bt.NewTx()
-			_ = tx.FromUTXOs(utxo)
-			_ = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
-
-			if err := tx.FillAllInputs(ctx, w.unlocker); err != nil {
-				prometheusInvalidTransactions.Inc()
-				return fmt.Errorf("error filling initial inputs: %v", err)
+			tx, err := w.sendTransactionFromUtxo(ctx, utxo)
+			if err != nil {
+				w.logger.Errorf("error sending transaction: %v", err)
+				// resend parent and retry transaction
+				if previousUtxo != nil {
+					retries := 0
+					for {
+						w.logger.Infof("resending parent transaction: %s", previousUtxo.TxIDHash.String())
+						_, err = w.sendTransactionFromUtxo(ctx, previousUtxo)
+						if err == nil {
+							// parent was re-sent, re-send this transaction
+							tx, err = w.sendTransactionFromUtxo(ctx, utxo)
+							if err != nil {
+								w.logger.Errorf("error resending parent transaction: %v", err)
+								if retries > 3 {
+									// return kills the worker
+									return err
+								}
+							}
+						} else {
+							w.logger.Errorf("error resending parent transaction: %v", err)
+							if retries > 3 {
+								// return kills the worker
+								return err
+							}
+						}
+						retries++
+						time.Sleep(1 * time.Second)
+					}
+				} else {
+					return err
+				}
 			}
 
-			go func() {
-				if err := w.distributor.SendTransaction(ctx, tx); err != nil {
-					w.logger.Errorf("error sending initial transaction: %v", err)
-					return
+			counterLoad := counter.Add(1)
+			if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
+				txPs := float64(0)
+				ts := time.Since(*w.globalStartTime).Seconds()
+				if ts > 0 {
+					txPs = float64(counterLoad) / ts
 				}
+				fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
+			}
 
-				counterLoad := counter.Add(1)
-				if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-					txPs := float64(0)
-					ts := time.Since(*w.globalStartTime).Seconds()
-					if ts > 0 {
-						txPs = float64(counterLoad) / ts
-					}
-					fmt.Printf("Time for %d transactions: %.2fs (%d tx/s)\r", counterLoad, time.Since(*w.globalStartTime).Seconds(), int(txPs))
-				}
+			// increment prometheus counter
+			prometheusProcessedTransactions.Inc()
+			prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
+			prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
+			w.totalTransactions.Add(1)
 
-				// increment prometheus counter
-				prometheusProcessedTransactions.Inc()
-				prometheusTransactionSize.Observe(float64(len(tx.ExtendedBytes())))
-				prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
-				w.totalTransactions.Add(1)
+			btUtxo := &bt.UTXO{
+				TxIDHash:      tx.TxIDChainHash(),
+				Vout:          0,
+				LockingScript: tx.Outputs[0].LockingScript,
+				Satoshis:      tx.Outputs[0].Satoshis,
+			}
 
-				w.utxoChan <- &bt.UTXO{
-					TxIDHash:      tx.TxIDChainHash(),
-					Vout:          0,
-					LockingScript: tx.Outputs[0].LockingScript,
-					Satoshis:      tx.Outputs[0].Satoshis,
-				}
-
-			}()
+			w.utxoChan <- btUtxo
+			previousUtxo = btUtxo
 
 			if w.rateLimiter != nil {
 				_ = w.rateLimiter.Wait(ctx)
 			}
 		}
 	}
+}
+
+func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (*bt.Tx, error) {
+	tx := bt.NewTx()
+	_ = tx.FromUTXOs(utxo)
+	_ = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
+
+	if err := tx.FillAllInputs(ctx, w.unlocker); err != nil {
+		prometheusInvalidTransactions.Inc()
+		return nil, fmt.Errorf("error filling initial inputs: %v", err)
+	}
+
+	if err := w.distributor.SendTransaction(ctx, tx); err != nil {
+		return nil, fmt.Errorf("error sending initial transaction: %v", err)
+	}
+
+	return tx, nil
 }
 
 var counter atomic.Uint64
