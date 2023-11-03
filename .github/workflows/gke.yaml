@@ -6,7 +6,7 @@ on:
       - staging
 jobs:
   go-lint-and-test:
-    runs-on: ubsv-runners
+    runs-on: ubsv-runner
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
 
@@ -42,7 +42,7 @@ jobs:
 
   build-docker:
     name: Build Docker image
-    runs-on: ubsv-runners
+    runs-on: ubsv-runner
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
 
