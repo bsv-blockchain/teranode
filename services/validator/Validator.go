@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -247,7 +248,11 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
 	defer reverseUtxoSpan.Finish()
 
-	if errReset := v.utxoStore.UnSpend(reverseUtxoSpan.Ctx, spentUtxos); errReset != nil {
+	// decouple the tracing context to not cancel the context when the tx is being saved in the background
+	callerSpan := opentracing.SpanFromContext(reverseUtxoSpan.Ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
+	if errReset := v.utxoStore.UnSpend(setCtx, spentUtxos); errReset != nil {
 		reverseUtxoSpan.RecordError(errReset)
 		v.logger.Errorf("error resetting utxos %v", errReset)
 	}

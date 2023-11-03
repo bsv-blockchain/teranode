@@ -140,9 +140,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if errorCount > 0 {
-		d.logger.Debugf("Error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), errors.String())
+		d.logger.Errorf("error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), errors.String())
 	} else {
-		d.logger.Debugf("Successfully distributed transaction %s", tx.TxIDChainHash().String())
+		d.logger.Debugf("successfully distributed transaction %s", tx.TxIDChainHash().String())
 	}
 
 	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
