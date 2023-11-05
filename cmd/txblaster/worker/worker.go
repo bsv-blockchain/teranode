@@ -103,6 +103,7 @@ type Ipv6MulticastMsg struct {
 type Worker struct {
 	logger            utils.Logger
 	rateLimiter       *rate.Limiter
+	coinbaseClient    *coinbase.Client
 	distributor       *distributor.Distributor
 	kafkaProducer     sarama.SyncProducer
 	kafkaTopic        string
@@ -120,7 +121,9 @@ type Worker struct {
 
 func NewWorker(
 	logger utils.Logger,
-	rateLimiter *rate.Limiter,
+	rateLimit float64,
+	coinbaseClient *coinbase.Client,
+	distributor *distributor.Distributor,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -144,15 +147,22 @@ func NewWorker(
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(200*time.Millisecond), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
-	if err != nil {
-		return nil, err
+	var rateLimiter *rate.Limiter
+	if rateLimit > 0 {
+		var rateLimitDuration time.Duration
+		if rateLimit < 1 {
+			rateLimitDuration = time.Second * time.Duration(1/rateLimit)
+		} else {
+			rateLimitDuration = time.Second / time.Duration(rateLimit)
+		}
+		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
 	return &Worker{
 		logger:            logger,
 		rateLimiter:       rateLimiter,
-		distributor:       d,
+		coinbaseClient:    coinbaseClient,
+		distributor:       distributor,
 		kafkaProducer:     kafkaProducer,
 		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,
@@ -178,15 +188,10 @@ func (w *Worker) Init(ctx context.Context) error {
 		}
 	}()
 
-	coinbaseClient, err := coinbase.NewClient(ctx)
-	if err != nil {
-		return fmt.Errorf("error creating coinbase tracker client: %v", err)
-	}
-
 	timeStart := time.Now()
 	w.startTime = timeStart
 
-	tx, err := coinbaseClient.RequestFunds(ctx, w.address.AddressString)
+	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString)
 	if err != nil {
 		return fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
 	}

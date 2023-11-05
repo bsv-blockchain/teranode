@@ -25,33 +25,28 @@ type Distributor struct {
 	failureTolerance   int
 }
 
-type DistributorOption func(*Distributor)
+type Option func(*Distributor)
 
-func WithBackoffDuration(t time.Duration) DistributorOption {
+func WithBackoffDuration(t time.Duration) Option {
 	return func(opts *Distributor) {
 		opts.backoff = t
 	}
 }
 
-func WithRetryAttempts(r int) DistributorOption {
+func WithRetryAttempts(r int) Option {
 	return func(opts *Distributor) {
 		opts.attempts = r
 	}
 }
 
-func WithFailureTolerance(r int) DistributorOption {
+func WithFailureTolerance(r int) Option {
 	return func(opts *Distributor) {
 		opts.failureTolerance = r
 	}
 }
 
-func GetPropagationGRPCAddresses() []string {
+func NewDistributor(logger utils.Logger, opts ...Option) (*Distributor, error) {
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	return addresses
-}
-
-func NewDistributor(logger utils.Logger, opts ...DistributorOption) (*Distributor, error) {
-	addresses := GetPropagationGRPCAddresses()
 
 	if len(addresses) == 0 {
 		return nil, errors.New("no propagation server addresses found")
@@ -89,6 +84,15 @@ func NewDistributor(logger utils.Logger, opts ...DistributorOption) (*Distributo
 type errorWrapper struct {
 	addr string
 	err  error
+}
+
+func (d *Distributor) GetPropagationGRPCAddresses() []string {
+	addresses := make([]string, 0, len(d.propagationServers))
+	for addr := range d.propagationServers {
+		addresses = append(addresses, addr)
+	}
+
+	return addresses
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
@@ -139,16 +143,16 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 	close(errorWrapperCh)
 
 	// Read any errors from the channel
-	errors := strings.Builder{}
+	builderErrors := strings.Builder{}
 	errorCount := 0
 
-	for errorWrapper := range errorWrapperCh {
-		errors.WriteString(fmt.Sprintf("\t%s: %v\n", errorWrapper.addr, errorWrapper.err))
+	for ew := range errorWrapperCh {
+		builderErrors.WriteString(fmt.Sprintf("\t%s: %v\n", ew.addr, ew.err))
 		errorCount++
 	}
 
 	if errorCount > 0 {
-		d.logger.Errorf("error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), errors.String())
+		d.logger.Errorf("error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), builderErrors.String())
 	} else {
 		d.logger.Debugf("successfully distributed transaction %s", tx.TxIDChainHash().String())
 	}
