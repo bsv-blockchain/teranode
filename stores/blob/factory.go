@@ -1,6 +1,7 @@
 package blob
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/gcs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/kinesiss3"
+	localttl "github.com/bitcoin-sv/ubsv/stores/blob/localTTL"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
@@ -99,6 +101,34 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 		}
 
 		store = batcher.New(logger, store, int(sizeInBytes), writeKeys)
+	}
+
+	if storeUrl.Query().Get("localTTLStore") != "" {
+		ttlStoreType := storeUrl.Query().Get("localTTLStore")
+		localTTLStorePath := storeUrl.Query().Get("localTTLStorePath")
+		if localTTLStorePath == "" {
+			localTTLStorePath = "/tmp/localTTL"
+		}
+
+		var s Store
+		if ttlStoreType == "badger" {
+			s, err = badger.New(localTTLStorePath)
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to create badger store"), err)
+			}
+		} else {
+			// default is file store
+			s, err = file.New(localTTLStorePath)
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to create file store"), err)
+			}
+		}
+
+		logger := gocore.Log("localTTL")
+		store, err = localttl.New(logger, s, store)
+		if err != nil {
+			return nil, errors.Join(errors.New("failed to create localTTL store"), err)
+		}
 	}
 
 	return
