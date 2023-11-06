@@ -211,22 +211,29 @@ func (w *Worker) Init(ctx context.Context) error {
 	return nil
 }
 
-func (w *Worker) Start(ctx context.Context) error {
+func (w *Worker) Start(ctx context.Context) (err error) {
 	start := time.Now()
 
+	var utxo *bt.UTXO
+	var tx *bt.Tx
 	var previousUtxo *bt.UTXO
+	var retries int
+	var counterLoad uint64
+	var txPs float64
+	var ts float64
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
-		case utxo := <-w.utxoChan:
-			tx, err := w.sendTransactionFromUtxo(ctx, utxo)
+		case utxo = <-w.utxoChan:
+			tx, err = w.sendTransactionFromUtxo(ctx, utxo)
 			if err != nil {
 				w.logger.Errorf("error sending transaction: %v", err)
 				// resend parent and retry transaction
 				if previousUtxo != nil {
-					retries := 0
+					retries = 0
 					for {
 						w.logger.Infof("resending parent transaction: %s", previousUtxo.TxIDHash.String())
 						_, err = w.sendTransactionFromUtxo(ctx, previousUtxo)
@@ -256,10 +263,10 @@ func (w *Worker) Start(ctx context.Context) error {
 				}
 			}
 
-			counterLoad := counter.Add(1)
+			counterLoad = counter.Add(1)
 			if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
-				txPs := float64(0)
-				ts := time.Since(*w.globalStartTime).Seconds()
+				txPs = float64(0)
+				ts = time.Since(*w.globalStartTime).Seconds()
 				if ts > 0 {
 					txPs = float64(counterLoad) / ts
 				}
@@ -289,17 +296,26 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (*bt.Tx, error) {
-	tx := bt.NewTx()
-	_ = tx.FromUTXOs(utxo)
-	_ = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
+func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx *bt.Tx, err error) {
+	tx = bt.NewTx()
+	err = tx.FromUTXOs(utxo)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return tx, fmt.Errorf("error adding utxo to tx: %v", err)
+	}
 
-	if err := tx.FillAllInputs(ctx, w.unlocker); err != nil {
+	err = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return tx, fmt.Errorf("error adding output to tx: %v", err)
+	}
+
+	if err = tx.FillAllInputs(ctx, w.unlocker); err != nil {
 		prometheusInvalidTransactions.Inc()
 		return tx, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
-	if err := w.distributor.SendTransaction(ctx, tx); err != nil {
+	if err = w.distributor.SendTransaction(ctx, tx); err != nil {
 		return tx, fmt.Errorf("error sending transaction: %v", err)
 	}
 
