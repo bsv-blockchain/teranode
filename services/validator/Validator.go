@@ -118,37 +118,30 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 		return fmt.Errorf("error registering tx in meta utxoStore: %v", err)
 	}
 
-	if v.blockAssemblyDisabled {
-		// block assembly is disabled, which means we are running in non-mining mode
-		utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:UpdateSpendable")
-		defer utxoSpan.Finish()
-
-		// store the new utxos from the tx
-		if err = v.utxoStore.Store(traceSpan.Ctx, tx); err != nil {
+	if !v.blockAssemblyDisabled {
+		// first we send the tx to the block assembler
+		if err = v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
+			TxIDChainHash: tx.TxIDChainHash(),
+			Fee:           txMetaData.Fee,
+			Size:          uint64(tx.Size()),
+			LockTime:      tx.LockTime,
+		}, spentUtxos); err != nil {
+			// TODO remove from tx meta store
 			v.reverseSpends(traceSpan, spentUtxos)
-			return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
+			traceSpan.RecordError(err)
+			return fmt.Errorf("error sending tx to block assembler: %v", err)
 		}
-
-		return nil
-	}
-
-	// first we send the tx to the block assembler
-	if err = v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
-		TxIDChainHash: tx.TxIDChainHash(),
-		Fee:           txMetaData.Fee,
-		Size:          uint64(tx.Size()),
-		LockTime:      tx.LockTime,
-	}, spentUtxos); err != nil {
-		// TODO remove from tx meta store
-		v.reverseSpends(traceSpan, spentUtxos)
-		traceSpan.RecordError(err)
-		return fmt.Errorf("error sending tx to block assembler: %v", err)
 	}
 
 	// then we store the new utxos from the tx
-	if err = v.utxoStore.Store(traceSpan.Ctx, tx); err != nil {
+	v.logger.Debugf("Store %d utxos: start", tx.OutputCount())
+	err = v.utxoStore.Store(traceSpan.Ctx, tx)
+	v.logger.Debugf("Store %d utxos: end", tx.OutputCount())
+	if err != nil {
 		// TODO remove from tx meta store
-		v.reverseSpends(traceSpan, spentUtxos)
+		// TRICKY - we've sent the tx to block assembly - we can't undo that?
+		// the reverseSpends need to be given the outputs not the spends
+		// v.reverseSpends(traceSpan, spentUtxos)
 		return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
 	}
 
