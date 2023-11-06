@@ -25,6 +25,19 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 
 	go m.cache.Start()
 
+	go func() {
+		for {
+			metrics := m.cache.Metrics()
+			prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cache.Len()))
+			prometheusBlockValidationTxMetaCacheInsertions.Set(float64(metrics.Insertions))
+			prometheusBlockValidationTxMetaCacheHits.Set(float64(metrics.Hits))
+			prometheusBlockValidationTxMetaCacheMisses.Set(float64(metrics.Misses))
+			prometheusBlockValidationTxMetaCacheEvictions.Set(float64(metrics.Evictions))
+
+			time.Sleep(10 * time.Second)
+		}
+	}()
+
 	return m
 }
 

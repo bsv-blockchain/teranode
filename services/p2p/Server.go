@@ -242,6 +242,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	go func() {
+		var header *model.BlockHeader
+		var meta *model.BlockHeaderMeta
+		var msgBytes []byte
 		for {
 			select {
 			case <-ctx.Done():
@@ -262,17 +265,17 @@ func (s *Server) Start(ctx context.Context) error {
 						PeerId:     s.host.ID().String(),
 					}
 
-					msgBytes, err := json.Marshal(b)
+					msgBytes, err = json.Marshal(b)
 					if err != nil {
 						s.logger.Errorf("json mmarshal error: ", err)
 						continue
 					}
-					if err := s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
+					if err = s.topics[blockTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
 
 				} else if notification.Type == model.NotificationType_MiningOn {
-					header, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+					header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						s.logger.Errorf("error getting block header for MiningOnMessage: ", err)
 						continue
@@ -288,12 +291,12 @@ func (s *Server) Start(ctx context.Context) error {
 						SizeInBytes:  meta.SizeInBytes,
 						TxCount:      meta.TxCount,
 					}
-					msgBytes, err := json.Marshal(mm)
+					msgBytes, err = json.Marshal(mm)
 					if err != nil {
 						s.logger.Errorf("json marshal error: ", err)
 						continue
 					}
-					if err := s.topics[miningOnTopicName].Publish(ctx, msgBytes); err != nil {
+					if err = s.topics[miningOnTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
 
@@ -304,12 +307,12 @@ func (s *Server) Start(ctx context.Context) error {
 						DataHubUrl: s.blobServerHttpAddressURL,
 						PeerId:     s.host.ID().String(),
 					}
-					msgBytes, err := json.Marshal(sm)
+					msgBytes, err = json.Marshal(sm)
 					if err != nil {
-						s.logger.Errorf("json mmarshal error: ", err)
+						s.logger.Errorf("json marshal error: ", err)
 						continue
 					}
-					if err := s.topics[subtreeTopicName].Publish(ctx, msgBytes); err != nil {
+					if err = s.topics[subtreeTopicName].Publish(ctx, msgBytes); err != nil {
 						s.logger.Errorf("publish error:", err)
 					}
 				}
@@ -324,7 +327,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Errorf("json mmarshal error: ", err)
 	}
 	// send  bestblock msg on topic
-	if err := s.topics[bestBlockTopicName].Publish(ctx, []byte(msgBytes)); err != nil {
+	if err = s.topics[bestBlockTopicName].Publish(ctx, []byte(msgBytes)); err != nil {
 		s.logger.Errorf("publish error:", err)
 	}
 
