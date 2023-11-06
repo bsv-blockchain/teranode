@@ -240,6 +240,7 @@ func (w *Worker) Start(ctx context.Context) error {
 									return err
 								}
 							}
+							break
 						} else {
 							w.logger.Errorf("error resending parent transaction: %v", err)
 							if retries > 3 {
@@ -295,11 +296,11 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (*b
 
 	if err := tx.FillAllInputs(ctx, w.unlocker); err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("error filling initial inputs: %v", err)
+		return tx, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
 	if err := w.distributor.SendTransaction(ctx, tx); err != nil {
-		return nil, fmt.Errorf("error sending initial transaction: %v", err)
+		return tx, fmt.Errorf("error sending transaction: %v", err)
 	}
 
 	return tx, nil
