@@ -49,7 +49,6 @@ func (m *Miner) Start(ctx context.Context) error {
 	var miningCtx context.Context
 	var cancel context.CancelFunc
 
-	_, cancel = context.WithCancel(context.Background())
 	for {
 		select {
 		case <-ctx.Done():
@@ -60,7 +59,9 @@ func (m *Miner) Start(ctx context.Context) error {
 			m.candidateTimer.Reset(candidateRequestInterval * time.Second)
 
 			// cancel the previous mining context and start a new one
-			cancel()
+			if cancel != nil {
+				cancel()
+			}
 			miningCtx, cancel = context.WithCancel(context.Background())
 
 			// start mining in a new goroutine, so we can cancel it if we need to
@@ -141,9 +142,6 @@ func (m *Miner) mine(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
 	m.logger.Debugf(solution.Stringify())
-
-	ctx, ctxCancel := context.WithDeadline(context.Background(), time.Now().Add(1*time.Second))
-	defer ctxCancel()
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
