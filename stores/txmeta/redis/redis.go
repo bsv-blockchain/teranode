@@ -112,6 +112,9 @@ func (r *Redis) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	res := r.rdb.Get(ctx, hash.String())
 
 	if res.Err() != nil {
+		if res.Err() == redis.Nil {
+			return nil, txmeta.ErrNotFound
+		}
 		return nil, res.Err()
 	}
 

@@ -123,6 +123,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
 
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
+	}
+
 	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
 	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
 	subtrees, err := block.GetSubtrees(u.subtreeStore)
@@ -153,11 +158,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		// TODO this should be a fatal error, but for now we just log it
 		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 		u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
-	}
-
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
 	}
 
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
