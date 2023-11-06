@@ -14,11 +14,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -26,6 +28,7 @@ type BlockValidation struct {
 	logger           utils.Logger
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
+	subtreeTTL       time.Duration
 	txStore          blob.Store
 	txMetaStore      txmeta.Store
 	validatorClient  validator.Interface
@@ -34,10 +37,14 @@ type BlockValidation struct {
 func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
+	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
+	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
+
 	bv := &BlockValidation{
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		subtreeStore:     subtreeStore,
+		subtreeTTL:       subtreeTTL,
 		txStore:          txStore,
 		txMetaStore:      txMetaStore,
 		validatorClient:  validatorClient,
@@ -304,7 +311,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	// store subtree in store
 	u.logger.Infof("[validateSubtree][%s] store subtree", subtreeHash.String())
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes)
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to store subtree", subtreeHash.String()), err)
 	}

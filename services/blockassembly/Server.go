@@ -47,6 +47,7 @@ type BlockAssembly struct {
 	utxoStore             utxostore.Interface
 	txMetaStore           txmeta_store.Store
 	subtreeStore          blob.Store
+	subtreeTTL            time.Duration
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
 	blockAssemblyDisabled bool
@@ -64,6 +65,9 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
+	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockassembly_subtreeTTL", 120)
+	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
+
 	ba := &BlockAssembly{
 		logger:                logger,
 		blockchainClient:      blockchainClient,
@@ -71,6 +75,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		utxoStore:             utxoStore,
 		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
+		subtreeTTL:            subtreeTTL,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest, 100),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
@@ -107,7 +112,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				if err = ba.subtreeStore.Set(context.Background(),
 					subtree.RootHash()[:],
 					subtreeBytes,
-					options.WithTTL(120*time.Minute), // this sets the TTL for the subtree, it must be updated when a block is mined
+					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
 				); err != nil {
 					ba.logger.Errorf("Failed to store subtree [%s]", err)
 					continue
