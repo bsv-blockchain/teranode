@@ -44,7 +44,9 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		Fee:         req.Fee,
 		SizeInBytes: req.Size,
 	}); err != nil {
-		return nil, err
+		return &blockassembly_api.BlockassemblyApiAddTxResponse{
+			Ok: false,
+		}, err
 	}
 
 	//if err = f.ba.frpcStoreUtxos(ctx, req); err != nil {
