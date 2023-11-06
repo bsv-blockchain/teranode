@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -54,8 +56,10 @@ func init() {
 }
 
 type Store struct {
-	db     *sql.DB
-	engine string
+	logger    utils.Logger
+	db        *sql.DB
+	engine    string
+	dbTimeout time.Duration
 }
 
 func New(storeUrl *url.URL) (*Store, error) {
@@ -81,15 +85,22 @@ func New(storeUrl *url.URL) (*Store, error) {
 		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
 	}
 
+	dbTimeout, _ := gocore.Config().GetInt("txmetastore_dbTimeoutMillis", 5000)
+
 	s := &Store{
-		db:     db,
-		engine: storeUrl.Scheme,
+		logger:    logger,
+		db:        db,
+		engine:    storeUrl.Scheme,
+		dbTimeout: time.Duration(dbTimeout) * time.Millisecond,
 	}
 
 	return s, nil
 }
 
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	q := `
 	SELECT
 		txBytes,
@@ -151,7 +162,10 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	}, nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	q := `
 		INSERT INTO txmeta
 		    (txBytes, hash, fee, size_in_bytes, parents, lock_time)
@@ -184,7 +198,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (s *Store) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	// add block hash to blocks array
 	var q string
 	if s.engine == "postgres" {
@@ -208,7 +225,10 @@ func (s *Store) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *c
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
+func (s *Store) Delete(cntxt context.Context, hash *chainhash.Hash) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	q := `
 		DELETE FROM txmeta
 		WHERE hash = $1`

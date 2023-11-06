@@ -47,6 +47,7 @@ type Coinbase struct {
 	catchupCh        chan processBlockCatchup
 	logger           utils.Logger
 	address          string
+	dbTimeout        time.Duration
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -77,6 +78,8 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
 
+	dbTimeoutMillis, _ := gocore.Config().GetInt("blockchain_store_dbTimeoutMillis", 5000)
+
 	c := &Coinbase{
 		store:        store,
 		db:           store.GetDB(),
@@ -87,6 +90,7 @@ func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error)
 		logger:       logger,
 		privateKey:   privateKey.PrivKey,
 		address:      coinbaseAddr.AddressString,
+		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
 	return c, nil
@@ -333,13 +337,16 @@ func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, 
 }
 
 func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
-	blockId, err := c.store.StoreBlock(ctx, block)
+	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	defer cancelTimeout()
+
+	blockId, err := c.store.StoreBlock(ctxTimeout, block)
 	if err != nil {
 		return fmt.Errorf("could not store block: %+v", err)
 	}
 
 	// process coinbase into utxos
-	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+	err = c.processCoinbase(ctxTimeout, blockId, block.Hash(), block.CoinbaseTx)
 	if err != nil {
 		return fmt.Errorf("could not process coinbase %+v", err)
 	}
@@ -347,7 +354,10 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	return nil
 }
 
-func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
 	if err := c.insertCoinbaseUTXOs(ctx, blockId, coinbaseTx); err != nil {
@@ -400,7 +410,10 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 	return nil
 }
 
-func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+func (c *Coinbase) createSpendingUtxos(cntxt context.Context, timestamp time.Time) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	q := `
 	  SELECT
 	   txid
@@ -451,7 +464,10 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 	}
 }
 
-func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
+func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	tx := bt.NewTx()
 
 	if err := tx.FromUTXOs(utxo); err != nil {
@@ -463,12 +479,17 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 	for amountRemaining > splitSatoshis {
 
-		tx.AddOutput(&bt.Output{
-			LockingScript: utxo.LockingScript,
-			Satoshis:      splitSatoshis,
-		})
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout splitting the satoshis")
+		default:
+			tx.AddOutput(&bt.Output{
+				LockingScript: utxo.LockingScript,
+				Satoshis:      splitSatoshis,
+			})
 
-		amountRemaining -= splitSatoshis
+			amountRemaining -= splitSatoshis
+		}
 	}
 
 	tx.AddOutput(&bt.Output{
@@ -489,7 +510,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 	return c.insertSpendableUTXOs(ctx, tx)
 }
 
-func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+func (c *Coinbase) RequestFunds(cntxt context.Context, address string) (*bt.Tx, error) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	start := gocore.CurrentNanos()
 	defer func() {
 		coinbaseStat.NewStat("RequestFunds").AddTime(start)
@@ -583,7 +607,10 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 
 	return utxo, nil
 }
-func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.UTXO, error) {
+func (c *Coinbase) requestFundsSqlite(cntxt context.Context, address string) (*bt.UTXO, error) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	txn, err := c.db.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.IsolationLevel(sql.LevelWriteCommitted),
 	})
@@ -633,7 +660,10 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 	return utxo, nil
 }
 
-func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
+func (c *Coinbase) insertCoinbaseUTXOs(cntxt context.Context, blockId uint64, tx *bt.Tx) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	start := gocore.CurrentNanos()
 	defer func() {
 		coinbaseStat.NewStat("insertCoinbaseUTXOs").AddTime(start)
@@ -712,7 +742,10 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 	return nil
 }
 
-func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
+func (c *Coinbase) insertSpendableUTXOs(cntxt context.Context, tx *bt.Tx) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	defer cancelTimeout()
+
 	start := gocore.CurrentNanos()
 	defer func() {
 		coinbaseStat.NewStat("insertSpendableUTXOs").AddTime(start)
@@ -761,7 +794,12 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 	}
 
-	if c.engine == util.Postgres {
+	switch c.engine {
+	case util.Sqlite, util.SqliteMemory:
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+	case util.Postgres:
 		// Execute the batch transaction
 		_, err = stmt.ExecContext(ctx)
 		if err != nil {

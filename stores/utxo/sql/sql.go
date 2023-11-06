@@ -14,6 +14,7 @@ import (
 	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -101,9 +102,11 @@ func init() {
 }
 
 type Store struct {
+	logger      utils.Logger
 	db          *sql.DB
 	engine      string
 	blockHeight uint32
+	dbTimeout   time.Duration
 }
 
 func New(storeUrl *url.URL) (*Store, error) {
@@ -129,9 +132,13 @@ func New(storeUrl *url.URL) (*Store, error) {
 		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
 	}
 
+	dbTimeoutMillis, _ := gocore.Config().GetInt("utxoStore_dbTimeoutMillis", 5000)
+
 	s := &Store{
-		db:     db,
-		engine: storeUrl.Scheme,
+		logger:    logger,
+		db:        db,
+		engine:    storeUrl.Scheme,
+		dbTimeout: time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
 	return s, nil
@@ -153,8 +160,11 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+func (s *Store) Get(cntxt context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	prometheusUtxoGet.Inc()
+
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
+	defer cancelTimeout()
 
 	var lockTime uint32
 	var txIdBytes []byte
@@ -184,11 +194,11 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashesWithContext(ctxTimeout, tx)
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashesWithContext(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -217,13 +227,13 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		}
 
 		for _, hash := range utxoHashes {
-			if _, err := stmt.ExecContext(ctxTimeout, storeLockTime, hash[:]); err != nil {
+			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
 				return err
 			}
 		}
 
 		// Execute the batch transaction
-		_, err = stmt.ExecContext(ctxTimeout)
+		_, err = stmt.ExecContext(ctx)
 		if err != nil {
 			return err
 		}
@@ -263,10 +273,10 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 			q := qBase + strings.Join(valuesStrings, ",")
 
 			select {
-			case <-ctxTimeout.Done():
+			case <-ctx.Done():
 				return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
 			default:
-				_, err = s.db.ExecContext(ctxTimeout, q, valuesArgs...)
+				_, err = s.db.ExecContext(ctx, q, valuesArgs...)
 				if err != nil {
 					return err
 				}
@@ -281,7 +291,10 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	return nil
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -330,7 +343,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	return nil
 }
 
-func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
+
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
@@ -360,7 +376,9 @@ func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, tx *bt.Tx) error {
+func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	defer cancelTimeout()
 	for vOut, output := range tx.Outputs {
 		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(vOut))
 		if err != nil {

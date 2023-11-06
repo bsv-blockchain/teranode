@@ -80,7 +80,10 @@ func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 		}
 
 		// filename = fmt.Sprintf("file:%s?cache=shared&mode=rwc", filename)
-		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=10000&_pragma=journal_mode=WAL", filename)
+
+		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
+		Fail fast. This is 'dev mode' sqlite after all */
+		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=100&_pragma=journal_mode=WAL", filename)
 	}
 
 	logger.Infof("Using sqlite DB: %s", filename)
@@ -100,5 +103,9 @@ func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("could not enable shared locking mode: %+v", err)
 	}
+
+	/* recommend setting max connection to low number - don't hide a problem by allowing infinite connections.
+	This is sqlite, our local db, this isn't about performance. Use a small number. See the problem. Fail fast. */
+	// db.SetMaxOpenConns(5)
 	return db, nil
 }

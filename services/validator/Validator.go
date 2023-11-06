@@ -134,9 +134,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 	}
 
 	// then we store the new utxos from the tx
-	v.logger.Debugf("Store %d utxos: start", tx.OutputCount())
 	err = v.utxoStore.Store(traceSpan.Ctx, tx)
-	v.logger.Debugf("Store %d utxos: end", tx.OutputCount())
 	if err != nil {
 		// TODO remove from tx meta store
 		// TRICKY - we've sent the tx to block assembly - we can't undo that?
