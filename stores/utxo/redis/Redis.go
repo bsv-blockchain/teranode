@@ -24,6 +24,7 @@ type Redis struct {
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
 	spentUtxoTtl       time.Duration
+	timeout            time.Duration
 }
 
 func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
@@ -76,12 +77,14 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 	rdb := redis.NewClusterClient(o)
 
 	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+	timeout, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	return &Redis{
 		url:          u,
 		mode:         "cluster",
 		rdb:          rdb,
 		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
 
@@ -170,7 +173,10 @@ func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+func (r *Redis) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	defer cancel()
+
 	storeLockTime := tx.LockTime
 	if len(lockTime) > 0 {
 		storeLockTime = lockTime[0]
@@ -181,22 +187,21 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	value := v.String()
 	txIDHash := tx.TxIDChainHash()
 
-	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 { // only do outputs with value
-			hash, err := util.UTXOHashFromOutput(txIDHash, output, uint32(i))
-			if err != nil {
-				return err
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d utxos", i, len(tx.Outputs))
+		default:
+			if output.Satoshis > 0 { // only do outputs with value
+				hash, err := util.UTXOHashFromOutput(txIDHash, output, uint32(i))
+				if err != nil {
+					return err
+				}
+
+				if err = r.storeUtxo(ctx, hash, value); err != nil {
+					return err
+				}
 			}
-
-			utxoHashes[i] = hash
-		}
-	}
-
-	for _, hash := range utxoHashes {
-		err := r.storeUtxo(ctx, hash, value)
-		if err != nil {
-			return err
 		}
 	}
 
@@ -216,56 +221,80 @@ func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value strin
 	return nil
 }
 
-func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+func (r *Redis) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
+	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	defer cancel()
+
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
-	for _, spend := range spends {
-		if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight()); err != nil {
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
+		default:
+			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight()); err != nil {
 
-			// revert the spent utxos
-			_ = r.UnSpend(ctx, spentSpends)
-			return err
-		} else {
-			spentSpends = append(spentSpends, spend)
-		}
-		r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
-	}
-
-	return nil
-}
-
-func (r *Redis) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
-	for _, spend := range spends {
-		res := r.rdb.Get(ctx, spend.Hash.String())
-		if res.Err() != nil {
-			return res.Err()
-		}
-
-		v := NewValueFromString(res.Val())
-
-		v.SpendingTxID = nil
-
-		res2 := r.rdb.Set(ctx, spend.Hash.String(), v.String(), 0)
-		if res2.Err() != nil {
-			return res2.Err()
-		}
-	}
-
-	return nil
-}
-
-func (r *Redis) Delete(ctx context.Context, tx *bt.Tx) error {
-	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 { // only do outputs with value
-			hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-			if err != nil {
+				// revert the spent utxos
+				_ = r.UnSpend(ctx, spentSpends)
 				return err
+			} else {
+				spentSpends = append(spentSpends, spend)
 			}
+			r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
+		}
+	}
 
-			res := r.rdb.Del(ctx, hash.String())
+	return nil
+}
 
+func (r *Redis) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
+	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	defer cancel()
+
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout unspending %d of %d utxos", i, len(spends))
+		default:
+			res := r.rdb.Get(ctx, spend.Hash.String())
 			if res.Err() != nil {
 				return res.Err()
+			}
+
+			v := NewValueFromString(res.Val())
+
+			v.SpendingTxID = nil
+
+			res2 := r.rdb.Set(ctx, spend.Hash.String(), v.String(), 0)
+			if res2.Err() != nil {
+				return res2.Err()
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *Redis) Delete(cntxt context.Context, tx *bt.Tx) error {
+	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	defer cancel()
+
+	for i, output := range tx.Outputs {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout deleting %d of %d utxos", i, len(tx.Outputs))
+		default:
+			if output.Satoshis > 0 { // only do outputs with value
+				hash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+				if err != nil {
+					return err
+				}
+
+				res := r.rdb.Del(ctx, hash.String())
+
+				if res.Err() != nil {
+					return res.Err()
+				}
 			}
 		}
 	}

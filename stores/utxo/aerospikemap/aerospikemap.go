@@ -278,7 +278,10 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
+func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
+	defer cancel()
+
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -302,7 +305,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		storeLockTime = lockTime[0]
 	}
 
-	bins, err := getBinsToStore(tx, storeLockTime)
+	bins, err := getBinsToStore(ctx, tx, storeLockTime)
 	if err != nil {
 		return err
 	}
@@ -322,7 +325,10 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	return nil
 }
 
-func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) {
+func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
+	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
+	defer cancel()
+
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -341,15 +347,20 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	// TODO use a database transaction, when available in new version of aerospike
-	for _, spend := range spends {
-		err = s.spendUtxo(policy, spend)
-		if err != nil {
-			// error encountered, reverse all spends and return error
-			if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
-				s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
-			}
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
+		default:
+			err = s.spendUtxo(policy, spend)
+			if err != nil {
+				// error encountered, reverse all spends and return error
+				if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
+					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
+				}
 
-			return err
+				return err
+			}
 		}
 	}
 
@@ -447,10 +458,18 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 	return nil
 }
 
-func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
-	for _, spend := range spends {
-		if err = s.unSpend(ctx, spend); err != nil {
-			return err
+func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
+	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
+	defer cancel()
+
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout unspending %d of %d utxos", i, len(spends))
+		default:
+			if err = s.unSpend(ctx, spend); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -524,21 +543,31 @@ func (s *Store) DeleteSpends(_ bool) {
 	// noop
 }
 
-func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
-	fee, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
+	fee, utxoHashes, err := utxostore.GetFeesAndUtxoHashesWithContext(ctx, tx)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
 		return nil, fmt.Errorf("failed to get fees and utxo hashes: %v", err)
 	}
 
 	utxos := make(map[interface{}]interface{})
-	for _, utxoHash := range utxoHashes {
-		utxos[utxoHash.String()] = aerospike.NewNullValue()
+	for i, utxoHash := range utxoHashes {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout storing %d of %d utxos", i, len(utxoHashes))
+		default:
+			utxos[utxoHash.String()] = aerospike.NewNullValue()
+		}
 	}
 
 	parentTxIDs := make([][]byte, 0, len(tx.Inputs))
-	for _, input := range tx.Inputs {
-		parentTxIDs = append(parentTxIDs, input.PreviousTxIDChainHash().CloneBytes())
+	for i, input := range tx.Inputs {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout storing %d of %d utxos", i, len(tx.Inputs))
+		default:
+			parentTxIDs = append(parentTxIDs, input.PreviousTxIDChainHash().CloneBytes())
+		}
 	}
 
 	blockIds := make([][]byte, 0)
