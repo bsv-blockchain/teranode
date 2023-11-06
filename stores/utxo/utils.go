@@ -1,6 +1,7 @@
 package utxo
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -27,6 +28,10 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 }
 
 func GetFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
+	return GetFeesAndUtxoHashesWithContext(context.Background(), tx)
+}
+
+func GetFeesAndUtxoHashesWithContext(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
 	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 
@@ -35,15 +40,20 @@ func GetFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
 	}
 
 	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 {
-			fees -= output.Satoshis
+		select {
+		case <-ctx.Done():
+			return fees, utxoHashes, fmt.Errorf("[GetFeesAndUtxoHashes] timeout - managed to prepare %d of %d", i, len(tx.Outputs))
+		default:
+			if output.Satoshis > 0 {
+				fees -= output.Satoshis
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-			if utxoErr != nil {
-				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+				utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+				if utxoErr != nil {
+					return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+				}
+
+				utxoHashes = append(utxoHashes, utxoHash)
 			}
-
-			utxoHashes = append(utxoHashes, utxoHash)
 		}
 	}
 

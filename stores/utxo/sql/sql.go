@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -184,7 +185,10 @@ func (s *Store) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashesWithContext(ctxTimeout, tx)
 	if err != nil {
 		return err
 	}
@@ -213,13 +217,13 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		}
 
 		for _, hash := range utxoHashes {
-			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
+			if _, err := stmt.ExecContext(ctxTimeout, storeLockTime, hash[:]); err != nil {
 				return err
 			}
 		}
 
 		// Execute the batch transaction
-		_, err = stmt.ExecContext(ctx)
+		_, err = stmt.ExecContext(ctxTimeout)
 		if err != nil {
 			return err
 		}
@@ -233,25 +237,41 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 
 	case "sqlite", "sqlitememory":
 		// Prepare the copy operation
-		q := `
-		INSERT INTO utxos
-		    (lock_time, hash)
-		VALUES
-	`
+		const batchSize = 500
 
-		variables := make([]interface{}, 0, len(utxoHashes))
-		for _, hash := range utxoHashes {
-			variables = append(variables, hash[:])
-			q += fmt.Sprintf("(%d, $%d),", storeLockTime, len(variables))
+		qBase := `
+				INSERT INTO utxos
+						(lock_time, hash)
+				VALUES
+		`
+		qRow := fmt.Sprintf("(%d, ?)", storeLockTime)
+
+		for i := 0; i < len(utxoHashes); i += batchSize {
+			var valuesStrings []string
+			var valuesArgs []interface{}
+
+			end := i + batchSize
+			if end > len(utxoHashes) {
+				end = len(utxoHashes)
+			}
+
+			for j := i; j < end; j++ {
+				valuesStrings = append(valuesStrings, qRow)
+				valuesArgs = append(valuesArgs, utxoHashes[j][:])
+			}
+
+			q := qBase + strings.Join(valuesStrings, ",")
+
+			select {
+			case <-ctxTimeout.Done():
+				return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
+			default:
+				_, err = s.db.ExecContext(ctxTimeout, q, valuesArgs...)
+				if err != nil {
+					return err
+				}
+			}
 		}
-
-		// remove last comma from query
-		q = q[:len(q)-1]
-
-		if _, err = s.db.ExecContext(ctx, q, variables...); err != nil {
-			return err
-		}
-
 	default:
 		return fmt.Errorf("unknown database engine: %s", s.engine)
 	}
@@ -312,8 +332,13 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	for _, spend := range spends {
-		if err := s.unSpend(ctx, spend); err != nil {
-			return err
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("[sql.go.UnSpend] context cancelled")
+		default:
+			if err := s.unSpend(ctx, spend); err != nil {
+				return err
+			}
 		}
 	}
 
