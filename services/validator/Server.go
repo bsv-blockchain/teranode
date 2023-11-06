@@ -229,14 +229,18 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return nil, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
+		return &validator_api.ValidateTransactionResponse{
+			Valid: false,
+		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
 	err = v.validator.Validate(traceSpan.Ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return nil, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
+		return &validator_api.ValidateTransactionResponse{
+			Valid: false,
+		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
