@@ -31,17 +31,22 @@ func (f *fRPC_Validator) ValidateTransaction(ctx context.Context, req *validator
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
-		return nil, fmt.Errorf("cannot read transaction data: %v", err)
+		return &validator_api.ValidatorApiValidateTransactionResponse{
+			Valid:  false,
+			Reason: err.Error(),
+		}, fmt.Errorf("cannot read transaction data: %v", err)
 	}
 
 	err = f.v.validator.Validate(traceSpan.Ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
+		errString := fmt.Sprintf("[ValidateTransaction] transaction %s is invalid: %v", tx.TxID(), err)
+		f.v.logger.Errorf(errString)
 		return &validator_api.ValidatorApiValidateTransactionResponse{
 			Valid:  false,
-			Reason: fmt.Sprintf("transaction %s is invalid: %v", tx.TxID(), err),
-		}, nil
+			Reason: err.Error(),
+		}, err
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.TransactionData)))
@@ -53,6 +58,7 @@ func (f *fRPC_Validator) ValidateTransaction(ctx context.Context, req *validator
 }
 
 func (f *fRPC_Validator) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidatorApiValidateTransactionBatchRequest) (*validator_api.ValidatorApiValidateTransactionBatchResponse, error) {
+	var err error
 	errReasons := make([]*validator_api.ValidatorApiValidateTransactionError, 0, len(req.Transactions))
 	for _, reqItem := range req.Transactions {
 		r := &validator_api.ValidateTransactionRequest{
@@ -70,7 +76,7 @@ func (f *fRPC_Validator) ValidateTransactionBatch(ctx context.Context, req *vali
 	return &validator_api.ValidatorApiValidateTransactionBatchResponse{
 		Valid:   true,
 		Reasons: errReasons,
-	}, nil
+	}, err
 }
 
 func (f *fRPC_Validator) ValidateTransactionStream(srv *validator_api.ValidateTransactionStreamServer) error {
