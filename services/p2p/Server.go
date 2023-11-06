@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -53,6 +52,7 @@ type Server struct {
 	bitcoinProtocolId string
 
 	blockchainClient         blockchain.ClientI
+	validationClient         *blockvalidation.Client
 	blobServerHttpAddressURL string
 	e                        *echo.Echo
 	notificationCh           chan *notificationMsg
@@ -170,6 +170,8 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		s.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 	}
 	s.blobServerHttpAddressURL = blobServerHttpAddressURL.String()
+
+	s.validationClient = blockvalidation.NewClient(ctx)
 
 	return nil
 }
@@ -477,13 +479,17 @@ func (s *Server) handleBlockchainMessage(ns network.Stream) {
 		s.logger.Errorf("failed to read network stream: %+v              ", err.Error())
 		return
 	}
-	ns.Close()
+	_ = ns.Close()
 	if len(buf) > 0 {
 		s.logger.Debugf("Received block topic message: %s", string(buf))
 	}
 }
 
 func (s *Server) handleBestBlockTopic(ctx context.Context) {
+	var pid peer.ID
+	var bh *model.BlockHeader
+	var bhMeta *model.BlockHeaderMeta
+	var msgBytes []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -505,14 +511,14 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 					s.logger.Errorf("json unmarshal error: ", err)
 					continue
 				}
-				pid, err := peer.Decode(msg.PeerId)
+				pid, err = peer.Decode(msg.PeerId)
 				if err != nil {
 					s.logger.Errorf("error decoding peerId: ", err)
 					continue
 				}
 
 				// get best block from blockchain service
-				bh, m, err := s.blockchainClient.GetBestBlockHeader(ctx)
+				bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
 					s.logger.Errorf("error getting best block header: ", err)
 					continue
@@ -524,11 +530,11 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 
 				bbr := BlockMessage{
 					Hash:       bh.Hash().String(),
-					Height:     m.Height,
+					Height:     bhMeta.Height,
 					DataHubUrl: s.blobServerHttpAddressURL,
 				}
 
-				msgBytes, err := json.Marshal(bbr)
+				msgBytes, err = json.Marshal(bbr)
 				if err != nil {
 					s.logger.Errorf("json marshal error: ", err)
 					continue
@@ -546,9 +552,9 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 
 func (s *Server) sendPeerMessage(ctx context.Context, pid peer.ID, msg []byte) error {
 	h2pi := s.host.Peerstore().PeerInfo(pid)
-	log.Printf("dialing %s\n", h2pi.Addrs)
+	s.logger.Infof("dialing %s", h2pi.Addrs)
 	if err := s.host.Connect(ctx, h2pi); err != nil {
-		log.Printf("Failed to connect: %+v\n", err)
+		s.logger.Errorf("failed to connect: %+v", err)
 	}
 
 	st, err := s.host.NewStream(
@@ -568,6 +574,7 @@ func (s *Server) sendPeerMessage(ctx context.Context, pid peer.ID, msg []byte) e
 
 func (s *Server) handleBlockTopic(ctx context.Context) {
 	s.logger.Debugf("handleBlockTopic\n")
+	var hash *chainhash.Hash
 	for {
 		select {
 		case <-ctx.Done():
@@ -597,13 +604,12 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 
 			if m.ReceivedFrom != s.host.ID() {
 				s.logger.Debugf("BLOCK: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
-				validationClient := blockvalidation.NewClient(ctx)
-				hash, err := chainhash.NewHashFromStr(msg.Hash)
+				hash, err = chainhash.NewHashFromStr(msg.Hash)
 				if err != nil {
 					s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
 					continue
 				}
-				if err = validationClient.BlockFound(ctx, hash, msg.DataHubUrl); err != nil {
+				if err = s.validationClient.BlockFound(ctx, hash, msg.DataHubUrl); err != nil {
 					s.logger.Errorf("[p2p] error validating block from %s: %s", msg.DataHubUrl, err)
 				}
 			} else {
@@ -614,6 +620,7 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 }
 
 func (s *Server) handleSubtreeTopic(ctx context.Context) {
+	var hash *chainhash.Hash
 	for {
 		select {
 		case <-ctx.Done():
@@ -642,13 +649,12 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 
 			if m.ReceivedFrom != s.host.ID() {
 				s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), msg)
-				validationClient := blockvalidation.NewClient(ctx)
-				hash, err := chainhash.NewHashFromStr(msg.Hash)
+				hash, err = chainhash.NewHashFromStr(msg.Hash)
 				if err != nil {
 					s.logger.Errorf("error getting chainhash from string %s", msg.Hash, err)
 					continue
 				}
-				if err = validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
+				if err = s.validationClient.SubtreeFound(ctx, hash, msg.DataHubUrl); err != nil {
 					s.logger.Errorf("[p2p] error validating subtree from %s: %s", msg.DataHubUrl, err)
 				}
 			} else {
