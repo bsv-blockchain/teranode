@@ -15,7 +15,7 @@ import (
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
+		blockchainStats.NewStat("GetBlock").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -323,7 +323,7 @@ func (ba *BlockAssembly) Stop(_ context.Context) error {
 func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockAssemblyStat.NewStat("Health").AddTime(start)
+		blockAssemblyStat.NewStat("Health", true).AddTime(start)
 	}()
 
 	prometheusBlockAssemblyHealth.Inc()
@@ -334,7 +334,7 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 	}, nil
 }
 
-func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
+func (ba *BlockAssembly) AddTx(cntxt context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	startTime := time.Now()
 
 	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
@@ -342,7 +342,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
 		//traceSpan.Finish()
-		blockAssemblyStat.NewStat("AddTx").AddTime(startTime.UnixNano())
+		stat := util.StatFromContext(cntxt, blockAssemblyStat.NewStat("AddTx", true))
+		stat.AddTime(startTime.UnixNano())
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
@@ -372,7 +373,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockAssemblyStat.NewStat("AddTxBatch").AddTime(start)
+		blockAssemblyStat.NewStat("AddTxBatch", true).AddTime(start)
 	}()
 
 	var batchError error = nil
@@ -395,7 +396,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {
 		txMetaSpan.Finish()
-		blockAssemblyStat.NewStat("GetTxMeta").AddTime(startMetaTime.UnixNano())
+		blockAssemblyStat.NewStat("GetTxMeta", true).AddTime(startMetaTime.UnixNano())
 		prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startMetaTime).Seconds())
 	}()
 
@@ -424,7 +425,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	startTime := time.Now()
 	prometheusBlockAssemblyGetMiningCandidate.Inc()
 	defer func() {
-		blockAssemblyStat.NewStat("GetMiningCandidate").AddTime(startTime.UnixNano())
+		blockAssemblyStat.NewStat("GetMiningCandidate", true).AddTime(startTime.UnixNano())
 		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
 	}()
 
@@ -446,7 +447,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockAssemblyStat.NewStat("SubmitMiningSolution").AddTime(start)
+		blockAssemblyStat.NewStat("SubmitMiningSolution", true).AddTime(start)
 	}()
 
 	// we don't have the processing to handle multiple huge blocks at the same time, so we limit it to 1
@@ -462,7 +463,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	start := time.Now()
 	defer func() {
-		blockAssemblyStat.NewStat("submitMiningSolution").AddTime(start.UnixNano())
+		blockAssemblyStat.NewStat("submitMiningSolution", true).AddTime(start.UnixNano())
 		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(time.Since(start).Seconds())
 	}()
 
@@ -646,7 +647,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:SubmitMiningSolution:removeSubtreesTTL")
 	defer func() {
 		span.Finish()
-		blockAssemblyStat.NewStat("removeSubtreesTTL").AddTime(startTime.UnixNano())
+		blockAssemblyStat.NewStat("removeSubtreesTTL", true).AddTime(startTime.UnixNano())
 		prometheusBlockAssemblyUpdateSubtreesTTL.Observe(time.Since(startTime).Seconds())
 	}()
 
@@ -671,7 +672,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *model.BlockHeader) error {
 	startTime := time.Now()
 	defer func() {
-		blockAssemblyStat.NewStat("UpdateTxMinedStatus").AddTime(startTime.UnixNano())
+		blockAssemblyStat.NewStat("UpdateTxMinedStatus", true).AddTime(startTime.UnixNano())
 		prometheusBlockAssemblyUpdateTxMinedStatus.Observe(time.Since(startTime).Seconds())
 	}()
 

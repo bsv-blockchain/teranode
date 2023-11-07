@@ -21,7 +21,7 @@ type getBestBlockHeaderCache struct {
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
+		blockchainStats.NewStat("GetBlock").AddTime(start)
 	}()
 
 	cached, ok := cache.Load("GetBestBlockHeader")

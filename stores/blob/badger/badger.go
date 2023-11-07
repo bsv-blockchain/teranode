@@ -33,6 +33,8 @@ func init() {
 	//prometheus.MustRegister(badgerExpvarCollector)
 }
 
+var badgerStats = gocore.NewStat("prop_store_badger")
+
 type Badger struct {
 	store  *badger.DB
 	logger utils.Logger
@@ -83,7 +85,7 @@ func (s *Badger) Health(ctx context.Context) (int, string, error) {
 func (s *Badger) Close(ctx context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Close").AddTime(start)
+		badgerStats.NewStat("Close").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "Badger:Close")
 	defer traceSpan.Finish()
@@ -95,7 +97,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
+		badgerStats.NewStat("Set").AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:Set")
@@ -123,7 +125,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	//s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("SetTTL").AddTime(start)
+		badgerStats.NewStat("SetTTL").AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:SetTTL")
@@ -143,7 +145,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	//s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Get").AddTime(start)
+		badgerStats.NewStat("Get").AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:Get")
@@ -184,7 +186,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Exists").AddTime(start)
+		badgerStats.NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "Badger:Exists")
 	defer traceSpan.Finish()
@@ -218,7 +220,7 @@ func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	//s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Del").AddTime(start)
+		badgerStats.NewStat("Del").AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:Del")

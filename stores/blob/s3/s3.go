@@ -23,6 +23,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var s3Stats = gocore.NewStat("prop_store_s3")
+
 type S3 struct {
 	client     *s3.S3
 	uploader   *s3manager.Uploader
@@ -114,7 +116,7 @@ func (g *S3) generateKey(key []byte) *string {
 func (g *S3) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Close").AddTime(start)
+		s3Stats.NewStat("Close").AddTime(start)
 	}()
 	traceSpan := tracing.Start(context.Background(), "s3:Close")
 	defer traceSpan.Finish()
@@ -126,7 +128,7 @@ func (g *S3) Close(_ context.Context) error {
 func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Set").AddTime(start)
+		s3Stats.NewStat("Set").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
@@ -162,7 +164,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("SetTTL").AddTime(start)
+		s3Stats.NewStat("SetTTL").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "s3:SetTTL")
 	defer traceSpan.Finish()
@@ -174,7 +176,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Get").AddTime(start)
+		s3Stats.NewStat("Get").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
@@ -205,7 +207,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Exists").AddTime(start)
+		s3Stats.NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
@@ -243,7 +245,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 func (g *S3) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_s3").NewStat("Del").AddTime(start)
+		s3Stats.NewStat("Del").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()

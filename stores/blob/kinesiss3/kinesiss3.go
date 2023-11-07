@@ -19,6 +19,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var kinesisStats = gocore.NewStat("prop_store_kinesisS3")
+
 type KinesisS3 struct {
 	client         *s3.S3
 	firehoseClient *firehose.Firehose
@@ -85,7 +87,7 @@ func (g *KinesisS3) Health(ctx context.Context) (int, string, error) {
 func (g *KinesisS3) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_kinesisS3").NewStat("Close").AddTime(start)
+		kinesisStats.NewStat("Close").AddTime(start)
 	}()
 	traceSpan := tracing.Start(context.Background(), "kinesisS3:Close")
 	defer traceSpan.Finish()
@@ -114,7 +116,7 @@ func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...o
 func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_kinesisS3").NewStat("SetTTL").AddTime(start)
+		kinesisStats.NewStat("SetTTL").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "kinesisS3:SetTTL")
 	defer traceSpan.Finish()
@@ -126,7 +128,7 @@ func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_kinesisS3").NewStat("Get").AddTime(start)
+		kinesisStats.NewStat("Get").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "kinesisS3:Get")
 	defer traceSpan.Finish()
@@ -148,7 +150,7 @@ func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 func (g *KinesisS3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_kinesisS3").NewStat("Exists").AddTime(start)
+		kinesisStats.NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "kinesisS3:Exists")
 	defer traceSpan.Finish()
@@ -176,7 +178,7 @@ func (g *KinesisS3) Exists(ctx context.Context, hash []byte) (bool, error) {
 func (g *KinesisS3) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_kinesisS3").NewStat("Del").AddTime(start)
+		kinesisStats.NewStat("Del").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "kinesisS3:Del")
 	defer traceSpan.Finish()

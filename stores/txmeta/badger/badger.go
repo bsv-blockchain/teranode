@@ -16,6 +16,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var badgerStat = gocore.NewStat("prop_store_badger")
+
 type loggerWrapper struct {
 	*gocore.Logger
 }
@@ -53,7 +55,7 @@ func New(dir string) (*Badger, error) {
 func (b *Badger) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Get").AddTime(start)
+		badgerStat.NewStat("Get", true).AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:Get")
@@ -93,7 +95,7 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_badger").NewStat("Set").AddTime(start)
+		badgerStat.NewStat("Set", true).AddTime(start)
 	}()
 
 	traceSpan := tracing.Start(ctx, "Badger:Set")

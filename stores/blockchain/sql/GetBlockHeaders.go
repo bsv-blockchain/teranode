@@ -19,7 +19,7 @@ type getBlockHeadersCache struct {
 func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("blockchain").NewStat("GetBlock").AddTime(start)
+		blockchainStats.NewStat("GetBlock").AddTime(start)
 	}()
 
 	cacheId := fmt.Sprintf("GetBlockHeaders_%s_%d", blockHashFrom.String(), numberOfHeaders)

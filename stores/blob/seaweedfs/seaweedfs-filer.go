@@ -18,6 +18,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var seaweedFsStats = gocore.NewStat("prop_store_seaweedfs")
+
 type SeaweedFS struct {
 	client     *goseaweedfs.Seaweed
 	collection string
@@ -94,7 +96,7 @@ func (s *SeaweedFS) generateKey(key []byte) string {
 func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("Set").AddTime(start)
+		seaweedFsStats.NewStat("Set").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "seaweedfs:Set")
 	defer traceSpan.Finish()
@@ -127,7 +129,7 @@ func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...o
 func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("SetTTL").AddTime(start)
+		seaweedFsStats.NewStat("SetTTL").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "seaweedfs:SetTTL")
 	defer traceSpan.Finish()
@@ -140,7 +142,7 @@ func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("Get").AddTime(start)
+		seaweedFsStats.NewStat("Get").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "seaweedfs:Get")
 	defer traceSpan.Finish()
@@ -168,7 +170,7 @@ func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 func (s *SeaweedFS) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("Exists").AddTime(start)
+		seaweedFsStats.NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "seaweedfs:Exists")
 	defer traceSpan.Finish()
@@ -195,7 +197,7 @@ func (s *SeaweedFS) Exists(ctx context.Context, hash []byte) (bool, error) {
 func (s *SeaweedFS) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gocore.NewStat("prop_store_seaweedfs").NewStat("Del").AddTime(start)
+		seaweedFsStats.NewStat("Del").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "seaweedfs:Del")
 	defer traceSpan.Finish()

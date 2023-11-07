@@ -92,16 +92,20 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
 				return
 			case notification := <-b.notifications:
-				b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
-				for sub := range b.subscribers {
-					b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
-					go func(s subscriber) {
-						b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
-						if err := s.subscription.Send(notification); err != nil {
-							b.deadSubscriptions <- s
-						}
-					}(sub)
-				}
+				start := gocore.CurrentNanos()
+				func() {
+					b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
+					for sub := range b.subscribers {
+						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+						go func(s subscriber) {
+							b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+							if err := s.subscription.Send(notification); err != nil {
+								b.deadSubscriptions <- s
+							}
+						}(sub)
+					}
+				}()
+				stats.NewStat("notification-channel", true).AddTime(start)
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
@@ -134,7 +138,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("Health").AddTime(start)
+		stats.NewStat("Health", true).AddTime(start)
 	}()
 
 	prometheusBlockchainHealth.Inc()
@@ -148,7 +152,7 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("AddBlock").AddTime(start)
+		stats.NewStat("AddBlock", true).AddTime(start)
 	}()
 
 	prometheusBlockchainAddBlock.Inc()
@@ -204,7 +208,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetBlock").AddTime(start)
+		stats.NewStat("GetBlock", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlock.Inc()
@@ -237,7 +241,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetLastNBlocks").AddTime(start)
+		stats.NewStat("GetLastNBlocks", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetLastNBlocks.Inc()
@@ -255,7 +259,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetBlockExists").AddTime(start)
+		stats.NewStat("GetBlockExists", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockExists.Inc()
@@ -278,7 +282,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetBestBlockHeader").AddTime(start)
+		stats.NewStat("GetBestBlockHeader", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetBestBlockHeader.Inc()
@@ -300,7 +304,7 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetBlockHeader").AddTime(start)
+		stats.NewStat("GetBlockHeader", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockHeader.Inc()
@@ -327,7 +331,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetBlockHeaders").AddTime(start)
+		stats.NewStat("GetBlockHeaders", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockHeaders.Inc()
@@ -356,7 +360,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("Subscribe").AddTime(start)
+		stats.NewStat("Subscribe", true).AddTime(start)
 	}()
 
 	prometheusBlockchainSubscribe.Inc()
@@ -386,7 +390,7 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("GetState").AddTime(start)
+		stats.NewStat("GetState", true).AddTime(start)
 	}()
 
 	prometheusBlockchainGetState.Inc()
@@ -404,7 +408,7 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("SetState").AddTime(start)
+		stats.NewStat("SetState", true).AddTime(start)
 	}()
 
 	prometheusBlockchainSetState.Inc()
@@ -420,7 +424,7 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("SendNotification").AddTime(start)
+		stats.NewStat("SendNotification", true).AddTime(start)
 	}()
 
 	prometheusBlockchainSendNotification.Inc()
