@@ -18,6 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+var stats = gocore.NewStat("blockchain")
+
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer
 	source       string
@@ -130,6 +132,11 @@ func (b *Blockchain) Stop(_ context.Context) error {
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("Health").AddTime(start)
+	}()
+
 	prometheusBlockchainHealth.Inc()
 
 	return &blockchain_api.HealthResponse{
@@ -139,6 +146,11 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("AddBlock").AddTime(start)
+	}()
+
 	prometheusBlockchainAddBlock.Inc()
 
 	header, err := model.NewBlockHeaderFromBytes(request.Header)
@@ -190,6 +202,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetBlock").AddTime(start)
+	}()
+
 	prometheusBlockchainGetBlock.Inc()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
@@ -218,6 +235,11 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetLastNBlocks").AddTime(start)
+	}()
+
 	prometheusBlockchainGetLastNBlocks.Inc()
 
 	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks)
@@ -231,6 +253,11 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetBlockExists").AddTime(start)
+	}()
+
 	prometheusBlockchainGetBlockExists.Inc()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
@@ -249,6 +276,11 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetBestBlockHeader").AddTime(start)
+	}()
+
 	prometheusBlockchainGetBestBlockHeader.Inc()
 
 	chainTip, meta, err := b.store.GetBestBlockHeader(ctx)
@@ -266,6 +298,11 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 }
 
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetBlockHeader").AddTime(start)
+	}()
+
 	prometheusBlockchainGetBlockHeader.Inc()
 
 	hash, err := chainhash.NewHash(req.BlockHash)
@@ -288,6 +325,11 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 }
 
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetBlockHeaders").AddTime(start)
+	}()
+
 	prometheusBlockchainGetBlockHeaders.Inc()
 
 	startHash, err := chainhash.NewHash(req.StartHash)
@@ -312,6 +354,11 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("Subscribe").AddTime(start)
+	}()
+
 	prometheusBlockchainSubscribe.Inc()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
@@ -337,6 +384,11 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("GetState").AddTime(start)
+	}()
+
 	prometheusBlockchainGetState.Inc()
 
 	data, err := b.store.GetState(ctx, req.Key)
@@ -350,6 +402,11 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("SetState").AddTime(start)
+	}()
+
 	prometheusBlockchainSetState.Inc()
 
 	err := b.store.SetState(ctx, req.Key, req.Data)
@@ -361,6 +418,11 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 }
 
 func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("SendNotification").AddTime(start)
+	}()
+
 	prometheusBlockchainSendNotification.Inc()
 
 	b.notifications <- req
