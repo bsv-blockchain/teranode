@@ -230,11 +230,13 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 	})
 }
 
-func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(cntxt, stats).NewStat("ValidateTransaction")
 	defer func() {
-		stats.NewStat("ValidateTransaction").AddTime(start)
+		stat.AddTime(start)
 	}()
+	ctx := util.ContextWithStat(cntxt, stat)
 
 	prometheusProcessedTransactions.Inc()
 	timeStart := time.Now()
@@ -251,7 +253,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
-	err = v.validator.Validate(traceSpan.Ctx, tx)
+	err = v.validator.Validate(ctx, tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
@@ -268,11 +270,13 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	}, nil
 }
 
-func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
 	start := gocore.CurrentNanos()
+	stat := stats.NewStat("ValidateTransactionBatch")
 	defer func() {
-		stats.NewStat("ValidateTransactionBatch").AddTime(start)
+		stat.AddTime(start)
 	}()
+	ctx := util.ContextWithStat(cntxt, stat)
 
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
 	for _, reqItem := range req.GetTransactions() {

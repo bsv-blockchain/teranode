@@ -368,7 +368,14 @@ func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.Empt
 	}, nil
 }
 
-func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
+func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
+	start := gocore.CurrentNanos()
+	stat := propagationStat.NewStat("ProcessTransactionHex")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(cntxt, stat)
+
 	txBytes, err := hex.DecodeString(req.Tx)
 	if err != nil {
 		return nil, err
@@ -379,11 +386,13 @@ func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *pro
 	})
 }
 
-func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(cntxt, propagationStat).NewStat("ProcessTransaction")
 	defer func() {
-		propagationStat.NewStat("ProcessTransaction").AddTime(start)
+		stat.AddTime(start)
 	}()
+	ctx := util.ContextWithStat(cntxt, stat)
 
 	prometheusProcessedTransactions.Inc()
 	traceSpan := tracing.Start(ctx, "PropagationServer:Set")
@@ -407,7 +416,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
-	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
+	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	g, gCtx := errgroup.WithContext(setCtx)
@@ -418,7 +427,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 		return nil
 	})
 
-	if err = ps.validator.Validate(traceSpan.Ctx, btTx); err != nil {
+	if err = ps.validator.Validate(ctx, btTx); err != nil {
 		// TODO send REJECT message to peers if invalid tx
 		ps.logger.Errorf("[ProcessTransaction][%s] received invalid transaction: %s", btTx.TxID(), err.Error())
 		prometheusInvalidTransactions.Inc()

@@ -72,11 +72,24 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 	return validator, nil
 }
 
-func (v *Validator) Health(ctx context.Context) (int, string, error) {
+func (v *Validator) Health(cntxt context.Context) (int, string, error) {
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(cntxt, stats).NewStat("Health")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	return 0, "LocalValidator", nil
 }
 
-func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
+func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(cntxt, stats).NewStat("Validate")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(cntxt, stat)
+
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend
 	defer func(reservedUtxos *[]*utxostore.Spend) {
@@ -147,10 +160,17 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx) (err error) {
 }
 
 func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxostore.Spend) (*txmeta.Data, error) {
-	txMetaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:StoreTxMeta")
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("registerTxInMetaStore")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
+
+	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	data, err := v.txMetaStore.Create(txMetaSpan.Ctx, tx)
+	data, err := v.txMetaStore.Create(ctx, tx)
 	if err != nil {
 		if errors.Is(err, txmeta.ErrAlreadyExists) {
 			// this does not need to be a warning, it's just a duplicate validation request
@@ -165,7 +185,14 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
-	basicSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:Basic")
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("validateTransaction")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
+
+	basicSpan := tracing.Start(ctx, "Validator:Validate:Basic")
 	defer func() {
 		basicSpan.Finish()
 	}()
@@ -179,7 +206,14 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error
 }
 
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.Spend, error) {
-	utxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:SpendUtxos")
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("spendUtxos")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
+
+	utxoSpan := tracing.Start(ctx, "Validator:Validate:SpendUtxos")
 	defer func() {
 		utxoSpan.Finish()
 	}()
@@ -207,7 +241,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 	}
 
 	// TODO Should we be doing this in a batch?
-	err = v.utxoStore.Spend(utxoSpan.Ctx, spends)
+	err = v.utxoStore.Spend(ctx, spends)
 	if err != nil {
 		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("validator: UTXO Store spend failed: %v", err)
@@ -217,6 +251,12 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxostore.Spend) error {
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("sendToBlockAssembler")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	if v.kafkaProducer != nil {
 		if err := v.publishToKafka(traceSpan, bData); err != nil {
@@ -225,7 +265,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
 	} else {
-		if _, err := v.blockAssembler.Store(traceSpan.Ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes); err != nil {
+		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes); err != nil {
 			v.reverseSpends(traceSpan, reservedUtxos)
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to block assembler: %v", err)
@@ -236,21 +276,36 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 }
 
 func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostore.Spend) {
-	reverseUtxoSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:ReverseUtxos")
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("reverseSpends")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
+
+	reverseUtxoSpan := tracing.Start(ctx, "Validator:Validate:ReverseUtxos")
 	defer reverseUtxoSpan.Finish()
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
 	callerSpan := opentracing.SpanFromContext(reverseUtxoSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	ctx = util.ContextWithStat(setCtx, stat)
 
-	if errReset := v.utxoStore.UnSpend(setCtx, spentUtxos); errReset != nil {
+	if errReset := v.utxoStore.UnSpend(ctx, spentUtxos); errReset != nil {
 		reverseUtxoSpan.RecordError(errReset)
 		v.logger.Errorf("error resetting utxos %v", errReset)
 	}
 }
 
 func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.Data) error {
-	kafkaSpan := tracing.Start(traceSpan.Ctx, "Validator:Validate:publishToKafka")
+	start := gocore.CurrentNanos()
+	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("publishToKafka")
+	defer func() {
+		stat.AddTime(start)
+	}()
+	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
+
+	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()
 
 	// partition is the first byte of the txid - max 2^8 partitions = 256
