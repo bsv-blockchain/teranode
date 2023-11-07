@@ -176,7 +176,7 @@ func (v *Server) Stop(_ context.Context) error {
 func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("Health").AddTime(start)
+		stats.NewStat("Health", true).AddTime(start)
 	}()
 
 	prometheusHealth.Inc()
@@ -189,7 +189,7 @@ func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*vali
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("ValidateTransactionStream").AddTime(start)
+		stats.NewStat("ValidateTransactionStream", true).AddTime(start)
 	}()
 
 	transactionData := bytes.Buffer{}
@@ -232,7 +232,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 
 func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, stats).NewStat("ValidateTransaction")
+	stat := util.StatFromContext(cntxt, stats).NewStat("ValidateTransaction", true)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -272,7 +272,7 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 
 func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
 	start := gocore.CurrentNanos()
-	stat := stats.NewStat("ValidateTransactionBatch")
+	stat := stats.NewStat("ValidateTransactionBatch", true)
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -84,7 +84,7 @@ func (v *Validator) Health(cntxt context.Context) (int, string, error) {
 
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, stats).NewStat("Validate")
+	stat := util.StatFromContext(cntxt, stats).NewStat("Validate", true)
 	defer func() {
 		stat.AddTime(start)
 	}()

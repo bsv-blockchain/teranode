@@ -330,7 +330,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		propagationStat.NewStat("Health").AddTime(start)
+		propagationStat.NewStat("Health", true).AddTime(start)
 	}()
 
 	prometheusHealth.Inc()
@@ -370,7 +370,7 @@ func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.Empt
 
 func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
 	start := gocore.CurrentNanos()
-	stat := propagationStat.NewStat("ProcessTransactionHex")
+	stat := propagationStat.NewStat("ProcessTransactionHex", true)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -388,7 +388,7 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 
 func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, propagationStat).NewStat("ProcessTransaction")
+	stat := util.StatFromContext(cntxt, propagationStat).NewStat("ProcessTransaction", true)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -449,7 +449,7 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		propagationStat.NewStat("ProcessTransactionStream").AddTime(start)
+		propagationStat.NewStat("ProcessTransactionStream", true).AddTime(start)
 	}()
 
 	for {
@@ -472,7 +472,7 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		propagationStat.NewStat("ProcessTransactionDebug").AddTime(start)
+		propagationStat.NewStat("ProcessTransactionDebug", true).AddTime(start)
 	}()
 
 	btTx, err := bt.NewTxFromBytes(req.Tx)
