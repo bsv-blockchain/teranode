@@ -328,6 +328,11 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 }
 
 func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("Health").AddTime(start)
+	}()
+
 	prometheusHealth.Inc()
 
 	status := ps.status.Load()
@@ -433,6 +438,11 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 }
 
 func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("ProcessTransactionStream").AddTime(start)
+	}()
+
 	for {
 		req, err := stream.Recv()
 		if err != nil {
@@ -451,6 +461,11 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 }
 
 func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("ProcessTransactionDebug").AddTime(start)
+	}()
+
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse transaction from bytes: %s", err.Error())

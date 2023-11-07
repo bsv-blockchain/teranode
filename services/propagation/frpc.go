@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/ordishs/gocore"
 )
 
 type fRPC_Propagation struct {
@@ -12,6 +13,11 @@ type fRPC_Propagation struct {
 }
 
 func (f *fRPC_Propagation) Health(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("Health_frpc").AddTime(start)
+	}()
+
 	return &propagation_api.PropagationApiHealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -19,6 +25,11 @@ func (f *fRPC_Propagation) Health(_ context.Context, _ *propagation_api.Propagat
 }
 
 func (f *fRPC_Propagation) ProcessTransaction(ctx context.Context, request *propagation_api.PropagationApiProcessTransactionRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("ProcessTransaction_frpc").AddTime(start)
+	}()
+
 	_, err := f.ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 		Tx: request.Tx,
 	})
@@ -27,6 +38,11 @@ func (f *fRPC_Propagation) ProcessTransaction(ctx context.Context, request *prop
 }
 
 func (f *fRPC_Propagation) ProcessTransactionDebug(ctx context.Context, request *propagation_api.PropagationApiProcessTransactionRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		propagationStat.NewStat("ProcessTransactionDebug_frpc").AddTime(start)
+	}()
+
 	_, err := f.ps.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 		Tx: request.Tx,
 	})
