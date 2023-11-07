@@ -7,7 +7,7 @@
 - [_Introduction_](#introduction)
 - [_Getting Started_](#getting-started)
   - [Pre-requisites and Installation](#pre-requisites-and-installation)
-  - [Running the node and / or individual services locally in development](#running-the-node-and--or-individual-services-locally-in-development)
+  - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
 - [_Advanced Usage_  [ TO-DO ]](#advanced-usage---to-do-)
   - [Settings](#settings)
   - [Makefile](#makefile)
@@ -110,6 +110,8 @@ Additional logs can be produced when the node is run with the following environm
 ## _Architecture_  [ TO-DO ]
 
 ---
+
+Please check the [Architecture Documentation](docs/architecture/architecture.md) for detailed documentation.
 
 Diagram...
 
