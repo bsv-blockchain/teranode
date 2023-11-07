@@ -30,6 +30,8 @@ import (
 	"storj.io/drpc/drpcserver"
 )
 
+var stats = gocore.NewStat("validator")
+
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
@@ -172,6 +174,11 @@ func (v *Server) Stop(_ context.Context) error {
 }
 
 func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("Health").AddTime(start)
+	}()
+
 	prometheusHealth.Inc()
 	return &validator_api.HealthResponse{
 		Ok:        true,
@@ -180,6 +187,11 @@ func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*vali
 }
 
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("ValidateTransactionStream").AddTime(start)
+	}()
+
 	transactionData := bytes.Buffer{}
 
 	for {
@@ -219,6 +231,11 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 }
 
 func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("ValidateTransaction").AddTime(start)
+	}()
+
 	prometheusProcessedTransactions.Inc()
 	timeStart := time.Now()
 	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
@@ -252,6 +269,11 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 }
 
 func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("ValidateTransactionBatch").AddTime(start)
+	}()
+
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
 	for _, reqItem := range req.GetTransactions() {
 		tx, err := v.ValidateTransaction(ctx, reqItem)

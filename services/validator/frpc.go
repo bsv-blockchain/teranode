@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
+	"github.com/ordishs/gocore"
 )
 
 type fRPC_Validator struct {
@@ -15,6 +16,11 @@ type fRPC_Validator struct {
 }
 
 func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiHealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("Health_frpc").AddTime(start)
+	}()
+
 	return &validator_api.ValidatorApiHealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -22,6 +28,11 @@ func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.Vali
 }
 
 func (f *fRPC_Validator) ValidateTransaction(ctx context.Context, req *validator_api.ValidatorApiValidateTransactionRequest) (*validator_api.ValidatorApiValidateTransactionResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("ValidateTransaction_frpc").AddTime(start)
+	}()
+
 	prometheusProcessedTransactions.Inc()
 	timeStart := time.Now()
 	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
@@ -58,6 +69,11 @@ func (f *fRPC_Validator) ValidateTransaction(ctx context.Context, req *validator
 }
 
 func (f *fRPC_Validator) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidatorApiValidateTransactionBatchRequest) (*validator_api.ValidatorApiValidateTransactionBatchResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("ValidateTransactionBatch_frpc").AddTime(start)
+	}()
+
 	var err error
 	errReasons := make([]*validator_api.ValidatorApiValidateTransactionError, 0, len(req.Transactions))
 	for _, reqItem := range req.Transactions {
