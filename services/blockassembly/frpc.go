@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type fRPC_BlockAssembly struct {
@@ -16,6 +17,11 @@ type fRPC_BlockAssembly struct {
 }
 
 func (f *fRPC_BlockAssembly) Health(ctx context.Context, message *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.BlockassemblyApiHealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		blockAssemblyStat.NewStat("Health_frpc").AddTime(start)
+	}()
+
 	return &blockassembly_api.BlockassemblyApiHealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -31,6 +37,7 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
+		blockAssemblyStat.NewStat("AddTx_frpc").AddTime(startTime.UnixNano())
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
@@ -59,6 +66,11 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 }
 
 func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		blockAssemblyStat.NewStat("AddTxBatch_frpc").AddTime(start)
+	}()
+
 	var req *blockassembly_api.BlockassemblyApiAddTxRequest
 	var txIdErrors [][]byte
 	for _, req = range batch.TxRequests {
