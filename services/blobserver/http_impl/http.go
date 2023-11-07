@@ -96,11 +96,23 @@ func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *
 
 	e.GET("/ws", h.HandleWebSocket(h.notificationCh))
 
+	prefix := gocore.GetStatPrefix()
+	e.GET(prefix+"stats", AdaptStdHandler(gocore.HandleStats))
+	e.GET(prefix+"reset", AdaptStdHandler(gocore.ResetStats))
+	e.GET(prefix+"*", AdaptStdHandler(gocore.HandleOther))
+
 	e.GET("*", func(c echo.Context) error {
 		return dashboard.AppHandler(c)
 	})
 
 	return h, nil
+}
+
+func AdaptStdHandler(handler func(w http.ResponseWriter, r *http.Request)) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		handler(c.Response().Writer, c.Request())
+		return nil
+	}
 }
 
 func (h *HTTP) Init(_ context.Context) error {
