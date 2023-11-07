@@ -13,7 +13,7 @@ type ClientI interface {
 	AddBlock(ctx context.Context, block *model.Block, external bool) error
 	SendNotification(ctx context.Context, notification *model.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
-	GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error)
+	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error)
 	GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)

@@ -25,9 +25,14 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		}
 	}
 
+	includeOrphans := false
+	if c.QueryParam("includeOrphans") == "true" {
+		includeOrphans = true
+	}
+
 	h.logger.Debugf("[BlobServer_http] GetBlockChain for %s for last %d blocks", c.Request().RemoteAddr, n)
 
-	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n)
+	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n, includeOrphans)
 	if err != nil {
 		if strings.HasSuffix(err.Error(), " not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())

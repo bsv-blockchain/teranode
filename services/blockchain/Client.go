@@ -152,9 +152,10 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
 }
 
-func (c Client) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
 		NumberOfBlocks: n,
+		IncludeOrphans: includeOrphans,
 	})
 	if err != nil {
 		return nil, err

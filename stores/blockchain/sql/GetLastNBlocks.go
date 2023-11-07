@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
 		gocore.NewStat("blockchain").NewStat("GetLastNBlocks").AddTime(start)
@@ -23,7 +23,29 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	q := `
+	var q string
+
+	if includeOrphans {
+		q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		ORDER BY height DESC
+	  LIMIT $1
+		)
+	`
+	} else {
+		q = `
 		SELECT
 		 b.version
 		,b.block_time
@@ -62,6 +84,8 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, 
 		)
 		ORDER BY height DESC
 	`
+	}
+
 	rows, err := s.db.QueryContext(ctx, q, n)
 	if err != nil {
 		return nil, err

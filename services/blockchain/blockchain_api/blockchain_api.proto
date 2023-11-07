@@ -129,6 +129,7 @@ message SetStateRequest {
 // swagger:model GetLastNBlocksRequest
 message GetLastNBlocksRequest {
   int64 numberOfBlocks = 1;
+  bool includeOrphans = 2;
 }
 
 // swagger:model GetLastNBlocksResponse
