@@ -28,6 +28,8 @@ import (
 // 	)
 // }
 
+var stats = gocore.NewStat("coinbase")
+
 // Server type carries the logger within it
 type Server struct {
 	coinbase_api.UnimplementedCoinbaseAPIServer
@@ -93,6 +95,11 @@ func (s *Server) Stop(_ context.Context) error {
 }
 
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("Health").AddTime(start)
+	}()
+
 	prometheusHealth.Inc()
 	return &coinbase_api.HealthResponse{
 		Ok:        true,
@@ -101,6 +108,11 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.Heal
 }
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		stats.NewStat("RequestFunds").AddTime(start)
+	}()
+
 	prometheusRequestFunds.Inc()
 
 	fundingTx, err := s.coinbase.RequestFunds(ctx, req.Address)

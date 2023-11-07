@@ -239,6 +239,11 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 }
 
 func (c *Coinbase) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("catchup").AddTime(start)
+	}()
+
 	c.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
 
 	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
@@ -297,6 +302,11 @@ LOOP:
 }
 
 func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) (*model.Block, error) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("processBlock").AddTime(start)
+	}()
+
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
 	// check whether we already have the parent block
@@ -337,6 +347,11 @@ func (c *Coinbase) processBlock(ctx context.Context, blockHash *chainhash.Hash, 
 }
 
 func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("storeBlock").AddTime(start)
+	}()
+
 	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	defer cancelTimeout()
 
@@ -355,6 +370,11 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 }
 
 func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("processCoinbase").AddTime(start)
+	}()
+
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
@@ -411,6 +431,11 @@ func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockH
 }
 
 func (c *Coinbase) createSpendingUtxos(cntxt context.Context, timestamp time.Time) {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("createSpendingUtxos").AddTime(start)
+	}()
+
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
@@ -465,6 +490,11 @@ func (c *Coinbase) createSpendingUtxos(cntxt context.Context, timestamp time.Tim
 }
 
 func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		coinbaseStat.NewStat("splitUtxo").AddTime(start)
+	}()
+
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
