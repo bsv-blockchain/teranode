@@ -71,7 +71,8 @@ func (s *File) loadTTLs() error {
 
 		ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
 		if err != nil {
-			return fmt.Errorf("failed to parse ttl: %w", err)
+			s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+			continue
 		}
 
 		s.fileTTLs[fileName[:len(fileName)-4]] = ttl
