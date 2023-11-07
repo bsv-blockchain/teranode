@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -25,12 +26,14 @@ type Memory struct {
 	m                map[chainhash.Hash]UTXO // needs to be able to be variable length
 	BlockHeight      uint32
 	DeleteSpentUtxos bool
+	timeout          time.Duration
 }
 
 func New(deleteSpends bool) *Memory {
 	return &Memory{
 		m:                make(map[chainhash.Hash]UTXO),
 		DeleteSpentUtxos: deleteSpends,
+		timeout:          5000 * time.Millisecond,
 	}
 }
 
@@ -68,11 +71,14 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *Memory) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
+func (m *Memory) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, m.timeout)
+	defer cancel()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -12,12 +14,14 @@ import (
 type SplitByHash struct {
 	m                map[[1]byte]*MapWithLocking
 	DeleteSpentUtxos bool
+	timeout          time.Duration
 }
 
 func NewSplitByHash(deleteSpends bool) *SplitByHash {
 	db := &SplitByHash{
 		m:                make(map[[1]byte]*MapWithLocking),
 		DeleteSpentUtxos: deleteSpends,
+		timeout:          5000 * time.Millisecond,
 	}
 
 	for i := 0; i <= 255; i++ {
@@ -62,8 +66,11 @@ func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+func (m *SplitByHash) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, m.timeout)
+	defer cancel()
+
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -74,15 +81,20 @@ func (m *SplitByHash) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) er
 	}
 
 	var ok bool
-	for _, hash := range utxoHashes {
-		_, ok = m.m[[1]byte{hash[0]}].Get(hash)
-		if ok {
-			return utxostore.ErrAlreadyExists
-		}
+	for i, hash := range utxoHashes {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d memory-split utxos", i, len(utxoHashes))
+		default:
+			_, ok = m.m[[1]byte{hash[0]}].Get(hash)
+			if ok {
+				return utxostore.ErrAlreadyExists
+			}
 
-		_, err = m.m[[1]byte{hash[0]}].Store(hash, storeLockTime)
-		if err != nil {
-			return err
+			_, err = m.m[[1]byte{hash[0]}].Store(hash, storeLockTime)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

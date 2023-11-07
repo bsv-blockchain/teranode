@@ -271,7 +271,7 @@ func TestAerospike(t *testing.T) {
 }
 
 func cleanDB(t *testing.T, client *aero.Client, tx *bt.Tx) {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(context.Background(), tx)
 	require.NoError(t, err)
 
 	for _, utxoHash := range utxoHashes {

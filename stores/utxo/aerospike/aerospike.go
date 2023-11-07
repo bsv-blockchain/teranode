@@ -264,7 +264,10 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
+func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
+	defer cancel()
+
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -275,7 +278,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
 		return fmt.Errorf("failed to get fees and utxo hashes: %v", err)
@@ -286,11 +289,16 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		storeLockTime = lockTime[0]
 	}
 
-	for _, hash := range utxoHashes {
-		err = s.storeUtxo(policy, hash, storeLockTime)
-		if err != nil {
-			// TODO reverse utxos that were already stored
-			return err
+	for i, hash := range utxoHashes {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(utxoHashes))
+		default:
+			err = s.storeUtxo(policy, hash, storeLockTime)
+			if err != nil {
+				// TODO reverse utxos that were already stored
+				return err
+			}
 		}
 	}
 

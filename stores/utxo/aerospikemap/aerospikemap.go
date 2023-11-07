@@ -544,7 +544,7 @@ func (s *Store) DeleteSpends(_ bool) {
 }
 
 func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
-	fee, utxoHashes, err := utxostore.GetFeesAndUtxoHashesWithContext(ctx, tx)
+	fee, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
 		return nil, fmt.Errorf("failed to get fees and utxo hashes: %v", err)

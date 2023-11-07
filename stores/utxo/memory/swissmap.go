@@ -2,7 +2,9 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -17,6 +19,7 @@ type SwissMap struct {
 	m                *swiss.Map[chainhash.Hash, UTXO]
 	BlockHeight      uint32
 	DeleteSpentUtxos bool
+	timeout          time.Duration
 }
 
 func NewSwissMap(deleteSpends bool) *SwissMap {
@@ -26,6 +29,7 @@ func NewSwissMap(deleteSpends bool) *SwissMap {
 	return &SwissMap{
 		m:                swissMap,
 		DeleteSpentUtxos: deleteSpends,
+		timeout:          5000 * time.Millisecond,
 	}
 }
 
@@ -64,8 +68,11 @@ func (m *SwissMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *SwissMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+func (m *SwissMap) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, m.timeout)
+	defer cancel()
+
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -78,14 +85,19 @@ func (m *SwissMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, hash := range utxoHashes {
-		if _, ok := m.m.Get(*hash); ok {
-			return utxostore.ErrAlreadyExists
-		} else {
-			m.m.Put(*hash, UTXO{
-				Hash:     nil,
-				LockTime: storeLockTime,
-			})
+	for i, hash := range utxoHashes {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d swissmp utxos", i, len(utxoHashes))
+		default:
+			if _, ok := m.m.Get(*hash); ok {
+				return utxostore.ErrAlreadyExists
+			} else {
+				m.m.Put(*hash, UTXO{
+					Hash:     nil,
+					LockTime: storeLockTime,
+				})
+			}
 		}
 	}
 

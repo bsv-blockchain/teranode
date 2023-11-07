@@ -27,11 +27,7 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 	return status
 }
 
-func GetFeesAndUtxoHashes(tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	return GetFeesAndUtxoHashesWithContext(context.Background(), tx)
-}
-
-func GetFeesAndUtxoHashesWithContext(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
+func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
 	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 

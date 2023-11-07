@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/maphash"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -20,6 +21,7 @@ type XsyncMap struct {
 	m                *xsync.MapOf[chainhash.Hash, UTXO]
 	BlockHeight      uint32
 	DeleteSpentUtxos bool
+	timeout          time.Duration
 }
 
 func NewXSyncMap(deleteSpends bool) *XsyncMap {
@@ -38,6 +40,7 @@ func NewXSyncMap(deleteSpends bool) *XsyncMap {
 	return &XsyncMap{
 		m:                xsyncMap,
 		DeleteSpentUtxos: deleteSpends,
+		timeout:          5000 * time.Millisecond,
 	}
 }
 
@@ -73,8 +76,11 @@ func (m *XsyncMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(tx)
+func (m *XsyncMap) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	ctx, cancel := context.WithTimeout(cntxt, m.timeout)
+	defer cancel()
+
+	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -84,18 +90,23 @@ func (m *XsyncMap) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error
 		storeLockTime = lockTime[0]
 	}
 
-	for _, hash := range utxoHashes {
-		if utxo, ok := m.m.Load(*hash); ok {
-			if utxo.Hash != nil {
-				return utxostore.ErrSpent
+	for i, hash := range utxoHashes {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d xsyncmap utxos", i, len(utxoHashes))
+		default:
+			if utxo, ok := m.m.Load(*hash); ok {
+				if utxo.Hash != nil {
+					return utxostore.ErrSpent
+				} else {
+					return utxostore.ErrAlreadyExists
+				}
 			} else {
-				return utxostore.ErrAlreadyExists
+				m.m.Store(*hash, UTXO{
+					Hash:     nil,
+					LockTime: storeLockTime,
+				})
 			}
-		} else {
-			m.m.Store(*hash, UTXO{
-				Hash:     nil,
-				LockTime: storeLockTime,
-			})
 		}
 	}
 
