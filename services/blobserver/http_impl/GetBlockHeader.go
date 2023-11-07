@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -16,7 +15,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentNanos()
 		defer func() {
-			blobserver.BlobServerStat.NewStat("GetBlockHeader_http").AddTime(start)
+			blobServerStat.NewStat("GetBlockHeader_http").AddTime(start)
 		}()
 
 		hashParam := c.Param("hash")

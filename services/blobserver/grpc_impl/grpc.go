@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -19,6 +18,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var blobServerStat = gocore.NewStat("blobserver")
 
 type subscriber struct {
 	subscription blobserver_api.BlobServerAPI_SubscribeServer
@@ -199,7 +200,7 @@ func (g *GRPC) Stop(ctx context.Context) error {
 func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("Health").AddTime(start)
+		blobServerStat.NewStat("Health").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCHealth.Inc()
@@ -214,7 +215,7 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockRequest) (*blobserver_api.GetBlockResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("GetBlock").AddTime(start)
+		blobServerStat.NewStat("GetBlock").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCGetBlock.Inc()
@@ -253,7 +254,7 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockHeaderRequest) (*blobserver_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("GetBlockHeader").AddTime(start)
+		blobServerStat.NewStat("GetBlockHeader").AddTime(start)
 	}()
 
 	hash, err := chainhash.NewHash(req.BlockHash)
@@ -277,7 +278,7 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlockHeadersRequest) (*blobserver_api.GetBlockHeadersResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("GetBlockHeaders").AddTime(start)
+		blobServerStat.NewStat("GetBlockHeaders").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCGetBlockHeaders.Inc()
@@ -314,7 +315,7 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlock
 func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("GetBestBlockHeader").AddTime(start)
+		blobServerStat.NewStat("GetBestBlockHeader").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCGetBestBlockHeader.Inc()
@@ -336,7 +337,7 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobs
 func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.GetNodesResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("GetNodes").AddTime(start)
+		blobServerStat.NewStat("GetNodes").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCGetNodes.Inc()
@@ -349,7 +350,7 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Ge
 func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("AddHttpSubscriber").AddTime(start)
+		blobServerStat.NewStat("AddHttpSubscriber").AddTime(start)
 	}()
 
 	g.newHttpSubscriptions <- ch
@@ -358,7 +359,7 @@ func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
 func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blobserver.BlobServerStat.NewStat("Subscribe").AddTime(start)
+		blobServerStat.NewStat("Subscribe").AddTime(start)
 	}()
 
 	prometheusBlobServerGRPCSubscribe.Inc()

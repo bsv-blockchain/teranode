@@ -21,8 +21,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var BlobServerStat = gocore.NewStat("blobserver")
-
 type peerWithContext struct {
 	peer       PeerI
 	cancelFunc context.CancelFunc

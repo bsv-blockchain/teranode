@@ -16,6 +16,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var blobServerStat = gocore.NewStat("blobserver")
+
 type HTTP struct {
 	logger         utils.Logger
 	repository     *repository.Repository
