@@ -4,12 +4,19 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
+		start := gocore.CurrentNanos()
+		defer func() {
+			blobserver.BlobServerStat.NewStat("GetTransactionMeta_http").AddTime(start)
+		}()
+
 		h.logger.Debugf("[BlobServer_http] GetTransactionMeta in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {

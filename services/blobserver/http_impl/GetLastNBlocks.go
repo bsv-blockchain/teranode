@@ -5,10 +5,17 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/labstack/echo/v4"
+	"github.com/ordishs/gocore"
 )
 
 func (h *HTTP) GetLastNBlocks(c echo.Context) error {
+	start := gocore.CurrentNanos()
+	defer func() {
+		blobserver.BlobServerStat.NewStat("GetLastNBlocks_http").AddTime(start)
+	}()
+
 	n := int64(10)
 	if c.QueryParam("n") != "" {
 		var err error

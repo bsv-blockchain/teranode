@@ -6,12 +6,19 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
+		start := gocore.CurrentNanos()
+		defer func() {
+			blobserver.BlobServerStat.NewStat("GetBlock_http").AddTime(start)
+		}()
+
 		h.logger.Debugf("[BlobServer_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
 		height, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {

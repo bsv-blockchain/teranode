@@ -5,12 +5,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -28,6 +30,11 @@ type UTXOItem struct {
 func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 	return func(c echo.Context) error {
+		start := gocore.CurrentNanos()
+		defer func() {
+			blobserver.BlobServerStat.NewStat("GetUTXOsByTXID_http").AddTime(start)
+		}()
+
 		h.logger.Debugf("[BlobServer_http] GetUTXOsByTXID in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {

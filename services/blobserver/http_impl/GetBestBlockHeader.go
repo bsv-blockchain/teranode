@@ -4,11 +4,18 @@ import (
 	"encoding/hex"
 	"net/http"
 
+	"github.com/bitcoin-sv/ubsv/services/blobserver"
 	"github.com/labstack/echo/v4"
+	"github.com/ordishs/gocore"
 )
 
 func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
+		start := gocore.CurrentNanos()
+		defer func() {
+			blobserver.BlobServerStat.NewStat("GetBestBlockHeader_http").AddTime(start)
+		}()
+
 		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
 
 		blockHeader, meta, err := h.repository.GetBestBlockHeader(c.Request().Context())
