@@ -363,19 +363,21 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	if len(missingTxHashes) > 0 {
 		start5 := gocore.CurrentNanos()
+		stat5 := stat.NewStat("5. blessMissingTxs")
 		var txMeta *txmeta.Data
 		// process all the missing transactions in order, there might be parent / child dependencies
 		// TODO get these in batches
 		for _, txHash := range missingTxHashes {
 			if txHash != nil {
-				txMeta, err = u.blessMissingTransaction(spanCtx, txHash, baseUrl)
+				ctx5 := util.ContextWithStat(spanCtx, stat5)
+				txMeta, err = u.blessMissingTransaction(ctx5, txHash, baseUrl)
 				if err != nil {
 					return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
 				}
 				txMetaMap.Store(txHash, txMeta)
 			}
 		}
-		stat.NewStat("5. blessMissingTxs").AddTime(start5)
+		stat5.AddTime(start5)
 	}
 
 	start6 := gocore.CurrentNanos()
@@ -424,6 +426,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 }
 
 func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*txmeta.Data, error) {
+	start, stat, ctx1 := util.StartStatFromContext(ctx, "blessMissingTransaction")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	// get transaction from network over http using the baseUrl
 	if baseUrl == "" {
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
@@ -433,15 +440,20 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	startTime := time.Now()
 	prometheusBlockValidationBlessMissingTransaction.Inc()
 
+	start1 := gocore.CurrentNanos()
 	alreadyHaveTransaction := true
-	txBytes, err := u.txStore.Get(ctx, txHash[:])
+	txBytes, err := u.txStore.Get(ctx1, txHash[:])
+	stat.NewStat("getTxFromStore").AddTime(start1)
 	if txBytes == nil || err != nil {
 		alreadyHaveTransaction = false
 
 		// do http request to baseUrl + txHash.String()
 		u.logger.Infof("[blessMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
+		startM := gocore.CurrentNanos()
+		statM := stat.NewStat("http fetch missing tx")
 		txBytes, err = util.DoHTTPRequest(ctx, url)
+		statM.AddTime(startM)
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to do http request", txHash.String()), err)
 		}
@@ -458,23 +470,28 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 	}
 
 	if !alreadyHaveTransaction {
+		startStore := gocore.CurrentNanos()
 		// store the transaction, we did not get it via propagation
-		err = u.txStore.Set(ctx, txHash[:], txBytes)
+		err = u.txStore.Set(ctx1, txHash[:], txBytes)
+		stat.NewStat("storeTx").AddTime(startStore)
 		if err != nil {
 			return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
 		}
 	}
 
+	ctxValidate := util.ContextWithStat(ctx1, stat)
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// todo return tx meta data
-	err = u.validatorClient.Validate(ctx, tx)
+	err = u.validatorClient.Validate(ctxValidate, tx)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", txHash.String(), err.Error())
 	}
 
-	txMeta, err := u.txMetaStore.Get(ctx, txHash)
+	start2 := gocore.CurrentNanos()
+	txMeta, err := u.txMetaStore.Get(ctx1, txHash)
+	stat.NewStat("getTxMeta").AddTime(start2)
 	if err != nil {
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", txHash.String(), err.Error())
 	}
