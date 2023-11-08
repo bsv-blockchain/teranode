@@ -81,7 +81,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 		batcherSize = settingsBufferSize
 	}
 
-	queue := NewLockFreeQueue()
+	queue := NewLockFreeQueue(0)
 
 	stp := &SubtreeProcessor{
 		currentItemsPerFile: initialItemsPerFile,

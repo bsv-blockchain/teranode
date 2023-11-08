@@ -15,7 +15,7 @@
       <th>Age</th>
       <th>Delta Time</th>
       <th>Miner</th>
-      <th>Fees</th>
+      <th>Block Reward</th>
       <th>Number of Transactions</th>
       <th>TPS</th>
       <th>Size (Bytes)</th>

@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -55,10 +56,112 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
 	timeStart := time.Now()
-	prometheusBlockValidationValidateBlock.Inc()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span.LogKV("block", block.Hash().String())
+	defer func() {
+		span.Finish()
+		prometheusBlockValidationValidateBlock.Inc()
+	}()
+
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
-	g, gCtx := errgroup.WithContext(ctx)
+	err := u.validateBLockSubtrees(spanCtx, block, baseUrl)
+	if err != nil {
+		return err
+	}
+
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+	if err != nil {
+		return err
+	}
+
+	// Add the coinbase transaction to the metaTxStore
+	// TODO - we need to consider if we can do this differently
+	if _, err = u.txMetaStore.Create(spanCtx, block.CoinbaseTx); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
+		}
+	}
+
+	// validate the block
+	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
+	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
+	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
+	}
+
+	// if valid, store the block
+	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
+	if err = u.blockchainClient.AddBlock(spanCtx, block, true); err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+	}
+
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
+	}
+
+	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
+	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
+	subtrees, err := block.GetSubtrees(u.subtreeStore)
+	if err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+	}
+
+	u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
+	err = u.validateBlockUpdateSubtreesTTL(spanCtx, block)
+	if err != nil {
+		return err
+	}
+
+	// add the transactions in this block to the txMeta block hashes
+	u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
+	if err = blockassembly.UpdateTxMinedStatus(spanCtx, u.txMetaStore, subtrees, block.Header); err != nil {
+		// TODO this should be a fatal error, but for now we just log it
+		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+		u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
+	}
+
+	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
+	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
+
+	return nil
+}
+
+func (u *BlockValidation) validateBlockUpdateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockUpdateSubtreesTTL")
+	defer func() {
+		span.Finish()
+	}()
+
+	// update the subtree TTLs
+	g, gCtx := errgroup.WithContext(spanCtx)
+	for _, subtreeHash := range block.Subtrees {
+		subtreeHash := subtreeHash
+		g.Go(func() error {
+			err = u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0)
+			if err != nil {
+				return errors.Join(errors.New("failed to update subtree TTL"), err)
+			}
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	defer func() {
+		span.Finish()
+	}()
+
+	g, gCtx := errgroup.WithContext(spanCtx)
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
@@ -90,88 +193,29 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// validate the missing subtrees in series, transactions might rely on each other
 	for _, subtreeHash := range missingSubtrees {
 		if subtreeHash != nil {
-			err := u.validateSubtree(ctx, subtreeHash, baseUrl)
+			err := u.validateSubtree(spanCtx, subtreeHash, baseUrl)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
 	}
 
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
-	if err != nil {
-		return err
-	}
-
-	// Add the coinbase transaction to the metaTxStore
-	// TODO - we need to consider if we can do this differently
-	if _, err = u.txMetaStore.Create(ctx, block.CoinbaseTx); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
-		}
-	}
-
-	// validate the block
-	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
-	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(ctx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
-		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
-	}
-
-	// if valid, store the block
-	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(ctx, block, true); err != nil {
-		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
-	}
-
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
-	}
-
-	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
-	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
-	subtrees, err := block.GetSubtrees(u.subtreeStore)
-	if err != nil {
-		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
-	}
-
-	// update the subtree TTLs
-	g, gCtx = errgroup.WithContext(ctx)
-	for _, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			err = u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0)
-			if err != nil {
-				return errors.Join(errors.New("failed to update subtree TTL"), err)
-			}
-			return nil
-		})
-	}
-
-	if err = g.Wait(); err != nil {
-		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
-	}
-
-	// add the transactions in this block to the txMeta block hashes
-	u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-	if err = blockassembly.UpdateTxMinedStatus(ctx, u.txMetaStore, subtrees, block.Header); err != nil {
-		// TODO this should be a fatal error, but for now we just log it
-		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-		u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
-	}
-
-	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
-
 	return nil
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
 	timeStart := time.Now()
-	prometheusBlockValidationValidateSubtree.Inc()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span.LogKV("subtree", subtreeHash.String())
+	defer func() {
+		span.Finish()
+		prometheusBlockValidationValidateSubtree.Inc()
+	}()
+
 	u.logger.Infof("[validateSubtree][%s] called", subtreeHash.String())
 
 	// get subtree from store
-	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
+	subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 	}
@@ -189,7 +233,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
-	subtreeBytes, err := util.DoHTTPRequest(ctx, url)
+	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
 	if err != nil {
 		return errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
@@ -216,7 +260,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	// validate the subtree
 	txMetaMap := sync.Map{}
-	g, gCtx := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(1024) // max 1024 concurrent requests
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
@@ -271,7 +315,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		// TODO get these in batches
 		for _, txHash := range missingTxHashes {
 			if txHash != nil {
-				txMeta, err = u.blessMissingTransaction(ctx, txHash, baseUrl)
+				txMeta, err = u.blessMissingTransaction(spanCtx, txHash, baseUrl)
 				if err != nil {
 					return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
 				}
@@ -311,7 +355,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	// store subtree in store
 	u.logger.Infof("[validateSubtree][%s] store subtree", subtreeHash.String())
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
+	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to store subtree", subtreeHash.String()), err)
 	}
@@ -365,6 +409,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, txHash *c
 
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
+	// todo return tx meta data
 	err = u.validatorClient.Validate(ctx, tx)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting

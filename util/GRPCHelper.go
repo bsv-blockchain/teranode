@@ -71,7 +71,7 @@ func init() {
 	resolver.SetDefaultScheme("dns")
 }
 
-func InitGlobalTracer(serviceName string) (opentracing.Tracer, io.Closer, error) {
+func InitGlobalTracer(serviceName string, samplingRate float64) (opentracing.Tracer, io.Closer, error) {
 	// TODO ipfs/go-log registers a tracer in its init() function() :-S
 	// if opentracing.IsGlobalTracerRegistered() {
 	//      so we cannot check this here and must overwrite it
@@ -85,7 +85,7 @@ func InitGlobalTracer(serviceName string) (opentracing.Tracer, io.Closer, error)
 
 	cfg.ServiceName = serviceName
 	cfg.Sampler.Type = jaeger.SamplerTypeProbabilistic
-	cfg.Sampler.Param = 0.01
+	cfg.Sampler.Param = samplingRate
 
 	var tracer opentracing.Tracer
 	var closer io.Closer

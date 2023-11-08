@@ -3,15 +3,18 @@ package validator
 import (
 	"context"
 	"net"
+	"strings"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver"
 	"storj.io/drpc/drpcconn"
 )
@@ -20,6 +23,8 @@ type Client struct {
 	client       validator_api.ValidatorAPIClient
 	drpcClient   validator_api.DRPCValidatorAPIClient
 	frpcClient   *validator_api.Client
+	running      bool
+	conn         *grpc.ClientConn
 	logger       utils.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
 	batchSize    int
@@ -60,6 +65,8 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	client := &Client{
 		client:       grpcClient,
 		logger:       logger,
+		running:      true,
+		conn:         conn,
 		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
 		batchSize:    sendBatchSize,
 		batchTimeout: sendBatchTimeout,
@@ -256,4 +263,51 @@ func (c *Client) connectFRPC() {
 			c.frpcClient = client
 		}
 	}
+}
+
+func (c Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
+	ch := make(chan *model.RejectedTxNotification)
+
+	go func() {
+		<-ctx.Done()
+		c.logger.Infof("[BlobServer] context done, closing subscription: %s", source)
+		c.running = false
+		err := c.conn.Close()
+		if err != nil {
+			c.logger.Errorf("[BlobServer] failed to close connection", err)
+		}
+	}()
+
+	go func() {
+		defer close(ch)
+
+		for c.running {
+			stream, err := c.client.Subscribe(ctx, &validator_api.SubscribeRequest{
+				Source: source,
+			})
+			if err != nil {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			for c.running {
+				resp, err := stream.Recv()
+				if err != nil {
+					if !strings.Contains(err.Error(), context.Canceled.Error()) {
+						c.logger.Errorf("[Validator] failed to receive notification: %v", err)
+					}
+					time.Sleep(1 * time.Second)
+					break
+				}
+
+				c.logger.Debugf("[Validator] received notification %+v", resp)
+				ch <- &model.RejectedTxNotification{
+					TxId:   resp.TxId,
+					Reason: resp.Reason,
+				}
+			}
+		}
+	}()
+
+	return ch, nil
 }

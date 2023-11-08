@@ -155,8 +155,14 @@ func main() {
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
 		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
+		samplingRateStr, _ := gocore.Config().Get("tracing_SampleRate", "0.01")
+		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
+		if err != nil {
+			logger.Errorf("error parsing sampling rate: %v", err)
+			samplingRate = 0.01
+		}
 
-		_, closer, err := util.InitGlobalTracer(serviceName)
+		_, closer, err := util.InitGlobalTracer(serviceName, samplingRate)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}

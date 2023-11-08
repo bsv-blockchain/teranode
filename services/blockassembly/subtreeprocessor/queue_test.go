@@ -13,7 +13,7 @@ import (
 )
 
 func Test_queue(t *testing.T) {
-	q := NewLockFreeQueue()
+	q := NewLockFreeQueue(0)
 
 	enqueueItems(t, q, 1, 10)
 
@@ -47,7 +47,7 @@ func Test_queue(t *testing.T) {
 }
 
 func Test_queue2Threads(t *testing.T) {
-	q := NewLockFreeQueue()
+	q := NewLockFreeQueue(0)
 
 	enqueueItems(t, q, 2, 10)
 
@@ -80,7 +80,7 @@ func Test_queue2Threads(t *testing.T) {
 
 func Test_queueLarge(t *testing.T) {
 	runtime.GC()
-	q := NewLockFreeQueue()
+	q := NewLockFreeQueue(0)
 
 	enqueueItems(t, q, 10_000, 1_000)
 
