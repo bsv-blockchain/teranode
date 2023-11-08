@@ -16,6 +16,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
+	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
@@ -192,7 +193,9 @@ func (b *Block) String() string {
 
 func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, currentChain []*BlockHeader) (bool, error) {
 	startTime := time.Now()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
+		span.Finish()
 		prometheusBlockValid.Observe(time.Since(startTime).Seconds())
 	}()
 
@@ -234,7 +237,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// missing the subtreeStore should only happen when we are validating an internal block
 	if subtreeStore != nil && len(b.Subtrees) > 0 {
 		// 6. Get and validate any missing subtrees.
-		if err = b.GetAndValidateSubtrees(ctx, subtreeStore); err != nil {
+		if err = b.GetAndValidateSubtrees(spanCtx, subtreeStore); err != nil {
 			return false, err
 		}
 

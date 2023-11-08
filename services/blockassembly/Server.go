@@ -644,7 +644,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *blockass
 
 func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
 	startTime := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:SubmitMiningSolution:removeSubtreesTTL")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:removeSubtreesTTL")
 	defer func() {
 		span.Finish()
 		blockAssemblyStat.NewStat("removeSubtreesTTL", true).AddTime(startTime.UnixNano())
@@ -671,24 +671,28 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 
 func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *model.BlockHeader) error {
 	startTime := time.Now()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
+		span.Finish()
 		blockAssemblyStat.NewStat("UpdateTxMinedStatus", true).AddTime(startTime.UnixNano())
 		prometheusBlockAssemblyUpdateTxMinedStatus.Observe(time.Since(startTime).Seconds())
 	}()
 
-	g, gCtx := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(1024)
 
+	blockHeaderHash := blockHeader.Hash()
 	for _, subtree := range subtrees {
-		nodes := subtree.Nodes
-		g.Go(func() error {
-			for _, node := range nodes {
-				if err := txMetaStore.SetMined(gCtx, &node.Hash, blockHeader.Hash()); err != nil {
+		for _, node := range subtree.Nodes {
+			hash := node.Hash
+			g.Go(func() error {
+				if err := txMetaStore.SetMined(gCtx, &hash, blockHeaderHash); err != nil {
 					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 				}
-			}
 
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 
 	if err := g.Wait(); err != nil {

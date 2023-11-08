@@ -10,6 +10,7 @@ import (
 type txIDAndFee struct {
 	node   *util.SubtreeNode
 	waitCh chan struct{}
+	time   int64
 	next   atomic.Pointer[txIDAndFee]
 }
 

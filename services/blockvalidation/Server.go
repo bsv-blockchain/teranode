@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -205,7 +206,9 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
 	timeStart := time.Now()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processBlockFound")
 	defer func() {
+		span.Finish()
 		stats.NewStat("processBlockFound").AddTime(timeStart.UnixNano())
 		prometheusBlockValidationProcessBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 	}()
@@ -213,7 +216,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	u.logger.Infof("[processBlockFound][%s] processing block found", hash.String())
 
 	// first check if the block exists, it might have already been processed
-	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	exists, err := u.blockchainClient.GetBlockExists(spanCtx, hash)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -222,13 +225,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		return nil
 	}
 
-	block, err := u.getBlock(ctx, hash, baseUrl)
+	block, err := u.getBlock(spanCtx, hash, baseUrl)
 	if err != nil {
 		return err
 	}
 
 	// catchup if we are missing the parent block
-	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	parentExists, err := u.blockchainClient.GetBlockExists(spanCtx, block.Header.HashPrevBlock)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
@@ -249,7 +252,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
+	err = u.blockValidation.ValidateBlock(spanCtx, block, baseUrl)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -259,11 +262,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	start := gocore.CurrentNanos()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:getBlock")
 	defer func() {
+		span.Finish()
 		stats.NewStat("getBlock").AddTime(start)
 	}()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
+	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("[getBlock][%s] failed to get block from peer [%w]", hash.String(), err)
 	}
