@@ -60,6 +60,22 @@ func New(dir string) (*Badger, error) {
 		WithLogger(logger).
 		WithLoggingLevel(badger.ERROR).WithNumMemtables(32).
 		WithMetricsEnabled(true)
+
+	// low memory options
+	if gocore.Config().GetBool("badger_limitMemoryLow") {
+		opts.WithBaseTableSize(1 << 20)
+		opts.WithNumMemtables(1)
+		opts.WithNumLevelZeroTables(1)
+		opts.WithNumLevelZeroTablesStall(2)
+		opts.WithSyncWrites(false)
+	} else if gocore.Config().GetBool("badger_limitMemoryMedium") {
+		opts.WithBaseTableSize(1 << 22)
+		opts.WithNumMemtables(2)
+		opts.WithNumLevelZeroTables(2)
+		opts.WithNumLevelZeroTablesStall(4)
+		opts.WithSyncWrites(false)
+	}
+
 	s, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
