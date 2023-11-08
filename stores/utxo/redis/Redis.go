@@ -2,10 +2,12 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
@@ -15,6 +17,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/errgroup"
 )
 
 type Redis struct {
@@ -45,12 +48,14 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 	rdb := redis.NewClient(o)
 
 	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+	timeout, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	return &Redis{
 		url:          u,
 		mode:         "client",
 		rdb:          rdb,
 		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
 
@@ -113,12 +118,14 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 	rdb := redis.NewRing(o)
 
 	spentUtxoTtl, _ := gocore.Config().GetInt("spent_utxo_ttl", 60)
+	timeout, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	return &Redis{
 		url:          u,
 		mode:         "ring",
 		rdb:          rdb,
 		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
 
@@ -187,22 +194,36 @@ func (r *Redis) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	value := v.String()
 	txIDHash := tx.TxIDChainHash()
 
+	g, gCtx := errgroup.WithContext(ctx)
+
+	var nrStored = atomic.Uint64{}
 	for i, output := range tx.Outputs {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timeout storing %d of %d utxos", i, len(tx.Outputs))
-		default:
-			if output.Satoshis > 0 { // only do outputs with value
+		if output.Satoshis > 0 { // only do outputs with value
+			i := i
+			output := output
+			g.Go(func() error {
 				hash, err := util.UTXOHashFromOutput(txIDHash, output, uint32(i))
 				if err != nil {
 					return err
 				}
 
-				if err = r.storeUtxo(ctx, hash, value); err != nil {
+				if err = r.storeUtxo(gCtx, hash, value); err != nil {
 					return err
 				}
-			}
+
+				nrStored.Add(1)
+
+				return nil
+			})
 		}
+	}
+
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("timeout storing %d of %d utxos", nrStored.Load(), len(tx.Outputs))
+		}
+
+		return err
 	}
 
 	return nil
