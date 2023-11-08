@@ -73,7 +73,7 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 }
 
 func (v *Validator) Health(cntxt context.Context) (int, string, error) {
-	start, stat, _ := util.StartStatFromContext(cntxt, "Health")
+	start, stat, _ := util.NewStatFromContext(cntxt, "Health", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
