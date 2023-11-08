@@ -239,7 +239,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 }
 
 func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseURL string) error {
-	start, stat, ctx := util.StartStatFromContext(cntxt, "catchup")
+	start, stat, ctx := util.NewStatFromContext(cntxt, "catchup", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -425,7 +425,7 @@ func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockH
 		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
 	}
 
-	go c.createSpendingUtxos(context.Background(), timestamp)
+	go c.createSpendingUtxos(ctx, timestamp)
 
 	return nil
 }
@@ -544,7 +544,7 @@ func (c *Coinbase) RequestFunds(cntxt context.Context, address string) (*bt.Tx, 
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
-	start, stat, ctx := util.NewStatFromContext(cntxt, "RequestFunds", coinbaseStat)
+	start, stat, ctx := util.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -694,7 +694,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(cntxt context.Context, blockId uint64, tx
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
-	start, stat, ctx := util.StartStatFromContext(cntxt, "insertCoinbaseUTXOs")
+	start, stat, ctx := util.StartStatFromContext(ctx, "insertCoinbaseUTXOs")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -776,7 +776,7 @@ func (c *Coinbase) insertSpendableUTXOs(cntxt context.Context, tx *bt.Tx) error 
 	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	defer cancelTimeout()
 
-	start, stat, ctx := util.StartStatFromContext(cntxt, "insertSpendableUTXOs")
+	start, stat, ctx := util.StartStatFromContext(ctx, "insertSpendableUTXOs")
 	defer func() {
 		stat.AddTime(start)
 	}()

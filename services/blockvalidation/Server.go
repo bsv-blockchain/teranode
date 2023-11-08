@@ -153,9 +153,9 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", stats)
 	defer func() {
-		stats.NewStat("Health").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockValidationHealth.Inc()
@@ -167,10 +167,10 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
-	timeStart := time.Now()
+	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", stats)
 	defer func() {
-		stats.NewStat("BlockFound").AddTime(timeStart.UnixNano())
-		prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+		stat.AddTime(start)
+		prometheusBlockValidationBlockFoundDuration.Observe(util.TimeSince(start))
 	}()
 
 	prometheusBlockValidationBlockFound.Inc()
@@ -206,7 +206,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidation:processBlockFound")
-	start, stat, ctx := util.StartStatFromContext(spanCtx, "processBlockFound")
+	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", stats)
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)
@@ -267,11 +267,11 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlock", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:getBlock")
 	defer func() {
 		span.Finish()
-		stats.NewStat("getBlock").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
@@ -292,9 +292,9 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", stats)
 	defer func() {
-		stats.NewStat("getBlockHeaders").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
@@ -317,10 +317,10 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
-	timeStart := time.Now()
+	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", stats)
 	defer func() {
-		stats.NewStat("catchup").AddTime(timeStart.UnixNano())
-		prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+		stat.AddTime(start)
+		prometheusBlockValidationCatchupDuration.Observe(util.TimeSince(start))
 	}()
 
 	prometheusBlockValidationCatchup.Inc()
@@ -391,10 +391,10 @@ LOOP:
 }
 
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
-	timeStart := time.Now()
+	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
 	defer func() {
-		stats.NewStat("SubtreeFound").AddTime(timeStart.UnixNano())
-		prometheusBlockValidationSubtreeFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+		stat.AddTime(start)
+		prometheusBlockValidationSubtreeFoundDuration.Observe(util.TimeSince(start))
 	}()
 
 	prometheusBlockValidationSubtreeFound.Inc()
