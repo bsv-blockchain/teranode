@@ -33,7 +33,7 @@ func init() {
 	//prometheus.MustRegister(badgerExpvarCollector)
 }
 
-var badgerStats = gocore.NewStat("prop_store_badger")
+var badgerStats = gocore.NewStat("prop_store_badger_blob", true)
 
 type Badger struct {
 	store  *badger.DB

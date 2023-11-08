@@ -16,7 +16,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var badgerStat = gocore.NewStat("prop_store_badger")
+var badgerStat = gocore.NewStat("prop_store_badger_txmeta", true)
 
 type loggerWrapper struct {
 	*gocore.Logger
