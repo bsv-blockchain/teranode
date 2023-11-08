@@ -30,7 +30,7 @@ func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.Vali
 
 func (f *fRPC_Validator) ValidateTransaction(cntxt context.Context, req *validator_api.ValidatorApiValidateTransactionRequest) (*validator_api.ValidatorApiValidateTransactionResponse, error) {
 	start := gocore.CurrentNanos()
-	s := stats.NewStat("ValidateTransaction_frpc")
+	s := stats.NewStat("ValidateTransaction_frpc", true)
 	defer func() {
 		s.AddTime(start)
 	}()

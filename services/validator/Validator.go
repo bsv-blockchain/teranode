@@ -146,6 +146,12 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		}
 	}
 
+	storeStart := gocore.CurrentNanos()
+	storeStat := stat.NewStat("utxo.Store", true)
+	defer func() {
+		storeStat.AddTime(storeStart)
+	}()
+
 	// then we store the new utxos from the tx
 	err = v.utxoStore.Store(traceSpan.Ctx, tx)
 	if err != nil {
