@@ -60,7 +60,7 @@ Various services and components are outlined to show their interactions and func
   - **TX Validation Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks for the blockchain.
   - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
-  - **Block Validation Service**: Validates new blocks before they are added to the blockchain.
+  - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
   - **Public Endpoints Service**: Provides API endpoints for external entities to interact with the node. **CLARIFY**
 
 6. **Ancillary Services**:
@@ -181,23 +181,24 @@ To know more about the Extended Transaction Format, please refer to the [Bitcoin
 
 The SubTrees are an innovation aimed at improving scalability and real-time processing capabilities of the blockchain system.
 
-**Unique to UBSV**: The concept of SubTrees is a distinct feature not found in the original Bitcoin protocol or other derivatives.
+_Unique to UBSV_: The concept of SubTrees is a distinct feature not found in the original Bitcoin protocol or other derivatives.
 
 1. A Subtree acts as an intermediate data structure to hold batches of 1M transaction IDs (including metadata) and their corresponding Merkle root.
 2. Each SubTree computes its own Merkle root, which is a single hash representing the entire set of transactions within that SubTree.
 
-**Efficiency**: Subtrees are broadcast every second (assuming the target of 1M transactions per second is met), making data propagation more continuous rather than batched every 10 minutes.
+_Efficiency_: Subtrees are broadcast every second (assuming the target of 1M transactions per second is met), making data propagation more continuous rather than batched every 10 minutes.
 1. By broadcasting these SubTrees at such a high frequency, receiving nodes can validate these batches quickly and continuously, having them "pre-approved" for inclusion in a block.
 2. This contrasts with the original Bitcoin protocol, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
 
-**Lightweight**: Subtrees only include transaction IDs, not the full transaction data, since all nodes already have the transactions, thus reducing the size of the data to propagate.
+_Lightweight_: Subtrees only include transaction IDs, not the full transaction data, since all nodes already have the transactions, thus reducing the size of the data to propagate.
 1. Since all nodes participating in the network are assumed to already have the full transaction data (which they receive and store as transactions are created and spread through the network), it's unnecessary to rebroadcast the full details with every SubTree.
 2. The SubTree then allows nodes to confirm they have all the relevant transactions and to update their state accordingly without having to process vast amounts of data repeatedly.
 
 ![UBSV_SubTree.png](img%2FUBSV_SubTree.png)
 
 ##### Blocks:
-  - **UBSV**: Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, allowing for quick validation of blocks.
+
+Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, allowing for quick validation of blocks.
 
 ![UBSV_Block.png](img%2FUBSV_Block.png)
 
@@ -547,7 +548,7 @@ This diagram describes the architecture and workflow of the legacy Peer-to-Peer 
 
 Here's the breakdown of the components and their functions:
 
-1. **P2P Network (<IPv4>)**: This refers to the original Bitcoin peer-to-peer network using the IPv4 internet protocol.
+1. **P2P Network (IPv4)**: This refers to the original Bitcoin peer-to-peer network using the IPv4 internet protocol.
 
 2. **P2P Receiver Service**: These are the services (1 or more) that receive and send transactions from / to the P2P network.
 
