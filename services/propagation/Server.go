@@ -3,11 +3,18 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +32,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"storj.io/drpc/drpcmux"
@@ -107,6 +115,15 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		err = ps.frpcServer(ctx, frpcAddress)
 		if err != nil {
 			ps.logger.Errorf("failed to start fRPC server: %v", err)
+		}
+	}
+
+	// Experimental QUIC server - to test throughput at scale
+	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
+	if ok {
+		err = ps.quicServer(ctx, quicAddress)
+		if err != nil {
+			ps.logger.Errorf("failed to start QUIC server: %v", err)
 		}
 	}
 
@@ -267,6 +284,72 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 	}
 
 	return nil
+}
+
+func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
+	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
+
+	config := &quic.Config{
+		MaxIncomingStreams:         10000,         // for example
+		MaxStreamReceiveWindow:     4 * (1 << 20), // 4 MB for example
+		MaxIncomingUniStreams:      10000,
+		MaxConnectionReceiveWindow: 4 * (1 << 20),
+		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
+	}
+	listener, err := quic.ListenAddr(quicAddresses, ps.generateTLSConfig(), config)
+	if err != nil {
+		ps.logger.Fatalf("error starting QUIC listener: %v", err)
+	}
+
+	go func() {
+		sess, err := listener.Accept(ctx)
+		if err != nil {
+			ps.logger.Errorf("error accepting new QUIC connection: %v", err)
+			return
+		}
+		for {
+			stream, err := sess.AcceptStream(ctx)
+			if err != nil {
+				return
+			}
+			ps.handleStream(ctx, stream)
+		}
+	}()
+
+	return nil
+}
+
+func (ps *PropagationServer) handleStream(ctx context.Context, stream quic.Stream) {
+	var txLength uint32
+	var err error
+	var buf []byte
+	for {
+		// Read the size of the incoming transaction first
+		err = binary.Read(stream, binary.BigEndian, &txLength)
+		if err != nil {
+			if err != io.EOF {
+				ps.logger.Errorf("error reading transaction length: %v\n", err)
+			}
+			return
+		}
+
+		// Now read the transaction data
+		buf = make([]byte, txLength)
+		_, err = io.ReadFull(stream, buf)
+		if err != nil {
+			ps.logger.Errorf("error reading transaction data: %v\n", err)
+			return
+		}
+
+		// Process the received bytes
+		go func(txb []byte) {
+			if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+				Tx: txb,
+			}); err != nil {
+				ps.logger.Errorf("error processing transaction: %v", err)
+			}
+		}(buf)
+	}
 }
 
 func (ps *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
@@ -492,4 +575,30 @@ func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.T
 	}
 
 	return nil
+}
+
+// Setup a bare-bones TLS config for the server
+func (ps *PropagationServer) generateTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		ps.logger.Errorf("error generating rsa key: %s", err.Error())
+		return nil
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		ps.logger.Errorf("error creating x509 certificate: %s", err.Error())
+		return nil
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		ps.logger.Errorf("error generating x509 key pair: %s", err.Error())
+		return nil
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"txblaster2"},
+	}
 }
