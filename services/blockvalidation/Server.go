@@ -213,7 +213,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		prometheusBlockValidationProcessBlockFoundDuration.Observe(util.TimeSince(start))
 	}()
 
-	u.logger.Infof("[processBlockFound][%s] processing block found", hash.String())
+	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
 
 	// first check if the block exists, it might have already been processed
 	startTime := gocore.CurrentNanos()
