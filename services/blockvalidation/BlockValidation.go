@@ -57,6 +57,7 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
 	timeStart := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span.LogKV("block", block.Hash().String())
 	defer func() {
 		span.Finish()
 		prometheusBlockValidationValidateBlock.Inc()
@@ -205,6 +206,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
 	timeStart := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
 		span.Finish()
 		prometheusBlockValidationValidateSubtree.Inc()
