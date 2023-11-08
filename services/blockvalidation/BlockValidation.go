@@ -190,10 +190,13 @@ func (u *BlockValidation) validateBlockUpdateSubtreesTTL(ctx context.Context, bl
 
 func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	start, stat, _ := util.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
 	defer func() {
 		span.Finish()
+		stat.AddTime(start)
 	}()
 
+	start1 := gocore.CurrentNanos()
 	g, gCtx := errgroup.WithContext(spanCtx)
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
@@ -219,36 +222,45 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	stat.NewStat("1. missingSubtrees").AddTime(start1)
+	if err != nil {
 		return err
 	}
 
+	start2 := gocore.CurrentNanos()
+	stat2 := stat.NewStat("2. validateSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
 	for _, subtreeHash := range missingSubtrees {
 		if subtreeHash != nil {
-			err := u.validateSubtree(spanCtx, subtreeHash, baseUrl)
+			ctx1 := util.ContextWithStat(spanCtx, stat2)
+			err := u.validateSubtree(ctx1, subtreeHash, baseUrl)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
 	}
+	stat2.AddTime(start2)
 
 	return nil
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
-	timeStart := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	start, stat, ctx1 := util.StartStatFromContext(ctx, "validateSubtree")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx1, "BlockValidation:ValidateBlock")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
 		span.Finish()
+		stat.AddTime(start)
 		prometheusBlockValidationValidateSubtree.Inc()
 	}()
 
 	u.logger.Infof("[validateSubtree][%s] called", subtreeHash.String())
 
+	start1 := gocore.CurrentNanos()
 	// get subtree from store
 	subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
+	stat.NewStat("1. subtreeExists").AddTime(start1)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 	}
@@ -263,14 +275,17 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
 	}
 
+	start2 := gocore.CurrentNanos()
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
 	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
+	stat.NewStat("2. http fetch subtree").AddTime(start2)
 	if err != nil {
 		return errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
 
+	start3 := gocore.CurrentNanos()
 	// the subtree bytes we got from our competing miner only contain the transaction hashes
 	// it's basically just a list of 32 byte transaction hashes
 	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
@@ -280,6 +295,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			return errors.Join(errors.New("failed to create transaction hash from bytes"), err)
 		}
 	}
+	stat.NewStat("3. createTxHashes").AddTime(start3)
 
 	nrTransactions := len(txHashes)
 	if !util.IsPowerOfTwo(nrTransactions) {
@@ -291,6 +307,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// create the empty subtree
 	subtree := util.NewTreeByLeafCount(nrTransactions)
 
+	start4 := gocore.CurrentNanos()
 	// validate the subtree
 	txMetaMap := sync.Map{}
 	g, gCtx := errgroup.WithContext(spanCtx)
@@ -338,11 +355,14 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		})
 	}
 
-	if err = g.Wait(); err != nil {
+	err = g.Wait()
+	stat.NewStat("4. checkTxs").AddTime(start4)
+	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
 	}
 
 	if len(missingTxHashes) > 0 {
+		start4 := gocore.CurrentNanos()
 		var txMeta *txmeta.Data
 		// process all the missing transactions in order, there might be parent / child dependencies
 		// TODO get these in batches
@@ -355,8 +375,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				txMetaMap.Store(txHash, txMeta)
 			}
 		}
+		stat.NewStat("blessMissingTxs").AddTime(start4)
 	}
 
+	start5 := gocore.CurrentNanos()
 	var ok bool
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
@@ -373,6 +395,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to add node to subtree", subtreeHash.String()), err)
 		}
 	}
+	stat.NewStat("5. addAllTxHashFeeSizesToSubtree").AddTime(start5)
 
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
@@ -386,14 +409,16 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to serialize subtree", subtreeHash.String()), err)
 	}
 
+	start6 := gocore.CurrentNanos()
 	// store subtree in store
 	u.logger.Infof("[validateSubtree][%s] store subtree", subtreeHash.String())
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
+	stat.NewStat("6. storeSubtree").AddTime(start6)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to store subtree", subtreeHash.String()), err)
 	}
 
-	prometheusBlockValidationValidateSubtreeDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusBlockValidationValidateSubtreeDuration.Observe(util.TimeSince(start))
 
 	return nil
 }

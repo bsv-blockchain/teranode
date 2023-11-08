@@ -110,8 +110,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
+					_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", stats, false)
 					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
-					if err = u.catchup(ctx, c.block, c.baseURL); err != nil {
+					if err = u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
@@ -119,9 +120,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				}
 			case b := <-u.blockFoundCh:
 				{
+					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", stats, false)
 					// TODO optimize this for the valid chain, not processing everything ???
 					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
-					if err = u.processBlockFound(ctx, b.hash, b.baseURL); err != nil {
+					if err = u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
 					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
@@ -411,7 +413,9 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
 	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
 
+	start1 := gocore.CurrentNanos()
 	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
+	stat.NewStat("subtreeStore.Exists").AddTime(start1)
 	if err != nil {
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to check if subtree exists [%w]", subtreeHash.String(), err)
 	}
@@ -425,8 +429,14 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
 	}
 
+	goroutineStat := stat.NewStat("go routine")
 	// validate the subtree in the background
 	go func() {
+		start := gocore.CurrentNanos()
+		defer func() {
+			goroutineStat.AddTime(start)
+		}()
+
 		// check if we are already processing this subtree
 		u.processingSubtreeMu.Lock()
 		processing, ok := u.processingSubtree[*subtreeHash]
@@ -447,7 +457,8 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 			u.processingSubtreeMu.Unlock()
 		}()
 
-		err = u.blockValidation.validateSubtree(context.TODO(), subtreeHash, req.GetBaseUrl())
+		_, _, ctx := util.NewStatFromContext(context.TODO(), "go routine", stats)
+		err = u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 			return
