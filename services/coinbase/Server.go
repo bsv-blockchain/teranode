@@ -97,7 +97,7 @@ func (s *Server) Stop(_ context.Context) error {
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		stats.NewStat("Health").AddTime(start)
+		stats.NewStat("Health_grpc").AddTime(start)
 	}()
 
 	prometheusHealth.Inc()
@@ -109,13 +109,15 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.Heal
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
 	start := gocore.CurrentNanos()
+	stat := stats.NewStat("RequestFunds_grpc", true)
 	defer func() {
-		stats.NewStat("RequestFunds").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusRequestFunds.Inc()
 
-	fundingTx, err := s.coinbase.RequestFunds(ctx, req.Address)
+	ctx1 := util.ContextWithStat(ctx, stat)
+	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address)
 	if err != nil {
 		return nil, err
 	}
