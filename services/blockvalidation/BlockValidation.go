@@ -101,6 +101,28 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
 	}
 
+	go func() {
+		// this happens in the background, since we have already added the block to the blockchain
+		// TODO should we recover this somehow if it fails?
+		err = u.finalizeBlockValidation(spanCtx, block)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
+		}
+	}()
+
+	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+
+	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
+
+	return nil
+}
+
+func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *model.Block) error {
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:finalizeBlockValidation")
+	defer func() {
+		span.Finish()
+	}()
+
 	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
 	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
 	subtrees, err := block.GetSubtrees(u.subtreeStore)
@@ -108,23 +130,33 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
 
-	u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
-	err = u.validateBlockUpdateSubtreesTTL(spanCtx, block)
-	if err != nil {
-		return err
+	g, gCtx := errgroup.WithContext(spanCtx)
+
+	g.Go(func() error {
+		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
+		err = u.validateBlockUpdateSubtreesTTL(gCtx, block)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%w]", block.Hash().String(), err)
+		}
+
+		return nil
+	})
+
+	g.Go(func() error {
+		// add the transactions in this block to the txMeta block hashes
+		u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
+		if err = blockassembly.UpdateTxMinedStatus(gCtx, u.txMetaStore, subtrees, block.Header); err != nil {
+			// TODO this should be a fatal error, but for now we just log it
+			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
+		}
+
+		return nil
+	})
+
+	if err = g.Wait(); err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 	}
-
-	// add the transactions in this block to the txMeta block hashes
-	u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-	if err = blockassembly.UpdateTxMinedStatus(spanCtx, u.txMetaStore, subtrees, block.Header); err != nil {
-		// TODO this should be a fatal error, but for now we just log it
-		//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-		u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
-	}
-
-	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
-
-	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
 
 	return nil
 }
