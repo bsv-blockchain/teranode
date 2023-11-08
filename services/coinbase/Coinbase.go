@@ -430,7 +430,8 @@ func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockH
 		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
 	}
 
-	go c.createSpendingUtxos(context.Background(), timestamp)
+	_, _, ctx = util.StartStatFromContext(context.Background(), "processCoinbase")
+	go c.createSpendingUtxos(ctx, timestamp)
 
 	return nil
 }

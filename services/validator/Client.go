@@ -73,16 +73,28 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 	}
 
 	// Connect to experimental DRPC server if configured
-	go client.connectDRPC()
+	client.connectDRPC()
 
 	// Connect to experimental fRPC server if configured
 	// fRPC has only been implemented for AddTx / Store
-	go client.connectFRPC()
+	client.connectFRPC()
 
 	if sendBatchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
 			go client.batchWorker(ctx)
 		}
+	}
+
+	if client.frpcClient != nil {
+		/* listen for close channel and reconnect */
+		client.logger.Infof("Listening for close channel on fRPC client")
+		go func() {
+			select {
+			case <-client.frpcClient.CloseChannel():
+				client.logger.Infof("fRPC client close channel received, reconnecting...")
+				client.connectFRPC()
+			}
+		}()
 	}
 
 	return client, nil
@@ -260,6 +272,7 @@ func (c *Client) connectFRPC() {
 		if err != nil {
 			c.logger.Errorf("error connecting to fRPC server in validator: %s", err)
 		} else {
+			c.logger.Debugf("Connected to validator fRPC server")
 			c.frpcClient = client
 		}
 	}

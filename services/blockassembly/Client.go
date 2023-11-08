@@ -79,6 +79,18 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 		}
 	}
 
+	if client.frpcClient != nil {
+		/* listen for close channel and reconnect */
+		client.logger.Infof("Listening for close channel on fRPC client")
+		go func() {
+			select {
+			case <-client.frpcClient.CloseChannel():
+				client.logger.Infof("fRPC client close channel received, reconnecting...")
+				client.connectFRPC()
+			}
+		}()
+	}
+
 	return client
 }
 
@@ -126,6 +138,7 @@ func (s *Client) connectFRPC() {
 		if err != nil {
 			s.logger.Errorf("error connecting to fRPC server in blockassembly: %s", err)
 		} else {
+			s.logger.Debugf("Connected to blockassembly fRPC server")
 			s.frpcClient = client
 		}
 	}

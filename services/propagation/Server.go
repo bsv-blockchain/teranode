@@ -500,20 +500,20 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.Go(func() error {
-		if err = ps.storeTransaction(gCtx, btTx); err != nil {
+		if err := ps.storeTransaction(gCtx, btTx); err != nil {
 			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v", btTx.TxIDChainHash(), err)
 		}
 		return nil
 	})
 
-	if err = ps.validator.Validate(ctx, btTx); err != nil {
+	if err := ps.validator.Validate(ctx, btTx); err != nil {
 		// TODO send REJECT message to peers if invalid tx
 		ps.logger.Errorf("[ProcessTransaction][%s] received invalid transaction: %s", btTx.TxID(), err.Error())
 		prometheusInvalidTransactions.Inc()
 		return nil, err
 	}
 
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		// TODO: we failed storing the tx in the store, what should we do now?
 		//       maybe store in a local badger or a kafka stream and have a process that retries?
 		ps.logger.Errorf("[ProcessTransaction][%s] failed to store transaction: %s", btTx.TxID(), err.Error())

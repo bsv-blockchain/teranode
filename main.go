@@ -241,28 +241,6 @@ func main() {
 		}
 	}
 
-	var validatorClient validator.Interface
-	if startBlockValidation || startPropagation {
-		localValidator := gocore.Config().GetBool("useLocalValidator", false)
-		if localValidator {
-			logger.Infof("[Validator] Using local validator")
-			validatorClient, err = validator.New(ctx,
-				logger,
-				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
-			)
-			if err != nil {
-				logger.Fatalf("could not create validator [%v]", err)
-			}
-
-		} else {
-			validatorClient, err = validator.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("error creating validator client: %v", err)
-			}
-		}
-	}
-
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
@@ -357,6 +335,26 @@ func main() {
 
 	// propagation
 	if startPropagation {
+		var validatorClient validator.Interface
+		localValidator := gocore.Config().GetBool("useLocalValidator", false)
+		if localValidator {
+			logger.Infof("[Validator] Using local validator")
+			validatorClient, err = validator.New(ctx,
+				logger,
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+			)
+			if err != nil {
+				logger.Fatalf("could not create validator [%v]", err)
+			}
+
+		} else {
+			validatorClient, err = validator.NewClient(ctx, logger)
+			if err != nil {
+				logger.Fatalf("error creating validator client: %v", err)
+			}
+		}
+
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
 			if gocore.Config().GetBool("propagation_use_dumb", false) {
