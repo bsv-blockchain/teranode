@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -15,13 +16,14 @@ import (
 
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*aerospike.Client
-var logger = gocore.Log("uaero", gocore.NewLogLevelFromString("DEBUG"))
 
 func init() {
 	aerospikeConnections = make(map[string]*aerospike.Client)
 }
 
 func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
+	logger := gocore.Log("uaero", gocore.NewLogLevelFromString("DEBUG"))
+
 	aerospikeConnectionMutex.Lock()
 	defer aerospikeConnectionMutex.Unlock()
 
@@ -29,7 +31,7 @@ func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	client, found := aerospikeConnections[url.Host]
 	if !found {
 		logger.Infof("[AEROSPIKE] Creating aerospike client for host: %s", url.Host)
-		client, err = getAerospikeClient(url)
+		client, err = getAerospikeClient(logger, url)
 		if err != nil {
 			return nil, err
 		}
@@ -41,7 +43,7 @@ func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	return client, nil
 }
 
-func getAerospikeClient(url *url.URL) (*aerospike.Client, error) {
+func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, error) {
 	if len(url.Path) < 1 {
 		return nil, fmt.Errorf("aerospike namespace not found")
 	}
