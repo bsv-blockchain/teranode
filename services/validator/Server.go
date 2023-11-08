@@ -32,14 +32,25 @@ import (
 
 var stats = gocore.NewStat("validator")
 
+type subscriber struct {
+	subscription validator_api.ValidatorAPI_SubscribeServer
+	source       string
+	done         chan struct{}
+}
+
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator   Interface
-	logger      utils.Logger
-	utxoStore   utxostore.Interface
-	txMetaStore txmetastore.Store
-	kafkaSignal chan os.Signal
+	validator           Interface
+	logger              utils.Logger
+	utxoStore           utxostore.Interface
+	txMetaStore         txmetastore.Store
+	kafkaSignal         chan os.Signal
+	newSubscriptions    chan subscriber
+	deadSubscriptions   chan subscriber
+	subscribers         map[subscriber]bool
+	subscriptionCtx     context.Context
+	cancelSubscriptions context.CancelFunc
 }
 
 func Enabled() bool {
@@ -50,11 +61,17 @@ func Enabled() bool {
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
 	initPrometheusMetrics()
+	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
 	return &Server{
-		logger:      logger,
-		utxoStore:   utxoStore,
-		txMetaStore: txMetaStore,
+		logger:              logger,
+		utxoStore:           utxoStore,
+		txMetaStore:         txMetaStore,
+		newSubscriptions:    make(chan subscriber, 10),
+		deadSubscriptions:   make(chan subscriber, 10),
+		subscribers:         make(map[subscriber]bool),
+		subscriptionCtx:     subscriptionCtx,
+		cancelSubscriptions: cancelSubscriptions,
 	}
 }
 
@@ -257,6 +274,7 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)
+		v.sendInvalidTxNotification(tx.TxID(), err.Error())
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
@@ -282,6 +300,8 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	for _, reqItem := range req.GetTransactions() {
 		tx, err := v.ValidateTransaction(ctx, reqItem)
 		if err != nil {
+			v.sendInvalidTxNotification(tx.String(), tx.Reason)
+
 			errReasons = append(errReasons, &validator_api.ValidateTransactionError{
 				TxId:   tx.String(),
 				Reason: tx.Reason,
@@ -361,4 +381,46 @@ func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 	}()
 
 	return nil
+}
+
+func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {
+	// prometheusBlockchainSubscribe.Inc()
+
+	// Keep this subscription alive without endless loop - use a channel that blocks forever.
+	ch := make(chan struct{})
+
+	v.newSubscriptions <- subscriber{
+		subscription: sub,
+		done:         ch,
+		source:       req.Source,
+	}
+
+	for {
+		select {
+		case <-sub.Context().Done():
+			// Client disconnected.
+			v.logger.Infof("[Validator] GRPC client disconnected: %s", req.Source)
+			return nil
+		case <-ch:
+			// Subscription ended.
+			return nil
+		}
+	}
+}
+
+func (v *Server) sendInvalidTxNotification(txId string, reason string) {
+	notification := &validator_api.RejectedTxNotification{
+		TxId:   txId,
+		Reason: reason,
+	}
+	v.logger.Debugf("[Validator] Sending notification: %s", notification)
+	for sub := range v.subscribers {
+		v.logger.Debugf("[Validator] Sending notification to %s in background: %s", sub.source, notification)
+		go func(s subscriber) {
+			v.logger.Debugf("[Validator] Sending notification to %s: %s", s.source, notification)
+			if err := s.subscription.Send(notification); err != nil {
+				v.deadSubscriptions <- s
+			}
+		}(sub)
+	}
 }

@@ -10,6 +10,8 @@ service ValidatorAPI {
   rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+  rpc Subscribe (SubscribeRequest) returns (stream RejectedTxNotification) {}
+
 }
 
 // swagger:model EmptyMessage
@@ -48,4 +50,15 @@ message ValidateTransactionError {
 message ValidateTransactionBatchResponse {
   bool valid = 1;
   repeated ValidateTransactionError reasons = 2;
+}
+
+// swagger:model SubscribeRequest
+message SubscribeRequest {
+  string source = 1;
+}
+
+// swagger:model Notification
+message RejectedTxNotification {
+  string txId = 1;
+  string reason = 2;
 }

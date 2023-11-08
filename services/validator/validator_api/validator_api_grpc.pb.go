@@ -23,6 +23,7 @@ const (
 	ValidatorAPI_ValidateTransaction_FullMethodName       = "/validator_api.ValidatorAPI/ValidateTransaction"
 	ValidatorAPI_ValidateTransactionBatch_FullMethodName  = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
 	ValidatorAPI_ValidateTransactionStream_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionStream"
+	ValidatorAPI_Subscribe_FullMethodName                 = "/validator_api.ValidatorAPI/Subscribe"
 )
 
 // ValidatorAPIClient is the client API for ValidatorAPI service.
@@ -34,6 +35,7 @@ type ValidatorAPIClient interface {
 	ValidateTransaction(ctx context.Context, in *ValidateTransactionRequest, opts ...grpc.CallOption) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionStreamClient, error)
+	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error)
 }
 
 type validatorAPIClient struct {
@@ -105,6 +107,38 @@ func (x *validatorAPIValidateTransactionStreamClient) CloseAndRecv() (*ValidateT
 	return m, nil
 }
 
+func (c *validatorAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ValidatorAPI_ServiceDesc.Streams[1], ValidatorAPI_Subscribe_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &validatorAPISubscribeClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type ValidatorAPI_SubscribeClient interface {
+	Recv() (*RejectedTxNotification, error)
+	grpc.ClientStream
+}
+
+type validatorAPISubscribeClient struct {
+	grpc.ClientStream
+}
+
+func (x *validatorAPISubscribeClient) Recv() (*RejectedTxNotification, error) {
+	m := new(RejectedTxNotification)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ValidatorAPIServer is the server API for ValidatorAPI service.
 // All implementations must embed UnimplementedValidatorAPIServer
 // for forward compatibility
@@ -114,6 +148,7 @@ type ValidatorAPIServer interface {
 	ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error
+	Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error
 	mustEmbedUnimplementedValidatorAPIServer()
 }
 
@@ -132,6 +167,9 @@ func (UnimplementedValidatorAPIServer) ValidateTransactionBatch(context.Context,
 }
 func (UnimplementedValidatorAPIServer) ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ValidateTransactionStream not implemented")
+}
+func (UnimplementedValidatorAPIServer) Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error {
+	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
 }
 func (UnimplementedValidatorAPIServer) mustEmbedUnimplementedValidatorAPIServer() {}
 
@@ -226,6 +264,27 @@ func (x *validatorAPIValidateTransactionStreamServer) Recv() (*ValidateTransacti
 	return m, nil
 }
 
+func _ValidatorAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ValidatorAPIServer).Subscribe(m, &validatorAPISubscribeServer{stream})
+}
+
+type ValidatorAPI_SubscribeServer interface {
+	Send(*RejectedTxNotification) error
+	grpc.ServerStream
+}
+
+type validatorAPISubscribeServer struct {
+	grpc.ServerStream
+}
+
+func (x *validatorAPISubscribeServer) Send(m *RejectedTxNotification) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // ValidatorAPI_ServiceDesc is the grpc.ServiceDesc for ValidatorAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -251,6 +310,11 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "ValidateTransactionStream",
 			Handler:       _ValidatorAPI_ValidateTransactionStream_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "Subscribe",
+			Handler:       _ValidatorAPI_Subscribe_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "services/validator/validator_api/validator_api.proto",
