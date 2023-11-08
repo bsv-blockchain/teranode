@@ -230,6 +230,11 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
 	}
 
+	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
+		_ = c.db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_processed_at index - [%+v]", err)
+	}
+
 	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_spendable_utxos_inserted_at index - [%+v]", err)
@@ -425,7 +430,7 @@ func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockH
 		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
 	}
 
-	go c.createSpendingUtxos(ctx, timestamp)
+	go c.createSpendingUtxos(context.Background(), timestamp)
 
 	return nil
 }
