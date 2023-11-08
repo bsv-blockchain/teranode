@@ -204,19 +204,21 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &emptypb.Empty{}, nil
 }
 
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
-	timeStart := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processBlockFound")
+func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
+	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidation:processBlockFound")
+	start, stat, ctx := util.StartStatFromContext(spanCtx, "processBlockFound")
 	defer func() {
 		span.Finish()
-		stats.NewStat("processBlockFound").AddTime(timeStart.UnixNano())
-		prometheusBlockValidationProcessBlockFoundDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+		stat.AddTime(start)
+		prometheusBlockValidationProcessBlockFoundDuration.Observe(util.TimeSince(start))
 	}()
 
 	u.logger.Infof("[processBlockFound][%s] processing block found", hash.String())
 
 	// first check if the block exists, it might have already been processed
-	exists, err := u.blockchainClient.GetBlockExists(spanCtx, hash)
+	startTime := gocore.CurrentNanos()
+	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	stat.NewStat("GetBlockExists").AddTime(startTime)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -225,13 +227,17 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		return nil
 	}
 
-	block, err := u.getBlock(spanCtx, hash, baseUrl)
+	startTime = gocore.CurrentNanos()
+	block, err := u.getBlock(ctx, hash, baseUrl)
+	stat.NewStat("GetBlock").AddTime(startTime)
 	if err != nil {
 		return err
 	}
 
 	// catchup if we are missing the parent block
-	parentExists, err := u.blockchainClient.GetBlockExists(spanCtx, block.Header.HashPrevBlock)
+	startTime = gocore.CurrentNanos()
+	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	stat.NewStat("GetBlockExists (parent)").AddTime(startTime)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
@@ -252,7 +258,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(spanCtx, block, baseUrl)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}

@@ -9,7 +9,7 @@ import (
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockchainStats.NewStat("GetState").AddTime(start)
+		stats.NewStat("GetState").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -35,7 +35,7 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockchainStats.NewStat("GetState").AddTime(start)
+		stats.NewStat("GetState").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

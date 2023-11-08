@@ -335,17 +335,16 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 }
 
 func (ba *BlockAssembly) AddTx(cntxt context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
-	startTime := time.Now()
+	startTime, stat, _ := util.NewStatFromContext(cntxt, "AddTx", blockAssemblyStat)
 
 	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
 
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
 		//traceSpan.Finish()
-		stat := util.StatFromContext(cntxt, blockAssemblyStat.NewStat("AddTx", true))
-		stat.AddTime(startTime.UnixNano())
+		stat.AddTime(startTime)
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+		prometheusBlockAssemblyAddTxDuration.Observe(util.TimeSince(startTime))
 	}()
 
 	if len(req.Txid) != 32 {

@@ -54,30 +54,31 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 	return bv
 }
 
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
-	timeStart := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+func (u *BlockValidation) ValidateBlock(cntxt context.Context, block *model.Block, baseUrl string) error {
+	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidation:ValidateBlock")
+	timeStart, stat, ctx := util.NewStatFromContext(spanCtx, "ValidateBlock", stats)
 	span.LogKV("block", block.Hash().String())
 	defer func() {
 		span.Finish()
+		stat.AddTime(timeStart)
 		prometheusBlockValidationValidateBlock.Inc()
 	}()
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
-	err := u.validateBLockSubtrees(spanCtx, block, baseUrl)
+	err := u.validateBLockSubtrees(ctx, block, baseUrl)
 	if err != nil {
 		return err
 	}
 
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
 	}
 
 	// Add the coinbase transaction to the metaTxStore
 	// TODO - we need to consider if we can do this differently
-	if _, err = u.txMetaStore.Create(spanCtx, block.CoinbaseTx); err != nil {
+	if _, err = u.txMetaStore.Create(ctx, block.CoinbaseTx); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
 		}
@@ -86,31 +87,31 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	if ok, err := block.Valid(ctx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
 		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 	}
 
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(spanCtx, block, true); err != nil {
+	if err = u.blockchainClient.AddBlock(ctx, block, true); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
 	}
 
 	go func() {
 		// this happens in the background, since we have already added the block to the blockchain
 		// TODO should we recover this somehow if it fails?
-		err = u.finalizeBlockValidation(spanCtx, block)
+		err = u.finalizeBlockValidation(ctx, block)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 		}
 	}()
 
-	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusBlockValidationValidateBlockDuration.Observe(util.TimeSince(timeStart))
 
 	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
 

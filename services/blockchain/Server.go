@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var stats = gocore.NewStat("blockchain")
+var stats = gocore.NewStat("blockchain", true)
 
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer

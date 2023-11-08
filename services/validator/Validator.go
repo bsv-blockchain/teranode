@@ -73,8 +73,7 @@ func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, tx
 }
 
 func (v *Validator) Health(cntxt context.Context) (int, string, error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, stats).NewStat("Health")
+	start, stat, _ := util.StartStatFromContext(cntxt, "Health")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -83,12 +82,10 @@ func (v *Validator) Health(cntxt context.Context) (int, string, error) {
 }
 
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, stats).NewStat("Validate", true)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, stat)
 
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend
@@ -97,7 +94,8 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		if r := recover(); r != nil {
 			if len(*reservedUtxos) > 0 {
 				// TODO is this correct in the recover? should we be reversing the utxos?
-				v.reverseSpends(tracing.Start(ctx, "Validator:Validate:Recover"), *reservedUtxos)
+				spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
+				v.reverseSpends(spanCtx, *reservedUtxos)
 			}
 
 			v.logger.Errorf("[Validate][%s] Validate recover: %v", tx.TxID(), r)
@@ -166,12 +164,10 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 }
 
 func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxostore.Spend) (*txmeta.Data, error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("registerTxInMetaStore")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
@@ -191,12 +187,10 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("validateTransaction")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	basicSpan := tracing.Start(ctx, "Validator:Validate:Basic")
 	defer func() {
@@ -212,12 +206,10 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error
 }
 
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.Spend, error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("spendUtxos")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	utxoSpan := tracing.Start(ctx, "Validator:Validate:SpendUtxos")
 	defer func() {
@@ -257,12 +249,10 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxostore.Spend) error {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("sendToBlockAssembler")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	if v.kafkaProducer != nil {
 		if err := v.publishToKafka(traceSpan, bData); err != nil {
@@ -282,12 +272,10 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 }
 
 func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostore.Spend) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("reverseSpends")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "reverseSpends")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	reverseUtxoSpan := tracing.Start(ctx, "Validator:Validate:ReverseUtxos")
 	defer reverseUtxoSpan.Finish()
@@ -295,7 +283,7 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
 	callerSpan := opentracing.SpanFromContext(reverseUtxoSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	ctx = util.ContextWithStat(setCtx, stat)
+	_, _, ctx = util.StartStatFromContext(setCtx, "reverseSpends")
 
 	if errReset := v.utxoStore.UnSpend(ctx, spentUtxos); errReset != nil {
 		reverseUtxoSpan.RecordError(errReset)
@@ -304,12 +292,10 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 }
 
 func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.Data) error {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(traceSpan.Ctx, stats).NewStat("publishToKafka")
+	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "publishToKafka")
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(traceSpan.Ctx, stat)
 
 	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()

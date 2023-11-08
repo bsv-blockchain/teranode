@@ -369,12 +369,10 @@ func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.Empt
 }
 
 func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
-	start := gocore.CurrentNanos()
-	stat := propagationStat.NewStat("ProcessTransactionHex", true)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "ProcessTransactionHex", propagationStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, stat)
 
 	txBytes, err := hex.DecodeString(req.Tx)
 	if err != nil {
@@ -387,12 +385,10 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 }
 
 func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, propagationStat).NewStat("ProcessTransaction", true)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "ProcessTransaction", propagationStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, stat)
 
 	prometheusProcessedTransactions.Inc()
 	traceSpan := tracing.Start(ctx, "PropagationServer:Set")

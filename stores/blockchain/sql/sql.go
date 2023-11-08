@@ -24,13 +24,9 @@ type SQL struct {
 }
 
 var (
-	storeStat = gocore.NewStat("blockchain")
-	cache     = sync.Map{}
+	stat  = gocore.NewStat("blockchain", true)
+	cache = sync.Map{}
 )
-
-func init() {
-	gocore.NewStat("blockchain")
-}
 
 func New(storeUrl *url.URL) (*SQL, error) {
 	logger := gocore.Log("bcsql")

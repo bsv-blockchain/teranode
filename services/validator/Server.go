@@ -248,12 +248,10 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 }
 
 func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
-	start := gocore.CurrentNanos()
-	stat := util.StatFromContext(cntxt, stats).NewStat("ValidateTransaction", true)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransaction", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, stat)
 
 	prometheusProcessedTransactions.Inc()
 	timeStart := time.Now()
@@ -289,12 +287,10 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 }
 
 func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
-	start := gocore.CurrentNanos()
-	stat := stats.NewStat("ValidateTransactionBatch", true)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransactionBatch", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, stat)
 
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
 	for _, reqItem := range req.GetTransactions() {

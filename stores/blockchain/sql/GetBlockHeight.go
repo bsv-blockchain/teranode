@@ -13,7 +13,7 @@ import (
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockchainStats.NewStat("GetBlock").AddTime(start)
+		stats.NewStat("GetBlock").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

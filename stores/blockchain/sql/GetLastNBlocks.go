@@ -14,12 +14,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var blockchainStats = gocore.NewStat("blockchain")
+var stats = gocore.NewStat("blockchain", true)
 
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		blockchainStats.NewStat("GetLastNBlocks").AddTime(start)
+		stats.NewStat("GetLastNBlocks").AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

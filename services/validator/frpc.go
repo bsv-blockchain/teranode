@@ -29,12 +29,10 @@ func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.Vali
 }
 
 func (f *fRPC_Validator) ValidateTransaction(cntxt context.Context, req *validator_api.ValidatorApiValidateTransactionRequest) (*validator_api.ValidatorApiValidateTransactionResponse, error) {
-	start := gocore.CurrentNanos()
-	s := stats.NewStat("ValidateTransaction_frpc", true)
+	start, s, ctx := util.NewStatFromContext(cntxt, "ValidateTransaction_frpc", stats)
 	defer func() {
 		s.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, s)
 
 	prometheusProcessedTransactions.Inc()
 	timeStart := time.Now()
@@ -72,12 +70,10 @@ func (f *fRPC_Validator) ValidateTransaction(cntxt context.Context, req *validat
 }
 
 func (f *fRPC_Validator) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidatorApiValidateTransactionBatchRequest) (*validator_api.ValidatorApiValidateTransactionBatchResponse, error) {
-	start := gocore.CurrentNanos()
-	s := stats.NewStat("ValidateTransactionBatch_frpc")
+	start, s, ctx := util.NewStatFromContext(cntxt, "ValidateTransactionBatch_frpc", stats)
 	defer func() {
 		s.AddTime(start)
 	}()
-	ctx := util.ContextWithStat(cntxt, s)
 
 	var err error
 	errReasons := make([]*validator_api.ValidatorApiValidateTransactionError, 0, len(req.Transactions))
