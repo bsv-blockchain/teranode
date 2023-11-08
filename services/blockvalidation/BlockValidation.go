@@ -362,7 +362,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	if len(missingTxHashes) > 0 {
-		start4 := gocore.CurrentNanos()
+		start5 := gocore.CurrentNanos()
 		var txMeta *txmeta.Data
 		// process all the missing transactions in order, there might be parent / child dependencies
 		// TODO get these in batches
@@ -375,10 +375,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				txMetaMap.Store(txHash, txMeta)
 			}
 		}
-		stat.NewStat("blessMissingTxs").AddTime(start4)
+		stat.NewStat("5. blessMissingTxs").AddTime(start5)
 	}
 
-	start5 := gocore.CurrentNanos()
+	start6 := gocore.CurrentNanos()
 	var ok bool
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
@@ -395,7 +395,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to add node to subtree", subtreeHash.String()), err)
 		}
 	}
-	stat.NewStat("5. addAllTxHashFeeSizesToSubtree").AddTime(start5)
+	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start6)
 
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
@@ -409,11 +409,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to serialize subtree", subtreeHash.String()), err)
 	}
 
-	start6 := gocore.CurrentNanos()
+	start7 := gocore.CurrentNanos()
 	// store subtree in store
 	u.logger.Infof("[validateSubtree][%s] store subtree", subtreeHash.String())
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
-	stat.NewStat("6. storeSubtree").AddTime(start6)
+	stat.NewStat("7. storeSubtree").AddTime(start7)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to store subtree", subtreeHash.String()), err)
 	}
