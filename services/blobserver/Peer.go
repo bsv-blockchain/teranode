@@ -2,6 +2,7 @@ package blobserver
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func (c *Peer) Start(ctx context.Context) error {
 			for c.running {
 				resp, err = stream.Recv()
 				if err != nil {
-					if !strings.Contains(err.Error(), context.Canceled.Error()) {
+					if !strings.Contains(err.Error(), context.Canceled.Error()) && !strings.Contains(err.Error(), io.EOF.Error()) {
 						c.logger.Errorf("[BlobServer] could not receive: %v", err)
 					}
 					_ = stream.CloseSend()
