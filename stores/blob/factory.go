@@ -21,12 +21,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 // NewStore
 // TODO add options to all stores
-func NewStore(storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
+func NewStore(logger utils.Logger, storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
 	switch storeUrl.Scheme {
 	case "null":
 		store, err = null.New()
@@ -41,7 +42,7 @@ func NewStore(storeUrl *url.URL, opts ...options.Options) (store Store, err erro
 			return nil, fmt.Errorf("error creating file blob store: %v", err)
 		}
 	case "badger":
-		store, err = badger.New("." + storeUrl.Path) // relative
+		store, err = badger.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
 			return nil, fmt.Errorf("error creating badger blob store: %v", err)
 		}
@@ -87,8 +88,6 @@ func NewStore(storeUrl *url.URL, opts ...options.Options) (store Store, err erro
 	}
 
 	if storeUrl.Query().Get("batch") == "true" {
-		logger := gocore.Log("batcher")
-
 		sizeInBytes := int64(4 * 1024 * 1024) // 4MB
 		sizeString := storeUrl.Query().Get("sizeInBytes")
 		if sizeString != "" {
@@ -115,7 +114,7 @@ func NewStore(storeUrl *url.URL, opts ...options.Options) (store Store, err erro
 
 		var ttlStore Store
 		if ttlStoreType == "badger" {
-			ttlStore, err = badger.New(localTTLStorePath)
+			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create badger store"), err)
 			}

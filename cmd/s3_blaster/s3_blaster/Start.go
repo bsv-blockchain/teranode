@@ -2,17 +2,16 @@ package s3_blaster
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
-	"strings"
-	"sync/atomic"
-	"time"
-
-	"crypto/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -93,7 +92,7 @@ func Start() {
 }
 
 func worker(logger utils.Logger) {
-	txStore, err := blob.NewStore(txStoreUrl)
+	txStore, err := blob.NewStore(logger, txStoreUrl)
 	if err != nil {
 		panic(err)
 	}

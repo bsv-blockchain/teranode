@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/dgraph-io/badger/v3"
+	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +20,7 @@ func TestBadger_SetTTL(t *testing.T) {
 		}()
 
 		_ = os.RemoveAll("./test")
-		s, err := New("./test")
+		s, err := New(p2p.TestLogger{}, "./test")
 		require.NoError(t, err)
 
 		key := []byte("key")

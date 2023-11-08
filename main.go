@@ -230,10 +230,10 @@ func main() {
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				gocore.Log("bass"),
-				getTxStore(),
+				getTxStore(logger),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
-				getSubtreeStore(),
+				getSubtreeStore(logger),
 				blockchainClient,
 			)); err != nil {
 				panic(err)
@@ -279,8 +279,8 @@ func main() {
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				gocore.Log("bval"),
 				getUtxoStore(ctx, logger),
-				getSubtreeStore(),
-				getTxStore(),
+				getSubtreeStore(logger),
+				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
 			)); err != nil {
@@ -329,9 +329,9 @@ func main() {
 		if err := sm.AddService("BlobServer", blobserver.NewServer(
 			gocore.Log("blob"),
 			getUtxoStore(ctx, logger),
-			getTxStore(),
+			getTxStore(logger),
 			getTxMetaStore(logger),
-			getSubtreeStore(),
+			getSubtreeStore(logger),
 		)); err != nil {
 			panic(err)
 		}
@@ -366,7 +366,7 @@ func main() {
 			} else {
 				if err := sm.AddService("PropagationServer", propagation.New(
 					gocore.Log("prop"),
-					getTxStore(),
+					getTxStore(logger),
 					validatorClient,
 				)); err != nil {
 					panic(err)

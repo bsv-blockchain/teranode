@@ -90,7 +90,7 @@ func getUtxoMemoryStore() utxostore.Interface {
 	return s
 }
 
-func getTxStore() blob.Store {
+func getTxStore(logger utils.Logger) blob.Store {
 	if txStore != nil {
 		return txStore
 	}
@@ -102,7 +102,7 @@ func getTxStore() blob.Store {
 	if !found {
 		panic("txstore config not found")
 	}
-	txStore, err = blob.NewStore(txStoreUrl)
+	txStore, err = blob.NewStore(logger, txStoreUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -110,7 +110,7 @@ func getTxStore() blob.Store {
 	return txStore
 }
 
-func getSubtreeStore() blob.Store {
+func getSubtreeStore(logger utils.Logger) blob.Store {
 	if subtreeStore != nil {
 		return subtreeStore
 	}
@@ -122,7 +122,7 @@ func getSubtreeStore() blob.Store {
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err = blob.NewStore(subtreeStoreUrl, options.WithPrefixDirectory(10))
+	subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithPrefixDirectory(10))
 	if err != nil {
 		panic(err)
 	}

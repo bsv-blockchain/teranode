@@ -72,7 +72,7 @@ func Start() {
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err := blob.NewStore(subtreeStoreUrl)
+	subtreeStore, err := blob.NewStore(logger, subtreeStoreUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -84,7 +84,7 @@ func Start() {
 	if !found {
 		panic("txstore config not found")
 	}
-	txStore, err := blob.NewStore(txStoreUrl)
+	txStore, err := blob.NewStore(logger, txStoreUrl)
 	if err != nil {
 		panic(err)
 	}

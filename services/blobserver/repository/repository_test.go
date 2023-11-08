@@ -24,7 +24,7 @@ func getMemoryStore(t *testing.T) blob.Store {
 	memoryURL, err := url.Parse("memory://")
 	require.NoError(t, err)
 
-	txStore, err := blob.NewStore(memoryURL)
+	txStore, err := blob.NewStore(p2p.TestLogger{}, memoryURL)
 	require.NoError(t, err)
 
 	return txStore

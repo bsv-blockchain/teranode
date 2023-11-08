@@ -42,7 +42,7 @@ type Badger struct {
 }
 
 type loggerWrapper struct {
-	*gocore.Logger
+	utils.Logger
 }
 
 var (
@@ -53,11 +53,10 @@ func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
 }
 
-func New(dir string) (*Badger, error) {
-	logger := loggerWrapper{gocore.Log("bdgr")}
-
+func New(logger utils.Logger, dir string) (*Badger, error) {
+	bLogger := loggerWrapper{logger}
 	opts := badger.DefaultOptions(dir).
-		WithLogger(logger).
+		WithLogger(bLogger).
 		WithLoggingLevel(badger.ERROR).WithNumMemtables(32).
 		WithMetricsEnabled(true)
 
