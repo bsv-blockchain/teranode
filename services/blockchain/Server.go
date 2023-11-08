@@ -105,7 +105,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 						}(sub)
 					}
 				}()
-				stats.NewStat("notification-channel", true).AddTime(start)
+				stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
