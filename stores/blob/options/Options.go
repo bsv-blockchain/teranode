@@ -7,9 +7,10 @@ import (
 type Options func(s *SetOptions)
 
 type SetOptions struct {
-	TTL          time.Duration
-	Extension    string
-	SubDirectory string
+	TTL             time.Duration
+	Extension       string
+	SubDirectory    string
+	PrefixDirectory int
 }
 
 func NewSetOptions(opts ...Options) *SetOptions {
@@ -37,5 +38,11 @@ func WithFileExtension(extension string) Options {
 func WithSubDirectory(subDirectory string) Options {
 	return func(s *SetOptions) {
 		s.SubDirectory = subDirectory
+	}
+}
+
+func WithPrefixDirectory(numberOfCharsInPrefix int) Options {
+	return func(s *SetOptions) {
+		s.PrefixDirectory = numberOfCharsInPrefix
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
@@ -23,7 +24,9 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func NewStore(storeUrl *url.URL) (store Store, err error) {
+// NewStore
+// TODO add options to all stores
+func NewStore(storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
 	switch storeUrl.Scheme {
 	case "null":
 		store, err = null.New()
@@ -60,7 +63,7 @@ func NewStore(storeUrl *url.URL) (store Store, err error) {
 			return nil, fmt.Errorf("error creating minio blob store: %v", err)
 		}
 	case "s3":
-		store, err = s3.New(storeUrl)
+		store, err = s3.New(storeUrl, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
 		}

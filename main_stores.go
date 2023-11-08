@@ -6,6 +6,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
@@ -121,7 +122,7 @@ func getSubtreeStore() blob.Store {
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err = blob.NewStore(subtreeStoreUrl)
+	subtreeStore, err = blob.NewStore(subtreeStoreUrl, options.WithPrefixDirectory(10))
 	if err != nil {
 		panic(err)
 	}

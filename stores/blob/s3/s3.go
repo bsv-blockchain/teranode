@@ -30,6 +30,7 @@ type S3 struct {
 	uploader   *s3manager.Uploader
 	downloader *s3manager.Downloader
 	bucket     string
+	prefixDir  int
 	logger     utils.Logger
 }
 
@@ -37,7 +38,7 @@ var (
 	cache = expiringmap.New[string, []byte](1 * time.Minute)
 )
 
-func New(s3URL *url.URL) (*S3, error) {
+func New(s3URL *url.URL, opts ...options.Options) (*S3, error) {
 	logger := gocore.Log("s3")
 
 	scheme := getQueryParamString(s3URL, "scheme", "http")
@@ -96,6 +97,11 @@ func New(s3URL *url.URL) (*S3, error) {
 		logger:     logger,
 	}
 
+	o := options.NewSetOptions(opts...)
+	if o.PrefixDirectory > 0 {
+		s.prefixDir = o.PrefixDirectory
+	}
+
 	return s, nil
 }
 
@@ -106,11 +112,6 @@ func (g *S3) Health(ctx context.Context) (int, string, error) {
 	}
 
 	return 0, "Minio Store", nil
-}
-
-func (g *S3) generateKey(key []byte) *string {
-	var reverseHexEncodedKey = utils.ReverseAndHexEncodeSlice(key)
-	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
 }
 
 func (g *S3) Close(_ context.Context) error {
@@ -133,7 +134,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	objectKey := g.generateKey(key)
+	objectKey := g.getObjectKey(key)
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3manager.UploadInput{
@@ -181,7 +182,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	objectKey := g.generateKey(hash)
+	objectKey := g.getObjectKey(hash)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -212,7 +213,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	objectKey := g.generateKey(hash)
+	objectKey := g.getObjectKey(hash)
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -250,7 +251,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	objectKey := g.generateKey(hash)
+	objectKey := g.getObjectKey(hash)
 
 	cache.Delete(*objectKey)
 
@@ -273,6 +274,23 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	}
 
 	return nil
+}
+
+func (g *S3) getObjectKey(key []byte) *string {
+	objectKey := g.generateKey(key)
+
+	if g.prefixDir > 0 {
+		// take the first n bytes of the key and use them as a prefix directory
+		objectKeyStr := *objectKey
+		objectKey = aws.String(fmt.Sprintf("%s/%s", objectKeyStr[:g.prefixDir], objectKeyStr))
+	}
+
+	return objectKey
+}
+
+func (g *S3) generateKey(key []byte) *string {
+	var reverseHexEncodedKey = utils.ReverseAndHexEncodeSlice(key)
+	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
 }
 
 func getQueryParamString(url *url.URL, key string, defaultValue string) string {
