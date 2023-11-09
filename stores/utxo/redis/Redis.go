@@ -32,7 +32,8 @@ type Redis struct {
 
 func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 	o := &redis.Options{
-		Addr: u.Host,
+		Addr:        u.Host,
+		PoolTimeout: time.Duration(10) * time.Second,
 	}
 
 	p, ok := u.User.Password()
@@ -66,7 +67,8 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 	addrs = append(addrs, hosts...)
 
 	o := &redis.ClusterOptions{
-		Addrs: addrs,
+		Addrs:       addrs,
+		PoolTimeout: time.Duration(10) * time.Second,
 	}
 
 	p, ok := u.User.Password()
@@ -102,7 +104,8 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 	}
 
 	o := &redis.RingOptions{
-		Addrs: addrs,
+		Addrs:       addrs,
+		PoolTimeout: time.Duration(10) * time.Second,
 	}
 
 	p, ok := u.User.Password()
@@ -195,7 +198,7 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	txIDHash := tx.TxIDChainHash()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(256)
+	g.SetLimit(16) // TODO what is a safe number here?
 
 	var nrStored = atomic.Uint64{}
 	for i, output := range tx.Outputs {
