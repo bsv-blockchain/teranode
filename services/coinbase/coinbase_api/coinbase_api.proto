@@ -41,7 +41,7 @@ message DistributeTransactionRequest {
 message ResponseWrapper {
   string address = 1;
   int64 durationNanos = 2;
-  int32 attempts = 3;
+  int32 retries = 3;
   string error = 4;
 }
 

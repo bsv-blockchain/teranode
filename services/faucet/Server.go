@@ -160,6 +160,12 @@ type submitPayload struct {
 	Tx string `json:"tx"`
 }
 
+type submitResponse struct {
+	Timestamp string                         `json:"timestamp"`
+	Txid      string                         `json:"txid"`
+	Responses []*distributor.ResponseWrapper `json:"responses"`
+}
+
 func (f *Faucet) submitHandler(c echo.Context) error {
 	var payload submitPayload
 
@@ -178,7 +184,13 @@ func (f *Faucet) submitHandler(c echo.Context) error {
 
 	responses, _ := f.distributor.SendTransaction(c.Request().Context(), tx)
 
-	return c.JSON(http.StatusOK, responses)
+	resp := submitResponse{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Txid:      tx.TxIDChainHash().String(),
+		Responses: responses,
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 func (f *Faucet) staticHandler(c echo.Context) error {

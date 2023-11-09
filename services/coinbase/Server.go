@@ -156,7 +156,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 	for _, response := range responses {
 		wrapper := &coinbase_api.ResponseWrapper{
 			Address:       response.Addr,
-			Attempts:      response.Retries,
+			Retries:       response.Retries,
 			DurationNanos: response.Duration.Nanoseconds(),
 		}
 
