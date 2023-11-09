@@ -180,9 +180,9 @@ func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (r *Redis) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	defer cancel()
+func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	//ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	//defer cancel()
 
 	storeLockTime := tx.LockTime
 	if len(lockTime) > 0 {
@@ -195,6 +195,7 @@ func (r *Redis) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	txIDHash := tx.TxIDChainHash()
 
 	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(256)
 
 	var nrStored = atomic.Uint64{}
 	for i, output := range tx.Outputs {
@@ -242,9 +243,9 @@ func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value strin
 	return nil
 }
 
-func (r *Redis) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	defer cancel()
+func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	//ctx, cancel := context.WithTimeout(cntxt, r.timeout)
+	//defer cancel()
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
