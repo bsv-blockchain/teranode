@@ -351,22 +351,22 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 	return block, err
 }
 
-func (c *Coinbase) storeBlock(cntxt context.Context, block *model.Block) error {
-	start, stat, ctx := util.StartStatFromContext(cntxt, "storeBlock")
+func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
+	start, stat, ctx := util.StartStatFromContext(ctx, "storeBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	defer cancelTimeout()
+	//ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	//defer cancelTimeout()
 
-	blockId, err := c.store.StoreBlock(ctxTimeout, block)
+	blockId, err := c.store.StoreBlock(ctx, block)
 	if err != nil {
 		return fmt.Errorf("could not store block: %+v", err)
 	}
 
 	// process coinbase into utxos
-	err = c.processCoinbase(ctxTimeout, blockId, block.Hash(), block.CoinbaseTx)
+	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
 	if err != nil {
 		return fmt.Errorf("could not process coinbase %+v", err)
 	}
@@ -374,14 +374,14 @@ func (c *Coinbase) storeBlock(cntxt context.Context, block *model.Block) error {
 	return nil
 }
 
-func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
-	start, stat, ctx := util.StartStatFromContext(cntxt, "processCoinbase")
+func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+	start, stat, ctx := util.StartStatFromContext(ctx, "processCoinbase")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	defer cancelTimeout()
+	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	//defer cancelTimeout()
 
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
@@ -436,14 +436,14 @@ func (c *Coinbase) processCoinbase(cntxt context.Context, blockId uint64, blockH
 	return nil
 }
 
-func (c *Coinbase) createSpendingUtxos(cntxt context.Context, timestamp time.Time) {
-	start, stat, ctx := util.StartStatFromContext(cntxt, "createSpendingUtxos")
+func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+	start, stat, ctx := util.StartStatFromContext(ctx, "createSpendingUtxos")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	defer cancelTimeout()
+	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	//defer cancelTimeout()
 
 	q := `
 	  SELECT
@@ -501,8 +501,8 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 		stat.AddTime(start)
 	}()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	defer cancelTimeout()
+	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	//defer cancelTimeout()
 
 	tx := bt.NewTx()
 
@@ -547,8 +547,8 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 }
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
-	ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	defer cancelTimeout()
+	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	//defer cancelTimeout()
 
 	start, stat, ctx := util.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
 	defer func() {
@@ -643,9 +643,9 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 
 	return utxo, nil
 }
-func (c *Coinbase) requestFundsSqlite(cntxt context.Context, address string) (*bt.UTXO, error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	defer cancelTimeout()
+func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.UTXO, error) {
+	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	//defer cancelTimeout()
 
 	txn, err := c.db.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.IsolationLevel(sql.LevelWriteCommitted),
@@ -696,9 +696,9 @@ func (c *Coinbase) requestFundsSqlite(cntxt context.Context, address string) (*b
 	return utxo, nil
 }
 
-func (c *Coinbase) insertCoinbaseUTXOs(cntxt context.Context, blockId uint64, tx *bt.Tx) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	defer cancelTimeout()
+func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
+	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	//defer cancelTimeout()
 
 	start, stat, ctx := util.StartStatFromContext(ctx, "insertCoinbaseUTXOs")
 	defer func() {
@@ -778,9 +778,9 @@ func (c *Coinbase) insertCoinbaseUTXOs(cntxt context.Context, blockId uint64, tx
 	return nil
 }
 
-func (c *Coinbase) insertSpendableUTXOs(cntxt context.Context, tx *bt.Tx) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	defer cancelTimeout()
+func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
+	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	//defer cancelTimeout()
 
 	start, stat, ctx := util.StartStatFromContext(ctx, "insertSpendableUTXOs")
 	defer func() {
