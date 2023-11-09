@@ -143,11 +143,11 @@ func (s *Client) connectFRPC() {
 			if err != nil {
 				s.logger.Warnf("Error connecting to fRPC server in blockassembly: %s", err)
 				time.Sleep(retryInterval)
-				retryInterval *= 2 // Backoff strategy (exponential)
+				retryInterval *= 2
 			} else {
 				s.logger.Infof("Connected to blockassembly fRPC server")
 				s.frpcClient = client
-				break // Exit the loop if the connection is successful
+				break
 			}
 		}
 
