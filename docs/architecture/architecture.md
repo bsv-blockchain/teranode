@@ -414,24 +414,20 @@ The validation process is continuous and iterative, designed to maintain the blo
 
 
 2. **SubTree Validation**: As subtrees are broadcast, the Validator service validates them in real-time.
+   * If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
+   * If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
 
 
 3. **Merkle Subtree Storage**: Validated subtrees are stored in the Merkle subtree Store.
 
 
-4. **Block Announcement**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
+4. **Block Assembly and Propagation**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
 
 
 5. **Block Validation by Validator Service**: The Validator service uses the stored subtrees to validate the newly announced block quickly. This is done by deriving the announced top-level Merkle hashes from the hashes of the subtrees in the Merkle subtree Store.
 
 
-6. **Transaction Retrieval and Validation**: If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
-
-
-7. **SubTree "Blessing"**: If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
-
-
-8. **Block Assembly and Propagation**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
+6. **Blockchain Update**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
 
 
 ---
@@ -496,20 +492,20 @@ For clarity, the assets are served in a read-only mode. The various micro-servic
 
 ### Coinbase
 
-The coinbase service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
+The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
+
+![UBSV_Coinbase_Overlay.png](img%2FUBSV_Coinbase_Overlay.png)
 
 In the UBSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
 
-The Coinbase Service responsibilities are as follows:
+The Coinbase Overlay Node (CON) is a specialised service utilized by miners. Its primary function is to monitor all blocks being mined, ensuring accurate tracking of the blocks that have been mined along with their Unspent Transaction Outputs (UTXOs).
 
-1. **Tracking New Blocks**: The service listens to the blockchain network for new blocks being mined. For every new block, the service would detect the coinbase transaction.
 
-2. **Recording Coinbase Transactions**: Upon identifying a coinbase transaction, the service writes the details into a datastore. This includes the outputs of the coinbase transaction.
+This service actively listens for block header notifications, while maintaining a database of all blocks, whether orphaned or not. Upon the announcement of a new block, the service requests the block in the compact subtree format. This format includes the coinbase transaction, which facilitates the processing of any UTXOs linked to that miner.
 
-3. **Monitoring Maturity**: A coinbase transaction is not spendable immediately; there is a standard maturity period of 100 blocks. This means the coins created in a coinbase transaction cannot be spent until 100 more blocks have been added to the blockchain after the block containing the coinbase transaction. The service would keep track of the maturity of each coinbase transaction to know when the funds become spendable.
+When a miner intends to spend one of their coins, they need to retrieve the corresponding UTXO from the CON service. Subsequently, they can generate a valid transaction and transmit this through the CON service. This action labels the UTXO as spent.
 
-4. **Ownership Management**: If the service is run by a mining entity, it would monitor and keep an inventory of all the coinbase transactions for the blocks that the entity has successfully mined, effectively managing the earned rewards.
-
+In essence, the CON service operates as a straightforward Simplified Payment Verification (SPV) overlay node, custom-built to cater to the requirements of miners.
 
 ---
 
