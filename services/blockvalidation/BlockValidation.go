@@ -196,7 +196,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		stat.AddTime(start)
 	}()
 
-	start1 := gocore.CurrentNanos()
+	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
@@ -228,7 +228,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		return err
 	}
 
-	start2 := gocore.CurrentNanos()
+	start2 := gocore.CurrentTime()
 	stat2 := stat.NewStat("2. validateSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
 	for _, subtreeHash := range missingSubtrees {
@@ -257,7 +257,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	u.logger.Infof("[validateSubtree][%s] called", subtreeHash.String())
 
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	// get subtree from store
 	subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
 	stat.NewStat("1. subtreeExists").AddTime(start)
@@ -275,7 +275,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
 	}
 
-	start = gocore.CurrentNanos()
+	start = gocore.CurrentTime()
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
@@ -285,7 +285,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
 
-	start = gocore.CurrentNanos()
+	start = gocore.CurrentTime()
 	// the subtree bytes we got from our competing miner only contain the transaction hashes
 	// it's basically just a list of 32 byte transaction hashes
 	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
@@ -307,7 +307,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// create the empty subtree
 	subtree := util.NewTreeByLeafCount(nrTransactions)
 
-	start = gocore.CurrentNanos()
+	start = gocore.CurrentTime()
 	// validate the subtree
 	txMetaMap := sync.Map{}
 	g, gCtx := errgroup.WithContext(spanCtx)
@@ -370,7 +370,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		stat5.AddTime(start)
 	}
 
-	start = gocore.CurrentNanos()
+	start = gocore.CurrentTime()
 	var ok bool
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
@@ -401,7 +401,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to serialize subtree", subtreeHash.String()), err)
 	}
 
-	start = gocore.CurrentNanos()
+	start = gocore.CurrentTime()
 	// store subtree in store
 	u.logger.Infof("[validateSubtree][%s] store subtree", subtreeHash.String())
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
@@ -454,7 +454,7 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
 	}
 
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	alreadyHaveTransaction := true
 	txBytes, err := u.txStore.Get(ctx, txHash[:])
 	stat.NewStat("getTxFromStore").AddTime(start)
@@ -464,7 +464,7 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 		// do http request to baseUrl + txHash.String()
 		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-		startM := gocore.CurrentNanos()
+		startM := gocore.CurrentTime()
 		statM := stat.NewStat("http fetch missing tx")
 		txBytes, err = util.DoHTTPRequest(ctx, url)
 		statM.AddTime(startM)
@@ -480,7 +480,7 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 	}
 
 	if !alreadyHaveTransaction {
-		start = gocore.CurrentNanos()
+		start = gocore.CurrentTime()
 		// store the transaction, we did not get it via propagation
 		err = u.txStore.Set(ctx, txHash[:], txBytes)
 		stat.NewStat("storeTx").AddTime(start)
@@ -515,7 +515,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", tx.TxID(), err.Error())
 	}
 
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	txMeta, err = u.txMetaStore.GetMeta(ctx, tx.TxIDChainHash())
 	stat.NewStat("getTxMeta").AddTime(start)
 	if err != nil {

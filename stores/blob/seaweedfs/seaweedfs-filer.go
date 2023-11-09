@@ -92,7 +92,7 @@ func (s *SeaweedFS) generateKey(key []byte) string {
 }
 
 func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_seaweedfs", true).NewStat("Set").AddTime(start)
 	}()
@@ -125,7 +125,7 @@ func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...o
 }
 
 func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_seaweedfs", true).NewStat("SetTTL").AddTime(start)
 	}()
@@ -138,7 +138,7 @@ func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 }
 
 func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_seaweedfs", true).NewStat("Get").AddTime(start)
 	}()
@@ -166,7 +166,7 @@ func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 }
 
 func (s *SeaweedFS) Exists(ctx context.Context, hash []byte) (bool, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_seaweedfs", true).NewStat("Exists").AddTime(start)
 	}()
@@ -193,7 +193,7 @@ func (s *SeaweedFS) Exists(ctx context.Context, hash []byte) (bool, error) {
 }
 
 func (s *SeaweedFS) Del(ctx context.Context, hash []byte) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_seaweedfs", true).NewStat("Del").AddTime(start)
 	}()

@@ -315,7 +315,7 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 		return tx, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
-	if err = w.distributor.SendTransaction(ctx, tx); err != nil {
+	if _, err = w.distributor.SendTransaction(ctx, tx); err != nil {
 		return tx, fmt.Errorf("error sending transaction: %v", err)
 	}
 

@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	prometheusHealth       prometheus.Counter
-	prometheusRequestFunds prometheus.Counter
+	prometheusHealth                prometheus.Counter
+	prometheusRequestFunds          prometheus.Counter
+	prometheusDistributeTransaction prometheus.Counter
 )
 
 var prometheusMetricsInitialized = false
@@ -28,8 +29,16 @@ func initPrometheusMetrics() {
 	prometheusRequestFunds = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "coinbase",
-			Name:      "get_utxo",
-			Help:      "Number of calls to the GetUtxo endpoint",
+			Name:      "request_funds",
+			Help:      "Number of calls to the RequestFunds endpoint",
+		},
+	)
+
+	prometheusDistributeTransaction = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "coinbase",
+			Name:      "distribute_transaction",
+			Help:      "Number of calls to the DistributeTransaction endpoint",
 		},
 	)
 

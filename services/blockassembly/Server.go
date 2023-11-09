@@ -330,7 +330,7 @@ func (ba *BlockAssembly) Stop(_ context.Context) error {
 }
 
 func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blockAssemblyStat.NewStat("Health_grpc", true).AddTime(start)
 	}()
@@ -379,7 +379,7 @@ func (ba *BlockAssembly) AddTx(cntxt context.Context, req *blockassembly_api.Add
 }
 
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blockAssemblyStat.NewStat("AddTxBatch_grpc", true).AddTime(start)
 	}()
@@ -404,7 +404,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {
 		txMetaSpan.Finish()
-		blockAssemblyStat.NewStat("GetTxMeta_grpc", true).AddTime(startMetaTime.UnixNano())
+		blockAssemblyStat.NewStat("GetTxMeta_grpc", true).AddTime(startMetaTime)
 		prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startMetaTime).Seconds())
 	}()
 
@@ -433,7 +433,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	startTime := time.Now()
 	prometheusBlockAssemblyGetMiningCandidate.Inc()
 	defer func() {
-		blockAssemblyStat.NewStat("GetMiningCandidate_grpc", true).AddTime(startTime.UnixNano())
+		blockAssemblyStat.NewStat("GetMiningCandidate_grpc", true).AddTime(startTime)
 		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
 	}()
 
@@ -453,7 +453,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blockAssemblyStat.NewStat("SubmitMiningSolution_grpc", true).AddTime(start)
 	}()
@@ -473,6 +473,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(util.TimeSince(start))
+		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(time.Since(start).Seconds())
 	}()
 
 	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
@@ -682,7 +683,7 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
-		blockAssemblyStat.NewStat("UpdateTxMinedStatus_grpc", true).AddTime(startTime.UnixNano())
+		blockAssemblyStat.NewStat("UpdateTxMinedStatus_grpc", true).AddTime(startTime)
 		prometheusBlockAssemblyUpdateTxMinedStatus.Observe(time.Since(startTime).Seconds())
 	}()
 

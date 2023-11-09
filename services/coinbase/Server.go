@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -95,7 +96,7 @@ func (s *Server) Stop(_ context.Context) error {
 }
 
 func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health_grpc").AddTime(start)
 	}()
@@ -108,7 +109,7 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.Heal
 }
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	stat := stats.NewStat("RequestFunds_grpc", true)
 	defer func() {
 		stat.AddTime(start)
@@ -117,7 +118,7 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 	prometheusRequestFunds.Inc()
 
 	ctx1 := util.ContextWithStat(ctx, stat)
-	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address)
+	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address, req.DisableDistribute)
 	if err != nil {
 		return nil, err
 	}
@@ -125,4 +126,44 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 	return &coinbase_api.RequestFundsResponse{
 		Tx: fundingTx.ExtendedBytes(),
 	}, nil
+}
+
+func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.DistributeTransactionRequest) (*coinbase_api.DistributeTransactionResponse, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		stats.NewStat("DistributeTransaction").AddTime(start)
+	}()
+
+	tx, err := bt.NewTxFromBytes(req.Tx)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse transaction bytes: %v", err)
+	}
+
+	if !tx.IsExtended() {
+		return nil, fmt.Errorf("transaction is not extended")
+	}
+
+	prometheusDistributeTransaction.Inc()
+
+	responses, _ := s.coinbase.DistributeTransaction(ctx, tx)
+
+	resp := &coinbase_api.DistributeTransactionResponse{
+		Timestamp: timestamppb.Now(),
+		Responses: make([]*coinbase_api.ResponseWrapper, len(responses)),
+	}
+
+	for _, response := range responses {
+		wrapper := &coinbase_api.ResponseWrapper{
+			Address:       response.Addr,
+			Attempts:      response.Retries,
+			DurationNanos: response.Duration.Nanoseconds(),
+		}
+
+		if response.Error != nil {
+			wrapper.Error = response.Error.Error()
+		}
+		resp.Responses = append(resp.Responses, wrapper)
+	}
+
+	return resp, nil
 }

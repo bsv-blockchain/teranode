@@ -92,7 +92,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
 				return
 			case notification := <-b.notifications:
-				start := gocore.CurrentNanos()
+				start := gocore.CurrentTime()
 				func() {
 					b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
 					for sub := range b.subscribers {
@@ -136,7 +136,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 }
 
 func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health", true).AddTime(start)
 	}()

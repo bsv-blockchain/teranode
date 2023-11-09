@@ -411,7 +411,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 }
 
 func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health", true).AddTime(start)
 	}()
@@ -526,7 +526,7 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 }
 
 func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("ProcessTransactionStream", true).AddTime(start)
 	}()
@@ -549,7 +549,7 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 }
 
 func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("ProcessTransactionDebug", true).AddTime(start)
 	}()

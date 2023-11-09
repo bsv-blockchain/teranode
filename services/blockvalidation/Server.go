@@ -408,7 +408,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
 	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
 
-	start1 := gocore.CurrentNanos()
+	start1 := gocore.CurrentTime()
 	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
 	stat.NewStat("subtreeStore.Exists").AddTime(start1)
 	if err != nil {
@@ -427,7 +427,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	goroutineStat := stat.NewStat("go routine")
 	// validate the subtree in the background
 	go func() {
-		start := gocore.CurrentNanos()
+		start := gocore.CurrentTime()
 		defer func() {
 			goroutineStat.AddTime(start)
 		}()

@@ -13,7 +13,7 @@ import (
 
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		start := gocore.CurrentNanos()
+		start := gocore.CurrentTime()
 		defer func() {
 			blobServerStat.NewStat("GetSubtree_http").AddTime(start)
 		}()

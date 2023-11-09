@@ -191,7 +191,7 @@ func (v *Server) Stop(_ context.Context) error {
 }
 
 func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health", true).AddTime(start)
 	}()
@@ -204,7 +204,7 @@ func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*vali
 }
 
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("ValidateTransactionStream", true).AddTime(start)
 	}()

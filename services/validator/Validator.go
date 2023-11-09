@@ -144,7 +144,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		}
 	}
 
-	storeStart := gocore.CurrentNanos()
+	storeStart := gocore.CurrentTime()
 	storeStat := stat.NewStat("utxo.Store", true)
 	defer func() {
 		storeStat.AddTime(storeStart)

@@ -14,7 +14,7 @@ import (
 
 func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		start := gocore.CurrentNanos()
+		start := gocore.CurrentTime()
 		defer func() {
 			blobServerStat.NewStat("GetTransaction_http").AddTime(start)
 		}()

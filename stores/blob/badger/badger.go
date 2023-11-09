@@ -96,7 +96,7 @@ func (s *Badger) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Badger) Close(ctx context.Context) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Close").AddTime(start)
 	}()
@@ -108,7 +108,7 @@ func (s *Badger) Close(ctx context.Context) error {
 
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Set").AddTime(start)
 	}()
@@ -136,7 +136,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 
 func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	//s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("SetTTL").AddTime(start)
 	}()
@@ -156,7 +156,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	//s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Get").AddTime(start)
 	}()
@@ -197,7 +197,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 
 func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Exists").AddTime(start)
 	}()
@@ -231,7 +231,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 
 func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	//s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Del").AddTime(start)
 	}()

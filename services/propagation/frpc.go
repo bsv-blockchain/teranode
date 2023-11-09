@@ -13,7 +13,7 @@ type fRPC_Propagation struct {
 }
 
 func (f *fRPC_Propagation) Health(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health_frpc").AddTime(start)
 	}()
@@ -25,7 +25,7 @@ func (f *fRPC_Propagation) Health(_ context.Context, _ *propagation_api.Propagat
 }
 
 func (f *fRPC_Propagation) ProcessTransaction(ctx context.Context, request *propagation_api.PropagationApiProcessTransactionRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("ProcessTransaction_frpc").AddTime(start)
 	}()
@@ -38,7 +38,7 @@ func (f *fRPC_Propagation) ProcessTransaction(ctx context.Context, request *prop
 }
 
 func (f *fRPC_Propagation) ProcessTransactionDebug(ctx context.Context, request *propagation_api.PropagationApiProcessTransactionRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("ProcessTransactionDebug_frpc").AddTime(start)
 	}()

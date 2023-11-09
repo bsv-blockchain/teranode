@@ -55,7 +55,7 @@ func (b *Badger) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Dat
 }
 
 func (b *Badger) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_txmeta", true).NewStat("Get", true).AddTime(start)
 	}()
@@ -95,7 +95,7 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_txmeta", true).NewStat("Set", true).AddTime(start)
 	}()

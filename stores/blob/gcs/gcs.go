@@ -48,7 +48,7 @@ func (g *GCS) Health(ctx context.Context) (int, string, error) {
 }
 
 func (g *GCS) Close(_ context.Context) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Close").AddTime(start)
 	}()
@@ -59,7 +59,7 @@ func (g *GCS) Close(_ context.Context) error {
 }
 
 func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Set").AddTime(start)
 	}()
@@ -85,7 +85,7 @@ func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options
 }
 
 func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("SetTTL").AddTime(start)
 	}()
@@ -97,7 +97,7 @@ func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 }
 
 func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Get").AddTime(start)
 	}()
@@ -122,7 +122,7 @@ func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 }
 
 func (g *GCS) Exists(ctx context.Context, hash []byte) (bool, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Exists").AddTime(start)
 	}()
@@ -144,7 +144,7 @@ func (g *GCS) Exists(ctx context.Context, hash []byte) (bool, error) {
 }
 
 func (g *GCS) Del(ctx context.Context, hash []byte) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Del").AddTime(start)
 	}()

@@ -27,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/services/faucet"
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
@@ -116,6 +117,7 @@ func main() {
 	startMiner := shouldStart("Miner")
 	startBlobServer := shouldStart("BlobServer")
 	startCoinbase := shouldStart("Coinbase")
+	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
 	help := shouldStart("help")
@@ -328,6 +330,14 @@ func main() {
 	if startCoinbase {
 		if err := sm.AddService("Coinbase", coinbase.New(
 			gocore.Log("coinB"),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
+	if startFaucet {
+		if err := sm.AddService("Faucet", faucet.New(
+			gocore.Log("faucet"),
 		)); err != nil {
 			panic(err)
 		}

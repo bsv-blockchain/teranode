@@ -538,7 +538,7 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 		return fmt.Errorf("error filling splitting inputs: %v", err)
 	}
 
-	if err := c.distributor.SendTransaction(ctx, tx); err != nil {
+	if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
 		return fmt.Errorf("error sending splitting transaction: %v", err)
 	}
 
@@ -546,7 +546,7 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 	return c.insertSpendableUTXOs(ctx, tx)
 }
 
-func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error) {
 	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
 
@@ -599,13 +599,19 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, er
 		return nil, fmt.Errorf("error filling initial inputs: %v", err)
 	}
 
-	if err = c.distributor.SendTransaction(ctx, tx); err != nil {
-		return nil, fmt.Errorf("error sending initial transaction: %v", err)
+	if !disableDistribute {
+		if _, err = c.distributor.SendTransaction(ctx, tx); err != nil {
+			return nil, fmt.Errorf("error sending initial transaction: %v", err)
+		}
+
+		c.logger.Debugf("Sent funding transaction %s", tx.TxIDChainHash().String())
 	}
 
-	c.logger.Debugf("Sent funding transaction %s", tx.TxIDChainHash().String())
-
 	return tx, nil
+}
+
+func (c *Coinbase) DistributeTransaction(ctx context.Context, tx *bt.Tx) ([]*distributor.ResponseWrapper, error) {
+	return c.distributor.SendTransaction(ctx, tx)
 }
 
 func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*bt.UTXO, error) {

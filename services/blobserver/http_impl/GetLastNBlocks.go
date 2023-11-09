@@ -10,7 +10,7 @@ import (
 )
 
 func (h *HTTP) GetLastNBlocks(c echo.Context) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetLastNBlocks_http").AddTime(start)
 	}()

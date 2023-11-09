@@ -17,7 +17,7 @@ type fRPC_Validator struct {
 }
 
 func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiHealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health_frpc").AddTime(start)
 	}()

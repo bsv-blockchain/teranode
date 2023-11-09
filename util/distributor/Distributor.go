@@ -19,7 +19,7 @@ import (
 type Distributor struct {
 	logger             utils.Logger
 	propagationServers map[string]propagation_api.PropagationAPIClient
-	attempts           int
+	attempts           int32
 	backoff            time.Duration
 	failureTolerance   int
 }
@@ -32,7 +32,7 @@ func WithBackoffDuration(t time.Duration) Option {
 	}
 }
 
-func WithRetryAttempts(r int) Option {
+func WithRetryAttempts(r int32) Option {
 	return func(opts *Distributor) {
 		opts.attempts = r
 	}
@@ -80,9 +80,11 @@ func NewDistributor(logger utils.Logger, opts ...Option) (*Distributor, error) {
 	return d, nil
 }
 
-type errorWrapper struct {
-	addr string
-	err  error
+type ResponseWrapper struct {
+	Addr     string        `json:"addr"`
+	Duration time.Duration `json:"duration"`
+	Retries  int32         `json:"retries"`
+	Error    error         `json:"error,omitempty"`
 }
 
 func (d *Distributor) GetPropagationGRPCAddresses() []string {
@@ -94,7 +96,7 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 	return addresses
 }
 
-func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
+func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*ResponseWrapper, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "Distributor:SendTransaction")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Distributor:SendTransaction")
 	defer func() {
@@ -104,7 +106,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	var wg sync.WaitGroup
 
-	errorWrapperCh := make(chan errorWrapper, len(d.propagationServers))
+	responseWrapperCh := make(chan ResponseWrapper, len(d.propagationServers))
 
 	for addr, propagationServer := range d.propagationServers {
 		a := addr // Create a local copy
@@ -119,24 +121,31 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 				stat1.AddTime(start1)
 			}()
 
-			attempts := 0
+			var retries int32
 			backoff := d.backoff
 
 			for {
 				if _, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
 					Tx: tx.ExtendedBytes(),
 				}); err == nil {
+					responseWrapperCh <- ResponseWrapper{
+						Addr:     a,
+						Retries:  retries,
+						Duration: time.Since(start),
+					}
 					break
 				} else {
 					d.logger.Debugf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
-					if attempts < d.attempts {
-						attempts++
+					if retries < d.attempts {
+						retries++
 						time.Sleep(backoff)
 						backoff *= 2
 					} else {
-						errorWrapperCh <- errorWrapper{
-							addr: a,
-							err:  err,
+						responseWrapperCh <- ResponseWrapper{
+							Addr:     a,
+							Retries:  retries,
+							Duration: time.Since(start),
+							Error:    err,
 						}
 						break
 					}
@@ -146,15 +155,23 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 	wg.Wait()
 
-	close(errorWrapperCh)
+	close(responseWrapperCh)
 
 	// Read any errors from the channel
+	responses := make([]*ResponseWrapper, len(d.propagationServers))
+	var i int
+
 	builderErrors := strings.Builder{}
 	errorCount := 0
 
-	for ew := range errorWrapperCh {
-		builderErrors.WriteString(fmt.Sprintf("\t%s: %v\n", ew.addr, ew.err))
-		errorCount++
+	for rw := range responseWrapperCh {
+		responses[i] = &rw
+		i++
+
+		if rw.Error != nil {
+			builderErrors.WriteString(fmt.Sprintf("\t%s: %v\n", rw.Addr, rw.Error))
+			errorCount++
+		}
 	}
 
 	if errorCount > 0 {
@@ -165,8 +182,8 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 	if failurePercentage > float32(d.failureTolerance) {
-		return fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage)
+		return responses, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage)
 	}
 
-	return nil
+	return responses, nil
 }

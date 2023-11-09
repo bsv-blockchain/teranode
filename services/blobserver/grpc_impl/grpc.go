@@ -198,7 +198,7 @@ func (g *GRPC) Stop(ctx context.Context) error {
 }
 
 func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("Health").AddTime(start)
 	}()
@@ -213,7 +213,7 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Heal
 }
 
 func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockRequest) (*blobserver_api.GetBlockResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetBlock").AddTime(start)
 	}()
@@ -252,7 +252,7 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 }
 
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockHeaderRequest) (*blobserver_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetBlockHeader").AddTime(start)
 	}()
@@ -276,7 +276,7 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 }
 
 func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlockHeadersRequest) (*blobserver_api.GetBlockHeadersResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetBlockHeaders").AddTime(start)
 	}()
@@ -313,7 +313,7 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlock
 }
 
 func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetBestBlockHeader").AddTime(start)
 	}()
@@ -335,7 +335,7 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobs
 }
 
 func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.GetNodesResponse, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("GetNodes").AddTime(start)
 	}()
@@ -348,7 +348,7 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Ge
 }
 
 func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("AddHttpSubscriber").AddTime(start)
 	}()
@@ -357,7 +357,7 @@ func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
 }
 
 func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		blobServerStat.NewStat("Subscribe").AddTime(start)
 	}()

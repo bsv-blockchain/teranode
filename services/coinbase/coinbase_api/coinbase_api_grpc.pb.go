@@ -20,8 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	CoinbaseAPI_Health_FullMethodName       = "/coinbase_api.CoinbaseAPI/Health"
-	CoinbaseAPI_RequestFunds_FullMethodName = "/coinbase_api.CoinbaseAPI/RequestFunds"
+	CoinbaseAPI_Health_FullMethodName                = "/coinbase_api.CoinbaseAPI/Health"
+	CoinbaseAPI_RequestFunds_FullMethodName          = "/coinbase_api.CoinbaseAPI/RequestFunds"
+	CoinbaseAPI_DistributeTransaction_FullMethodName = "/coinbase_api.CoinbaseAPI/DistributeTransaction"
 )
 
 // CoinbaseAPIClient is the client API for CoinbaseAPI service.
@@ -31,6 +32,7 @@ type CoinbaseAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	RequestFunds(ctx context.Context, in *RequestFundsRequest, opts ...grpc.CallOption) (*RequestFundsResponse, error)
+	DistributeTransaction(ctx context.Context, in *DistributeTransactionRequest, opts ...grpc.CallOption) (*DistributeTransactionResponse, error)
 }
 
 type coinbaseAPIClient struct {
@@ -59,6 +61,15 @@ func (c *coinbaseAPIClient) RequestFunds(ctx context.Context, in *RequestFundsRe
 	return out, nil
 }
 
+func (c *coinbaseAPIClient) DistributeTransaction(ctx context.Context, in *DistributeTransactionRequest, opts ...grpc.CallOption) (*DistributeTransactionResponse, error) {
+	out := new(DistributeTransactionResponse)
+	err := c.cc.Invoke(ctx, CoinbaseAPI_DistributeTransaction_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoinbaseAPIServer is the server API for CoinbaseAPI service.
 // All implementations must embed UnimplementedCoinbaseAPIServer
 // for forward compatibility
@@ -66,6 +77,7 @@ type CoinbaseAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error)
+	DistributeTransaction(context.Context, *DistributeTransactionRequest) (*DistributeTransactionResponse, error)
 	mustEmbedUnimplementedCoinbaseAPIServer()
 }
 
@@ -78,6 +90,9 @@ func (UnimplementedCoinbaseAPIServer) Health(context.Context, *emptypb.Empty) (*
 }
 func (UnimplementedCoinbaseAPIServer) RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestFunds not implemented")
+}
+func (UnimplementedCoinbaseAPIServer) DistributeTransaction(context.Context, *DistributeTransactionRequest) (*DistributeTransactionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DistributeTransaction not implemented")
 }
 func (UnimplementedCoinbaseAPIServer) mustEmbedUnimplementedCoinbaseAPIServer() {}
 
@@ -128,6 +143,24 @@ func _CoinbaseAPI_RequestFunds_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoinbaseAPI_DistributeTransaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DistributeTransactionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoinbaseAPIServer).DistributeTransaction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoinbaseAPI_DistributeTransaction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoinbaseAPIServer).DistributeTransaction(ctx, req.(*DistributeTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CoinbaseAPI_ServiceDesc is the grpc.ServiceDesc for CoinbaseAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -142,6 +175,10 @@ var CoinbaseAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestFunds",
 			Handler:    _CoinbaseAPI_RequestFunds_Handler,
+		},
+		{
+			MethodName: "DistributeTransaction",
+			Handler:    _CoinbaseAPI_DistributeTransaction_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

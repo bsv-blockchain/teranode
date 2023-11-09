@@ -14,7 +14,7 @@ import (
 
 func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		start := gocore.CurrentNanos()
+		start := gocore.CurrentTime()
 		defer func() {
 			blobServerStat.NewStat("GetBlockHeaders_http").AddTime(start)
 		}()

@@ -11,6 +11,7 @@ service CoinbaseAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc RequestFunds(RequestFundsRequest) returns (RequestFundsResponse) {}
+  rpc DistributeTransaction(DistributeTransactionRequest) returns (DistributeTransactionResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -23,9 +24,29 @@ message HealthResponse {
 // swagger:model RequestFundsRequest
 message RequestFundsRequest {
   string address = 1;
+  bool disableDistribute = 2;
 }
 
 // swagger:model RequestFundsResponse
 message RequestFundsResponse {
   bytes tx = 1;
+}
+
+// swagger:model DistributeTransactionRequest
+message DistributeTransactionRequest {
+  bytes tx = 1;
+}
+
+// swagger:model ResponseWrapper
+message ResponseWrapper {
+  string address = 1;
+  int64 durationNanos = 2;
+  int32 attempts = 3;
+  string error = 4;
+}
+
+// swagger:model DistributeTransactionResponse
+message DistributeTransactionResponse {
+  google.protobuf.Timestamp timestamp = 1;
+  repeated ResponseWrapper responses = 2;
 }

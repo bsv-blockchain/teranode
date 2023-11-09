@@ -113,7 +113,7 @@ func (g *S3) Health(ctx context.Context) (int, string, error) {
 }
 
 func (g *S3) Close(_ context.Context) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Close").AddTime(start)
 	}()
@@ -125,7 +125,7 @@ func (g *S3) Close(_ context.Context) error {
 }
 
 func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
 	}()
@@ -161,7 +161,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 }
 
 func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
 	}()
@@ -173,7 +173,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 }
 
 func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
 	}()
@@ -204,7 +204,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 }
 
 func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
 	}()
@@ -242,7 +242,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 }
 
 func (g *S3) Del(ctx context.Context, hash []byte) error {
-	start := gocore.CurrentNanos()
+	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
 	}()
