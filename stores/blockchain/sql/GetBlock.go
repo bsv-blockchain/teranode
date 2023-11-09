@@ -7,15 +7,15 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlock")
 	defer func() {
-		stats.NewStat("GetBlock").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -24,7 +24,6 @@ type SQL struct {
 }
 
 var (
-	stat  = gocore.NewStat("blockchain", true)
 	cache = sync.Map{}
 )
 

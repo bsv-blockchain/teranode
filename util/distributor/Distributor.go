@@ -15,8 +15,6 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var distributorStat = gocore.NewStat("distributor")
-
 type Distributor struct {
 	logger             utils.Logger
 	propagationServers map[string]propagation_api.PropagationAPIClient
@@ -96,7 +94,7 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
-	start, stat, _ := util.NewStatFromContext(ctx, "Distributor:SendTransaction", distributorStat)
+	start, stat, _ := util.StartStatFromContext(ctx, "Distributor:SendTransaction")
 	defer func() {
 		stat.AddTime(start)
 	}()

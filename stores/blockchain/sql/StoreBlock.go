@@ -8,15 +8,15 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "StoreBlock")
 	defer func() {
-		stat.NewStat("StoreBlock").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

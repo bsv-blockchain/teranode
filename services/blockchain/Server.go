@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var stats = gocore.NewStat("blockchain", true)
+var stats = gocore.NewStat("blockchain")
 
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer
@@ -150,9 +150,9 @@ func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_ap
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "AddBlock", stats)
 	defer func() {
-		stats.NewStat("AddBlock", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainAddBlock.Inc()
@@ -185,19 +185,19 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx, block)
+	_, err = b.store.StoreBlock(ctx1, block)
 	if err != nil {
 		return nil, err
 	}
 
 	// if !request.External {
-	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
 		Type: model.NotificationType_MiningOn,
 		Hash: block.Hash().CloneBytes(),
 	})
 	// }
 
-	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),
 	})
@@ -206,9 +206,9 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlock", stats)
 	defer func() {
-		stats.NewStat("GetBlock", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlock.Inc()
@@ -218,7 +218,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		return nil, err
 	}
 
-	block, height, err := b.store.GetBlock(ctx, blockHash)
+	block, height, err := b.store.GetBlock(ctx1, blockHash)
 	if err != nil {
 		return nil, err
 	}
@@ -239,14 +239,14 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetLastNBlocks", stats)
 	defer func() {
-		stats.NewStat("GetLastNBlocks", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetLastNBlocks.Inc()
 
-	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks, request.IncludeOrphans)
+	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans)
 	if err != nil {
 		return nil, err
 	}
@@ -280,14 +280,14 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBestBlockHeader", stats)
 	defer func() {
-		stats.NewStat("GetBestBlockHeader", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetBestBlockHeader.Inc()
 
-	chainTip, meta, err := b.store.GetBestBlockHeader(ctx)
+	chainTip, meta, err := b.store.GetBestBlockHeader(ctx1)
 	if err != nil {
 		return nil, err
 	}
@@ -302,9 +302,9 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 }
 
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeader", stats)
 	defer func() {
-		stats.NewStat("GetBlockHeader", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockHeader.Inc()
@@ -314,7 +314,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		return nil, err
 	}
 
-	blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
+	blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -329,9 +329,9 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 }
 
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeaders", stats)
 	defer func() {
-		stats.NewStat("GetBlockHeaders", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockHeaders.Inc()
@@ -341,7 +341,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 		return nil, err
 	}
 
-	blockHeaders, heights, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
+	blockHeaders, heights, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -358,9 +358,9 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
-	start := gocore.CurrentNanos()
+	start, stat, _ := util.NewStatFromContext(sub.Context(), "Subscribe", stats)
 	defer func() {
-		stats.NewStat("Subscribe", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainSubscribe.Inc()
@@ -388,14 +388,14 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetState", stats)
 	defer func() {
-		stats.NewStat("GetState", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetState.Inc()
 
-	data, err := b.store.GetState(ctx, req.Key)
+	data, err := b.store.GetState(ctx1, req.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -406,14 +406,14 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "SetState", stats)
 	defer func() {
-		stats.NewStat("SetState", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainSetState.Inc()
 
-	err := b.store.SetState(ctx, req.Key, req.Data)
+	err := b.store.SetState(ctx1, req.Key, req.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -422,9 +422,9 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 }
 
 func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	start := gocore.CurrentNanos()
+	start, stat, _ := util.NewStatFromContext(context.Background(), "SendNotification", stats)
 	defer func() {
-		stats.NewStat("SendNotification", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainSendNotification.Inc()

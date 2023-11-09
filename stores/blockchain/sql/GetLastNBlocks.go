@@ -10,16 +10,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var stats = gocore.NewStat("blockchain", true)
-
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetLastNBlocks")
 	defer func() {
-		stats.NewStat("GetLastNBlocks").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var stats = gocore.NewStat("blockvalidation", true)
+var stats = gocore.NewStat("blockvalidation")
 
 type processBlockFound struct {
 	hash    *chainhash.Hash

@@ -10,13 +10,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeader")
 	defer func() {
-		stats.NewStat("GetBlockHeader").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -10,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type getBestBlockHeaderCache struct {
@@ -19,9 +18,9 @@ type getBestBlockHeaderCache struct {
 }
 
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBestBlockHeader")
 	defer func() {
-		stats.NewStat("GetBlock").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	cached, ok := cache.Load("GetBestBlockHeader")

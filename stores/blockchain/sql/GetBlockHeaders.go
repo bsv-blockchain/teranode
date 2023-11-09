@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type getBlockHeadersCache struct {
@@ -17,9 +17,9 @@ type getBlockHeadersCache struct {
 }
 
 func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
 	defer func() {
-		stats.NewStat("GetBlock").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	cacheId := fmt.Sprintf("GetBlockHeaders_%s_%d", blockHashFrom.String(), numberOfHeaders)

@@ -3,13 +3,13 @@ package sql
 import (
 	"context"
 
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/ubsv/util"
 )
 
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetState")
 	defer func() {
-		stats.NewStat("GetState").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -33,9 +33,9 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
-	start := gocore.CurrentNanos()
+	start, stat, ctx := util.StartStatFromContext(ctx, "SetState")
 	defer func() {
-		stats.NewStat("GetState").AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	ctx, cancel := context.WithCancel(ctx)
