@@ -59,6 +59,9 @@ func init() {
 }
 
 func main() {
+	// Flush buffered events before the program terminates.
+	defer sentry.Flush(2 * time.Second)
+
 	switch path.Base(os.Args[0]) {
 	case "aerospiketest.run":
 		// aerospiketest.Init()
@@ -424,13 +427,15 @@ func main() {
 func startSentry(logger *gocore.Logger) {
 	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
+		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
 		if err != nil {
 			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
 		}
 
 		if err = sentry.Init(sentry.ClientOptions{
-			Dsn: sentryDns,
+			Dsn:        sentryDns,
+			ServerName: serviceName,
 
 			TracesSampleRate: tracesSampleRate,
 		}); err != nil {
