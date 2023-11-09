@@ -38,6 +38,7 @@ require (
 	github.com/ordishs/gocore v1.0.50
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
+	github.com/quic-go/quic-go v0.38.1
 	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.30.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
@@ -203,7 +204,6 @@ require (
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/qtls-go1-20 v0.3.3 // indirect
-	github.com/quic-go/quic-go v0.38.1 // indirect
 	github.com/quic-go/webtransport-go v0.5.3 // indirect
 	github.com/raulk/go-watchdog v1.3.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect

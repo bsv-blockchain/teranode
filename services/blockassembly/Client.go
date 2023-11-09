@@ -83,12 +83,13 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 		/* listen for close channel and reconnect */
 		client.logger.Infof("Listening for close channel on fRPC client")
 		go func() {
-			for {
-				select {
-				case <-client.frpcClient.CloseChannel():
-					client.logger.Infof("fRPC client close channel received, reconnecting...")
-					client.connectFRPC()
-				}
+			select {
+			case <-ctx.Done():
+				client.logger.Infof("fRPC client context done, closing channel")
+				return
+			case <-client.frpcClient.CloseChannel():
+				client.logger.Infof("fRPC client close channel received, reconnecting...")
+				client.connectFRPC()
 			}
 		}()
 	}

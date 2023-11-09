@@ -89,12 +89,13 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		/* listen for close channel and reconnect */
 		client.logger.Infof("Listening for close channel on fRPC client")
 		go func() {
-			for {
-				select {
-				case <-client.frpcClient.CloseChannel():
-					client.logger.Infof("fRPC client close channel received, reconnecting...")
-					client.connectFRPC()
-				}
+			select {
+			case <-ctx.Done():
+				client.logger.Infof("fRPC client context done, closing channel")
+				return
+			case <-client.frpcClient.CloseChannel():
+				client.logger.Infof("fRPC client close channel received, reconnecting...")
+				client.connectFRPC()
 			}
 		}()
 	}
@@ -154,22 +155,22 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (s *Client) batchWorker(ctx context.Context) {
-	duration := time.Duration(s.batchTimeout) * time.Millisecond
-	ringBuffer := make([]*validator_api.ValidateTransactionRequest, s.batchSize)
+func (c *Client) batchWorker(ctx context.Context) {
+	duration := time.Duration(c.batchTimeout) * time.Millisecond
+	ringBuffer := make([]*validator_api.ValidateTransactionRequest, c.batchSize)
 	i := 0
 	for {
 		select {
-		case req := <-s.batchCh:
+		case req := <-c.batchCh:
 			ringBuffer[i] = req
 			i++
-			if i == s.batchSize {
-				s.sendBatchToValidator(ctx, ringBuffer)
+			if i == c.batchSize {
+				c.sendBatchToValidator(ctx, ringBuffer)
 				i = 0
 			}
 		case <-time.After(duration):
 			if i > 0 {
-				s.sendBatchToValidator(ctx, ringBuffer[:i])
+				c.sendBatchToValidator(ctx, ringBuffer[:i])
 				i = 0
 			}
 		}

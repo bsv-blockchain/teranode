@@ -546,8 +546,8 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 	return c.insertSpendableUTXOs(ctx, tx)
 }
 
-func (c *Coinbase) RequestFunds(cntxt context.Context, address string) (*bt.Tx, error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+func (c *Coinbase) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+	ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	defer cancelTimeout()
 
 	start, stat, ctx := util.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
