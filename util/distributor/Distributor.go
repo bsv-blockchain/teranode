@@ -96,7 +96,7 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
-	start, stat, _ := util.NewStatFromContext(ctx, "SendTransaction", distributorStat)
+	start, stat, _ := util.NewStatFromContext(ctx, "Distributor:SendTransaction", distributorStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
