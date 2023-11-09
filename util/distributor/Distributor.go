@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -94,9 +95,11 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
-	start, stat, _ := util.StartStatFromContext(ctx, "Distributor:SendTransaction")
+	start, stat, ctx := util.StartStatFromContext(ctx, "Distributor:SendTransaction")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Distributor:SendTransaction")
 	defer func() {
 		stat.AddTime(start)
+		span.Finish()
 	}()
 
 	var wg sync.WaitGroup
@@ -110,7 +113,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		wg.Add(1)
 
 		go func() {
-			start1, stat1, ctx1 := util.NewStatFromContext(ctx, "ProcessTransaction", stat)
+			start1, stat1, ctx1 := util.NewStatFromContext(spanCtx, "ProcessTransaction", stat)
 			defer func() {
 				wg.Done()
 				stat1.AddTime(start1)
