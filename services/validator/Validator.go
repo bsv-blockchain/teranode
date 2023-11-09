@@ -179,7 +179,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 			return nil, txmeta.ErrAlreadyExists
 		}
 
-		v.reverseSpends(traceSpan, spentUtxos)
+		v.reverseSpends(txMetaSpan, spentUtxos)
 		return data, errors.Join(fmt.Errorf("error sending tx %s to tx meta utxoStore", tx.TxIDChainHash().String()), err)
 	}
 
