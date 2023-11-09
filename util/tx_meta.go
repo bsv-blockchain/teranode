@@ -20,11 +20,7 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 	} else {
 		parentTxHashes = make([]*chainhash.Hash, len(tx.Inputs))
 		for index, input := range tx.Inputs {
-			parentTxHash, err := UTXOHashFromInput(input)
-			if err != nil {
-				return nil, err
-			}
-			parentTxHashes[index] = parentTxHash
+			parentTxHashes[index] = input.PreviousTxIDChainHash()
 		}
 	}
 
