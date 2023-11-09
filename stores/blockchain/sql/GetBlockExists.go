@@ -10,7 +10,7 @@ import (
 )
 
 func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlock")
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockExists")
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -12,7 +12,7 @@ import (
 )
 
 func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlock")
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetHeader")
 	defer func() {
 		stat.AddTime(start)
 	}()
