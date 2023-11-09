@@ -83,10 +83,12 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 		/* listen for close channel and reconnect */
 		client.logger.Infof("Listening for close channel on fRPC client")
 		go func() {
-			select {
-			case <-client.frpcClient.CloseChannel():
-				client.logger.Infof("fRPC client close channel received, reconnecting...")
-				client.connectFRPC()
+			for {
+				select {
+				case <-client.frpcClient.CloseChannel():
+					client.logger.Infof("fRPC client close channel received, reconnecting...")
+					client.connectFRPC()
+				}
 			}
 		}()
 	}
@@ -126,20 +128,32 @@ func (s *Client) connectFRPC() {
 
 	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
 	if ok {
-		s.logger.Infof("Using fRPC connection to blockassembly")
-		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+		maxRetries := 3
+		retryInterval := 5 * time.Second
 
-		client, err := blockassembly_api.NewClient(nil, nil)
-		if err != nil {
-			s.logger.Errorf("error creating new fRPC client in blockassembly: %s", err)
+		for i := 0; i < maxRetries; i++ {
+			s.logger.Infof("Attempting to create fRPC connection to blockassembly, attempt %d", i+1)
+
+			client, err := blockassembly_api.NewClient(nil, nil)
+			if err != nil {
+				s.logger.Errorf("Error creating new fRPC client in blockassembly: %s", err)
+				return // or handle the error accordingly
+			}
+
+			err = client.Connect(blockAssemblyFRPCAddress)
+			if err != nil {
+				s.logger.Errorf("Error connecting to fRPC server in blockassembly: %s", err)
+				time.Sleep(retryInterval)
+				retryInterval *= 2 // Backoff strategy (exponential)
+			} else {
+				s.logger.Debugf("Connected to blockassembly fRPC server")
+				s.frpcClient = client
+				break // Exit the loop if the connection is successful
+			}
 		}
 
-		err = client.Connect(blockAssemblyFRPCAddress)
-		if err != nil {
-			s.logger.Errorf("error connecting to fRPC server in blockassembly: %s", err)
-		} else {
-			s.logger.Debugf("Connected to blockassembly fRPC server")
-			s.frpcClient = client
+		if s.frpcClient == nil {
+			s.logger.Errorf("Failed to connect to blockassembly fRPC server after %d attempts", maxRetries)
 		}
 	}
 }

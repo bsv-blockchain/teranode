@@ -89,10 +89,12 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		/* listen for close channel and reconnect */
 		client.logger.Infof("Listening for close channel on fRPC client")
 		go func() {
-			select {
-			case <-client.frpcClient.CloseChannel():
-				client.logger.Infof("fRPC client close channel received, reconnecting...")
-				client.connectFRPC()
+			for {
+				select {
+				case <-client.frpcClient.CloseChannel():
+					client.logger.Infof("fRPC client close channel received, reconnecting...")
+					client.connectFRPC()
+				}
 			}
 		}()
 	}
@@ -260,21 +262,34 @@ func (c *Client) connectFRPC() {
 
 	validatorFRPCAddress, ok := gocore.Config().Get("validator_frpcAddress")
 	if ok {
-		c.logger.Infof("Using fRPC connection to validator")
-		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
+		maxRetries := 3
+		retryInterval := 5 * time.Second
 
-		client, err := validator_api.NewClient(nil, nil)
-		if err != nil {
-			c.logger.Errorf("error creating new fRPC client in validator: %s", err)
+		for i := 0; i < maxRetries; i++ {
+			c.logger.Infof("Attempting to create fRPC connection to validator, attempt %d", i+1)
+
+			client, err := validator_api.NewClient(nil, nil)
+			if err != nil {
+				c.logger.Errorf("Error creating new fRPC client in validator: %s", err)
+				return
+			}
+
+			err = client.Connect(validatorFRPCAddress)
+			if err != nil {
+				c.logger.Errorf("Error connecting to fRPC server in validator: %s", err)
+				time.Sleep(retryInterval)
+				retryInterval *= 2
+			} else {
+				c.logger.Debugf("Connected to validator fRPC server")
+				c.frpcClient = client
+				break
+			}
 		}
 
-		err = client.Connect(validatorFRPCAddress)
-		if err != nil {
-			c.logger.Errorf("error connecting to fRPC server in validator: %s", err)
-		} else {
-			c.logger.Debugf("Connected to validator fRPC server")
-			c.frpcClient = client
+		if c.frpcClient == nil {
+			c.logger.Fatalf("Failed to connect to validator fRPC server after %d attempts", maxRetries)
 		}
+
 	}
 }
 
