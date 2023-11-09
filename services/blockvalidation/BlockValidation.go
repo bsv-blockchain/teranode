@@ -246,8 +246,8 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
-	startTotal, stat, ctx1 := util.StartStatFromContext(ctx, "validateSubtree")
-	span, spanCtx := opentracing.StartSpanFromContext(ctx1, "BlockValidation:ValidateBlock")
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
 		span.Finish()
@@ -362,9 +362,8 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	if len(missingTxHashes) > 0 {
-		start = gocore.CurrentNanos()
-		stat5 := stat.NewStat("5. blessMissingTxs")
-		err = u.processMissingTransactions(spanCtx, subtreeHash, missingTxHashes, baseUrl, &txMetaMap)
+		start, stat5, ctx5 := util.StartStatFromContext(spanCtx, "5. processMissingTransactions")
+		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashes, baseUrl, &txMetaMap)
 		if err != nil {
 			return err
 		}
