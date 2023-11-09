@@ -257,9 +257,9 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
-	start := gocore.CurrentNanos()
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockExists", stats)
 	defer func() {
-		stats.NewStat("GetBlockExists", true).AddTime(start)
+		stat.AddTime(start)
 	}()
 
 	prometheusBlockchainGetBlockExists.Inc()
@@ -269,7 +269,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 		return nil, err
 	}
 
-	exists, err := b.store.GetBlockExists(ctx, blockHash)
+	exists, err := b.store.GetBlockExists(ctx1, blockHash)
 	if err != nil {
 		return nil, err
 	}

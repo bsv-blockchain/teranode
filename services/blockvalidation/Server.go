@@ -218,9 +218,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
 
 	// first check if the block exists, it might have already been processed
-	startTime := gocore.CurrentNanos()
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
-	stat.NewStat("GetBlockExists").AddTime(startTime)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -229,17 +227,13 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		return nil
 	}
 
-	startTime = gocore.CurrentNanos()
 	block, err := u.getBlock(ctx, hash, baseUrl)
-	stat.NewStat("GetBlock").AddTime(startTime)
 	if err != nil {
 		return err
 	}
 
 	// catchup if we are missing the parent block
-	startTime = gocore.CurrentNanos()
 	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
-	stat.NewStat("GetBlockExists (parent)").AddTime(startTime)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
