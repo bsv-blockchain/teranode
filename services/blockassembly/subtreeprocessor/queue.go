@@ -48,12 +48,17 @@ func (q *LockFreeQueue) enqueue(v *txIDAndFee) {
 func (q *LockFreeQueue) dequeue() *txIDAndFee {
 	next := q.tail.next.Load()
 
-	validTime := true
-	if q.timeDelay > 0 {
-		validTime = next.time >= time.Now().Add(-1*q.timeDelay).UnixMilli()
+	if next == nil || next == q.previousTail {
+		return nil
 	}
 
-	if next == nil || next == q.previousTail || !validTime {
+	validTime := true
+	if q.timeDelay > 0 {
+		validTimeMillis := time.Now().Add(-1 * q.timeDelay).UnixMilli()
+		validTime = next.time <= validTimeMillis
+	}
+
+	if !validTime {
 		return nil
 	}
 

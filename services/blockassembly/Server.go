@@ -124,6 +124,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				}
 				stat2.AddTime(start2)
 
+				// TODO #145
+				// the repository in the blob server sometimes cannot find subtrees that were just stored
+				// this is the dumbest way we can think of to fix it, at least temporarily
+				time.Sleep(20 * time.Millisecond)
+
 				start3, stat3, ctx3 := util.NewStatFromContext(ctx, "SendNotification", stat1)
 				if err = ba.blockchainClient.SendNotification(ctx3, &model.Notification{
 					Type: model.NotificationType_Subtree,

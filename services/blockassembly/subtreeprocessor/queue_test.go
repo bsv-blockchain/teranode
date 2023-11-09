@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_queue(t *testing.T) {
@@ -35,6 +36,60 @@ func Test_queue(t *testing.T) {
 	items = 0
 	for {
 		item := q.dequeue()
+		if item == nil {
+			break
+		}
+		assert.Equal(t, uint64(items), item.node.Fee)
+		items++
+		//t.Logf("Item: %d\n", item.node.Fee)
+	}
+	assert.True(t, q.IsEmpty())
+	assert.Equal(t, 10, items)
+}
+
+func Test_queueWithTime(t *testing.T) {
+	q := NewLockFreeQueue(100 * time.Millisecond)
+
+	enqueueItems(t, q, 1, 10)
+
+	item := q.dequeue()
+	require.Nil(t, item)
+
+	time.Sleep(50 * time.Millisecond)
+
+	item = q.dequeue()
+	require.Nil(t, item)
+
+	time.Sleep(100 * time.Millisecond)
+
+	items := 0
+	for {
+		item = q.dequeue()
+		if item == nil {
+			break
+		}
+		assert.Equal(t, uint64(items), item.node.Fee)
+		items++
+		//t.Logf("Item: %d\n", item.node.Fee)
+	}
+	assert.True(t, q.IsEmpty())
+	assert.Equal(t, 10, items)
+
+	enqueueItems(t, q, 1, 10)
+
+	item = q.dequeue()
+	require.Nil(t, item)
+
+	time.Sleep(50 * time.Millisecond)
+
+	item = q.dequeue()
+	require.Nil(t, item)
+
+	time.Sleep(100 * time.Millisecond)
+
+	items = 0
+	for {
+		item = q.dequeue()
 		if item == nil {
 			break
 		}

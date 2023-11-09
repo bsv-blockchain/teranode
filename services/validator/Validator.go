@@ -137,7 +137,10 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			Size:          uint64(tx.Size()),
 			LockTime:      tx.LockTime,
 		}, spentUtxos); err != nil {
-			// TODO remove from tx meta store
+			if err = v.txMetaStore.Delete(traceSpan.Ctx, tx.TxIDChainHash()); err != nil {
+				v.logger.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
+			}
+
 			v.reverseSpends(traceSpan, spentUtxos)
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to block assembler: %v", err)
@@ -153,7 +156,11 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	// then we store the new utxos from the tx
 	err = v.utxoStore.Store(traceSpan.Ctx, tx)
 	if err != nil {
-		// TODO remove from tx meta store
+
+		// TODO #144
+		// add the tx to the fail queue and process ASAP?
+
+		// TODO remove from tx meta store?
 		// TRICKY - we've sent the tx to block assembly - we can't undo that?
 		// the reverseSpends need to be given the outputs not the spends
 		// v.reverseSpends(traceSpan, spentUtxos)

@@ -39,7 +39,7 @@ func Store(t *testing.T, db txmeta.Store) {
 
 		parentTxHashes := make([]*chainhash.Hash, len(Tx1.Inputs))
 		for index, input := range Tx1.Inputs {
-			parentTxHash, _ := util.UTXOHashFromInput(input)
+			parentTxHash := input.PreviousTxIDChainHash()
 			parentTxHashes[index] = parentTxHash
 		}
 

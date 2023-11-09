@@ -183,10 +183,7 @@ func (s *File) Del(_ context.Context, hash []byte) error {
 	fileName := s.filename(hash)
 
 	// remove ttl file
-	if err := os.Remove(fileName + ".ttl"); err != nil {
-		return fmt.Errorf("failed to remove ttl file: %w", err)
-	}
-
+	_ = os.Remove(fileName + ".ttl")
 	return os.Remove(fileName)
 }
 
