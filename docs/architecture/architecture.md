@@ -53,10 +53,10 @@ Various services and components are outlined to show their interactions and func
 
 3. **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
 
-4. **Coinbase Overlay Node**: This service handles the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners. ****CLARIFY - Creates them??? what does this do? ** END CLARIFY**
+4. **Coinbase Overlay Node**: This service handles the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners. ****CLARIFY - Creates them??? what does this do?**
 
 5. **UBSV Node Core Services**:
-  - **Propagation Service**: Responsible for propagating transactions through the network.
+  - **Propagation Service**: Responsible for receiving transactions (from other nodes) and propagating transactions (to other nodes).
   - **TX Validation Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks for the blockchain.
   - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
@@ -64,7 +64,7 @@ Various services and components are outlined to show their interactions and func
   - **Public Endpoints Service**: Provides API endpoints for external entities to interact with the node. **CLARIFY**
 
 6. **Ancillary Services**:
-  - **TX Submission (ARC)**: Manages the submission of new transactions to the network. **CLARIFY**
+  - **TX Submission (ARC)**: Manages the submission of  transactions to the network on behalf of the propagation service.
   - **Banlist Service**: Maintains and checks a list of banned entities or nodes. **CLARIFY**
   - **UTXO Lookup Service**:
     - **UTXO Lookup Service**: Retrieves information about **unspent** transaction outputs, which are essential for validating new transactions.
@@ -253,11 +253,6 @@ The node has been designed as a collection of microservices, each handling speci
 
 ### Transaction Propagation Service
 
--- **CLARIFY** ???
-** _Propagation Service only propagates transactions but not subtrees or blocks? Those are handled directly by the block assembly?_
-** _Who sends subtrees and blocks to others?_
--- **END CLARIFY** ???
-
 The Propagation service is responsible for:
 
 * Receiving transactions from other nodes and forwarding them to the Validator service.
@@ -281,15 +276,7 @@ Here is a breakdown of the components as shown:
 
 Note:
 - **Communication via gRPC**: While the main network might use multicast for propagation, the test network simplifies operations by using gRPC, a high-performance, open-source universal RPC framework, for direct communication between the Propagation and Validation Services, bypassing the need for IPV6 broadcasting.
-
-
---- NOTE - WHERE IS THE CODE FOR THE TRANSACTION STORE? IS IT A SERVICE?? **CLARIFY**
-
-- Technology and specific Stores [TODO] **CLARIFY**
-  - TX Storage...
-
-**CLARIFY**  - in this diagram, we have an extended transaction, but it is not clear what the extended transaction is. Is it the transaction with the metadata? Why does it come from the Multicast Group? Who originally assembles the "Extended TX"???? **CLARIFY**
-
+-
 
 ---
 
@@ -316,9 +303,6 @@ Here is a breakdown of the components as shown:
 5. **UTXO Service:** Datastore of UTXOs (the outputs from transactions that have not been spent and can be used as inputs in new transactions).
 
 6. **TX Status:** Datastore managing the statuses of transactions. If validated and not mined, they will be eligible for inclusion in a block.
-
-
-** CLARIFY - What is the TX METADATA Store for? Include here in the details? ** CLARIFY
 
 
 ---
@@ -489,7 +473,7 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 The Blob Server service is responsible for storing and retrieving blobs. It is a key-value store that uses the blob ID as the key and the blob as the value. The Blob Server service is used by the Validator service to retrieve blobs when validating transactions.
 
-*** CLARIFY - What is the Blob Server Service? Tie up with the model *** CLARIFY
+***CLARIFY - What is the Blob Server Service? Tie up with the model***
 
 - Business rationale / what it is for / process flows / diagrams [TODO]
 - Architecture [TODO]
@@ -502,6 +486,7 @@ The Blob Server service is responsible for storing and retrieving blobs. It is a
 
 ### Coinbase
 
+***CLARIFY***
 The Coinbase service is responsible for creating coinbase transactions. It is also responsible for receiving coinbase transactions from other nodes and forwarding them to the Validator service.
 
 - Business rationale / what it is for / process flows / diagrams [TODO]
@@ -516,20 +501,11 @@ The Coinbase service is responsible for creating coinbase transactions. It is al
 
 ### Bootstrap
 
-The Bootstrap service is responsible for bootstrapping the network. It is also responsible for receiving bootstrap nodes from other nodes and forwarding them to the Validator service.
+The Bootstrap Service, helps new nodes find peers in a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
-This object is designed to manage a set of subscribers and broadcast notifications to them, likely to keep them updated about changes in the network or data of interest. Discovery....
+The service manages a set of subscribers and broadcast notifications and keep-alives to them, to keep them updated about network participants.
 
-This service is likely an integral part of a network's node discovery and communication layer, responsible for maintaining up-to-date information about network participants and facilitating their communication.
-*** **CLARIFY** - What is the Bootstrap Service? Tie up with the model *** **CLARIFY**
-
-
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
-
+The current version uses Google's RPC framework for setting up the server and handling stream-based communication.
 
 ---
 
@@ -556,26 +532,30 @@ Here's the breakdown of the components and their functions:
 
 4. **Multicast Group Tx Receive**: This indicates a multicast setup where transactions are broadcast to multiple nodes simultaneously. This is efficient for disseminating information quickly to many nodes in the network.
 
+
 ---
 
 ### UTXO Store
 
-The UTXO Store service is responsible for storing and retrieving UTXOs. It is a key-value store that uses the UTXO ID as the key and the UTXO as the value. The UTXO Store service is used by the Validator service to retrieve UTXOs when validating transactions.
+The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
 
 ---
 
+
 ### Transaction Meta Store
 
-The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. It is a key-value store that uses the transaction ID as the key and the transaction metadata as the value. The Transaction Meta Store service is used by the Validator service to retrieve transaction metadata when validating transactions.
+The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. This is used by many services, including the Validator and Block Assembly services, to retrieve transaction metadata when validating transactions. The Transaction Meta Store service is also used by the Block Assembly service to retrieve transaction metadata when assembling blocks.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+The metadata in scope in this service refers to extra fields of interest during transaction-related processing.
+
+| Field          | Description                                             |
+|----------------|---------------------------------------------------------|
+| Tx             | The actual transaction data                             |
+| Fee            | The fee associated with the transaction                 |
+| SizeInBytes    | The size of the transaction in bytes                    |
+| FirstSeen      | Timestamp of when the transaction was first seen        |
+| ParentTxHashes | List of hashes of the transaction's parent transactions |
+
+
+---
