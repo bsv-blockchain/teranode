@@ -136,24 +136,23 @@ func (s *Client) connectFRPC() {
 
 			client, err := blockassembly_api.NewClient(nil, nil)
 			if err != nil {
-				s.logger.Errorf("Error creating new fRPC client in blockassembly: %s", err)
-				return // or handle the error accordingly
+				s.logger.Fatalf("Error creating new fRPC client in blockassembly: %s", err)
 			}
 
 			err = client.Connect(blockAssemblyFRPCAddress)
 			if err != nil {
-				s.logger.Errorf("Error connecting to fRPC server in blockassembly: %s", err)
+				s.logger.Warnf("Error connecting to fRPC server in blockassembly: %s", err)
 				time.Sleep(retryInterval)
 				retryInterval *= 2 // Backoff strategy (exponential)
 			} else {
-				s.logger.Debugf("Connected to blockassembly fRPC server")
+				s.logger.Infof("Connected to blockassembly fRPC server")
 				s.frpcClient = client
 				break // Exit the loop if the connection is successful
 			}
 		}
 
 		if s.frpcClient == nil {
-			s.logger.Errorf("Failed to connect to blockassembly fRPC server after %d attempts", maxRetries)
+			s.logger.Fatalf("Failed to connect to blockassembly fRPC server after %d attempts", maxRetries)
 		}
 	}
 }

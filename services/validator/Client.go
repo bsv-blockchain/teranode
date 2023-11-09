@@ -270,17 +270,16 @@ func (c *Client) connectFRPC() {
 
 			client, err := validator_api.NewClient(nil, nil)
 			if err != nil {
-				c.logger.Errorf("Error creating new fRPC client in validator: %s", err)
-				return
+				c.logger.Fatalf("Error creating new fRPC client in validator: %s", err)
 			}
 
 			err = client.Connect(validatorFRPCAddress)
 			if err != nil {
-				c.logger.Errorf("Error connecting to fRPC server in validator: %s", err)
+				c.logger.Warnf("Error connecting to fRPC server in validator: %s", err)
 				time.Sleep(retryInterval)
 				retryInterval *= 2
 			} else {
-				c.logger.Debugf("Connected to validator fRPC server")
+				c.logger.Infof("Connected to validator fRPC server")
 				c.frpcClient = client
 				break
 			}
