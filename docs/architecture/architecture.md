@@ -2,7 +2,6 @@
 
 ## Index
 
-
 - [Overview](#overview)
 - [Data Model and Propagation](#data-model-and-propagation)
   - [Block Size](#block-size)
@@ -18,11 +17,11 @@
   - [Miner / Hasher](#miner--hasher)
   - [Subtree and Block Validator](#subtree-and-block-validator)
     - [Service Components and Dependencies:](#service-components-and-dependencies)
-    - [SubTree Validation:](#subtree-validation)
-    - [Block Validation:](#block-validation)
+    - [SubTree Validation Details:](#subtree-validation-details)
+    - [Block Validation Details:](#block-validation-details)
     - [Overall Block and SubTree Validation Process](#overall-block-and-subtree-validation-process)
   - [Blockchain Service](#blockchain-service)
-  - [Blob Server](#blob-server)
+  - [Blob Server / Asset Server](#blob-server--asset-server)
   - [Coinbase](#coinbase)
   - [Bootstrap](#bootstrap)
   - [P2P](#p2p)
@@ -53,7 +52,7 @@ Various services and components are outlined to show their interactions and func
 
 3. **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
 
-4. **Coinbase Overlay Node**: This service handles the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners. ****CLARIFY - Creates them??? what does this do?**
+4. **Coinbase Overlay Node**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
 
 5. **UBSV Node Core Services**:
   - **Propagation Service**: Responsible for receiving transactions (from other nodes) and propagating transactions (to other nodes).
@@ -61,7 +60,6 @@ Various services and components are outlined to show their interactions and func
   - **Block Assembly Service**: Assembles blocks for the blockchain.
   - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
   - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
-  - **Public Endpoints Service**: Provides API endpoints for external entities to interact with the node. **CLARIFY**
 
 6. **Ancillary Services**:
   - **TX Submission (ARC)**: Manages the submission of  transactions to the network on behalf of the propagation service.
@@ -71,7 +69,7 @@ Various services and components are outlined to show their interactions and func
 
 7. **Other Components**:
   - **Message Broker**: A middleware that facilitates communication between different services.
-  - **TX Status Store**: Keeps track of the status of transactions within the system.  **CLARIFY**
+  - **TX Status Store**: Keeps track of the status of transactions within the system.
   - **Hashers**: Perform the computational work of hashing that is central to the mining process.
 
 ---
@@ -469,31 +467,48 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 ---
 
 
-### Blob Server
+### Blob Server / Asset Server
 
-The Blob Server service is responsible for storing and retrieving blobs. It is a key-value store that uses the blob ID as the key and the blob as the value. The Blob Server service is used by the Validator service to retrieve blobs when validating transactions.
+The Blob Server (also known as Asset Server) serves as an asset server in a read-only capacity, acting as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
-***CLARIFY - What is the Blob Server Service? Tie up with the model***
+- **Transactions (TX)**.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+- **SubTrees**.
+
+- **Blocks and Block Headers**.
+
+- **Unspent Transaction Outputs (UTXO)**.
+
+- **Metadata for a Transaction (TXMeta)**.
+
+The server uses both HTTP and gRPC as communication protocols:
+
+- **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
+
+- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the UBSV distributed network.
+
+The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
+
+For clarity, the assets are served in a read-only mode. The various micro-services write directly to the data stores, but the blob server fronts them as a read-only interface.
 
 ---
 
 
 ### Coinbase
 
-***CLARIFY***
-The Coinbase service is responsible for creating coinbase transactions. It is also responsible for receiving coinbase transactions from other nodes and forwarding them to the Validator service.
+The coinbase service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+In the UBSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
+
+The Coinbase Service responsibilities are as follows:
+
+1. **Tracking New Blocks**: The service listens to the blockchain network for new blocks being mined. For every new block, the service would detect the coinbase transaction.
+
+2. **Recording Coinbase Transactions**: Upon identifying a coinbase transaction, the service writes the details into a datastore. This includes the outputs of the coinbase transaction.
+
+3. **Monitoring Maturity**: A coinbase transaction is not spendable immediately; there is a standard maturity period of 100 blocks. This means the coins created in a coinbase transaction cannot be spent until 100 more blocks have been added to the blockchain after the block containing the coinbase transaction. The service would keep track of the maturity of each coinbase transaction to know when the funds become spendable.
+
+4. **Ownership Management**: If the service is run by a mining entity, it would monitor and keep an inventory of all the coinbase transactions for the blocks that the entity has successfully mined, effectively managing the earned rewards.
 
 
 ---
