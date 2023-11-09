@@ -96,6 +96,11 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
+	start, stat, _ := util.NewStatFromContext(ctx, "SendTransaction", distributorStat)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	var wg sync.WaitGroup
 
 	errorWrapperCh := make(chan errorWrapper, len(d.propagationServers))
@@ -107,17 +112,17 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) error {
 		wg.Add(1)
 
 		go func() {
-			start := gocore.CurrentNanos()
+			start1, stat1, ctx1 := util.NewStatFromContext(ctx, "ProcessTransaction", stat)
 			defer func() {
 				wg.Done()
-				distributorStat.NewStat(a).NewStat("ProcessTransaction").AddTime(start)
+				stat1.AddTime(start1)
 			}()
 
 			attempts := 0
 			backoff := d.backoff
 
 			for {
-				if _, err := p.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+				if _, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
 					Tx: tx.ExtendedBytes(),
 				}); err == nil {
 					break
