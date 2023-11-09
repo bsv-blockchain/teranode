@@ -105,8 +105,10 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
 				prometheusBlockAssemblerSubtreeCreated.Inc()
 
+				ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
+
 				if subtreeBytes, err = subtree.Serialize(); err != nil {
-					ba.logger.Errorf("Failed to serialize subtree [%s]", err)
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to serialize subtree: %s", subtree.RootHash().String(), err)
 					continue
 				}
 
@@ -117,7 +119,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeBytes,
 					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
 				); err != nil {
-					ba.logger.Errorf("Failed to store subtree [%s]", err)
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
 					continue
 				}
 				stat2.AddTime(start2)
@@ -127,11 +129,10 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					Type: model.NotificationType_Subtree,
 					Hash: subtree.RootHash(),
 				}); err != nil {
-					ba.logger.Errorf("Failed to send subtree notification [%s]", err)
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtree.RootHash().String(), err)
 				}
 				stat3.AddTime(start3)
 
-				ba.logger.Infof("Received new subtree notification for: %s (len %d)", subtree.RootHash().String(), subtree.Length())
 				stat1.AddTime(start1)
 			}
 		}

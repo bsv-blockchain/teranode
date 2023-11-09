@@ -408,6 +408,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	}
 
 	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
+		u.logger.Warnf("[SubtreeFound][%s] already processing subtree", subtreeHash.String())
 		return &emptypb.Empty{}, nil
 	}
 	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
