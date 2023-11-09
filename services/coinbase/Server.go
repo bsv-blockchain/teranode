@@ -148,6 +148,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 	responses, _ := s.coinbase.DistributeTransaction(ctx, tx)
 
 	resp := &coinbase_api.DistributeTransactionResponse{
+		Txid:      tx.TxIDChainHash().String(),
 		Timestamp: timestamppb.Now(),
 		Responses: make([]*coinbase_api.ResponseWrapper, len(responses)),
 	}

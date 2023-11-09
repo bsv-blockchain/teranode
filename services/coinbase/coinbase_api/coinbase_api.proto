@@ -47,6 +47,7 @@ message ResponseWrapper {
 
 // swagger:model DistributeTransactionResponse
 message DistributeTransactionResponse {
-  google.protobuf.Timestamp timestamp = 1;
-  repeated ResponseWrapper responses = 2;
+  string txid = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  repeated ResponseWrapper responses = 3;
 }
