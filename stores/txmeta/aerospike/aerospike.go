@@ -86,6 +86,10 @@ func New(u *url.URL) (*Store, error) {
 	}, nil
 }
 
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return s.Get(ctx, hash)
+}
+
 func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 

@@ -41,6 +41,10 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	return m
 }
 
+func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return t.Get(ctx, hash)
+}
+
 func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cached := t.cache.Get(*hash)
 	if cached != nil {

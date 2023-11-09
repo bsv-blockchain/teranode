@@ -21,6 +21,10 @@ func New() *Memory {
 	}
 }
 
+func (m *Memory) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return m.Get(ctx, hash)
+}
+
 func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	m.mu.Lock()
 	status, ok := m.txStatus[*hash]

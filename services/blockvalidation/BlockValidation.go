@@ -331,7 +331,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				// no - get it from the network
 				// yes - is the txid blessed?
 				// if all txs in tree are blessed, then bless the tree
-				txMeta, err = u.txMetaStore.Get(gCtx, txHash)
+				txMeta, err = u.txMetaStore.GetMeta(gCtx, txHash)
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
 						// collect all missing transactions for processing in order
@@ -451,7 +451,7 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 
 	// get transaction from network over http using the baseUrl
 	if baseUrl == "" {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
+		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
 	}
 
 	start := gocore.CurrentNanos()
@@ -462,21 +462,21 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 		alreadyHaveTransaction = false
 
 		// do http request to baseUrl + txHash.String()
-		u.logger.Infof("[blessMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
+		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
 		startM := gocore.CurrentNanos()
 		statM := stat.NewStat("http fetch missing tx")
 		txBytes, err = util.DoHTTPRequest(ctx, url)
 		statM.AddTime(startM)
 		if err != nil {
-			return nil, errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to do http request", txHash.String()), err)
+			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
 		}
 	}
 
 	// validate the transaction by creating a transaction object
 	tx, err := bt.NewTxFromBytes(txBytes)
 	if err != nil {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
+		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
 	}
 
 	if !alreadyHaveTransaction {
@@ -485,7 +485,7 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 		err = u.txStore.Set(ctx, txHash[:], txBytes)
 		stat.NewStat("storeTx").AddTime(start)
 		if err != nil {
-			return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
+			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
 		}
 	}
 
@@ -516,7 +516,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	}
 
 	start := gocore.CurrentNanos()
-	txMeta, err = u.txMetaStore.Get(ctx, tx.TxIDChainHash())
+	txMeta, err = u.txMetaStore.GetMeta(ctx, tx.TxIDChainHash())
 	stat.NewStat("getTxMeta").AddTime(start)
 	if err != nil {
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", tx.TxID(), err.Error())

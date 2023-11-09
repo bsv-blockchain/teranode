@@ -97,6 +97,10 @@ func New(storeUrl *url.URL) (*Store, error) {
 	return s, nil
 }
 
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return s.Get(ctx, hash)
+}
+
 func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
 	defer cancelTimeout()

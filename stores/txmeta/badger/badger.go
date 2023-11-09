@@ -50,6 +50,10 @@ func New(dir string) (*Badger, error) {
 	return badgerStore, nil
 }
 
+func (b *Badger) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return b.Get(ctx, hash)
+}
+
 func (b *Badger) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	start := gocore.CurrentNanos()
 	defer func() {

@@ -29,6 +29,19 @@ type MetaData struct {
 	LockTime    uint32 `json:"lockTime"`
 }
 
+func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
+	d := &Data{}
+
+	// read the numbers
+	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
+	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
+	d.FirstSeen = binary.LittleEndian.Uint32(dataBytes[16:20])
+	d.BlockHeight = binary.LittleEndian.Uint32(dataBytes[20:24])
+	d.LockTime = binary.LittleEndian.Uint32(dataBytes[24:28])
+
+	return d, nil
+}
+
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	d := &Data{}
 
