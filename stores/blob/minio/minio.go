@@ -16,8 +16,6 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var minioStats = gocore.NewStat("prop_store_minio")
-
 type Minio struct {
 	client     *minio.Client
 	bucketName string
@@ -104,7 +102,7 @@ func (m *Minio) Health(ctx context.Context) (int, string, error) {
 func (m *Minio) Close(ctx context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("Close").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("Close").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:Close")
 	defer traceSpan.Finish()
@@ -115,7 +113,7 @@ func (m *Minio) Close(ctx context.Context) error {
 func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("Set").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("Set").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:Set")
 	defer traceSpan.Finish()
@@ -151,7 +149,7 @@ func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...opti
 func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("SetTTL").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("SetTTL").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:SetTTL")
 	defer traceSpan.Finish()
@@ -191,7 +189,7 @@ func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) erro
 func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("Get").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("Get").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:Get")
 	defer traceSpan.Finish()
@@ -234,7 +232,7 @@ func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
 func (m *Minio) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("Exists").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:Exists")
 	defer traceSpan.Finish()
@@ -266,7 +264,7 @@ func (m *Minio) Exists(ctx context.Context, hash []byte) (bool, error) {
 func (m *Minio) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		minioStats.NewStat("Del").AddTime(start)
+		gocore.NewStat("prop_store_minio", true).NewStat("Del").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "minio:Del")
 	defer traceSpan.Finish()

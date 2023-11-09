@@ -14,8 +14,6 @@ import (
 	"google.golang.org/api/option"
 )
 
-var gcsStats = gocore.NewStat("prop_store_gcs")
-
 type GCS struct {
 	client *storage.Client
 	bucket *storage.BucketHandle
@@ -52,7 +50,7 @@ func (g *GCS) Health(ctx context.Context) (int, string, error) {
 func (g *GCS) Close(_ context.Context) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("Close").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("Close").AddTime(start)
 	}()
 	traceSpan := tracing.Start(context.Background(), "gcs:Close")
 	defer traceSpan.Finish()
@@ -63,7 +61,7 @@ func (g *GCS) Close(_ context.Context) error {
 func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("Set").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("Set").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "gcs:Set")
 	defer traceSpan.Finish()
@@ -89,7 +87,7 @@ func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options
 func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("SetTTL").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("SetTTL").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "gcs:SetTTL")
 	defer traceSpan.Finish()
@@ -101,7 +99,7 @@ func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("Get").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("Get").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "gcs:Get")
 	defer traceSpan.Finish()
@@ -126,7 +124,7 @@ func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {
 func (g *GCS) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("Exists").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("Exists").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "gcs:Exists")
 	defer traceSpan.Finish()
@@ -148,7 +146,7 @@ func (g *GCS) Exists(ctx context.Context, hash []byte) (bool, error) {
 func (g *GCS) Del(ctx context.Context, hash []byte) error {
 	start := gocore.CurrentNanos()
 	defer func() {
-		gcsStats.NewStat("Del").AddTime(start)
+		gocore.NewStat("prop_store_gcs", true).NewStat("Del").AddTime(start)
 	}()
 	traceSpan := tracing.Start(ctx, "gcs:Del")
 	defer traceSpan.Finish()
