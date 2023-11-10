@@ -87,10 +87,14 @@ func New(u *url.URL) (*Store, error) {
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.Get(ctx, hash)
+	return s.get(ctx, hash, []string{"fee", "sizeInBytes", "locktime"})
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return s.get(ctx, hash, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "firstSeen", "blockHashes", "lockTime"})
+}
+
+func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 
 	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
@@ -107,7 +111,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	}
 
 	readPolicy := util.GetAerospikeReadPolicy(options...)
-	value, aeroErr = s.client.Get(readPolicy, key)
+	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -118,40 +122,67 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 
 	var err error
 
+	status := &txmeta.Data{}
+
+	if fee, ok := value.Bins["fee"].(int); ok {
+		status.Fee = uint64(fee)
+	}
+
+	if sb, ok := value.Bins["sizeInBytes"].(int); ok {
+		status.SizeInBytes = uint64(sb)
+	}
+
+	if ls, ok := value.Bins["lockTime"].(int); ok {
+		status.LockTime = uint32(ls)
+	}
+
+	if fs, ok := value.Bins["firstSeen"].(int); ok {
+		status.FirstSeen = uint32(fs)
+	}
+
 	var parentTxHashes []*chainhash.Hash
 	if value.Bins["parentTxHashes"] != nil {
-		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([]interface{})
+		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([][]byte)
 		if ok {
 			parentTxHashes = make([]*chainhash.Hash, len(parentTxHashesInterface))
 			for i, v := range parentTxHashesInterface {
-				parentTxHashes[i], err = chainhash.NewHash(v.([]byte))
+				parentTxHashes[i], err = chainhash.NewHash(v)
 				if err != nil {
 					return nil, err
 				}
 			}
+
+			status.ParentTxHashes = parentTxHashes
 		}
 	}
 
 	var blockHashes []*chainhash.Hash
 	if value.Bins["blockHashes"] != nil {
-		blockHashesInterface := value.Bins["blockHashes"].([]interface{})
-		blockHashes = make([]*chainhash.Hash, len(blockHashesInterface))
-		for i, v := range blockHashesInterface {
-			blockHashes[i], err = chainhash.NewHash(v.([]byte))
-			if err != nil {
-				return nil, err
+		blockHashesInterface, ok := value.Bins["blockHashes"].([][]byte)
+		if ok {
+			blockHashes = make([]*chainhash.Hash, len(blockHashesInterface))
+			for i, v := range blockHashesInterface {
+				blockHashes[i], err = chainhash.NewHash(v)
+				if err != nil {
+					return nil, err
+				}
 			}
+			status.BlockHashes = blockHashes
 		}
 	}
 
 	// transform the aerospike interface{} into the correct types
-	status := &txmeta.Data{
-		Tx:             value.Bins["tx"].(*bt.Tx),
-		Fee:            uint64(value.Bins["fee"].(int)),
-		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
-		ParentTxHashes: parentTxHashes,
-		FirstSeen:      uint32(value.Bins["firstSeen"].(int)),
-		BlockHashes:    blockHashes,
+	if value.Bins["tx"] != nil {
+		b, ok := value.Bins["tx"].([]byte)
+		if !ok {
+			return nil, errors.New("could not convert tx to []byte")
+		}
+
+		tx, err := bt.NewTxFromBytes(b)
+		if err != nil {
+			return nil, errors.New("could not convert tx bytes to bt.Tx")
+		}
+		status.Tx = tx
 	}
 
 	return status, nil
@@ -186,7 +217,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	}
 
 	bins := []*aerospike.Bin{
-		aerospike.NewBin("tx", tx),
+		aerospike.NewBin("tx", tx.ExtendedBytes()),
 		aerospike.NewBin("fee", int(txMeta.Fee)),
 		aerospike.NewBin("sizeInBytes", int(txMeta.SizeInBytes)),
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
