@@ -47,7 +47,7 @@ func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta
 
 func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cached := t.cache.Get(*hash)
-	if cached != nil {
+	if cached != nil && cached.Value() != nil {
 		return cached.Value(), nil
 	}
 
@@ -75,7 +75,7 @@ func (t txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHa
 
 	var txMeta *txmeta.Data
 	cached := t.cache.Get(*hash)
-	if cached != nil {
+	if cached != nil && cached.Value() != nil {
 		txMeta = cached.Value()
 		if txMeta.BlockHashes == nil {
 			txMeta.BlockHashes = []*chainhash.Hash{
