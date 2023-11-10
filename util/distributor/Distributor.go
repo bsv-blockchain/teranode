@@ -106,7 +106,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 	var wg sync.WaitGroup
 
-	responseWrapperCh := make(chan ResponseWrapper, len(d.propagationServers))
+	responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
 
 	for addr, propagationServer := range d.propagationServers {
 		a := addr // Create a local copy
@@ -128,7 +128,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				if _, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
 					Tx: tx.ExtendedBytes(),
 				}); err == nil {
-					responseWrapperCh <- ResponseWrapper{
+					responseWrapperCh <- &ResponseWrapper{
 						Addr:     a,
 						Retries:  retries,
 						Duration: time.Since(start),
@@ -141,7 +141,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						time.Sleep(backoff)
 						backoff *= 2
 					} else {
-						responseWrapperCh <- ResponseWrapper{
+						responseWrapperCh <- &ResponseWrapper{
 							Addr:     a,
 							Retries:  retries,
 							Duration: time.Since(start),
@@ -165,7 +165,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 	errorCount := 0
 
 	for rw := range responseWrapperCh {
-		responses[i] = &rw
+		responses[i] = rw
 		i++
 
 		if rw.Error != nil {

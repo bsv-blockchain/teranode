@@ -156,7 +156,7 @@ func (v *Server) Start(ctx context.Context) error {
 		if v.useP2P {
 			// if using p2p we are already subscribed but will need to get the best block from peers.
 			v.logger.Infof("Using libP2P")
-		} else {
+		} else if gocore.Config().GetBool("feature_bootstrap", true) {
 			v.logger.Infof("Using bootstrap service")
 			// Start a subscription to the bootstrap service
 
@@ -208,6 +208,8 @@ func (v *Server) Start(ctx context.Context) error {
 
 				return bootstrapClient.Start(ctx)
 			})
+		} else {
+			v.logger.Warnf("No P2P or Bootstap client is running")
 		}
 	}
 

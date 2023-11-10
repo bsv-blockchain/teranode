@@ -41,12 +41,13 @@ message DistributeTransactionRequest {
 message ResponseWrapper {
   string address = 1;
   int64 durationNanos = 2;
-  int32 attempts = 3;
+  int32 retries = 3;
   string error = 4;
 }
 
 // swagger:model DistributeTransactionResponse
 message DistributeTransactionResponse {
-  google.protobuf.Timestamp timestamp = 1;
-  repeated ResponseWrapper responses = 2;
+  string txid = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  repeated ResponseWrapper responses = 3;
 }

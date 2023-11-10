@@ -51,18 +51,20 @@ func New(logger utils.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bo
 	}
 
 	go func() {
+		var batchItem *BatchItem
+		var err error
 		for {
 			select {
 			case <-b.queueCtx.Done():
 				return
 			default:
-				batchItem := b.queue.dequeue()
+				batchItem = b.queue.dequeue()
 				if batchItem == nil {
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 
-				err := b.processBatchItem(batchItem)
+				err = b.processBatchItem(batchItem)
 				if err != nil {
 					b.logger.Errorf("error processing batch item: %v", err)
 				}

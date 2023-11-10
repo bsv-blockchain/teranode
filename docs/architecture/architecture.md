@@ -1,7 +1,11 @@
-# UBSV (Unbounded Bitcoin Satoshi Vision) Architecture Overview
+
+![BSVBA-Logo_FC.svg](img%2FBSVBA-Logo_FC.svg)
+
+
+# UBSV (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
+
 
 ## Index
-
 
 - [Overview](#overview)
 - [Data Model and Propagation](#data-model-and-propagation)
@@ -18,11 +22,11 @@
   - [Miner / Hasher](#miner--hasher)
   - [Subtree and Block Validator](#subtree-and-block-validator)
     - [Service Components and Dependencies:](#service-components-and-dependencies)
-    - [SubTree Validation:](#subtree-validation)
-    - [Block Validation:](#block-validation)
+    - [SubTree Validation Details:](#subtree-validation-details)
+    - [Block Validation Details:](#block-validation-details)
     - [Overall Block and SubTree Validation Process](#overall-block-and-subtree-validation-process)
   - [Blockchain Service](#blockchain-service)
-  - [Blob Server](#blob-server)
+  - [Blob Server / Asset Server](#blob-server--asset-server)
   - [Coinbase](#coinbase)
   - [Bootstrap](#bootstrap)
   - [P2P](#p2p)
@@ -53,25 +57,24 @@ Various services and components are outlined to show their interactions and func
 
 3. **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
 
-4. **Coinbase Overlay Node**: This service handles the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners. ****CLARIFY - Creates them??? what does this do? ** END CLARIFY**
+4. **Coinbase Overlay Node**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
 
 5. **UBSV Node Core Services**:
-  - **Propagation Service**: Responsible for propagating transactions through the network.
+  - **Propagation Service**: Responsible for receiving transactions (from other nodes) and propagating transactions (to other nodes).
   - **TX Validation Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks for the blockchain.
   - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
   - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
-  - **Public Endpoints Service**: Provides API endpoints for external entities to interact with the node. **CLARIFY**
 
 6. **Ancillary Services**:
-  - **TX Submission (ARC)**: Manages the submission of new transactions to the network. **CLARIFY**
+  - **TX Submission (ARC)**: Manages the submission of  transactions to the network on behalf of the propagation service.
   - **Banlist Service**: Maintains and checks a list of banned entities or nodes. **CLARIFY**
   - **UTXO Lookup Service**:
     - **UTXO Lookup Service**: Retrieves information about **unspent** transaction outputs, which are essential for validating new transactions.
 
 7. **Other Components**:
   - **Message Broker**: A middleware that facilitates communication between different services.
-  - **TX Status Store**: Keeps track of the status of transactions within the system.  **CLARIFY**
+  - **TX Status Store**: Keeps track of the status of transactions within the system.
   - **Hashers**: Perform the computational work of hashing that is central to the mining process.
 
 ---
@@ -186,7 +189,7 @@ _Unique to UBSV_: The concept of subtrees is a distinct feature not found in the
 1. A subtree acts as an intermediate data structure to hold batches of 1M transaction IDs (including metadata) and their corresponding Merkle root.
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
 
-_Efficiency_: Subtrees are broadcast every second (assuming a throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
+_Efficiency_: Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
 1. By broadcasting these subtrees at such a high frequency, receiving nodes can validate these batches quickly and continuously, having them "pre-approved" for inclusion in a block.
 2. This contrasts with the original Bitcoin protocol, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
 
@@ -205,7 +208,7 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 ### Advantages of the UBSV Model
 - **Continuous Data Flow**: Instead of nodes being idle between blocks, they are continuously receiving and processing subtrees.
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
-- **Scalability**: The model supports a much higher transaction throughput (1M transactions per second).
+- **Scalability**: The model supports a much higher transaction throughput (> 1M transactions per second).
 
 
 ### Network Behavior
@@ -253,11 +256,6 @@ The node has been designed as a collection of microservices, each handling speci
 
 ### Transaction Propagation Service
 
--- **CLARIFY** ???
-** _Propagation Service only propagates transactions but not subtrees or blocks? Those are handled directly by the block assembly?_
-** _Who sends subtrees and blocks to others?_
--- **END CLARIFY** ???
-
 The Propagation service is responsible for:
 
 * Receiving transactions from other nodes and forwarding them to the Validator service.
@@ -281,15 +279,7 @@ Here is a breakdown of the components as shown:
 
 Note:
 - **Communication via gRPC**: While the main network might use multicast for propagation, the test network simplifies operations by using gRPC, a high-performance, open-source universal RPC framework, for direct communication between the Propagation and Validation Services, bypassing the need for IPV6 broadcasting.
-
-
---- NOTE - WHERE IS THE CODE FOR THE TRANSACTION STORE? IS IT A SERVICE?? **CLARIFY**
-
-- Technology and specific Stores [TODO] **CLARIFY**
-  - TX Storage...
-
-**CLARIFY**  - in this diagram, we have an extended transaction, but it is not clear what the extended transaction is. Is it the transaction with the metadata? Why does it come from the Multicast Group? Who originally assembles the "Extended TX"???? **CLARIFY**
-
+-
 
 ---
 
@@ -316,9 +306,6 @@ Here is a breakdown of the components as shown:
 5. **UTXO Service:** Datastore of UTXOs (the outputs from transactions that have not been spent and can be used as inputs in new transactions).
 
 6. **TX Status:** Datastore managing the statuses of transactions. If validated and not mined, they will be eligible for inclusion in a block.
-
-
-** CLARIFY - What is the TX METADATA Store for? Include here in the details? ** CLARIFY
 
 
 ---
@@ -432,24 +419,20 @@ The validation process is continuous and iterative, designed to maintain the blo
 
 
 2. **SubTree Validation**: As subtrees are broadcast, the Validator service validates them in real-time.
+   * If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
+   * If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
 
 
 3. **Merkle Subtree Storage**: Validated subtrees are stored in the Merkle subtree Store.
 
 
-4. **Block Announcement**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
+4. **Block Assembly and Propagation**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
 
 
 5. **Block Validation by Validator Service**: The Validator service uses the stored subtrees to validate the newly announced block quickly. This is done by deriving the announced top-level Merkle hashes from the hashes of the subtrees in the Merkle subtree Store.
 
 
-6. **Transaction Retrieval and Validation**: If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
-
-
-7. **SubTree "Blessing"**: If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
-
-
-8. **Block Assembly and Propagation**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
+6. **Blockchain Update**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
 
 
 ---
@@ -485,51 +468,60 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 ---
 
 
-### Blob Server
+### Blob Server / Asset Server
 
-The Blob Server service is responsible for storing and retrieving blobs. It is a key-value store that uses the blob ID as the key and the blob as the value. The Blob Server service is used by the Validator service to retrieve blobs when validating transactions.
+The Blob Server (also known as Asset Server) serves as an asset server in a read-only capacity, acting as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
-*** CLARIFY - What is the Blob Server Service? Tie up with the model *** CLARIFY
+- **Transactions (TX)**.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+- **SubTrees**.
+
+- **Blocks and Block Headers**.
+
+- **Unspent Transaction Outputs (UTXO)**.
+
+- **Metadata for a Transaction (TXMeta)**.
+
+The server uses both HTTP and gRPC as communication protocols:
+
+- **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
+
+- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the UBSV distributed network.
+
+The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
+
+For clarity, the assets are served in a read-only mode. The various micro-services write directly to the data stores, but the blob server fronts them as a read-only interface.
 
 ---
 
 
 ### Coinbase
 
-The Coinbase service is responsible for creating coinbase transactions. It is also responsible for receiving coinbase transactions from other nodes and forwarding them to the Validator service.
+The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+![UBSV_Coinbase_Overlay.png](img%2FUBSV_Coinbase_Overlay.png)
 
+In the UBSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
+
+The Coinbase Overlay Node (CON) is a specialised service utilized by miners. Its primary function is to monitor all blocks being mined, ensuring accurate tracking of the blocks that have been mined along with their Unspent Transaction Outputs (UTXOs).
+
+
+This service actively listens for block header notifications, while maintaining a database of all blocks, whether orphaned or not. Upon the announcement of a new block, the service requests the block in the compact subtree format. This format includes the coinbase transaction, which facilitates the processing of any UTXOs linked to that miner.
+
+When a miner intends to spend one of their coins, they need to retrieve the corresponding UTXO from the CON service. Subsequently, they can generate a valid transaction and transmit this through the CON service. This action labels the UTXO as spent.
+
+In essence, the CON service operates as a straightforward Simplified Payment Verification (SPV) overlay node, custom-built to cater to the requirements of miners.
 
 ---
 
 
 ### Bootstrap
 
-The Bootstrap service is responsible for bootstrapping the network. It is also responsible for receiving bootstrap nodes from other nodes and forwarding them to the Validator service.
+The Bootstrap Service, helps new nodes find peers in a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
-This object is designed to manage a set of subscribers and broadcast notifications to them, likely to keep them updated about changes in the network or data of interest. Discovery....
+The service manages a set of subscribers and broadcast notifications and keep-alives to them, to keep them updated about network participants.
 
-This service is likely an integral part of a network's node discovery and communication layer, responsible for maintaining up-to-date information about network participants and facilitating their communication.
-*** **CLARIFY** - What is the Bootstrap Service? Tie up with the model *** **CLARIFY**
-
-
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
-
+The current version uses Google's RPC framework for setting up the server and handling stream-based communication.
 
 ---
 
@@ -556,26 +548,30 @@ Here's the breakdown of the components and their functions:
 
 4. **Multicast Group Tx Receive**: This indicates a multicast setup where transactions are broadcast to multiple nodes simultaneously. This is efficient for disseminating information quickly to many nodes in the network.
 
+
 ---
 
 ### UTXO Store
 
-The UTXO Store service is responsible for storing and retrieving UTXOs. It is a key-value store that uses the UTXO ID as the key and the UTXO as the value. The UTXO Store service is used by the Validator service to retrieve UTXOs when validating transactions.
+The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
 
 ---
 
+
 ### Transaction Meta Store
 
-The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. It is a key-value store that uses the transaction ID as the key and the transaction metadata as the value. The Transaction Meta Store service is used by the Validator service to retrieve transaction metadata when validating transactions.
+The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. This is used by many services, including the Validator and Block Assembly services, to retrieve transaction metadata when validating transactions. The Transaction Meta Store service is also used by the Block Assembly service to retrieve transaction metadata when assembling blocks.
 
-- Business rationale / what it is for / process flows / diagrams [TODO]
-- Architecture [TODO]
-- Data model [TODO]
-- Technology and specific Stores [TODO]
-- Related modules [TODO]
+The metadata in scope in this service refers to extra fields of interest during transaction-related processing.
+
+| Field          | Description                                             |
+|----------------|---------------------------------------------------------|
+| Tx             | The actual transaction data                             |
+| Fee            | The fee associated with the transaction                 |
+| SizeInBytes    | The size of the transaction in bytes                    |
+| FirstSeen      | Timestamp of when the transaction was first seen        |
+| ParentTxHashes | List of hashes of the transaction's parent transactions |
+
+
+---

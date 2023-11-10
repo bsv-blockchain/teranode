@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -18,6 +19,7 @@ type File struct {
 	path        string
 	logger      utils.Logger
 	fileTTLs    map[string]time.Time
+	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
 	// mu     sync.RWMutex
 }
@@ -48,6 +50,9 @@ func New(dir string) (*File, error) {
 }
 
 func (s *File) loadTTLs() error {
+	s.fileTTLsMu.Lock()
+	defer s.fileTTLsMu.Unlock()
+
 	s.logger.Infof("Loading file TTLs: %s", s.path)
 
 	// get all files in the directory that end with .ttl
@@ -90,16 +95,27 @@ func (s *File) ttlCleaner(ctx context.Context) {
 			return
 		default:
 			s.logger.Debugf("Cleaning file TTLs: %s", s.path)
+
+			filesToRemove := make([]string, 0, len(s.fileTTLs))
+			s.fileTTLsMu.Lock()
 			for fileName, ttl := range s.fileTTLs {
 				if ttl.Before(time.Now()) {
-					if err := os.Remove(fileName); err != nil {
-						s.logger.Errorf("failed to remove file: %s", fileName)
-					}
-					if err := os.Remove(fileName + ".ttl"); err != nil {
-						s.logger.Errorf("failed to remove ttl file: %s", fileName)
-					}
-					delete(s.fileTTLs, fileName)
+					filesToRemove = append(filesToRemove, fileName)
 				}
+			}
+			s.fileTTLsMu.Unlock()
+
+			for _, fileName := range filesToRemove {
+				if err := os.Remove(fileName); err != nil {
+					s.logger.Errorf("failed to remove file: %s", fileName)
+				}
+				if err := os.Remove(fileName + ".ttl"); err != nil {
+					s.logger.Errorf("failed to remove ttl file: %s", fileName)
+				}
+
+				s.fileTTLsMu.Lock()
+				delete(s.fileTTLs, fileName)
+				s.fileTTLsMu.Unlock()
 			}
 		}
 	}
@@ -130,7 +146,9 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 			return fmt.Errorf("failed to write ttl to file: %w", err)
 		}
+		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
+		s.fileTTLsMu.Unlock()
 	}
 
 	if fileOptions.Extension != "" {
