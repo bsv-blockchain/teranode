@@ -409,7 +409,6 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 
 	var subtreeSize int
-	var subtreeBytes []byte
 	var err error
 
 	var sizeInBytes atomic.Uint64
@@ -421,7 +420,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 		i := i
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			subtreeBytes, err = subtreeStore.Get(gCtx, subtreeHash[:])
+			subtreeBytes, err := subtreeStore.Get(gCtx, subtreeHash[:])
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 			}
