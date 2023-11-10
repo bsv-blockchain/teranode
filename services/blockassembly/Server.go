@@ -603,6 +603,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
 	}
 
+	_, err = ba.txMetaStore.Create(ctx, block.CoinbaseTx)
+	if err != nil {
+		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
+	}
+
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	//callerSpan := opentracing.SpanFromContext(ctx)
 	//setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
