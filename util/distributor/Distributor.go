@@ -125,9 +125,11 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 			backoff := d.backoff
 
 			for {
-				if _, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
+				_, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
 					Tx: tx.ExtendedBytes(),
-				}); err == nil {
+				})
+
+				if err == nil {
 					responseWrapperCh <- &ResponseWrapper{
 						Addr:     a,
 						Retries:  retries,

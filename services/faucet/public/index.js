@@ -1,14 +1,23 @@
-async function postData (url = '', data = {}) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(data)
-  })
+async function postData(url = '', data = {}) {
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(data)
+    });
 
-  return response.json()
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    return await response.json();
+  } catch (error) {
+    return { error: true, message: error.message };
+  }
 }
+
 
 window.onload = function() {
   const faucetForm = document.getElementById('faucetForm')

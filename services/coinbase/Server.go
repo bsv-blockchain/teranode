@@ -158,6 +158,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 			Address:       response.Addr,
 			Retries:       response.Retries,
 			DurationNanos: response.Duration.Nanoseconds(),
+			Error:         response.Error.Error(),
 		}
 
 		if response.Error != nil {
