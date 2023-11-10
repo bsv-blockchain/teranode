@@ -113,7 +113,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)
-				close(s.done)
+				safeClose(s.done)
 				b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
 			}
 		}
@@ -432,4 +432,12 @@ func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Not
 	b.notifications <- req
 
 	return &emptypb.Empty{}, nil
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }
