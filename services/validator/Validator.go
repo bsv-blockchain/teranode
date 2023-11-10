@@ -153,14 +153,24 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		}
 	}
 
-	storeStart := gocore.CurrentTime()
-	storeStat := stat.NewStat("utxo.Store", true)
+	// then we store the new utxos from the tx
+	err = v.storeUtxos(traceSpan.Ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
+	start, stat, ctx := util.StartStatFromContext(ctx, "storeUtxos")
+	storeUtxosSpan := tracing.Start(ctx, "Validator:storeUtxos")
 	defer func() {
-		storeStat.AddTime(storeStart)
+		stat.AddTime(start)
+		storeUtxosSpan.Finish()
 	}()
 
-	// then we store the new utxos from the tx
-	err = v.utxoStore.Store(traceSpan.Ctx, tx)
+	err := v.utxoStore.Store(storeUtxosSpan.Ctx, tx)
 	if err != nil {
 
 		// TODO #144
