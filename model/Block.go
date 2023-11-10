@@ -416,6 +416,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(1024)
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		subtreeHash := subtreeHash
@@ -447,10 +448,10 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 
 			return nil
 		})
+	}
 
-		if err = g.Wait(); err != nil {
-			return fmt.Errorf("failed to get and validate subtrees: %v", err)
-		}
+	if err = g.Wait(); err != nil {
+		return fmt.Errorf("failed to get and validate subtrees: %v", err)
 	}
 
 	b.TransactionCount = txCount.Load()
