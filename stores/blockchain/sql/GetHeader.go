@@ -17,6 +17,15 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		stat.AddTime(start)
 	}()
 
+	cacheId := *blockHash
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*model.BlockHeader); ok && cacheData != nil {
+			s.logger.Debugf("GetHeader cache hit")
+			return cacheData, nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -63,6 +72,8 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	}
 
 	blockHeader.Bits = model.NewNBitFromSlice(nBits)
+
+	cache.Set(cacheId, blockHeader, cacheTTL)
 
 	return blockHeader, nil
 }

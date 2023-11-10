@@ -12,11 +12,26 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+type getBlockCache struct {
+	block  *model.Block
+	height uint32
+}
+
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()
+
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := *blockHash
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*getBlockCache); ok && cacheData != nil {
+			s.logger.Debugf("GetBlock cache hit")
+			return cacheData.block, cacheData.height, nil
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -96,6 +111,11 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
+
+	cache.Set(cacheId, &getBlockCache{
+		block:  block,
+		height: height,
+	}, cacheTTL)
 
 	return block, height, nil
 }

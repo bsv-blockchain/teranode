@@ -177,10 +177,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 	}
 
 	// clear all caches after a new block is added
-	cache.Range(func(key, value interface{}) bool {
-		cache.Delete(key)
-		return true
-	})
+	cache.DeleteAll()
 
 	return newBlockId, nil
 }

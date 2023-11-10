@@ -15,6 +15,16 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		stat.AddTime(start)
 	}()
 
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := *blockHash
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if exists, ok := cached.Value().(bool); ok {
+			s.logger.Debugf("GetBlockExists cache hit")
+			return exists, nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -34,6 +44,8 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		}
 		return false, err
 	}
+
+	cache.Set(cacheId, true, cacheTTL)
 
 	return true, nil
 }

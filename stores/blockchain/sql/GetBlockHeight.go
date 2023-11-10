@@ -16,6 +16,15 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		stat.AddTime(start)
 	}()
 
+	cacheId := *blockHash
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(uint32); ok && cacheData != 0 {
+			s.logger.Debugf("GetBlockHeight cache hit")
+			return cacheData, nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -37,6 +46,8 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		}
 		return 0, err
 	}
+
+	cache.Set(cacheId, height, cacheTTL)
 
 	return height, nil
 }

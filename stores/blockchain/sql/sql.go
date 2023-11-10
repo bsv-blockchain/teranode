@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -24,8 +25,14 @@ type SQL struct {
 }
 
 var (
-	cache = sync.Map{}
+	cache    *ttlcache.Cache[chainhash.Hash, any]
+	cacheTTL time.Duration
 )
+
+func init() {
+	cacheTTL = 2 * time.Minute
+	cache = ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](cacheTTL))
+}
 
 func New(storeUrl *url.URL) (*SQL, error) {
 	logger := gocore.Log("bcsql")

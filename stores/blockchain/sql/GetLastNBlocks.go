@@ -19,6 +19,16 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 		stat.AddTime(start)
 	}()
 
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t", n, includeOrphans)))
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().([]*model.BlockInfo); ok && cacheData != nil {
+			s.logger.Debugf("GetLastNBlocks cache hit")
+			return cacheData, nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -152,6 +162,8 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 
 		blockInfos = append(blockInfos, info)
 	}
+
+	cache.Set(cacheId, blockInfos, cacheTTL)
 
 	return blockInfos, nil
 }

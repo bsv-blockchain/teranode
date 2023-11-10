@@ -22,11 +22,14 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		stat.AddTime(start)
 	}()
 
-	cacheId := fmt.Sprintf("GetBlockHeaders_%s_%d", blockHashFrom.String(), numberOfHeaders)
-	cached, ok := cache.Load(cacheId)
-	if ok {
-		s.logger.Debugf("GetBlockHeaders cache hit")
-		return cached.(*getBlockHeadersCache).blockHeaders, cached.(*getBlockHeadersCache).heights, nil
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%d-%s", numberOfHeaders, blockHashFrom)))
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*getBlockHeadersCache); ok && cacheData != nil {
+			s.logger.Debugf("GetBlockHeaders cache hit")
+			return cacheData.blockHeaders, cacheData.heights, nil
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -107,10 +110,10 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		heights = append(heights, height)
 	}
 
-	cache.Store(cacheId, &getBlockHeadersCache{
+	cache.Set(cacheId, &getBlockHeadersCache{
 		blockHeaders: blockHeaders,
 		heights:      heights,
-	})
+	}, cacheTTL)
 
 	return blockHeaders, heights, nil
 }

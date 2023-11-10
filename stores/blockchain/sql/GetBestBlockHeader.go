@@ -23,10 +23,14 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		stat.AddTime(start)
 	}()
 
-	cached, ok := cache.Load("GetBestBlockHeader")
-	if ok {
-		s.logger.Debugf("GetBestBlockHeader cache hit")
-		return cached.(*getBestBlockHeaderCache).blockHeader, cached.(*getBestBlockHeaderCache).meta, nil
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := chainhash.HashH([]byte("GetBestBlockHeader"))
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*getBestBlockHeaderCache); ok && cacheData != nil {
+			s.logger.Debugf("GetBestBlockHeader cache hit")
+			return cacheData.blockHeader, cacheData.meta, nil
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -102,10 +106,10 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	blockHeaderMeta.Miner = miner
 
 	// set cache
-	cache.Store("GetBestBlockHeader", &getBestBlockHeaderCache{
+	cache.Set(cacheId, &getBestBlockHeaderCache{
 		blockHeader: blockHeader,
 		meta:        blockHeaderMeta,
-	})
+	}, cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }
