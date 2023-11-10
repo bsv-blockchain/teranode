@@ -1023,8 +1023,8 @@ github.com/ordishs/go-bt/v2 v2.2.5 h1:PMty/zNK5pdgKDTfnnV9djH4eTwIqNZt+iSoGKCc/l
 github.com/ordishs/go-bt/v2 v2.2.5/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.50 h1:XVmyo3vsYSfFsc8Vue2bUHVznSdwnyI7Nh6LjEFaQpg=
 github.com/ordishs/go-utils v1.0.50/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.51 h1:NIjpR184s8nWE+BAXAiE2ijeJCyICGXugAMh5PTs0bU=
-github.com/ordishs/gocore v1.0.51/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
+github.com/ordishs/gocore v1.0.52 h1:laqUEFPAsLtpCnuonzPdbOcJCWHEaeLFq4Xi7RJWHkA=
+github.com/ordishs/gocore v1.0.52/go.mod h1:Nm48yxIUBuKvVXwLC8bB8aQDNUsBpaoVRTtcmjKlhrQ=
 github.com/otiai10/copy v1.2.0/go.mod h1:rrF5dJ5F0t/EWSYODDu4j9/vEeYHMkc8jt0zJChqQWw=
 github.com/otiai10/curr v0.0.0-20150429015615-9b4961190c95/go.mod h1:9qAhocn7zKJG+0mI8eUu6xqkFDYS2kb2saOteoSB3cE=
 github.com/otiai10/curr v1.0.0/go.mod h1:LskTG5wDwr8Rs+nNQ+1LlxRjAtTZZjtJW4rMXl6j4vs=
