@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 
 	"github.com/Shopify/sarama"
@@ -89,16 +90,21 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend
+
 	defer func(reservedUtxos *[]*utxostore.Spend) {
 		traceSpan.Finish()
+
 		if r := recover(); r != nil {
+			buf := make([]byte, 1024)
+			runtime.Stack(buf, false)
+
 			if len(*reservedUtxos) > 0 {
 				// TODO is this correct in the recover? should we be reversing the utxos?
 				spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
 				v.reverseSpends(spanCtx, *reservedUtxos)
 			}
 
-			v.logger.Errorf("[Validate][%s] Validate recover: %v", tx.TxID(), r)
+			v.logger.Errorf("[Validate][%s] Validate recover [stack=%s]: %v", tx.TxID(), string(buf), r)
 		}
 	}(&spentUtxos)
 
