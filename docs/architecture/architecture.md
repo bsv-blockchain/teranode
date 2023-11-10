@@ -1,4 +1,9 @@
-# UBSV (Unbounded Bitcoin Satoshi Vision) Architecture Overview
+
+![BSVBA-Logo_FC.svg](img%2FBSVBA-Logo_FC.svg)
+
+
+# UBSV (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
+
 
 ## Index
 
@@ -184,7 +189,7 @@ _Unique to UBSV_: The concept of subtrees is a distinct feature not found in the
 1. A subtree acts as an intermediate data structure to hold batches of 1M transaction IDs (including metadata) and their corresponding Merkle root.
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
 
-_Efficiency_: Subtrees are broadcast every second (assuming a throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
+_Efficiency_: Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
 1. By broadcasting these subtrees at such a high frequency, receiving nodes can validate these batches quickly and continuously, having them "pre-approved" for inclusion in a block.
 2. This contrasts with the original Bitcoin protocol, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
 
@@ -203,7 +208,7 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 ### Advantages of the UBSV Model
 - **Continuous Data Flow**: Instead of nodes being idle between blocks, they are continuously receiving and processing subtrees.
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
-- **Scalability**: The model supports a much higher transaction throughput (1M transactions per second).
+- **Scalability**: The model supports a much higher transaction throughput (> 1M transactions per second).
 
 
 ### Network Behavior
