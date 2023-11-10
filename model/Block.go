@@ -408,9 +408,6 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 
 	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 
-	var subtreeSize int
-	var err error
-
 	var sizeInBytes atomic.Uint64
 	var txCount atomic.Uint64
 
@@ -431,15 +428,6 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
 			}
 
-			if i == 0 {
-				subtreeSize = subtree.Length()
-			} else {
-				// all subtrees need to be the same size as the first tree, except the last one
-				if subtree.Length() != subtreeSize && i != len(b.Subtrees)-1 {
-					return fmt.Errorf("subtree %d has length %d, expected %d", i, subtree.Length(), subtreeSize)
-				}
-			}
-
 			b.SubtreeSlices[i] = subtree
 
 			sizeInBytes.Add(subtree.SizeInBytes)
@@ -449,8 +437,22 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 		})
 	}
 
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		return fmt.Errorf("failed to get and validate subtrees: %v", err)
+	}
+
+	// check that the size of all subtrees is the same
+	var subtreeSize int
+	nrOfSubtrees := len(b.Subtrees)
+	for i, subtree := range b.SubtreeSlices {
+		if i == 0 {
+			subtreeSize = subtree.Length()
+		} else {
+			// all subtrees need to be the same size as the first tree, except the last one
+			if subtree.Length() != subtreeSize && i != nrOfSubtrees-1 {
+				return fmt.Errorf("subtree %d has length %d, expected %d", i, subtree.Length(), subtreeSize)
+			}
+		}
 	}
 
 	b.TransactionCount = txCount.Load()
