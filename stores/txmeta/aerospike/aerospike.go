@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -24,6 +25,7 @@ var (
 	prometheusTxMetaSet      prometheus.Counter
 	prometheusTxMetaSetMined prometheus.Counter
 	prometheusTxMetaDelete   prometheus.Counter
+	logger                   = gocore.Log("aero_store")
 )
 
 func init() {
@@ -95,10 +97,20 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 }
 
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
+	var e error
+	defer func() {
+		if e != nil {
+			logger.Errorf("txmeta get error for %s: %v", hash.String(), e)
+		} else {
+			logger.Warnf("txmeta get success for %s", hash.String())
+		}
+	}()
+
 	prometheusTxMetaGet.Inc()
 
 	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if aeroErr != nil {
+		e = aeroErr
 		return nil, aeroErr
 	}
 
@@ -113,10 +125,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	readPolicy := util.GetAerospikeReadPolicy(options...)
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
+		e = aeroErr
 		return nil, aeroErr
 	}
 
 	if value == nil {
+		e = errors.New("value is nil")
 		return nil, nil
 	}
 
@@ -148,6 +162,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 			for i, v := range parentTxHashesInterface {
 				parentTxHashes[i], err = chainhash.NewHash(v)
 				if err != nil {
+					e = err
 					return nil, err
 				}
 			}
@@ -164,6 +179,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 			for i, v := range blockHashesInterface {
 				blockHashes[i], err = chainhash.NewHash(v)
 				if err != nil {
+					e = err
 					return nil, err
 				}
 			}
@@ -175,12 +191,14 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	if value.Bins["tx"] != nil {
 		b, ok := value.Bins["tx"].([]byte)
 		if !ok {
-			return nil, errors.New("could not convert tx to []byte")
+			e = errors.New("could not convert tx to []byte")
+			return nil, e
 		}
 
 		tx, err := bt.NewTxFromBytes(b)
 		if err != nil {
-			return nil, errors.New("could not convert tx bytes to bt.Tx")
+			e = errors.New("could not convert tx bytes to bt.Tx")
+			return nil, e
 		}
 		status.Tx = tx
 	}
@@ -189,6 +207,14 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+	var e error
+	defer func() {
+		if e != nil {
+			logger.Errorf("txmeta Create error for %s: %v", tx.TxIDChainHash().String(), e)
+		} else {
+			logger.Warnf("txmeta Create success for %s", tx.TxIDChainHash().String())
+		}
+	}()
 
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
@@ -203,11 +229,13 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	hash := tx.TxIDChainHash()
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
+		e = err
 		return nil, err
 	}
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
+		e = err
 		return nil, err
 	}
 
@@ -224,6 +252,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
+
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		aeroErr := &aerospike.AerospikeError{}
@@ -233,6 +262,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 			}
 		}
 
+		e = err
 		return txMeta, err
 	}
 
@@ -242,6 +272,15 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+	var e error
+	defer func() {
+		if e != nil {
+			logger.Errorf("txmeta SetMined error for %s: %v", hash.String(), e)
+		} else {
+			logger.Warnf("txmeta SetMined success for %s", hash.String())
+		}
+	}()
+
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
@@ -249,12 +288,14 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
+		e = err
 		return err
 	}
 
 	readPolicy := util.GetAerospikeReadPolicy()
 	record, err := s.client.Get(readPolicy, key, "blockHashes")
 	if err != nil {
+		e = err
 		return err
 	}
 
@@ -268,6 +309,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
+		e = err
 		return err
 	}
 
@@ -277,16 +319,27 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 }
 
 func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
+	var e error
+	defer func() {
+		if e != nil {
+			logger.Errorf("txmeta Delete error for %s: %v", hash.String(), e)
+		} else {
+			logger.Warnf("txmeta Delete success for %s", hash.String())
+		}
+	}()
+
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
+		e = err
 		return err
 	}
 
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
+		e = err
 		return err
 	}
 
