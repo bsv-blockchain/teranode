@@ -207,7 +207,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidation:processBlockFound")
+	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
 	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", stats)
 	defer func() {
 		span.Finish()
@@ -264,7 +264,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "getBlock", stats)
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:getBlock")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlock")
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)
@@ -314,8 +314,10 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
 	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:catchup")
 	defer func() {
 		stat.AddTime(start)
+		span.Finish()
 		prometheusBlockValidationCatchupDuration.Observe(util.TimeSince(start))
 	}()
 
@@ -324,7 +326,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
 
 	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockchainClient.GetBlockExists(ctx, fromBlock.Hash())
+	exists, err := u.blockchainClient.GetBlockExists(spanCtx, fromBlock.Hash())
 	if err != nil {
 		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 	}
@@ -340,7 +342,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 LOOP:
 	for {
 		u.logger.Debugf("[catchup][%s] getting block headers for catchup from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
-		blockHeaders, err = u.getBlockHeaders(ctx, fromBlockHeaderHash, baseURL)
+		blockHeaders, err = u.getBlockHeaders(spanCtx, fromBlockHeaderHash, baseURL)
 		if err != nil {
 			return err
 		}
@@ -350,7 +352,7 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
-			exists, err = u.blockchainClient.GetBlockExists(ctx, blockHeader.Hash())
+			exists, err = u.blockchainClient.GetBlockExists(spanCtx, blockHeader.Hash())
 			if err != nil {
 				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 			}
@@ -374,12 +376,12 @@ LOOP:
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, err = u.getBlock(ctx, blockHeader.Hash(), baseURL)
+		block, err = u.getBlock(spanCtx, blockHeader.Hash(), baseURL)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
 		}
 
-		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL); err != nil {
+		if err = u.blockValidation.ValidateBlock(spanCtx, block, baseURL); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}
@@ -388,8 +390,10 @@ LOOP:
 
 func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:SubtreeFound")
 	defer func() {
 		stat.AddTime(start)
+		span.Finish()
 		prometheusBlockValidationSubtreeFoundDuration.Observe(util.TimeSince(start))
 	}()
 
@@ -409,7 +413,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
 
 	start1 := gocore.CurrentTime()
-	exists, err := u.subtreeStore.Exists(ctx, subtreeHash[:])
+	exists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
 	stat.NewStat("subtreeStore.Exists").AddTime(start1)
 	if err != nil {
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to check if subtree exists [%w]", subtreeHash.String(), err)
@@ -425,13 +429,13 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	}
 
 	goroutineStat := stat.NewStat("go routine")
+
+	// decouple the tracing context to not cancel the context when finalize the block processing in the background
+	callerSpan := opentracing.SpanFromContext(spanCtx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
 	// validate the subtree in the background
 	go func() {
-		start := gocore.CurrentTime()
-		defer func() {
-			goroutineStat.AddTime(start)
-		}()
-
 		// check if we are already processing this subtree
 		u.processingSubtreeMu.Lock()
 		processing, ok := u.processingSubtree[*subtreeHash]
@@ -445,18 +449,22 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		u.processingSubtree[*subtreeHash] = true
 		u.processingSubtreeMu.Unlock()
 
-		// remove from processing map when done
+		// start a new span for the subtree validation
+		start = gocore.CurrentTime()
+		subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
 		defer func() {
+			goroutineStat.AddTime(start)
+			subtreeSpan.Finish()
+
+			// remove from processing map when done
 			u.processingSubtreeMu.Lock()
 			delete(u.processingSubtree, *subtreeHash)
 			u.processingSubtreeMu.Unlock()
 		}()
 
-		_, _, ctx := util.NewStatFromContext(context.TODO(), "go routine", stats)
-		err = u.blockValidation.validateSubtree(ctx, subtreeHash, req.GetBaseUrl())
+		err = u.blockValidation.validateSubtree(subtreeSpanCtx, subtreeHash, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
-			return
 		}
 	}()
 

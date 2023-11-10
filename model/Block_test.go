@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/hex"
 	"testing"
 
@@ -66,7 +67,7 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, uint64(1), block.TransactionCount)
 		assert.Equal(t, uint64(123), block.SizeInBytes)
 
-		assert.NoError(t, block.CheckMerkleRoot())
+		assert.NoError(t, block.CheckMerkleRoot(context.Background()))
 	})
 
 	t.Run("test block bytes - subtrees", func(t *testing.T) {

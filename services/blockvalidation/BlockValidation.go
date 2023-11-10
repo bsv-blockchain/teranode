@@ -54,9 +54,9 @@ func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI
 	return bv
 }
 
-func (u *BlockValidation) ValidateBlock(cntxt context.Context, block *model.Block, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidation:ValidateBlock")
-	timeStart, stat, ctx := util.NewStatFromContext(spanCtx, "ValidateBlock", stats)
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
+	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
 	defer func() {
 		span.Finish()
@@ -66,46 +66,51 @@ func (u *BlockValidation) ValidateBlock(cntxt context.Context, block *model.Bloc
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
-	err := u.validateBLockSubtrees(ctx, block, baseUrl)
+	// validate all the subtrees in the block
+	err := u.validateBLockSubtrees(spanCtx, block, baseUrl)
 	if err != nil {
 		return err
 	}
 
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
+	// get all 100 previous block headers on the main chain
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
 	}
 
 	// Add the coinbase transaction to the metaTxStore
-	// TODO - we need to consider if we can do this differently
-	if _, err = u.txMetaStore.Create(ctx, block.CoinbaseTx); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
-		}
+	err = u.storeCoinbaseTx(spanCtx, block)
+	if err != nil {
+		return err
 	}
 
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(ctx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
 		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 	}
 
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(ctx, block, true); err != nil {
+	if err = u.blockchainClient.AddBlock(spanCtx, block, true); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
 	}
+
+	// decouple the tracing context to not cancel the context when finalize the block processing in the background
+	callerSpan := opentracing.SpanFromContext(spanCtx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	go func() {
 		// this happens in the background, since we have already added the block to the blockchain
 		// TODO should we recover this somehow if it fails?
-		err = u.finalizeBlockValidation(ctx, block)
+		// what are the consequences of this failing?
+		err = u.finalizeBlockValidation(setCtx, block)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 		}
@@ -114,6 +119,22 @@ func (u *BlockValidation) ValidateBlock(cntxt context.Context, block *model.Bloc
 	prometheusBlockValidationValidateBlockDuration.Observe(util.TimeSince(timeStart))
 
 	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
+
+	return nil
+}
+
+func (u *BlockValidation) storeCoinbaseTx(spanCtx context.Context, block *model.Block) (err error) {
+	childSpan, childSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidation:storeCoinbaseTx")
+	defer func() {
+		childSpan.Finish()
+	}()
+
+	// TODO - we need to consider if we can do this differently
+	if _, err = u.txMetaStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
+		}
+	}
 
 	return nil
 }
@@ -135,7 +156,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 
 	g.Go(func() error {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
-		err = u.validateBlockUpdateSubtreesTTL(gCtx, block)
+		err = u.updateSubtreesTTL(gCtx, block)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%w]", block.Hash().String(), err)
 		}
@@ -162,8 +183,8 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	return nil
 }
 
-func (u *BlockValidation) validateBlockUpdateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockUpdateSubtreesTTL")
+func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:updateSubtreesTTL")
 	defer func() {
 		span.Finish()
 	}()
@@ -189,7 +210,7 @@ func (u *BlockValidation) validateBlockUpdateSubtreesTTL(ctx context.Context, bl
 }
 
 func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBLockSubtrees")
 	start, stat, _ := util.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
 	defer func() {
 		span.Finish()
@@ -234,8 +255,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	for _, subtreeHash := range missingSubtrees {
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
-			err := u.validateSubtree(ctx1, subtreeHash, baseUrl)
-			if err != nil {
+			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl); err != nil {
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
@@ -247,7 +267,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree")
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
 		span.Finish()

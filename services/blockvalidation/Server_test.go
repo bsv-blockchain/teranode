@@ -75,7 +75,7 @@ func TestOneTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
-	err = block.CheckMerkleRoot()
+	err = block.CheckMerkleRoot(ctx)
 	assert.NoError(t, err)
 }
 
@@ -132,7 +132,7 @@ func TestTwoTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
-	err = block.CheckMerkleRoot()
+	err = block.CheckMerkleRoot(ctx)
 	assert.NoError(t, err)
 }
 
@@ -211,7 +211,7 @@ func TestMerkleRoot(t *testing.T) {
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
-	err = block.CheckMerkleRoot()
+	err = block.CheckMerkleRoot(ctx)
 	assert.NoError(t, err)
 }
 

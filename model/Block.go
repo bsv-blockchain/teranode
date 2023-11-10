@@ -248,7 +248,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 
 		//8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
-		if err = b.CheckMerkleRoot(); err != nil {
+		if err = b.CheckMerkleRoot(spanCtx); err != nil {
 			return false, err
 		}
 	}
@@ -263,7 +263,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 11. Check that there are no duplicate transactions in the block.
 	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
 	if subtreeStore != nil {
-		err = b.checkDuplicateTransactions()
+		err = b.checkDuplicateTransactions(spanCtx)
 		if err != nil {
 			return false, err
 		}
@@ -272,7 +272,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// // 12. Check that all transactions are in the valid order and blessed
 	// //     Can only be done with a valid texMetaStore passed in
 	// if txMetaStore != nil {
-	// 	err = b.validOrderAndBlessed(ctx, txMetaStore, currentChain)
+	// 	err = b.validOrderAndBlessed(spanCtx, txMetaStore, currentChain)
 	// 	if err != nil {
 	// 		return false, err
 	// 	}
@@ -301,7 +301,10 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	return nil
 }
 
-func (b *Block) checkDuplicateTransactions() error {
+func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
+	span, _ := opentracing.StartSpanFromContext(ctx, "Block:checkDuplicateTransactions")
+	defer span.Finish()
+
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
 	for subIdx, subtree := range b.SubtreeSlices {
 		size := len(subtree.Nodes)
@@ -392,7 +395,9 @@ func (b *Block) GetSubtrees(subtreeStore blob.Store) ([]*util.Subtree, error) {
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.Store) error {
 	startTime := time.Now()
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:GetAndValidateSubtrees")
 	defer func() {
+		span.Finish()
 		prometheusBlockGetAndValidateSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
@@ -410,7 +415,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var sizeInBytes atomic.Uint64
 	var txCount atomic.Uint64
 
-	g, gCtx := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(spanCtx)
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		subtreeHash := subtreeHash
@@ -457,13 +462,15 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	return nil
 }
 
-func (b *Block) CheckMerkleRoot() (err error) {
+func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	if len(b.Subtrees) != len(b.SubtreeSlices) {
 		return fmt.Errorf("number of subtrees does not match number of subtree slices")
 	}
 
 	startTime := time.Now()
+	span, _ := opentracing.StartSpanFromContext(ctx, "Block:CheckMerkleRoot")
 	defer func() {
+		span.Finish()
 		prometheusBlockCheckMerkleRoot.Observe(time.Since(startTime).Seconds())
 	}()
 
