@@ -208,6 +208,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
+	span.LogKV("hash", hash.String())
 	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", stats)
 	defer func() {
 		span.Finish()
@@ -462,6 +463,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 			u.processingSubtreeMu.Unlock()
 		}()
 
+		subtreeSpan.LogKV("hash", subtreeHash.String())
 		err = u.blockValidation.validateSubtree(subtreeSpanCtx, subtreeHash, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
