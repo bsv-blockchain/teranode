@@ -312,10 +312,17 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	txMetaMap := sync.Map{}
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(1024) // max 1024 concurrent requests
+
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
+	nrOfMissingTransactions := 0
 	var missingTxHashesMu sync.Mutex
 	for idx, txHash := range txHashes {
+		if txHash == nil {
+			// TODO throw error here?
+			continue
+		}
+
 		txHash := txHash
 		idx := idx
 		g.Go(func() error {
@@ -335,8 +342,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
 						// collect all missing transactions for processing in order
+						// that is why we use an indexed slice instead of just a slice append
 						missingTxHashesMu.Lock()
 						missingTxHashes[idx] = txHash
+						nrOfMissingTransactions++
 						missingTxHashesMu.Unlock()
 						return nil
 					} else {
@@ -361,9 +370,19 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
 	}
 
-	if len(missingTxHashes) > 0 {
+	if nrOfMissingTransactions > 0 {
 		start, stat5, ctx5 := util.StartStatFromContext(spanCtx, "5. processMissingTransactions")
-		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashes, baseUrl, &txMetaMap)
+		// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
+		// this is done to make sure the order is preserved when getting them in parallel
+		// compact the missingTxHashes to only a list of the missing ones
+		missingTxHashesCompacted := make([]*chainhash.Hash, 0, nrOfMissingTransactions)
+		for _, txHash := range missingTxHashes {
+			if txHash != nil {
+				missingTxHashesCompacted = append(missingTxHashesCompacted, txHash)
+			}
+		}
+
+		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, &txMetaMap)
 		if err != nil {
 			return err
 		}
@@ -422,25 +441,59 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 		span.Finish()
 	}()
 
-	var txMeta *txmeta.Data
 	// process all the missing transactions in order, there might be parent / child dependencies
-	// TODO get these in batches
-	for _, txHash := range missingTxHashes {
-		if txHash != nil {
-			tx, err := u.getMissingTransaction(ctx, txHash, baseUrl)
-			if err != nil {
-				return errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to get transaction", txHash.String()), err)
-			}
+	var missingTxs []*bt.Tx
+	missingTxs, err = u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
+	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
+	}
 
-			txMeta, err = u.blessMissingTransaction(spanCtx, tx)
-			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), txHash.String()), err)
-			}
-			txMetaMap.Store(txHash, txMeta)
+	var txMeta *txmeta.Data
+	var tx *bt.Tx
+	for _, tx = range missingTxs {
+		txMeta, err = u.blessMissingTransaction(spanCtx, tx)
+		if err != nil {
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String()), err)
 		}
+		txMetaMap.Store(tx.TxIDChainHash(), txMeta)
 	}
 
 	return nil
+}
+
+func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []*chainhash.Hash, baseUrl string) (missingTxs []*bt.Tx, err error) {
+	// TODO get these in proper batches
+
+	// transactions have to be returned in the same order as they were requested
+	missingTxs = make([]*bt.Tx, len(missingTxHashes))
+	missingTxsMu := sync.Mutex{}
+
+	// TODO #148 should be using ctx, but there is a race condition in the StatsContext
+	g, gCtx := errgroup.WithContext(context.Background())
+	g.SetLimit(32)
+
+	var tx *bt.Tx
+	for idx, txHash := range missingTxHashes {
+		txHash := txHash
+		idx := idx
+		g.Go(func() error {
+			tx, err = u.getMissingTransaction(gCtx, txHash, baseUrl)
+			if err != nil {
+				return errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to get transaction", txHash.String()), err)
+			}
+			missingTxsMu.Lock()
+			missingTxs[idx] = tx
+			missingTxsMu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return nil, errors.Join(fmt.Errorf("[blessMissingTransaction] failed to get all transactions"), err)
+	}
+
+	return missingTxs, nil
 }
 
 func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
