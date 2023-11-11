@@ -149,9 +149,8 @@ async function getBestBlockHeader(address) {
   const response = await fetch(url)
 
   if (!response.ok) {
-    throw new Error(`HTTP error! Status: ${response.status}`)
+    throw new Error(await response.text());
   }
-
   return await response.json()
 }
 

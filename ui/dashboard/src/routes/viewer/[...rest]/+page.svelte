@@ -66,10 +66,10 @@
       loading = true
 
       const response = await fetch(url)
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`)
-      }
 
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
       const d = await response.json()
 
       res = d
