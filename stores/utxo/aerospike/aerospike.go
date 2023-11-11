@@ -115,6 +115,9 @@ type Store struct {
 func New(u *url.URL) (*Store, error) {
 	//asl.Logger.SetLevel(asl.DEBUG)
 
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr))
+
 	namespace := u.Path[1:]
 
 	client, err := util.GetAerospikeClient(u)
@@ -128,17 +131,16 @@ func New(u *url.URL) (*Store, error) {
 	if timeoutValue != "" {
 		var err error
 		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
+			logger.Fatalf("could not parse timeout %s: %v", timeoutValue, err)
 			timeout = 0
 		}
 	}
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 
 	return &Store{
 		u:           u,
 		client:      client,
 		namespace:   namespace,
-		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
+		logger:      logger,
 		blockHeight: 0,
 		timeout:     timeout,
 	}, nil
@@ -387,11 +389,16 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 		),
 	)
 
+	spentSpends := make([]*utxostore.Spend, 0, len(spends))
+
 	for _, spend := range spends {
-		err = s.spendUtxo(policy, spend, options)
-		if err != nil {
-			// TODO reverse utxos that were already spent
+		if err := s.spendUtxo(policy, spend, options); err != nil {
+
+			// revert the spent utxos
+			_ = s.UnSpend(context.Background(), spentSpends)
 			return err
+		} else {
+			spentSpends = append(spentSpends, spend)
 		}
 	}
 
@@ -410,16 +417,14 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend,
 	bin := aerospike.NewBin("txid", spend.SpendingTxID.CloneBytes())
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
-		s.logger.Errorf("AEROSPIKE: error in aerospike spend PutBins: %v", err)
+		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			s.logger.Debugf("utxo %s was not found: %s", spend.Hash.String(), err.Error())
+			return utxostore.ErrNotFound
+		}
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			s.logger.Debugf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
 			return utxostore.ErrLockTime
-		}
-
-		if errors.Is(err, aerospike.ErrKeyNotFound) {
-			s.logger.Debugf("utxo %s was not found: %s", spend.Hash.String(), err.Error())
-			return utxostore.ErrNotFound
 		}
 
 		// check whether we had the same value set as before
@@ -441,7 +446,8 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend,
 				}
 
 				s.logger.Debugf("utxo %s was spent by %s", spend.Hash.String(), spendingTxHash)
-				return utxostore.ErrSpent
+
+				return utxostore.NewErrSpentExtra(spendingTxHash)
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()

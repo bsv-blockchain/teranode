@@ -204,14 +204,14 @@ func worker(logger utils.Logger) {
 		// Delete the txid
 		timeStart := time.Now()
 		if err = utxostore.Delete(ctx, btTx); err != nil {
-			panic(err)
+			logger.Fatalf("Failed to Delete %s: %v", btTx.TxIDChainHash().String(), err)
 		}
 		prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Store the txid
 		timeStart = time.Now()
 		if err = utxostore.Store(ctx, btTx); err != nil {
-			panic(err)
+			logger.Fatalf("Failed to Store %s: %v", btTx.TxIDChainHash().String(), err)
 		}
 		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))
 		// Spend the txid
