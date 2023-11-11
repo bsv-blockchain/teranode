@@ -71,9 +71,12 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *Memory) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	ctx, cancel := context.WithTimeout(cntxt, m.timeout)
-	defer cancel()
+func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	if m.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

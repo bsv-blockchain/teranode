@@ -184,8 +184,11 @@ func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	//ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	//defer cancel()
+	// if r.timeout > 0 {
+	// 	var cancel context.CancelFunc
+	// 	ctx, cancel = context.WithTimeout(ctx, r.timeout)
+	// 	defer cancel()
+	// }
 
 	storeLockTime := tx.LockTime
 	if len(lockTime) > 0 {
@@ -247,8 +250,11 @@ func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value strin
 }
 
 func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
-	//ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	//defer cancel()
+	// if r.timeout > 0 {
+	// 	var cancel context.CancelFunc
+	// 	ctx, cancel = context.WithTimeout(ctx, r.timeout)
+	// 	defer cancel()
+	// }
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
@@ -272,9 +278,12 @@ func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	return nil
 }
 
-func (r *Redis) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	defer cancel()
+func (r *Redis) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
 
 	for i, spend := range spends {
 		select {
@@ -300,9 +309,12 @@ func (r *Redis) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err e
 	return nil
 }
 
-func (r *Redis) Delete(cntxt context.Context, tx *bt.Tx) error {
-	ctx, cancel := context.WithTimeout(cntxt, r.timeout)
-	defer cancel()
+func (r *Redis) Delete(ctx context.Context, tx *bt.Tx) error {
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
 
 	for i, output := range tx.Outputs {
 		select {

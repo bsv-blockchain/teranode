@@ -348,8 +348,8 @@ func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMes
 	}, nil
 }
 
-func (ba *BlockAssembly) AddTx(cntxt context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
-	startTime, stat, _ := util.NewStatFromContext(cntxt, "AddTx_grpc", blockAssemblyStat)
+func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
+	startTime, stat, _ := util.NewStatFromContext(ctx, "AddTx_grpc", blockAssemblyStat)
 
 	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
 

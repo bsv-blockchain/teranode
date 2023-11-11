@@ -264,9 +264,12 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
-	defer cancel()
+func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	if s.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
+	}
 
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
@@ -322,7 +325,7 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	if err != nil {
 		// check whether we already set this utxo
 		prometheusUtxoGet.Inc()
-		value, getErr := s.client.Get(nil, key, "txid")
+		value, getErr := s.client.Get(nil, key, "locktime")
 		if getErr == nil && value != nil {
 			txid, ok := value.Bins["txid"].([]byte)
 			if ok && len(txid) != 0 {
