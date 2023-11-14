@@ -38,6 +38,8 @@ build: build-dashboard build-ubsv
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	GOOS=linux GOARCH=arm64 CC=/usr/bin/aarch64-linux-gnu-gcc go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -I/usr/include/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.arm64.run .
+
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags

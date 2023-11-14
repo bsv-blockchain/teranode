@@ -1,20 +1,41 @@
-# docker file used to build the docker image. This was manually pushed to the ecr repo for now and used
-# in case you want to make an update to the base image, change this file, build and push.
+# docker file used to build the docker image.
+# The build process is now integrated into CICD
+# To use: enable the 'build base container image' Workflow (usually disabled), then push a commit to master/staging branch.
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
 # Set the base image
-FROM --platform=linux/amd64 golang:1.21.0-bullseye
+# Pass in the platform/arch to build on. E.g. "docker build --build-args PLATFORM_ARCH=linux/amd64,linux/arm64"
+# Defaults to linux/amd64 (X86_64)
+
+#ARG PLATFORM_ARCH=linux/amd64
+#FROM --platform=${PLATFORM_ARCH} golang:1.21.0-bullseye as linux-amd64
+#FROM --platform=linux/amd64 golang:1.21.0-bullseye as linux-amd64
+#RUN apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+
+#ARG PLATFORM_ARCH=linux/arm64
+#FROM --platform=${PLATFORM_ARCH} golang:1.21.0-bullseye as linux-arm64
+#FROM --platform=linux/arm64 golang:1.21.0-bullseye as linux-arm64
+#RUN apt-get update && apt-get install -y gcc-x86-64-linux-gnu
+
+FROM golang:1.21.0-bullseye
+
+ARG TARGETOS
+ARG TARGETARCH
+#FROM ${TARGETOS}-${TARGETARCH}
+
 ARG GITHUB_SHA
 
 # 18 is the latest LTS version of NodeJS
 ENV NODE_MAJOR=18
+
 # Add nodesource to apt sources
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list &&\
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
 
-RUN apt update && \
-    apt install -y ca-certificates gnupg nodejs build-essential libsecp256k1-dev && \
+# Install packages
+RUN apt-get update && \
+    apt-get install -y ca-certificates gnupg nodejs build-essential libsecp256k1-dev gcc-aarch64-linux-gnu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -32,4 +53,5 @@ RUN go mod download
 # Install Delve debugger
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
+# This causes issues with cross-compilation requiring the extra gcc package for alternative architectures
 ENV CGO_ENABLED=1
