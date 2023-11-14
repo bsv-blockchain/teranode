@@ -472,3 +472,14 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 	return &emptypb.Empty{}, nil
 }
+
+func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
+	subtree, err := u.subtreeStore.Get(ctx, request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockvalidation_api.GetSubtreeResponse{
+		Subtree: subtree,
+	}, nil
+}

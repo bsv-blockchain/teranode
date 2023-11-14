@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -74,8 +75,13 @@ func NewClient(ctx context.Context, logger utils.Logger, address string) (*Clien
 	}, nil
 }
 
-func (c Client) Health(ctx context.Context) (*blobserver_api.HealthResponse, error) {
-	return c.client.Health(ctx, &emptypb.Empty{})
+func (c Client) Health(ctx context.Context) (bool, error) {
+	response, err := c.client.Health(ctx, &emptypb.Empty{})
+	if err != nil {
+		return false, err
+	}
+
+	return response.Ok, nil
 }
 
 func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
@@ -211,4 +217,46 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	}()
 
 	return ch, nil
+}
+
+func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
+	response, err := c.client.Get(ctx, &blobserver_api.GetSubtreeRequest{
+		Hash: subtreeHash,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return response.Subtree, nil
+}
+
+func (c Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*blobserver_api.GetNodesResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (c Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+	blobOptions := options.NewSetOptions(opts...)
+
+	_, err := c.client.Set(ctx, &blobserver_api.SetSubtreeRequest{
+		Hash:    key[:],
+		Subtree: value,
+		Ttl:     uint32(blobOptions.TTL.Seconds()),
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+	_, err := c.client.SetTTL(ctx, &blobserver_api.SetSubtreeTTLRequest{
+		Hash: key[:],
+		Ttl:  uint32(int64(ttl.Seconds())),
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

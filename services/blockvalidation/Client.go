@@ -2,11 +2,15 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	blockvalidation_api "github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Client struct {
@@ -30,6 +34,15 @@ func NewClient(ctx context.Context) *Client {
 	return &Client{
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
 	}
+}
+
+func (s Client) Health(ctx context.Context) (bool, error) {
+	_, err := s.apiClient.Health(ctx, &emptypb.Empty{})
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (s Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) error {
@@ -58,4 +71,25 @@ func (s Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, b
 	}
 
 	return nil
+}
+
+func (s Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
+	req := &blockvalidation_api.GetSubtreeRequest{
+		Hash: subtreeHash,
+	}
+
+	response, err := s.apiClient.Get(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return response.Subtree, nil
+}
+
+func (s Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+	return fmt.Errorf("not implemented")
 }

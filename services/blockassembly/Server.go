@@ -49,6 +49,8 @@ type BlockAssembly struct {
 	txMetaStore           txmeta_store.Store
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
+	blobServerClient      WrapperInterface
+	blockValidationClient WrapperInterface
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
 	blockAssemblyDisabled bool
@@ -60,8 +62,8 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembly {
+func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
+	blockchainClient blockchain.ClientI, blobServerClient, blockValidationClient WrapperInterface) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
@@ -77,6 +79,8 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
 		subtreeTTL:            subtreeTTL,
+		blobServerClient:      blobServerClient,
+		blockValidationClient: blockValidationClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest, 100),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
@@ -164,9 +168,17 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 }
 
 // Start function
-func (ba *BlockAssembly) Start(ctx context.Context) error {
+func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
-	if err := ba.blockAssembler.Start(ctx); err != nil {
+	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
+	if remoteTTLStores {
+		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.subtreeStore, ba.blobServerClient, ba.blockValidationClient)
+		if err != nil {
+			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
+		}
+	}
+
+	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
 	}
 
@@ -631,7 +643,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 
 	g.Go(func() error {
 		// add the transactions in this block to the txMeta block hashes
-		if err = UpdateTxMinedStatus(gCtx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
+		if err = model.UpdateTxMinedStatus(gCtx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
 			// TODO this should be a fatal error, but for now we just log it
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			return fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
@@ -683,39 +695,6 @@ func (ba *BlockAssembly) removeSubtreesTTL(cntxt context.Context, block *model.B
 				ba.logger.Warnf("failed to update subtree TTL: %v", err)
 			}
 		}(subtreeHash[:])
-	}
-
-	return nil
-}
-
-func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *model.BlockHeader) error {
-	startTime := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
-	defer func() {
-		span.Finish()
-		blockAssemblyStat.NewStat("UpdateTxMinedStatus_grpc", true).AddTime(startTime)
-		prometheusBlockAssemblyUpdateTxMinedStatus.Observe(time.Since(startTime).Seconds())
-	}()
-
-	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024)
-
-	blockHeaderHash := blockHeader.Hash()
-	for _, subtree := range subtrees {
-		for _, node := range subtree.Nodes {
-			hash := node.Hash
-			g.Go(func() error {
-				if err := txMetaStore.SetMined(gCtx, &hash, blockHeaderHash); err != nil {
-					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
-				}
-
-				return nil
-			})
-		}
-	}
-
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 	}
 
 	return nil

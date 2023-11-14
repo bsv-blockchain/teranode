@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
 	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -345,6 +346,32 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.Ge
 	return &blobserver_api.GetNodesResponse{
 		Nodes: g.getPeers(),
 	}, nil
+}
+
+func (g *GRPC) Get(ctx context.Context, request *blobserver_api.GetSubtreeRequest) (*blobserver_api.GetSubtreeResponse, error) {
+	hash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeBytes, err := g.repository.SubtreeStore.Get(ctx, hash[:])
+	if err != nil {
+		return nil, err
+	}
+
+	return &blobserver_api.GetSubtreeResponse{
+		Subtree: subtreeBytes,
+	}, nil
+}
+
+func (g *GRPC) Set(ctx context.Context, request *blobserver_api.SetSubtreeRequest) (*emptypb.Empty, error) {
+	ttl := time.Duration(request.Ttl) * time.Second
+	return &emptypb.Empty{}, g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
+}
+
+func (g *GRPC) SetTTL(ctx context.Context, request *blobserver_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
+	ttl := time.Duration(request.Ttl) * time.Second
+	return &emptypb.Empty{}, g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
 }
 
 func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {

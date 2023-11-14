@@ -26,6 +26,9 @@ const (
 	BlobServerAPI_GetBlockHeaders_FullMethodName    = "/blobserver_api.BlobServerAPI/GetBlockHeaders"
 	BlobServerAPI_GetBestBlockHeader_FullMethodName = "/blobserver_api.BlobServerAPI/GetBestBlockHeader"
 	BlobServerAPI_GetNodes_FullMethodName           = "/blobserver_api.BlobServerAPI/GetNodes"
+	BlobServerAPI_Get_FullMethodName                = "/blobserver_api.BlobServerAPI/Get"
+	BlobServerAPI_Set_FullMethodName                = "/blobserver_api.BlobServerAPI/Set"
+	BlobServerAPI_SetTTL_FullMethodName             = "/blobserver_api.BlobServerAPI/SetTTL"
 	BlobServerAPI_Subscribe_FullMethodName          = "/blobserver_api.BlobServerAPI/Subscribe"
 )
 
@@ -40,6 +43,9 @@ type BlobServerAPIClient interface {
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetNodesResponse, error)
+	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
+	Set(ctx context.Context, in *SetSubtreeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	SetTTL(ctx context.Context, in *SetSubtreeTTLRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error)
 }
 
@@ -105,6 +111,33 @@ func (c *blobServerAPIClient) GetNodes(ctx context.Context, in *emptypb.Empty, o
 	return out, nil
 }
 
+func (c *blobServerAPIClient) Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error) {
+	out := new(GetSubtreeResponse)
+	err := c.cc.Invoke(ctx, BlobServerAPI_Get_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) Set(ctx context.Context, in *SetSubtreeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlobServerAPI_Set_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blobServerAPIClient) SetTTL(ctx context.Context, in *SetSubtreeTTLRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlobServerAPI_SetTTL_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blobServerAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (BlobServerAPI_SubscribeClient, error) {
 	stream, err := c.cc.NewStream(ctx, &BlobServerAPI_ServiceDesc.Streams[0], BlobServerAPI_Subscribe_FullMethodName, opts...)
 	if err != nil {
@@ -148,6 +181,9 @@ type BlobServerAPIServer interface {
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error)
+	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
+	Set(context.Context, *SetSubtreeRequest) (*emptypb.Empty, error)
+	SetTTL(context.Context, *SetSubtreeTTLRequest) (*emptypb.Empty, error)
 	Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error
 	mustEmbedUnimplementedBlobServerAPIServer()
 }
@@ -173,6 +209,15 @@ func (UnimplementedBlobServerAPIServer) GetBestBlockHeader(context.Context, *emp
 }
 func (UnimplementedBlobServerAPIServer) GetNodes(context.Context, *emptypb.Empty) (*GetNodesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetNodes not implemented")
+}
+func (UnimplementedBlobServerAPIServer) Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedBlobServerAPIServer) Set(context.Context, *SetSubtreeRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Set not implemented")
+}
+func (UnimplementedBlobServerAPIServer) SetTTL(context.Context, *SetSubtreeTTLRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetTTL not implemented")
 }
 func (UnimplementedBlobServerAPIServer) Subscribe(*SubscribeRequest, BlobServerAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
@@ -298,6 +343,60 @@ func _BlobServerAPI_GetNodes_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlobServerAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSubtreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).Get(ctx, req.(*GetSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlobServerAPI_Set_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSubtreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).Set(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_Set_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).Set(ctx, req.(*SetSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlobServerAPI_SetTTL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSubtreeTTLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlobServerAPIServer).SetTTL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlobServerAPI_SetTTL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlobServerAPIServer).SetTTL(ctx, req.(*SetSubtreeTTLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlobServerAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -349,6 +448,18 @@ var BlobServerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodes",
 			Handler:    _BlobServerAPI_GetNodes_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _BlobServerAPI_Get_Handler,
+		},
+		{
+			MethodName: "Set",
+			Handler:    _BlobServerAPI_Set_Handler,
+		},
+		{
+			MethodName: "SetTTL",
+			Handler:    _BlobServerAPI_SetTTL_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

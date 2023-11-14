@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -167,7 +166,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	g.Go(func() error {
 		// add the transactions in this block to the txMeta block hashes
 		u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-		if err = blockassembly.UpdateTxMinedStatus(gCtx, u.txMetaStore, subtrees, block.Header); err != nil {
+		if err = model.UpdateTxMinedStatus(gCtx, u.txMetaStore, subtrees, block.Header); err != nil {
 			// TODO this should be a fatal error, but for now we just log it
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)

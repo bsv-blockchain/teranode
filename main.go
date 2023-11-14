@@ -224,28 +224,6 @@ func main() {
 		}
 	}
 
-	// blockAssembly
-	if startBlockAssembly {
-		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			// should this be done globally somewhere?
-			blockchainClient, err := blockchain.NewClient(ctx)
-			if err != nil {
-				panic(err)
-			}
-
-			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				gocore.Log("bass"),
-				getTxStore(logger),
-				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
-				getSubtreeStore(logger),
-				blockchainClient,
-			)); err != nil {
-				panic(err)
-			}
-		}
-	}
-
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
@@ -266,6 +244,58 @@ func main() {
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
+			)); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	// blob server
+	if startBlobServer {
+		if err := sm.AddService("BlobServer", blobserver.NewServer(
+			gocore.Log("blob"),
+			getUtxoStore(ctx, logger),
+			getTxStore(logger),
+			getTxMetaStore(logger),
+			getSubtreeStore(logger),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
+	// blockAssembly
+	if startBlockAssembly {
+		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
+			// should this be done globally somewhere?
+			blockchainClient, err := blockchain.NewClient(ctx)
+			if err != nil {
+				panic(err)
+			}
+
+			blobServerAddr, ok := gocore.Config().Get("coinbase_blobserverGrpcAddress")
+			if !ok {
+				blobServerAddr, ok = gocore.Config().Get("blobserver_grpcAddress")
+				if !ok {
+					panic(err)
+				}
+			}
+
+			blobServerClient, err := blobserver.NewClient(ctx, logger, blobServerAddr)
+			if err != nil {
+				panic(err)
+			}
+
+			blockValidationClient := blockvalidation.NewClient(ctx)
+
+			if err = sm.AddService("BlockAssembly", blockassembly.New(
+				gocore.Log("bass"),
+				getTxStore(logger),
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+				getSubtreeStore(logger),
+				blockchainClient,
+				blobServerClient,
+				blockValidationClient,
 			)); err != nil {
 				panic(err)
 			}
@@ -304,19 +334,6 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
-		}
-	}
-
-	// blob server
-	if startBlobServer {
-		if err := sm.AddService("BlobServer", blobserver.NewServer(
-			gocore.Log("blob"),
-			getUtxoStore(ctx, logger),
-			getTxStore(logger),
-			getTxMetaStore(logger),
-			getSubtreeStore(logger),
-		)); err != nil {
-			panic(err)
 		}
 	}
 
