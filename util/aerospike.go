@@ -54,7 +54,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	// todo optimize write policies
 	policy.LimitConnectionsToQueueSize = true
 	policy.ConnectionQueueSize = 1024
-	policy.MinConnectionsPerNode = 512
+	//policy.MinConnectionsPerNode = 512
 	policy.MaxErrorRate = 0
 	policy.FailIfNotConnected = true
 
@@ -150,6 +150,13 @@ type AerospikeWritePolicyOptions func(*aerospike.WritePolicy)
 func WithTotalTimeoutWrite(timeout time.Duration) AerospikeWritePolicyOptions {
 	return func(policy *aerospike.WritePolicy) {
 		policy.BasePolicy.TotalTimeout = timeout
+	}
+}
+
+// WithExpiration sets the expiration for the Aerospike write policy
+func WithExpiration(timeout uint32) AerospikeWritePolicyOptions {
+	return func(policy *aerospike.WritePolicy) {
+		policy.Expiration = timeout
 	}
 }
 
