@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -133,8 +134,15 @@ func TestRedisTTL(t *testing.T) {
 	err = r.Store(ctx, tx1)
 	require.NoError(t, err)
 
-	_, err = r.Get(ctx, spend1)
+	var val *utxostore.Response
+
+	val, err = r.Get(ctx, spend1)
 	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_OK), val.Status)
+	assert.Nil(t, val.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
+
+	r.spentUtxoTtl = 1
 
 	// Spend txid with spend1
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
@@ -143,6 +151,20 @@ func TestRedisTTL(t *testing.T) {
 	// check the ttl
 	dur := r.rdb.TTL(ctx, utxoHash0.String())
 	assert.Greater(t, dur.Val(), time.Duration(0)*time.Second)
+
+	val, err = r.Get(ctx, spend1)
+	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_SPENT), val.Status)
+	assert.Equal(t, val.SpendingTxID, spend1.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	val, err = r.Get(ctx, spend1)
+	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_NOT_FOUND), val.Status)
+	assert.Nil(t, val.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
 }
 
 func TestRollbackSpend(t *testing.T) {

@@ -26,7 +26,7 @@ type Redis struct {
 	mode               string
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
-	spentUtxoTtl       time.Duration
+	spentUtxoTtl       uint32
 	timeout            time.Duration
 }
 
@@ -55,7 +55,7 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 		url:          u,
 		mode:         "client",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
@@ -90,7 +90,7 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 		url:          u,
 		mode:         "cluster",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
@@ -127,7 +127,7 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 		url:          u,
 		mode:         "ring",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
@@ -263,15 +263,13 @@ func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 		case <-ctx.Done():
 			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
 		default:
-			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight()); err != nil {
-
+			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight(), r.spentUtxoTtl); err != nil {
 				// revert the spent utxos
 				_ = r.UnSpend(ctx, spentSpends)
 				return err
 			} else {
 				spentSpends = append(spentSpends, spend)
 			}
-			r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
 		}
 	}
 

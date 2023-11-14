@@ -2,6 +2,7 @@
 local hash = KEYS[1]
 local spendingTxID = ARGV[1]
 local blockHeight = ARGV[2]
+local ttl = ARGV[3]
 
 -- Get value from Redis
 local v = redis.call('GET', hash)
@@ -42,6 +43,11 @@ end
 local updatedValue = lockTime .. ',' .. spendingTxID
 
 -- Update in Redis
-redis.call('SET', hash, updatedValue)
+ttl = tonumber(ttl)
+if ttl > 0 then
+  redis.call('SET', hash, updatedValue, 'EX', ttl)
+else
+  redis.call('SET', hash, updatedValue)
+end
 
 return 'OK'

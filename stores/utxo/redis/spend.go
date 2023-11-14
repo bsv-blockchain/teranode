@@ -16,8 +16,9 @@ var scriptString string
 
 var luaScript = redis.NewScript(scriptString)
 
-func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, blockHeight uint32) error {
-	res, err := luaScript.Run(ctx, rdb, []string{spend.Hash.String()}, spend.SpendingTxID.String(), blockHeight).Result()
+func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, blockHeight, ttl uint32) error {
+	// ttl is in seconds, convert to milliseconds
+	res, err := luaScript.Run(ctx, rdb, []string{spend.Hash.String()}, spend.SpendingTxID.String(), blockHeight, ttl).Result()
 	if err != nil {
 		return err
 	}
