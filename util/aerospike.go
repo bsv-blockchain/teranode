@@ -54,7 +54,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	// todo optimize write policies
 	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
-	//policy.MinConnectionsPerNode = 128
+	policy.MinConnectionsPerNode = 400
 	policy.MaxErrorRate = 0
 	policy.FailIfNotConnected = true
 
@@ -100,7 +100,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	if err != nil {
 		return nil, err
 	}
-	cnxNum, err := client.WarmUp(0)
+	cnxNum, err := client.WarmUp(700)
 	logger.Infof("Warmed up %d connections", cnxNum)
 	if err != nil {
 		return nil, err
