@@ -238,8 +238,6 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	defer func() {
 		if e != nil {
 			logger.Errorf("txmeta Create error for %s: %v", tx.TxIDChainHash().String(), e)
-		} else {
-			logger.Warnf("txmeta Create success for %s", tx.TxIDChainHash().String())
 		}
 	}()
 
