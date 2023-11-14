@@ -394,7 +394,6 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 
 	policy := s.createWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 
 	policy.FilterExpression = aerospike.ExpAnd(
 		// check whether txid has been set = spent
@@ -515,8 +514,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		nLockTime = 0
 	}
 
-	policy := s.createWritePolicy(3, math.MaxUint32)
-	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+	policy := s.createWritePolicy(2, math.MaxUint32)
 
 	startDelete := time.Now()
 	_, err = s.client.Delete(policy, key)
