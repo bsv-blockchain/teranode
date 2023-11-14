@@ -301,8 +301,6 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	defer func() {
 		if e != nil {
 			logger.Errorf("txmeta SetMined error for %s: %v", hash.String(), e)
-		} else {
-			logger.Warnf("txmeta SetMined success for %s", hash.String())
 		}
 	}()
 
