@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,9 +21,10 @@ var scriptString string
 var luaScript = redis.NewScript(scriptString)
 
 type Redis struct {
-	url  *url.URL
-	rdb  redis.Cmdable
-	mode string
+	url       *url.URL
+	rdb       redis.Cmdable
+	txMetaTtl time.Duration
+	mode      string
 }
 
 func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
@@ -41,10 +44,13 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewClient(o)
 
+	txMetaTtl, _ := gocore.Config().GetInt("txmeta_store_ttl", 60*60*2) // in seconds
+
 	return &Redis{
-		url:  u,
-		mode: "client",
-		rdb:  rdb,
+		url:       u,
+		mode:      "client",
+		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
+		rdb:       rdb,
 	}, nil
 }
 
@@ -70,10 +76,13 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewClusterClient(o)
 
+	txMetaTtl, _ := gocore.Config().GetInt("txmeta_store_ttl", 60*60*2) // in seconds
+
 	return &Redis{
-		url:  u,
-		mode: "cluster",
-		rdb:  rdb,
+		url:       u,
+		mode:      "cluster",
+		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
+		rdb:       rdb,
 	}, nil
 }
 
@@ -101,10 +110,13 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	rdb := redis.NewRing(o)
 
+	txMetaTtl, _ := gocore.Config().GetInt("txmeta_store_ttl", 60*60*2) // in seconds
+
 	return &Redis{
-		url:  u,
-		mode: "ring",
-		rdb:  rdb,
+		url:       u,
+		mode:      "ring",
+		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
+		rdb:       rdb,
 	}, nil
 }
 
@@ -158,7 +170,7 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return nil, err
 	}
 
-	res := r.rdb.SetNX(context.Background(), tx.TxIDChainHash().String(), data.Bytes(), 0)
+	res := r.rdb.SetNX(context.Background(), tx.TxIDChainHash().String(), data.Bytes(), r.txMetaTtl)
 	if res.Err() != nil {
 		return nil, res.Err()
 	}
