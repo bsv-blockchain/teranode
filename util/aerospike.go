@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"github.com/aerospike/aerospike-client-go/v6"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,8 +11,6 @@ import (
 
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-
-	"github.com/aerospike/aerospike-client-go/v6"
 )
 
 var aerospikeConnectionMutex sync.Mutex
@@ -52,9 +51,9 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = true
+	policy.LimitConnectionsToQueueSize = false
 	policy.ConnectionQueueSize = 1024
-	//policy.MinConnectionsPerNode = 512
+	//policy.MinConnectionsPerNode = 128
 	policy.MaxErrorRate = 0
 	policy.FailIfNotConnected = true
 
@@ -100,6 +99,11 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	if err != nil {
 		return nil, err
 	}
+	cnxNum, err := client.WarmUp(0)
+	logger.Infof("Warmed up %d connections", cnxNum)
+	if err != nil {
+		return nil, err
+	}
 
 	return client, nil
 }
@@ -133,7 +137,7 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 // If no options are provided, the policy will use the default values
 func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
-	readPolicy.MaxRetries = 1
+	readPolicy.MaxRetries = 5
 
 	// Apply the provided options
 	for _, opt := range options {
