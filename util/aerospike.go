@@ -52,10 +52,12 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.LimitConnectionsToQueueSize = false
+	policy.LimitConnectionsToQueueSize = true
 	policy.ConnectionQueueSize = 1024
+	policy.IdleTimeout = 250
 	policy.MinConnectionsPerNode = 512
 	policy.MaxErrorRate = 0
+	policy.FailIfNotConnected = true
 
 	if url.User != nil {
 		policy.AuthMode = 2
