@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/storage v1.31.0
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
-	github.com/aerospike/aerospike-client-go/v6 v6.14.0
+	github.com/aerospike/aerospike-client-go/v6 v6.14.1
 	github.com/aws/aws-sdk-go v1.44.235
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.1.0

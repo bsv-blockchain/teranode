@@ -145,12 +145,45 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		// generation will be 3, because we did a touch for the TTL
-		require.Equal(t, uint32(3), value.Generation)
+		require.Equal(t, uint32(2), value.Generation)
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
 		require.Error(t, err, utxostore.ErrSpent)
+	})
+
+	t.Run("aerospike spend with expiry", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		err = db.Store(context.Background(), tx)
+		require.NoError(t, err)
+
+		db.expiration = 1
+
+		err = db.Spend(context.Background(), spends)
+		require.NoError(t, err)
+
+		resp, err = db.Get(context.Background(), spend)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		require.Equal(t, hash, resp.SpendingTxID)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
+		require.Equal(t, uint32(2), value.Generation)
+
+		// try to spend with different txid
+		err = db.Spend(context.Background(), spends2)
+		require.Error(t, err, utxostore.ErrSpent)
+
+		time.Sleep(2 * time.Second)
+
+		policy := util.GetAerospikeReadPolicy()
+		_, err = client.Get(policy, key)
+		require.ErrorIs(t, err, aero.ErrKeyNotFound)
+
+		resp, err = db.Get(context.Background(), spend)
+		require.ErrorIs(t, err, utxostore.ErrNotFound)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
@@ -224,7 +257,7 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		require.Equal(t, uint32(3), value.Generation)
+		require.Equal(t, uint32(2), value.Generation)
 	})
 
 	t.Run("aerospike unix time locktime", func(t *testing.T) {
@@ -265,8 +298,7 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
-		require.Equal(t, uint32(3), value.Generation)
-
+		require.Equal(t, uint32(2), value.Generation)
 	})
 }
 

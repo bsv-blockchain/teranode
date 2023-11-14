@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -109,6 +110,7 @@ type Store struct {
 	namespace   string
 	logger      utils.Logger
 	blockHeight uint32
+	expiration  uint32
 	timeout     time.Duration
 }
 
@@ -136,12 +138,23 @@ func New(u *url.URL) (*Store, error) {
 		}
 	}
 
+	expiration := uint32(0)
+	expirationValue := u.Query().Get("expiration")
+	if expirationValue != "" {
+		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		if err != nil {
+			logger.Fatalf("could not parse expiration %s: %v", expirationValue, err)
+		}
+		expiration = uint32(expiration64)
+	}
+
 	return &Store{
 		u:           u,
 		client:      client,
 		namespace:   namespace,
 		logger:      logger,
 		blockHeight: 0,
+		expiration:  expiration,
 		timeout:     timeout,
 	}, nil
 }
@@ -229,7 +242,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxostore.Response{
 				Status: int(utxostore_api.Status_NOT_FOUND),
-			}, nil
+			}, utxostore.ErrNotFound
 		}
 
 		s.logger.Errorf("Failed to get aerospike key: %v\n", aErr)
@@ -267,12 +280,6 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	if s.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.timeout)
-		defer cancel()
-	}
-
 	options := make([]util.AerospikeWritePolicyOptions, 0)
 
 	if s.timeout > 0 {
@@ -371,28 +378,32 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
 	}
 
-	policy := util.GetAerospikeWritePolicy(1, 0, options...)
+	policy := util.GetAerospikeWritePolicy(1, s.expiration, options...)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
-	policy.FilterExpression = aerospike.ExpOr(
-		// anything below the block height is spendable, including 0
-		aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+	policy.FilterExpression = aerospike.ExpAnd(
+		// check whether txid has been set = spent
+		aerospike.ExpNot(aerospike.ExpBinExists("txid")),
 
-		aerospike.ExpAnd(
-			aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
-			// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
-			// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
-			// and not the block time itself.
-			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+		aerospike.ExpOr(
+			// anything below the block height is spendable, including 0
+			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+
+			aerospike.ExpAnd(
+				aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+				// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+				// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+				// and not the block time itself.
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+			),
 		),
 	)
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
 	for _, spend := range spends {
-		if err := s.spendUtxo(policy, spend, options); err != nil {
+		if err = s.spendUtxo(policy, spend); err != nil {
 
 			// revert the spent utxos
 			_ = s.UnSpend(context.Background(), spentSpends)
@@ -407,7 +418,7 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 	return nil
 }
 
-func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend, options []util.AerospikeWritePolicyOptions) error {
+func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend) error {
 	key, err := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
@@ -454,17 +465,6 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend,
 		return fmt.Errorf("error in aerospike spend PutBins: %w", err)
 	}
 
-	// delete the spend after 1 minutes
-	// this allows someone to send the same transaction again, without triggering an error, in a 1-minute window
-	policy = util.GetAerospikeWritePolicy(0, 0, options...)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	//policy.Expiration = 60
-	err = s.client.Touch(policy, key)
-	if err != nil {
-		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike spend Touch: %v\n", err)
-	}
-
 	return nil
 }
 
@@ -487,8 +487,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
 	}
 
-	policy := util.GetAerospikeWritePolicy(3, 0, writeOptions...)
-	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+	policy := util.GetAerospikeWritePolicy(2, 0, writeOptions...)
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])

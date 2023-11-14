@@ -5,7 +5,10 @@ package aerospike
 import (
 	"context"
 	"errors"
+	"math"
 	"net/url"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -56,13 +59,19 @@ func init() {
 }
 
 type Store struct {
-	client    *aerospike.Client
-	timeout   time.Duration
-	namespace string
+	client     *aerospike.Client
+	expiration uint32
+	timeout    time.Duration
+	namespace  string
 }
 
+var initMu sync.Mutex
+
 func New(u *url.URL) (*Store, error) {
+	// this is weird, but if we are starting 2 connections (utxo, txmeta) at the same time, this fails
+	initMu.Lock()
 	asl.Logger.SetLevel(asl.DEBUG)
+	initMu.Unlock()
 
 	namespace := u.Path[1:]
 
@@ -81,10 +90,21 @@ func New(u *url.URL) (*Store, error) {
 		}
 	}
 
+	expiration := uint32(0)
+	expirationValue := u.Query().Get("expiration")
+	if expirationValue != "" {
+		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		if err != nil {
+			logger.Fatalf("could not parse expiration %s: %v", expirationValue, err)
+		}
+		expiration = uint32(expiration64)
+	}
+
 	return &Store{
-		client:    client,
-		namespace: namespace,
-		timeout:   timeout,
+		client:     client,
+		namespace:  namespace,
+		expiration: expiration,
+		timeout:    timeout,
 	}, nil
 }
 
@@ -126,6 +146,9 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		e = aeroErr
+		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
+			return nil, txmeta.ErrNotFound
+		}
 		return nil, aeroErr
 	}
 
@@ -154,17 +177,20 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 		status.FirstSeen = uint32(fs)
 	}
 
+	var cHash *chainhash.Hash
+
 	var parentTxHashes []*chainhash.Hash
 	if value.Bins["parentTxHashes"] != nil {
-		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([][]byte)
+		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([]byte)
 		if ok {
-			parentTxHashes = make([]*chainhash.Hash, len(parentTxHashesInterface))
-			for i, v := range parentTxHashesInterface {
-				parentTxHashes[i], err = chainhash.NewHash(v)
+			parentTxHashes = make([]*chainhash.Hash, 0, len(parentTxHashesInterface)/32)
+			for i := 0; i < len(parentTxHashesInterface); i += 32 {
+				cHash, err = chainhash.NewHash(parentTxHashesInterface[i : i+32])
 				if err != nil {
 					e = err
 					return nil, err
 				}
+				parentTxHashes = append(parentTxHashes, cHash)
 			}
 
 			status.ParentTxHashes = parentTxHashes
@@ -173,15 +199,16 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 	var blockHashes []*chainhash.Hash
 	if value.Bins["blockHashes"] != nil {
-		blockHashesInterface, ok := value.Bins["blockHashes"].([][]byte)
+		blockHashesInterface, ok := value.Bins["blockHashes"].([]byte)
 		if ok {
-			blockHashes = make([]*chainhash.Hash, len(blockHashesInterface))
-			for i, v := range blockHashesInterface {
-				blockHashes[i], err = chainhash.NewHash(v)
+			blockHashes = make([]*chainhash.Hash, 0, len(blockHashesInterface)/32)
+			for i := 0; i < len(blockHashesInterface); i += 32 {
+				cHash, err = chainhash.NewHash(blockHashesInterface[i : i+32])
 				if err != nil {
 					e = err
 					return nil, err
 				}
+				blockHashes = append(blockHashes, cHash)
 			}
 			status.BlockHashes = blockHashes
 		}
@@ -222,7 +249,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, 0, options...)
+	policy := util.GetAerospikeWritePolicy(0, s.expiration, options...)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
@@ -239,9 +266,9 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return nil, err
 	}
 
-	parentTxHashesInterface := make([]interface{}, len(txMeta.ParentTxHashes))
-	for i, v := range txMeta.ParentTxHashes {
-		parentTxHashesInterface[i] = v[:]
+	parentTxHashesInterface := make([]byte, 0, 32*len(txMeta.ParentTxHashes))
+	for _, v := range txMeta.ParentTxHashes {
+		parentTxHashesInterface = append(parentTxHashesInterface, v[:]...)
 	}
 
 	bins := []*aerospike.Bin{
@@ -281,7 +308,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		}
 	}()
 
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32-1)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
@@ -299,11 +326,11 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
-	blockHashes, ok := record.Bins["blockHashes"].([]interface{})
+	blockHashes, ok := record.Bins["blockHashes"].([]byte)
 	if !ok {
-		blockHashes = make([]interface{}, 0)
+		blockHashes = make([]byte, 0, 32)
 	}
-	blockHashes = append(blockHashes, *blockHash)
+	blockHashes = append(blockHashes, blockHash[:]...)
 
 	bin := aerospike.NewBin("blockHashes", blockHashes)
 
