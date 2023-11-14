@@ -314,7 +314,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
-	// check whether we already have the parent block
+	// check whether we already have the block
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return nil, fmt.Errorf("could not check whether block exists %+v", err)

@@ -412,7 +412,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			prometheusUtxoGet.Inc()
-			value, getErr := s.client.Get(nil, key, "utxos", "locktime")
+			value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "utxos", "locktime")
 			if getErr != nil {
 				return fmt.Errorf("could not see if the value was the same as before: %w", getErr)
 			}

@@ -5,6 +5,7 @@ package aerospike
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net/url"
 	"strconv"
@@ -59,10 +60,12 @@ func init() {
 }
 
 type Store struct {
-	client     *aerospike.Client
-	expiration uint32
-	timeout    time.Duration
-	namespace  string
+	client          *aerospike.Client
+	namespace       string
+	expiration      uint32
+	timeout         time.Duration
+	readMaxRetries  int
+	writeMaxRetries int
 }
 
 var initMu sync.Mutex
@@ -90,6 +93,26 @@ func New(u *url.URL) (*Store, error) {
 		}
 	}
 
+	var readMaxRetries int
+
+	retryValue := u.Query().Get("readMaxRetries")
+	if retryValue != "" {
+		var err error
+		if readMaxRetries, err = strconv.Atoi(retryValue); err != nil {
+			readMaxRetries = -1
+		}
+	}
+
+	var writeMaxRetries int
+
+	retryValue = u.Query().Get("writeMaxRetries")
+	if retryValue != "" {
+		var err error
+		if writeMaxRetries, err = strconv.Atoi(retryValue); err != nil {
+			writeMaxRetries = -1
+		}
+	}
+
 	expiration := uint32(0)
 	expirationValue := u.Query().Get("expiration")
 	if expirationValue != "" {
@@ -101,10 +124,12 @@ func New(u *url.URL) (*Store, error) {
 	}
 
 	return &Store{
-		client:     client,
-		namespace:  namespace,
-		expiration: expiration,
-		timeout:    timeout,
+		client:          client,
+		namespace:       namespace,
+		expiration:      expiration,
+		timeout:         timeout,
+		readMaxRetries:  readMaxRetries,
+		writeMaxRetries: writeMaxRetries,
 	}, nil
 }
 
@@ -136,20 +161,15 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 	var value *aerospike.Record
 
-	options := make([]util.AerospikeReadPolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeout(s.timeout))
-	}
-
-	readPolicy := util.GetAerospikeReadPolicy(options...)
+	readPolicy := s.createReadPolicy()
+	start := time.Now()
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		e = aeroErr
 		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
 			return nil, txmeta.ErrNotFound
 		}
-		return nil, aeroErr
+		return nil, fmt.Errorf("aerospike get error (time taken: %s) : %w", time.Since(start).String(), aeroErr)
 	}
 
 	if value == nil {
@@ -241,16 +261,6 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		}
 	}()
 
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, s.expiration, options...)
-	policy.RecordExistsAction = aerospike.CREATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-
 	hash := tx.TxIDChainHash()
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
@@ -278,6 +288,10 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
+	policy := s.createWritePolicy(0, s.expiration)
+	policy.RecordExistsAction = aerospike.CREATE_ONLY
+
+	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		aeroErr := &aerospike.AerospikeError{}
@@ -287,6 +301,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 			}
 		}
 
+		err = fmt.Errorf("aerospike put error (time taken: %s) : %w", time.Since(start).String(), err)
 		e = err
 		return txMeta, err
 	}
@@ -304,11 +319,6 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		}
 	}()
 
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32-1)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
-
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
 		e = err
@@ -322,6 +332,10 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
+	writePolicy := s.createWritePolicy(0, math.MaxUint32-1)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
+
 	blockHashes, ok := record.Bins["blockHashes"].([]byte)
 	if !ok {
 		blockHashes = make([]byte, 0, 32)
@@ -330,9 +344,10 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 
 	bin := aerospike.NewBin("blockHashes", blockHashes)
 
-	err = s.client.PutBins(policy, key, bin)
+	start := time.Now()
+	err = s.client.PutBins(writePolicy, key, bin)
 	if err != nil {
-		e = err
+		e = fmt.Errorf("aerospike put error (time taken: %s) : %w", time.Since(start).String(), err)
 		return err
 	}
 
@@ -351,8 +366,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 		}
 	}()
 
-	policy := util.GetAerospikeWritePolicy(0, 0)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy := s.createWritePolicy(0, math.MaxUint32)
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if err != nil {
@@ -360,13 +374,37 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 		return err
 	}
 
+	start := time.Now()
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
-		e = err
+		e = fmt.Errorf("aerospike delete error (time taken: %s) : %w", time.Since(start).String(), err)
 		return err
 	}
 
 	prometheusTxMetaDelete.Inc()
 
 	return nil
+}
+
+func (s *Store) createReadPolicy() *aerospike.BasePolicy {
+	policy := util.GetAerospikeReadPolicy()
+	if s.timeout > 0 {
+		policy.TotalTimeout = s.timeout
+	}
+	if s.readMaxRetries >= 0 {
+		policy.MaxRetries = s.readMaxRetries
+	}
+	return policy
+}
+
+func (s *Store) createWritePolicy(generation, expiration uint32) *aerospike.WritePolicy {
+	policy := util.GetAerospikeWritePolicy(generation, expiration)
+	if s.timeout > 0 {
+		policy.TotalTimeout = s.timeout
+	}
+	if s.writeMaxRetries >= 0 {
+		policy.MaxRetries = s.writeMaxRetries
+	}
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	return policy
 }

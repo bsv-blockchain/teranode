@@ -105,13 +105,15 @@ func init() {
 }
 
 type Store struct {
-	u           *url.URL
-	client      *aerospike.Client
-	namespace   string
-	logger      utils.Logger
-	blockHeight uint32
-	expiration  uint32
-	timeout     time.Duration
+	u               *url.URL
+	client          *aerospike.Client
+	namespace       string
+	logger          utils.Logger
+	blockHeight     uint32
+	expiration      uint32
+	timeout         time.Duration
+	readMaxRetries  int
+	writeMaxRetries int
 }
 
 func New(u *url.URL) (*Store, error) {
@@ -148,14 +150,36 @@ func New(u *url.URL) (*Store, error) {
 		expiration = uint32(expiration64)
 	}
 
+	var readMaxRetries int
+
+	retryValue := u.Query().Get("readMaxRetries")
+	if retryValue != "" {
+		var err error
+		if readMaxRetries, err = strconv.Atoi(retryValue); err != nil {
+			readMaxRetries = -1
+		}
+	}
+
+	var writeMaxRetries int
+
+	retryValue = u.Query().Get("writeMaxRetries")
+	if retryValue != "" {
+		var err error
+		if writeMaxRetries, err = strconv.Atoi(retryValue); err != nil {
+			writeMaxRetries = -1
+		}
+	}
+
 	return &Store{
-		u:           u,
-		client:      client,
-		namespace:   namespace,
-		logger:      logger,
-		blockHeight: 0,
-		expiration:  expiration,
-		timeout:     timeout,
+		u:               u,
+		client:          client,
+		namespace:       namespace,
+		logger:          logger,
+		blockHeight:     0,
+		expiration:      expiration,
+		timeout:         timeout,
+		readMaxRetries:  readMaxRetries,
+		writeMaxRetries: writeMaxRetries,
 	}, nil
 }
 
@@ -200,7 +224,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	}
 
 	bin := aerospike.NewBin("bin", "value")
-	err = s.client.PutBins(writePolicy, key, bin)
+	err = s.client.PutBins(s.createWritePolicy(0, math.MaxUint32), key, bin)
 	if err != nil {
 		return -2, details, err
 	}
@@ -228,14 +252,9 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		return nil, aErr
 	}
 
-	options := make([]util.AerospikeReadPolicyOptions, 0)
+	policy := s.createReadPolicy()
 
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeout(s.timeout))
-	}
-
-	policy := util.GetAerospikeReadPolicy(options...)
-
+	start := time.Now()
 	value, aErr := s.client.Get(policy, key, "txid", "locktime")
 	if aErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
@@ -245,7 +264,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 			}, utxostore.ErrNotFound
 		}
 
-		s.logger.Errorf("Failed to get aerospike key: %v\n", aErr)
+		s.logger.Errorf("Failed to get aerospike key (time taken: %s) : %v\n", time.Since(start).String(), aErr)
 		return nil, aErr
 	}
 
@@ -280,15 +299,14 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
 	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32, options...)
+	policy := s.createWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
@@ -330,11 +348,13 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 		aerospike.NewBin("locktime", nLockTime),
 	}
 
+	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
 		// check whether we already set this utxo
 		prometheusUtxoGet.Inc()
-		value, getErr := s.client.Get(nil, key, "locktime")
+		readPolicy := util.GetAerospikeReadPolicy()
+		value, getErr := s.client.Get(readPolicy, key, "locktime")
 		if getErr == nil && value != nil {
 			txid, ok := value.Bins["txid"].([]byte)
 			if ok && len(txid) != 0 {
@@ -356,7 +376,7 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 			return utxostore.ErrNotFound
 		}
 
-		return err
+		return fmt.Errorf("error in aerospike store PutBins (time taken: %s) : %w", time.Since(start).String(), err)
 	}
 
 	return nil
@@ -372,15 +392,9 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 
 	//expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
 
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(1, s.expiration, options...)
+	policy := s.createWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
 
 	policy.FilterExpression = aerospike.ExpAnd(
 		// check whether txid has been set = spent
@@ -403,7 +417,7 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
 	for _, spend := range spends {
-		if err = s.spendUtxo(policy, spend); err != nil {
+		if err := s.spendUtxo(policy, spend); err != nil {
 
 			// revert the spent utxos
 			_ = s.UnSpend(context.Background(), spentSpends)
@@ -426,6 +440,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 	}
 
 	bin := aerospike.NewBin("txid", spend.SpendingTxID.CloneBytes())
+	start := time.Now()
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
 		if errors.Is(err, aerospike.ErrKeyNotFound) {
@@ -440,9 +455,11 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 		// check whether we had the same value set as before
 		prometheusUtxoGet.Inc()
-		value, getErr := s.client.Get(nil, key, "txid")
+		readPolicy := util.GetAerospikeReadPolicy()
+		startGet := time.Now()
+		value, getErr := s.client.Get(readPolicy, key, "txid")
 		if getErr != nil {
-			return fmt.Errorf("could not see if the value was the same as before: %w", getErr)
+			return fmt.Errorf("could not see if the value was the same as before (time taken: %s) : %w", time.Since(startGet).String(), getErr)
 		}
 		valueBytes, ok := value.Bins["txid"].([]byte)
 		if ok && len(valueBytes) == 32 {
@@ -462,7 +479,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
-		return fmt.Errorf("error in aerospike spend PutBins: %w", err)
+		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)
 	}
 
 	return nil
@@ -479,17 +496,6 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 }
 
 func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
-	readOptions := make([]util.AerospikeReadPolicyOptions, 0)
-	writeOptions := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		readOptions = append(readOptions, util.WithTotalTimeout(s.timeout))
-		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(2, 0, writeOptions...)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-
 	key, err := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
@@ -497,10 +503,11 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		return err
 	}
 
-	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(readOptions...), key, "locktime")
+	start := time.Now()
+	value, getErr := s.client.Get(s.createReadPolicy(), key, "locktime")
 	if getErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike get key: %v\n", err)
+		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v\n", time.Since(start).String(), err)
 		return err
 	}
 	nLockTime, ok := value.Bins["locktime"].(int)
@@ -508,10 +515,14 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		nLockTime = 0
 	}
 
+	policy := s.createWritePolicy(3, math.MaxUint32)
+	policy.GenerationPolicy = aerospike.EXPECT_GEN_EQUAL
+
+	startDelete := time.Now()
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike Reset delete key: %v\n", err)
+		s.logger.Errorf("ERROR in aerospike Reset delete key (time taken: %s) : %v\n", time.Since(startDelete).String(), err)
 		return err
 	}
 
@@ -521,14 +532,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, 0, options...)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy := s.createWritePolicy(0, math.MaxUint32)
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {
@@ -537,6 +541,7 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 		return err
 	}
 
+	start := time.Now()
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
 		// if the key is not found, we don't need to delete, it's not there anyway
@@ -545,7 +550,7 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 		}
 
 		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
-		return fmt.Errorf("error in aerospike delete key: %v", err)
+		return fmt.Errorf("error in aerospike delete key (time taken: %s): %v", time.Since(start).String(), err)
 	}
 
 	prometheusUtxoDelete.Inc()
@@ -555,4 +560,27 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 
 func (s *Store) DeleteSpends(_ bool) {
 	// noop
+}
+
+func (s *Store) createReadPolicy() *aerospike.BasePolicy {
+	policy := util.GetAerospikeReadPolicy()
+	if s.timeout > 0 {
+		policy.TotalTimeout = s.timeout
+	}
+	if s.readMaxRetries >= 0 {
+		policy.MaxRetries = s.readMaxRetries
+	}
+	return policy
+}
+
+func (s *Store) createWritePolicy(generation, expiration uint32) *aerospike.WritePolicy {
+	policy := util.GetAerospikeWritePolicy(generation, expiration)
+	if s.timeout > 0 {
+		policy.TotalTimeout = s.timeout
+	}
+	if s.writeMaxRetries >= 0 {
+		policy.MaxRetries = s.writeMaxRetries
+	}
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	return policy
 }

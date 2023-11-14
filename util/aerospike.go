@@ -2,12 +2,13 @@ package util
 
 import (
 	"fmt"
-	"github.com/aerospike/aerospike-client-go/v6"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aerospike/aerospike-client-go/v6"
 
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
