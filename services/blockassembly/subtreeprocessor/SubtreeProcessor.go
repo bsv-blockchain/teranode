@@ -402,6 +402,9 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	//}
 
 	stp.logger.Infof("moveUpBlock with block %s", block.String())
+	defer func() {
+		stp.logger.Infof("DONE moveUpBlock with block %s", block.String())
+	}()
 	stp.logger.Debugf("resetting subtrees: %v", block.Subtrees)
 
 	coinbaseId := block.CoinbaseTx.TxIDChainHash()

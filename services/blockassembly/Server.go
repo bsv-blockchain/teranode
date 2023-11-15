@@ -645,7 +645,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		g.Go(func() error {
 			// add the transactions in this block to the txMeta block hashes
 			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
-			if err = model.UpdateTxMinedStatus(gCtx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
+			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
 				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			}
 			return nil

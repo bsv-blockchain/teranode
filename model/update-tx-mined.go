@@ -8,11 +8,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
+func UpdateTxMinedStatus(ctx context.Context, logger utils.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
@@ -32,6 +33,7 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 			for idx, node := range subtree.Nodes {
 				hashes = append(hashes, &node.Hash)
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
+					logger.Infof("SetMinedMulti for %d hashes, batch %d, for subtree %s in block %s", len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockHeaderHash.String())
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
 						return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 					}
@@ -40,6 +42,7 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 			}
 
 			if len(hashes) > 0 {
+				logger.Infof("SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %s", len(hashes), subtree.RootHash().String(), blockHeaderHash.String())
 				if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
 					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 				}

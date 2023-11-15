@@ -310,8 +310,6 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 }
 
 func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
-	s.logger.Infof("txmeta SetMinedMulti for %d hashes", len(hashes))
-
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	policy := util.GetAerospikeBatchWritePolicy(0, s.expiration)
