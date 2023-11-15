@@ -27,7 +27,7 @@ type Distributor struct {
 	failureTolerance   int
 	useQuic            bool
 	quicAddresses      []string
-	quicStream         quic.Stream
+	quicStreams        []quic.Stream
 }
 
 type Option func(*Distributor)
@@ -95,21 +95,26 @@ func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, erro
 		return nil, fmt.Errorf("propagation_quicAddresses not set in config")
 	}
 	logger.Infof("Using QUIC with address %s", quicAddresses)
-	quicAddress := quicAddresses[0]
+
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"txblaster2"},
 	}
+	quicStreams := make([]quic.Stream, len(quicAddresses))
 	ctx := context.Background()
-	session, err := quic.DialAddr(ctx, quicAddress, tlsConf, nil)
-	if err != nil {
-		return nil, err
-	}
+	var err error
+	var session quic.Connection
 	// defer session.CloseWithError(0, "closing")
-
-	quicStream, err = session.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, err
+	for i, quicAddress := range quicAddresses {
+		session, err = quic.DialAddr(ctx, quicAddress, tlsConf, nil)
+		if err != nil {
+			return nil, err
+		}
+		quicStream, err = session.OpenStreamSync(ctx)
+		if err != nil {
+			return nil, err
+		}
+		quicStreams[i] = quicStream
 	}
 
 	d := &Distributor{
@@ -119,7 +124,7 @@ func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, erro
 		failureTolerance:   50,
 		useQuic:            true,
 		quicAddresses:      quicAddresses,
-		quicStream:         quicStream,
+		quicStreams:        quicStreams,
 	}
 
 	for _, opt := range opts {
@@ -158,18 +163,19 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		txBytes := tx.ExtendedBytes()
 		// Send the length of the transaction first
 		txLength := uint32(len(txBytes))
+		for _, qs := range d.quicStreams {
+			err = binary.Write(qs, binary.BigEndian, txLength)
+			if err != nil {
+				d.logger.Errorf("Error writing transaction length: %v", err)
+				return nil, err
+			}
 
-		err = binary.Write(d.quicStream, binary.BigEndian, txLength)
-		if err != nil {
-			d.logger.Errorf("Error writing transaction length: %v", err)
-			return nil, err
-		}
-
-		// Send the raw transaction
-		_, err = d.quicStream.Write(txBytes)
-		if err != nil {
-			d.logger.Errorf("Error writing raw transaction to stream: %v", err)
-			return nil, err
+			// Send the raw transaction
+			_, err = qs.Write(txBytes)
+			if err != nil {
+				d.logger.Errorf("Error writing raw transaction to stream: %v", err)
+				return nil, err
+			}
 		}
 		return nil, nil
 	} else {

@@ -138,7 +138,7 @@ func NewServer(logger utils.Logger) *Server {
 	}
 	rtn, ok := gocore.Config().Get("p2p_rejected_tx_topic")
 	if !ok {
-		panic("p2p_mining_on_topic not set in config")
+		panic("p2p_rejected_tx_topic not set in config")
 	}
 
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
@@ -259,6 +259,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.handleSubtreeTopic(ctx)
 	go s.handleMiningOnTopic(ctx)
 	go s.blockchainSubscriptionListener(ctx)
+	go s.validatorSubscriptionListener(ctx)
 
 	s.sendBestBlockMessage(ctx)
 
@@ -286,51 +287,12 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 	// define vars here to prevent too many allocs
 	var notification *model.Notification
-	var rejectedTxNotification *model.RejectedTxNotification
 	var blockMessage BlockMessage
 	var miningOnMessage MiningOnMessage
 	var subtreeMessage SubtreeMessage
-	var rejectedTxMessage RejectedTxMessage
 	var header *model.BlockHeader
 	var meta *model.BlockHeaderMeta
 	var msgBytes []byte
-
-	// Subscribe to the validator service
-	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
-	if err != nil {
-		s.logger.Errorf("error subscribing to validator service: ", err)
-		return
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				s.logger.Infof("P2P service shutting down")
-				return
-			case rejectedTxNotification = <-validatorSubscription:
-				if rejectedTxNotification == nil {
-					continue
-				}
-				// received a message
-				s.logger.Debugf("P2P Received %s rejected tx notification: %s", rejectedTxNotification.TxId, rejectedTxNotification.Reason)
-
-				rejectedTxMessage = RejectedTxMessage{
-					TxId:   rejectedTxNotification.TxId,
-					Reason: rejectedTxNotification.Reason,
-					PeerId: s.host.ID().String(),
-				}
-				msgBytes, err = json.Marshal(rejectedTxMessage)
-				if err != nil {
-					s.logger.Errorf("json marshal error: ", err)
-					continue
-				}
-				if err = s.topics[rejectedTxTopicName].Publish(ctx, msgBytes); err != nil {
-					s.logger.Errorf("publish error:", err)
-				}
-			}
-		}
-
-	}()
 
 	for {
 		select {
@@ -405,6 +367,51 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (s *Server) validatorSubscriptionListener(ctx context.Context) {
+	s.logger.Debugf("validatorSubscriptionListener\n")
+	// Subscribe to the validator service
+	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
+	if err != nil {
+		s.logger.Errorf("error subscribing to validator service: ", err)
+		return
+	}
+	// define vars here to prevent too many allocs
+	var rejectedTxNotification *model.RejectedTxNotification
+	var rejectedTxMessage RejectedTxMessage
+	var msgBytes []byte
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("P2P service shutting down")
+			return
+		case rejectedTxNotification = <-validatorSubscription:
+			if rejectedTxNotification == nil {
+				s.logger.Debugf("P2P Received nil rejected tx notification")
+				continue
+			}
+			// received a message
+			s.logger.Debugf("P2P Received %s rejected tx notification: %s", rejectedTxNotification.TxId, rejectedTxNotification.Reason)
+
+			rejectedTxMessage = RejectedTxMessage{
+				TxId:   rejectedTxNotification.TxId,
+				Reason: rejectedTxNotification.Reason,
+				PeerId: s.host.ID().String(),
+			}
+			msgBytes, err = json.Marshal(rejectedTxMessage)
+			if err != nil {
+				s.logger.Errorf("json marshal error: ", err)
+				continue
+			}
+			s.logger.Debugf("P2P publishing rejectedTxMessage")
+			if err = s.topics[rejectedTxTopicName].Publish(ctx, msgBytes); err != nil {
+				s.logger.Errorf("publish error:", err)
+			}
+		}
+	}
+
 }
 
 func (s *Server) StartHttp(ctx context.Context) error {
