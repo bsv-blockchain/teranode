@@ -181,6 +181,16 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
+func (r *Redis) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = r.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // SetMined uses a lua script to update the block hash of a transaction
 func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockHash.CloneBytes()).Result()

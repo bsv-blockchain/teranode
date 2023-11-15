@@ -6,6 +6,7 @@ import (
 
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"golang.org/x/sync/errgroup"
 )
@@ -21,16 +22,19 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 
 	blockHeaderHash := blockHeader.Hash()
 	for _, subtree := range subtrees {
-		for _, node := range subtree.Nodes {
-			hash := node.Hash
-			g.Go(func() error {
-				if err := txMetaStore.SetMined(gCtx, &hash, blockHeaderHash); err != nil {
-					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
-				}
+		subtree := subtree
+		g.Go(func() error {
+			hashes := make([]*chainhash.Hash, len(subtree.Nodes))
+			for idx, node := range subtree.Nodes {
+				hashes[idx] = &node.Hash
+			}
 
-				return nil
-			})
-		}
+			if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
+				return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
+			}
+
+			return nil
+		})
 	}
 
 	if err := g.Wait(); err != nil {

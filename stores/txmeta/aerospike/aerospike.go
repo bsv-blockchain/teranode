@@ -1,4 +1,4 @@
-// //go:build aerospike
+//go:build aerospike
 
 package aerospike
 
@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -29,7 +30,6 @@ var (
 	prometheusTxMetaSet      prometheus.Counter
 	prometheusTxMetaSetMined prometheus.Counter
 	prometheusTxMetaDelete   prometheus.Counter
-	logger                   = gocore.Log("aero_store")
 )
 
 func init() {
@@ -63,6 +63,7 @@ type Store struct {
 	client     *aerospike.Client
 	namespace  string
 	expiration uint32
+	logger     utils.Logger
 }
 
 var initMu sync.Mutex
@@ -72,6 +73,8 @@ func New(u *url.URL) (*Store, error) {
 	initMu.Lock()
 	asl.Logger.SetLevel(asl.DEBUG)
 	initMu.Unlock()
+
+	logger := gocore.Log("aero_store")
 
 	namespace := u.Path[1:]
 
@@ -94,6 +97,7 @@ func New(u *url.URL) (*Store, error) {
 		client:     client,
 		namespace:  namespace,
 		expiration: expiration,
+		logger:     logger,
 	}, nil
 }
 
@@ -109,9 +113,9 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	var e error
 	defer func() {
 		if e != nil {
-			logger.Errorf("txmeta get error for %s: %v", hash.String(), e)
+			s.logger.Errorf("txmeta get error for %s: %v", hash.String(), e)
 		} else {
-			logger.Warnf("txmeta get success for %s", hash.String())
+			s.logger.Warnf("txmeta get success for %s", hash.String())
 		}
 	}()
 
@@ -125,7 +129,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 	var value *aerospike.Record
 
-	readPolicy := util.GetAerospikeReadPolicy()
+	readPolicy := s.createReadPolicy()
 	start := time.Now()
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
@@ -221,7 +225,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	var e error
 	defer func() {
 		if e != nil {
-			logger.Errorf("txmeta Create error for %s: %v", tx.TxIDChainHash().String(), e)
+			s.logger.Errorf("txmeta Create error for %s: %v", tx.TxIDChainHash().String(), e)
 		}
 	}()
 
@@ -252,7 +256,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, s.expiration)
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	start := time.Now()
@@ -279,7 +283,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	var e error
 	defer func() {
 		if e != nil {
-			logger.Errorf("txmeta SetMined error for %s: %v", hash.String(), e)
+			s.logger.Errorf("txmeta SetMined error for %s: %v", hash.String(), e)
 		}
 	}()
 
@@ -289,27 +293,12 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
-	readPolicy := util.GetAerospikeReadPolicy()
-	record, err := s.client.Get(readPolicy, key, "blockHashes")
-	if err != nil {
-		e = err
-		return err
-	}
-
-	writePolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32-1)
+	writePolicy := s.createWritePolicy(0, s.expiration)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
-	blockHashes, ok := record.Bins["blockHashes"].([]byte)
-	if !ok {
-		blockHashes = make([]byte, 0, 32)
-	}
-	blockHashes = append(blockHashes, blockHash[:]...)
-
-	bin := aerospike.NewBin("blockHashes", blockHashes)
-
+	bin := aerospike.NewBin("blockHashes", blockHash[:])
 	start := time.Now()
-	err = s.client.PutBins(writePolicy, key, bin)
+	err = s.client.AppendBins(writePolicy, key, bin)
 	if err != nil {
 		e = fmt.Errorf("aerospike put error (time taken: %s) : %w", time.Since(start).String(), err)
 		return err
@@ -320,13 +309,53 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	return nil
 }
 
+func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+	s.logger.Infof("txmeta SetMinedMulti for %d hashes", len(hashes)
+
+	batchPolicy := s.createBatchPolicy()
+
+	policy := s.createBatchWritePolicy(0, s.expiration)
+	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+
+	for idx, hash := range hashes {
+		key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+		if err != nil {
+			return err
+		}
+		bin := aerospike.NewBin("blockHashes", blockHash[:])
+		record := aerospike.NewBatchWrite(policy, key, aerospike.AppendOp(bin))
+		// Add to batch
+		batchRecords[idx] = record
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return err
+	}
+
+	prometheusTxMetaSetMined.Inc()
+
+	for idx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+		if err != nil {
+			// TODO what to do here?
+			hash := hashes[idx]
+			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hash.String(), err)
+		}
+	}
+
+	return nil
+}
+
 func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	var e error
 	defer func() {
 		if e != nil {
-			logger.Errorf("txmeta Delete error for %s: %v", hash.String(), e)
+			s.logger.Errorf("txmeta Delete error for %s: %v", hash.String(), e)
 		} else {
-			logger.Warnf("txmeta Delete success for %s", hash.String())
+			s.logger.Warnf("txmeta Delete success for %s", hash.String())
 		}
 	}()
 
@@ -348,4 +377,30 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	prometheusTxMetaDelete.Inc()
 
 	return nil
+}
+
+func (s *Store) createReadPolicy() *aerospike.BasePolicy {
+	policy := util.GetAerospikeReadPolicy()
+
+	return policy
+}
+
+func (s *Store) createWritePolicy(generation, expiration uint32) *aerospike.WritePolicy {
+	policy := util.GetAerospikeWritePolicy(generation, expiration)
+	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+
+	return policy
+}
+
+func (s *Store) createBatchPolicy() *aerospike.BatchPolicy {
+	batchPolicy := aerospike.NewBatchPolicy()
+
+	return batchPolicy
+}
+
+func (s *Store) createBatchWritePolicy(generation, expiration uint32) *aerospike.BatchWritePolicy {
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.Expiration = expiration
+
+	return batchWritePolicy
 }

@@ -18,5 +18,6 @@ type Store interface {
 	GetMeta(ctx context.Context, hash *chainhash.Hash) (*Data, error)
 	Create(ctx context.Context, tx *bt.Tx) (*Data, error)
 	SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error
+	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 }

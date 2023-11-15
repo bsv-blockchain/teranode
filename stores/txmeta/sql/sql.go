@@ -202,6 +202,16 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
 	defer cancelTimeout()

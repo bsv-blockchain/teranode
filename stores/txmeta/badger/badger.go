@@ -136,6 +136,16 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
+func (b *Badger) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = b.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

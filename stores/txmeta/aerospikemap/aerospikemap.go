@@ -1,4 +1,4 @@
-// //go:build aerospike
+//go:build aerospike
 
 package aerospikemap
 
@@ -149,6 +149,16 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	// this is a no-op for the map implementation - it is created in the utxo store
 	return s.Get(ctx, tx.TxIDChainHash())
+}
+
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {

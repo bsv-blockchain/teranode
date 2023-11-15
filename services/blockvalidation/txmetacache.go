@@ -67,12 +67,37 @@ func (t txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error
 	return txMeta, nil
 }
 
+func (t txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockHash)
+	if err != nil {
+		return err
+	}
+
+	for _, hash := range hashes {
+		err = t.setMinedInCache(ctx, hash, blockHash)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (t txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	err := t.txMetaStore.SetMined(ctx, hash, blockHash)
 	if err != nil {
 		return err
 	}
 
+	err = t.setMinedInCache(ctx, hash, blockHash)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (t txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
 	var txMeta *txmeta.Data
 	cached := t.cache.Get(*hash)
 	if cached != nil && cached.Value() != nil {

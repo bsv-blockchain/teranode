@@ -57,6 +57,16 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return s, nil
 }
 
+func (m *Memory) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = m.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

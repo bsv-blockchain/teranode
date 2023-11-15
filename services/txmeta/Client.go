@@ -115,6 +115,16 @@ func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *
 	return nil
 }
 
+func (c *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+	for _, hash := range hashes {
+		if err := c.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (c *Client) Delete(_ context.Context, _ *chainhash.Hash) error {
 	return nil // do not allow to Delete through grpc
 }
