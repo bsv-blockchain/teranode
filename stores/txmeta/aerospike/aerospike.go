@@ -129,7 +129,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 	var value *aerospike.Record
 
-	readPolicy := s.createReadPolicy()
+	readPolicy := util.GetAerospikeReadPolicy()
 	start := time.Now()
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
@@ -293,7 +293,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 		return err
 	}
 
-	writePolicy := s.createWritePolicy(0, s.expiration)
+	writePolicy := util.GetAerospikeWritePolicy(0, s.expiration)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	bin := aerospike.NewBin("blockHashes", blockHash[:])
@@ -312,10 +312,9 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
 	s.logger.Infof("txmeta SetMinedMulti for %d hashes", len(hashes))
 
-	batchPolicy := s.createBatchPolicy()
-	batchPolicy.AllowInlineSSD = true
+	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	policy := s.createBatchWritePolicy(0, s.expiration)
+	policy := util.GetAerospikeBatchWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
@@ -378,30 +377,4 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	prometheusTxMetaDelete.Inc()
 
 	return nil
-}
-
-func (s *Store) createReadPolicy() *aerospike.BasePolicy {
-	policy := util.GetAerospikeReadPolicy()
-
-	return policy
-}
-
-func (s *Store) createWritePolicy(generation, expiration uint32) *aerospike.WritePolicy {
-	policy := util.GetAerospikeWritePolicy(generation, expiration)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-
-	return policy
-}
-
-func (s *Store) createBatchPolicy() *aerospike.BatchPolicy {
-	batchPolicy := aerospike.NewBatchPolicy()
-
-	return batchPolicy
-}
-
-func (s *Store) createBatchWritePolicy(generation, expiration uint32) *aerospike.BatchWritePolicy {
-	batchWritePolicy := aerospike.NewBatchWritePolicy()
-	batchWritePolicy.Expiration = expiration
-
-	return batchWritePolicy
 }
