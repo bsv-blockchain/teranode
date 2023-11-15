@@ -149,7 +149,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 
 			v.reverseSpends(traceSpan, spentUtxos)
 			traceSpan.RecordError(err)
-			return fmt.Errorf("error sending tx to block assembler: %v", err)
+			return fmt.Errorf("error sending tx to block assembler (disabled): %v", err)
 		}
 	}
 
