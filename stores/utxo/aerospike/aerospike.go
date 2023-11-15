@@ -436,11 +436,6 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			return utxostore.ErrNotFound
 		}
 
-		if errors.Is(err, aerospike.ErrFilteredOut) {
-			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
-			return utxostore.ErrLockTime
-		}
-
 		// check whether we had the same value set as before
 		prometheusUtxoGet.Inc()
 		readPolicy := util.GetAerospikeReadPolicy()
@@ -467,6 +462,13 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
+
+		if errors.Is(err, aerospike.ErrFilteredOut) {
+			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
+			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
+			return utxostore.ErrLockTime
+		}
+
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)
 	}
 
