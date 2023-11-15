@@ -82,7 +82,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		blobServerClient:      blobServerClient,
 		blockValidationClient: blockValidationClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest, 100),
+		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
@@ -620,49 +620,41 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
 	}
 
-	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	//callerSpan := opentracing.SpanFromContext(ctx)
-	//setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-
-	g, gCtx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		if err = ba.removeSubtreesTTL(gCtx, block); err != nil {
-			return fmt.Errorf("failed to remove subtrees TTL: %w", err)
-		}
-		return nil
-	})
-
-	ba.logger.Infof("[BlockAssembly] waiting for removeSubtreesTTL: %s", block.Header.Hash())
-	if err = g.Wait(); err != nil {
-		// TODO do we need to do a cleanup?
-		return nil, fmt.Errorf("[BlockAssembly] error updating status: %w", err)
-	}
-
-	g, gCtx = errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		// add the transactions in this block to the txMeta block hashes
-		if err = model.UpdateTxMinedStatus(gCtx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
-			// TODO this should be a fatal error, but for now we just log it
-			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-			return fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-		}
-		return nil
-	})
-
-	ba.logger.Infof("[BlockAssembly] waiting for UpdateTxMinedStatus: %s", block.Header.Hash())
-	if err = g.Wait(); err != nil {
-		// TODO do we need to do a cleanup?
-		return nil, fmt.Errorf("[BlockAssembly] error updating status: %w", err)
-	}
-	ba.logger.Infof("[BlockAssembly] wait over for removeSubtreesTTL and UpdateTxMinedStatus: %s", block.Header.Hash())
-
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block, false); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
+
+	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	callerSpan := opentracing.SpanFromContext(ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
+	go func() {
+		// TODO what do we do if this fails, the subtrees TTL and tx meta status still needs to be updated
+		g, gCtx := errgroup.WithContext(setCtx)
+
+		g.Go(func() error {
+			ba.logger.Infof("[BlockAssembly] remove subtrees TTL: %s", block.Header.Hash())
+			if err = ba.removeSubtreesTTL(gCtx, block); err != nil {
+				ba.logger.Errorf("failed to remove subtrees TTL: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			// add the transactions in this block to the txMeta block hashes
+			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
+			if err = model.UpdateTxMinedStatus(gCtx, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
+				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+			}
+			return nil
+		})
+
+		if err = g.Wait(); err != nil {
+			ba.logger.Errorf("[BlockAssembly] error updating status: %w", err)
+		}
+	}()
 
 	// remove jobs, we have already mined a block
 	// if we don't do this, all the subtrees will never be removed from memory
