@@ -112,8 +112,14 @@ func (v *Server) Start(ctx context.Context) error {
 						})
 						if err != nil {
 							v.logger.Errorf("[Validator] Error validating transaction: %s", err)
+
 						}
 						if !response.Valid {
+							tx, err := bt.NewTxFromBytes(txBytes)
+							if err == nil {
+								v.sendInvalidTxNotification(tx.TxID(), response.Reason)
+							}
+
 							v.logger.Errorf("[Validator] Invalid transaction: %s", response.Reason)
 						}
 						processedN := n.Add(1)
@@ -420,7 +426,7 @@ func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {
 	// prometheusBlockchainSubscribe.Inc()
-
+	v.logger.Debugf("subscribe request from %s", req.Source)
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 

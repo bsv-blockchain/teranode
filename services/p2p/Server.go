@@ -499,7 +499,7 @@ func readPrivateKey() (*crypto.PrivKey, error) {
 }
 
 func (s *Server) discoverPeers(ctx context.Context, tn []string) {
-	kademliaDHT := initDHT(ctx, s.host)
+	kademliaDHT := InitDHT(ctx, s.host)
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
 	for _, topicName := range tn {
 		dutil.Advertise(ctx, routingDiscovery, topicName)
@@ -521,7 +521,7 @@ ConnectLoop:
 
 					peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
-						panic(err)
+						s.logger.Errorf("error finding peers: %+v", err)
 					}
 
 					for p := range peerChan {

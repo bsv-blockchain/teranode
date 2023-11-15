@@ -602,7 +602,16 @@ func (ps *PropagationServer) generateTLSConfig() *tls.Config {
 		ps.logger.Errorf("error generating rsa key: %s", err.Error())
 		return nil
 	}
+
 	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+
+	remoteAddress, err := utils.GetPublicIPAddress()
+	if err != nil {
+		ps.logger.Fatalf("Failed to get public IP address: %v", err)
+	}
+	// Add IP SANs
+	template.IPAddresses = []net.IP{net.ParseIP(remoteAddress)}
+
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
 		ps.logger.Errorf("error creating x509 certificate: %s", err.Error())
