@@ -18,23 +18,24 @@ func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, su
 		span.Finish()
 	}()
 
-	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024)
+	maxMinedRoutines, _ := gocore.Config().GetInt("txmeta_store_maxMinedRoutines", 128)
+	maxMinedBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
 
-	maxBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
+	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(maxMinedRoutines)
 
 	blockHeaderHash := blockHeader.Hash()
 	for _, subtree := range subtrees {
 		subtree := subtree
 		g.Go(func() error {
-			hashes := make([]*chainhash.Hash, 0, maxBatchSize)
+			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx, node := range subtree.Nodes {
 				hashes = append(hashes, &node.Hash)
-				if idx > 0 && idx%maxBatchSize == 0 {
+				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
 						return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 					}
-					hashes = make([]*chainhash.Hash, 0, maxBatchSize)
+					hashes = make([]*chainhash.Hash, 0, maxMinedBatchSize)
 				}
 			}
 
