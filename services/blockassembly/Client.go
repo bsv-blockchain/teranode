@@ -71,7 +71,7 @@ func NewClient(ctx context.Context, logger utils.Logger) *Client {
 
 	// Connect to experimental fRPC server if configured
 	// fRPC has only been implemented for AddTx / Store
-	go client.connectFRPC()
+	client.connectFRPC()
 
 	if batchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
