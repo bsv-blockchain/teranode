@@ -132,7 +132,11 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor")
 				err = stp.reorgBlocks(ctx, reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
 				if err == nil {
-					stp.currentBlockHeader = reorgReq.moveUpBlocks[len(reorgReq.moveUpBlocks)-1].Header
+					if len(reorgReq.moveUpBlocks) > 0 {
+						stp.currentBlockHeader = reorgReq.moveUpBlocks[len(reorgReq.moveUpBlocks)-1].Header
+					} else {
+						stp.currentBlockHeader = reorgReq.moveDownBlocks[len(reorgReq.moveDownBlocks)-1].Header
+					}
 				}
 				reorgReq.errChan <- err
 

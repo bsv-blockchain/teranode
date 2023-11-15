@@ -313,6 +313,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 	s.logger.Infof("txmeta SetMinedMulti for %d hashes", len(hashes))
 
 	batchPolicy := s.createBatchPolicy()
+	batchPolicy.AllowInlineSSD = true
 
 	policy := s.createBatchWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY

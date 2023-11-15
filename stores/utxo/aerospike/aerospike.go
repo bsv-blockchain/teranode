@@ -295,7 +295,9 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		return s.storeUtxo(policy, utxoHashes[0], storeLockTime)
 	}
 
-	writePolicy := aerospike.NewBatchPolicy()
+	batchPolicy := aerospike.NewBatchPolicy()
+	batchPolicy.AllowInlineSSD = true
+
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
@@ -315,7 +317,7 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		batchRecords[idx] = record
 	}
 
-	err = s.client.BatchOperate(writePolicy, batchRecords)
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		// TODO reverse utxos that were already stored
 		return err
