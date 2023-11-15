@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	aerospikeHost      = "aero.ubsv-store0.eu-north-1.ubsv.dev" // "localhost"
-	aerospikePort      = 3000                                   // 3800
-	aerospikeNamespace = "utxostore"                            // test
+	aerospikeHost      = "localhost" // "localhost"
+	aerospikePort      = 3800        // 3800
+	aerospikeNamespace = "test"      // test
 )
 
 var (
@@ -121,12 +121,29 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(1), value.Generation)
 
 		err = db.Store(context.Background(), tx)
-		require.NoError(t, err)
+		require.Error(t, err)
 
 		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		err = db.Store(context.Background(), tx)
+		require.Error(t, err)
+	})
+
+	t.Run("aerospike store multi", func(t *testing.T) {
+		txM := tx.Clone()
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+
+		cleanDB(t, client, txM)
+		err = db.Store(context.Background(), txM)
+		require.NoError(t, err)
+
+		err = db.Store(context.Background(), txM)
+		require.Error(t, err)
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {

@@ -290,23 +290,49 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		storeLockTime = lockTime[0]
 	}
 
-	for i, hash := range utxoHashes {
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(utxoHashes))
-			}
-			return fmt.Errorf("context cancelled storing %d of %d aerospike utxos", i, len(utxoHashes))
-		default:
-			err = s.storeUtxo(policy, hash, storeLockTime)
-			if err != nil {
-				// TODO reverse utxos that were already stored
-				return err
-			}
+	// just store it normally if it is only 1 utxo
+	if len(utxoHashes) == 1 {
+		return s.storeUtxo(policy, utxoHashes[0], storeLockTime)
+	}
+
+	writePolicy := aerospike.NewBatchPolicy()
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(utxoHashes))
+
+	var key *aerospike.Key
+	var bin *aerospike.Bin
+	for idx, hash := range utxoHashes {
+		key, err = aerospike.NewKey(s.namespace, "utxo", hash[:])
+		if err != nil {
+			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
+			return err
+		}
+
+		bin = aerospike.NewBin("locktime", tx.LockTime)
+		record := aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(bin))
+		batchRecords[idx] = record
+	}
+
+	err = s.client.BatchOperate(writePolicy, batchRecords)
+	if err != nil {
+		// TODO reverse utxos that were already stored
+		return err
+	}
+
+	// check for errors
+	for idx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+		if err != nil {
+			hash := utxoHashes[idx]
+			// TODO reverse utxos that were already stored
+			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
+			return fmt.Errorf("error in aerospike store BatchOperate: %s - %w", hash.String(), err)
 		}
 	}
 
-	prometheusUtxoStore.Inc()
+	prometheusUtxoStore.Add(float64(len(utxoHashes)))
 
 	return nil
 }
@@ -464,6 +490,11 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
+			if len(valueBytes) == 32 {
+				s.logger.Errorf("utxo %s is already spent by %s", spend.Hash.String(), valueBytes)
+				return utxostore.ErrSpent
+			}
+
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
 			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
 			return utxostore.ErrLockTime
