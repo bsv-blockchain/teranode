@@ -28,6 +28,10 @@ func (s *Store) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (s *Store) GetBlockHeight() (uint32, error) {
+	return s.BlockHeight, nil
+}
+
 func (s *Store) Health(ctx context.Context) (int, string, error) {
 	resp, err := s.db.Health(ctx, &emptypb.Empty{})
 	if err != nil {

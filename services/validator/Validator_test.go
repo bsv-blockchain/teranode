@@ -18,6 +18,10 @@ func (ns *NullStore) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (ns *NullStore) GetBlockHeight() (uint32, error) {
+	return 0, nil
+}
+
 func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator test Null Store", nil
 }

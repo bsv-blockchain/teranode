@@ -116,6 +116,15 @@ func (c *Client) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator", nil
 }
 
+func (c *Client) GetBlockHeight() (uint32, error) {
+	resp, err := c.client.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
+	if err != nil {
+		return 0, err
+	}
+
+	return resp.Height, nil
+}
+
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize == 0 {
 		if c.frpcClient != nil {
@@ -293,7 +302,7 @@ func (c *Client) connectFRPC() {
 	}
 }
 
-func (c Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
+func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
 	ch := make(chan *model.RejectedTxNotification)
 
 	go func() {
