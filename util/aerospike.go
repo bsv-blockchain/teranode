@@ -151,7 +151,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 		return nil, err
 	}
 	cnxNum, err := client.WarmUp(policy.ConnectionQueueSize)
-	logger.Infof("Warmed up %d connections", cnxNum)
+	logger.Infof("Warmed up %d connections (%0.f nodes each with %d connections)", cnxNum, cnxNum/policy.ConnectionQueueSize, policy.ConnectionQueueSize)
 	if err != nil {
 		return nil, err
 	}
@@ -162,56 +162,56 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 func getQueryBool(url *url.URL, key string, defaultValue bool, logger utils.Logger) bool {
 	value := url.Query().Get(key)
 	if value == "" {
-		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue)
+		logger.Infof("[Aerospike] %s=%t [default]", key, defaultValue)
 		return defaultValue
 	}
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
-		logger.Fatalf("[Aerospike] Invalid value %s=%s", key, value)
+		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%s", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%t", key, defaultValue)
 	return valueBool
 }
 
 func getQueryInt(url *url.URL, key string, defaultValue int, logger utils.Logger) int {
 	value := url.Query().Get(key)
 	if value == "" {
-		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue)
+		logger.Infof("[Aerospike] %s=%d [default]", key, defaultValue)
 		return defaultValue
 	}
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
-		logger.Fatalf("[Aerospike] Invalid value %s=%s", key, value)
+		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%s", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%d", key, defaultValue)
 	return valueInt
 }
 
 func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logger utils.Logger) time.Duration {
 	value := url.Query().Get(key)
 	if value == "" {
-		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue)
+		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue.String())
 		return defaultValue
 	}
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
-		logger.Fatalf("[Aerospike] Invalid value %s=%s", key, value)
+		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%s", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%s", key, defaultValue.String())
 	return valueDuration
 }
 
 func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger utils.Logger) float64 {
 	value := url.Query().Get(key)
 	if value == "" {
-		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue)
+		logger.Infof("[Aerospike] %s=%f [default]", key, defaultValue)
 		return defaultValue
 	}
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		logger.Fatalf("[Aerospike] Invalid value %s=%s", key, value)
+		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%s", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%f", key, defaultValue)
 	return valueFloat64
 }
 
