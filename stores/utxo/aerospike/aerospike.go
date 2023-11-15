@@ -433,7 +433,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		}
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
-			s.logger.Debugf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
+			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
 			return utxostore.ErrLockTime
 		}
 
