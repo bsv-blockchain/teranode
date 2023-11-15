@@ -143,11 +143,11 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			Size:          uint64(tx.Size()),
 			LockTime:      tx.LockTime,
 		}, spentUtxos); err != nil {
-			if err = v.txMetaStore.Delete(traceSpan.Ctx, tx.TxIDChainHash()); err != nil {
+			if err := v.txMetaStore.Delete(traceSpan.Ctx, tx.TxIDChainHash()); err != nil {
 				v.logger.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 			}
 
-			e := fmt.Errorf("error sending tx to block assembler (disabled): %v", err)
+			e := fmt.Errorf("error sending tx to block assembler: %v", err)
 			v.reverseSpends(traceSpan, spentUtxos)
 			traceSpan.RecordError(err)
 			return e
@@ -286,9 +286,9 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		}
 	} else {
 		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes); err != nil {
-			e := fmt.Errorf("error sending tx to block assembler: %v", err)
+			e := fmt.Errorf("error calling blockAssembler Store(): %v", err)
 			v.reverseSpends(traceSpan, reservedUtxos)
-			traceSpan.RecordError(err) // modifies err and sets it to nil?
+			traceSpan.RecordError(err)
 			return e
 		}
 	}
