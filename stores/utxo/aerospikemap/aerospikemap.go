@@ -109,7 +109,7 @@ type Store struct {
 	namespace   string
 	logger      utils.Logger
 	blockHeight uint32
-	timeout     time.Duration
+	dbTimeout   time.Duration
 }
 
 var (
@@ -134,17 +134,9 @@ func New(u *url.URL) (*Store, error) {
 		return nil, err
 	}
 
-	var timeout time.Duration
-
-	timeoutValue := u.Query().Get("timeout")
-	if timeoutValue != "" {
-		var err error
-		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
-			timeout = 0
-		}
-	}
-
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+
+	timeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	return &Store{
 		u:           u,
@@ -152,7 +144,7 @@ func New(u *url.URL) (*Store, error) {
 		namespace:   namespace,
 		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
 		blockHeight: 0,
-		timeout:     timeout,
+		dbTimeout:   time.Duration(timeoutMillis) * time.Millisecond,
 	}, nil
 }
 
@@ -225,13 +217,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		return nil, aErr
 	}
 
-	options := make([]util.AerospikeReadPolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeout(s.timeout))
-	}
-
-	policy := util.GetAerospikeReadPolicy(options...)
+	policy := util.GetAerospikeReadPolicy()
 
 	value, aErr := s.client.Get(policy, key, binNames...)
 	if aErr != nil {
@@ -278,20 +264,16 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
-	defer cancel()
-
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
+func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	if s.dbTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
+		defer cancel()
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32, options...)
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	key, aeroErr := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash().CloneBytes())
 	if aeroErr != nil {
@@ -325,9 +307,12 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	return nil
 }
 
-func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
-	defer cancel()
+func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	if s.dbTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
+		defer cancel()
+	}
 
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
@@ -336,15 +321,8 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 		}
 	}()
 
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(1, 0, options...)
+	policy := util.GetAerospikeWritePolicy(1, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	// TODO use a database transaction, when available in new version of aerospike
 	for i, spend := range spends {
@@ -458,9 +436,12 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 	return nil
 }
 
-func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancel := context.WithTimeout(cntxt, s.timeout)
-	defer cancel()
+func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	if s.dbTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
+		defer cancel()
+	}
 
 	for i, spend := range spends {
 		select {
@@ -477,16 +458,7 @@ func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) (err e
 }
 
 func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
-	// readOptions := make([]util.AerospikeReadPolicyOptions, 0)
-	writeOptions := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		// readOptions = append(readOptions, util.WithTotalTimeout(s.timeout))
-		writeOptions = append(writeOptions, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(3, 0, writeOptions...)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy := util.GetAerospikeWritePolicy(3, 0)
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", spend.TxID[:])
 	if err != nil {
@@ -507,14 +479,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
-	options := make([]util.AerospikeWritePolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeoutWrite(s.timeout))
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, 0, options...)
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+	policy := util.GetAerospikeWritePolicy(0, 0)
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {

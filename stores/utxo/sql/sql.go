@@ -132,7 +132,7 @@ func New(storeUrl *url.URL) (*Store, error) {
 		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
 	}
 
-	dbTimeoutMillis, _ := gocore.Config().GetInt("utxoStore_dbTimeoutMillis", 5000)
+	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
 		logger:    logger,

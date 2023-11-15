@@ -105,15 +105,13 @@ func init() {
 }
 
 type Store struct {
-	u               *url.URL
-	client          *aerospike.Client
-	namespace       string
-	logger          utils.Logger
-	blockHeight     uint32
-	expiration      uint32
-	timeout         time.Duration
-	readMaxRetries  int
-	writeMaxRetries int
+	u           *url.URL
+	client      *aerospike.Client
+	namespace   string
+	logger      utils.Logger
+	blockHeight uint32
+	expiration  uint32
+	dbTimeout   time.Duration
 }
 
 func New(u *url.URL) (*Store, error) {
@@ -129,17 +127,6 @@ func New(u *url.URL) (*Store, error) {
 		return nil, err
 	}
 
-	var timeout time.Duration
-
-	timeoutValue := u.Query().Get("timeout")
-	if timeoutValue != "" {
-		var err error
-		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
-			logger.Fatalf("could not parse timeout %s: %v", timeoutValue, err)
-			timeout = 0
-		}
-	}
-
 	expiration := uint32(0)
 	expirationValue := u.Query().Get("expiration")
 	if expirationValue != "" {
@@ -150,36 +137,16 @@ func New(u *url.URL) (*Store, error) {
 		expiration = uint32(expiration64)
 	}
 
-	var readMaxRetries int
-
-	retryValue := u.Query().Get("readMaxRetries")
-	if retryValue != "" {
-		var err error
-		if readMaxRetries, err = strconv.Atoi(retryValue); err != nil {
-			readMaxRetries = -1
-		}
-	}
-
-	var writeMaxRetries int
-
-	retryValue = u.Query().Get("writeMaxRetries")
-	if retryValue != "" {
-		var err error
-		if writeMaxRetries, err = strconv.Atoi(retryValue); err != nil {
-			writeMaxRetries = -1
-		}
-	}
+	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	return &Store{
-		u:               u,
-		client:          client,
-		namespace:       namespace,
-		logger:          logger,
-		blockHeight:     0,
-		expiration:      expiration,
-		timeout:         timeout,
-		readMaxRetries:  readMaxRetries,
-		writeMaxRetries: writeMaxRetries,
+		u:           u,
+		client:      client,
+		namespace:   namespace,
+		logger:      logger,
+		blockHeight: 0,
+		expiration:  expiration,
+		dbTimeout:   time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}, nil
 }
 
@@ -224,7 +191,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	}
 
 	bin := aerospike.NewBin("bin", "value")
-	err = s.client.PutBins(s.createWritePolicy(0, math.MaxUint32), key, bin)
+	err = s.client.PutBins(util.GetAerospikeWritePolicy(0, math.MaxUint32), key, bin)
 	if err != nil {
 		return -2, details, err
 	}
@@ -252,7 +219,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		return nil, aErr
 	}
 
-	policy := s.createReadPolicy()
+	policy := util.GetAerospikeReadPolicy()
 
 	start := time.Now()
 	value, aErr := s.client.Get(policy, key, "txid", "locktime")
@@ -299,13 +266,13 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 // Store stores the utxos of the tx in aerospike
 // the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
 func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	if s.timeout > 0 {
+	if s.dbTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
 		defer cancel()
 	}
 
-	policy := s.createWritePolicy(0, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
@@ -382,7 +349,13 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	return nil
 }
 
-func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
+	if s.dbTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
+		defer cancel()
+	}
+
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -392,7 +365,7 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 
 	//expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
 
-	policy := s.createWritePolicy(0, s.expiration)
+	policy := util.GetAerospikeWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	policy.FilterExpression = aerospike.ExpAnd(
@@ -415,14 +388,20 @@ func (s *Store) Spend(_ context.Context, spends []*utxostore.Spend) (err error) 
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
-	for _, spend := range spends {
-		if err := s.spendUtxo(policy, spend); err != nil {
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(spends))
+		default:
 
-			// revert the spent utxos
-			_ = s.UnSpend(context.Background(), spentSpends)
-			return err
-		} else {
-			spentSpends = append(spentSpends, spend)
+			if err := s.spendUtxo(policy, spend); err != nil {
+
+				// revert the spent utxos
+				_ = s.UnSpend(context.Background(), spentSpends)
+				return err
+			} else {
+				spentSpends = append(spentSpends, spend)
+			}
 		}
 	}
 
@@ -485,9 +464,21 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 }
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err error) {
-	for _, spend := range spends {
-		if err = s.unSpend(ctx, spend); err != nil {
-			return err
+	if s.dbTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.dbTimeout)
+		defer cancel()
+	}
+
+	for i, spend := range spends {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(spends))
+		default:
+
+			if err = s.unSpend(ctx, spend); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -503,7 +494,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	}
 
 	start := time.Now()
-	value, getErr := s.client.Get(s.createReadPolicy(), key, "locktime")
+	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "locktime")
 	if getErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", err.Error()).Inc()
 		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v\n", time.Since(start).String(), err)
@@ -514,7 +505,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		nLockTime = 0
 	}
 
-	policy := s.createWritePolicy(2, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(2, math.MaxUint32)
 
 	startDelete := time.Now()
 	_, err = s.client.Delete(policy, key)
@@ -530,7 +521,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
-	policy := s.createWritePolicy(0, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {
@@ -558,27 +549,4 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 
 func (s *Store) DeleteSpends(_ bool) {
 	// noop
-}
-
-func (s *Store) createReadPolicy() *aerospike.BasePolicy {
-	policy := util.GetAerospikeReadPolicy()
-	if s.timeout > 0 {
-		policy.TotalTimeout = s.timeout
-	}
-	if s.readMaxRetries >= 0 {
-		policy.MaxRetries = s.readMaxRetries
-	}
-	return policy
-}
-
-func (s *Store) createWritePolicy(generation, expiration uint32) *aerospike.WritePolicy {
-	policy := util.GetAerospikeWritePolicy(generation, expiration)
-	if s.timeout > 0 {
-		policy.TotalTimeout = s.timeout
-	}
-	if s.writeMaxRetries >= 0 {
-		policy.MaxRetries = s.writeMaxRetries
-	}
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
-	return policy
 }

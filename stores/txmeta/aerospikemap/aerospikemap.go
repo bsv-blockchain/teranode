@@ -5,7 +5,6 @@ package aerospikemap
 import (
 	"context"
 	"net/url"
-	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
@@ -55,7 +54,6 @@ func init() {
 
 type Store struct {
 	client    *aerospike.Client
-	timeout   time.Duration
 	namespace string
 }
 
@@ -69,20 +67,9 @@ func New(u *url.URL) (*Store, error) {
 		return nil, err
 	}
 
-	var timeout time.Duration
-
-	timeoutValue := u.Query().Get("timeout")
-	if timeoutValue != "" {
-		var err error
-		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
-			timeout = 0
-		}
-	}
-
 	return &Store{
 		client:    client,
 		namespace: namespace,
-		timeout:   timeout,
 	}, nil
 }
 
@@ -101,13 +88,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 
 	var value *aerospike.Record
 
-	options := make([]util.AerospikeReadPolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeout(s.timeout))
-	}
-
-	readPolicy := util.GetAerospikeReadPolicy(options...)
+	readPolicy := util.GetAerospikeReadPolicy()
 	value, aeroErr = s.client.Get(readPolicy, key)
 	if aeroErr != nil {
 		return nil, aeroErr
@@ -173,7 +154,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, setName, hash[:])
