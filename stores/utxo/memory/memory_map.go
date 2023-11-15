@@ -27,6 +27,10 @@ func (mm *MapWithLocking) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (mm *MapWithLocking) GetBlockHeight() (uint32, error) {
+	return mm.BlockHeight, nil
+}
+
 func (mm *MapWithLocking) Get(hash *chainhash.Hash) (*UTXO, bool) {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()

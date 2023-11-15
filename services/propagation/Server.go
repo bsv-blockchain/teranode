@@ -403,6 +403,24 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 		_, _ = sb.WriteString(fmt.Sprintf("Validator: GOOD %d - %q\n", code, details))
 	}
 
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+	if localValidator {
+		blockHeight, err := ps.validator.GetBlockHeight()
+		if err != nil {
+			errs = append(errs, err)
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
+		} else {
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+		}
+
+		if blockHeight <= 0 {
+			errs = append(errs, errors.New("blockHeight <= 0"))
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
+		} else {
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+		}
+	}
+
 	if len(errs) > 0 {
 		return -1, sb.String(), errors.New("Health errors occurred")
 	}

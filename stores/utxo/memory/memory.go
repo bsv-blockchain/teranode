@@ -42,6 +42,10 @@ func (m *Memory) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *Memory) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *Memory) Health(_ context.Context) (int, string, error) {
 	return 0, "Memory Store", nil
 }

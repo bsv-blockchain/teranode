@@ -60,6 +60,10 @@ func (s *Scylla) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (s *Scylla) GetBlockHeight() (uint32, error) {
+	return s.getBlockHeight(), nil
+}
+
 func (s *Scylla) getBlockHeight() uint32 {
 	s.heightMutex.RLock()
 	defer s.heightMutex.RUnlock()

@@ -10,6 +10,7 @@ service ValidatorAPI {
   rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+  rpc GetBlockHeight(EmptyMessage) returns (GetBlockHeightResponse) {}
   rpc Subscribe (SubscribeRequest) returns (stream RejectedTxNotification) {}
 
 }
@@ -50,6 +51,11 @@ message ValidateTransactionError {
 message ValidateTransactionBatchResponse {
   bool valid = 1;
   repeated ValidateTransactionError reasons = 2;
+}
+
+// swagger:model GetBlockHeightResponse
+message GetBlockHeightResponse {
+  uint32 height = 1;
 }
 
 // swagger:model SubscribeRequest

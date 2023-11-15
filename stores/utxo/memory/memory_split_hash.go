@@ -38,6 +38,10 @@ func (m *SplitByHash) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *SplitByHash) GetBlockHeight() (uint32, error) {
+	return m.m[[1]byte{uint8(0)}].GetBlockHeight()
+}
+
 func (m *SplitByHash) Health(ctx context.Context) (int, string, error) {
 	return 0, "SplitByHash Store", nil
 }

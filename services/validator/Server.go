@@ -3,6 +3,7 @@ package validator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -193,10 +195,36 @@ func (v *Server) Stop(_ context.Context) error {
 func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
+		prometheusHealth.Inc()
 		stats.NewStat("Health", true).AddTime(start)
 	}()
 
-	prometheusHealth.Inc()
+	var sb strings.Builder
+	errs := make([]error, 0)
+
+	blockHeight, err := v.validator.GetBlockHeight()
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+	}
+
+	if blockHeight <= 0 {
+		errs = append(errs, errors.New("blockHeight <= 0"))
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+	}
+
+	if len(errs) > 0 {
+		return &validator_api.HealthResponse{
+			Ok:        false,
+			Details:   sb.String(),
+			Timestamp: uint32(time.Now().Unix()),
+		}, err
+	}
+
 	return &validator_api.HealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -308,6 +336,17 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	return &validator_api.ValidateTransactionBatchResponse{
 		Valid:   true,
 		Reasons: errReasons,
+	}, nil
+}
+
+func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error) {
+	blockHeight, err := v.validator.GetBlockHeight()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "cannot get block height: %v", err)
+	}
+
+	return &validator_api.GetBlockHeightResponse{
+		Height: blockHeight,
 	}, nil
 }
 

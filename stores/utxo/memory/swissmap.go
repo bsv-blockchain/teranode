@@ -38,6 +38,10 @@ func (m *SwissMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *SwissMap) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *SwissMap) Health(_ context.Context) (int, string, error) {
 	return 0, "SwissMap Store", nil
 }

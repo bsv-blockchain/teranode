@@ -82,6 +82,10 @@ func (v *Validator) Health(cntxt context.Context) (int, string, error) {
 	return 0, "LocalValidator", nil
 }
 
+func (v *Validator) GetBlockHeight() (height uint32, err error) {
+	return v.utxoStore.GetBlockHeight()
+}
+
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", stats)
 	defer func() {

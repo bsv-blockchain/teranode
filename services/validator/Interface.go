@@ -9,4 +9,5 @@ import (
 type Interface interface {
 	Health(ctx context.Context) (int, string, error)
 	Validate(ctx context.Context, tx *bt.Tx) error
+	GetBlockHeight() (uint32, error)
 }

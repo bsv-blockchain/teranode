@@ -156,6 +156,10 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	return nil
 }
 
+func (s *Store) GetBlockHeight() (uint32, error) {
+	return s.blockHeight, nil
+}
+
 func (s *Store) Health(ctx context.Context) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:
 

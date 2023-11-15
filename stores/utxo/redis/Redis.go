@@ -140,6 +140,10 @@ func (r *Redis) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (r *Redis) GetBlockHeight() (uint32, error) {
+	return r.currentBlockHeight, nil
+}
+
 func (r *Redis) getBlockHeight() uint32 {
 	r.heightMutex.RLock()
 	defer r.heightMutex.RUnlock()

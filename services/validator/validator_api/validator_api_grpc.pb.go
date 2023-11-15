@@ -23,6 +23,7 @@ const (
 	ValidatorAPI_ValidateTransaction_FullMethodName       = "/validator_api.ValidatorAPI/ValidateTransaction"
 	ValidatorAPI_ValidateTransactionBatch_FullMethodName  = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
 	ValidatorAPI_ValidateTransactionStream_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionStream"
+	ValidatorAPI_GetBlockHeight_FullMethodName            = "/validator_api.ValidatorAPI/GetBlockHeight"
 	ValidatorAPI_Subscribe_FullMethodName                 = "/validator_api.ValidatorAPI/Subscribe"
 )
 
@@ -35,6 +36,7 @@ type ValidatorAPIClient interface {
 	ValidateTransaction(ctx context.Context, in *ValidateTransactionRequest, opts ...grpc.CallOption) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionStreamClient, error)
+	GetBlockHeight(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockHeightResponse, error)
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error)
 }
 
@@ -107,6 +109,15 @@ func (x *validatorAPIValidateTransactionStreamClient) CloseAndRecv() (*ValidateT
 	return m, nil
 }
 
+func (c *validatorAPIClient) GetBlockHeight(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockHeightResponse, error) {
+	out := new(GetBlockHeightResponse)
+	err := c.cc.Invoke(ctx, ValidatorAPI_GetBlockHeight_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *validatorAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error) {
 	stream, err := c.cc.NewStream(ctx, &ValidatorAPI_ServiceDesc.Streams[1], ValidatorAPI_Subscribe_FullMethodName, opts...)
 	if err != nil {
@@ -148,6 +159,7 @@ type ValidatorAPIServer interface {
 	ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error
+	GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error)
 	Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error
 	mustEmbedUnimplementedValidatorAPIServer()
 }
@@ -167,6 +179,9 @@ func (UnimplementedValidatorAPIServer) ValidateTransactionBatch(context.Context,
 }
 func (UnimplementedValidatorAPIServer) ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ValidateTransactionStream not implemented")
+}
+func (UnimplementedValidatorAPIServer) GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeight not implemented")
 }
 func (UnimplementedValidatorAPIServer) Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
@@ -264,6 +279,24 @@ func (x *validatorAPIValidateTransactionStreamServer) Recv() (*ValidateTransacti
 	return m, nil
 }
 
+func _ValidatorAPI_GetBlockHeight_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ValidatorAPIServer).GetBlockHeight(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidatorAPI_GetBlockHeight_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidatorAPIServer).GetBlockHeight(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ValidatorAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -303,6 +336,10 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateTransactionBatch",
 			Handler:    _ValidatorAPI_ValidateTransactionBatch_Handler,
+		},
+		{
+			MethodName: "GetBlockHeight",
+			Handler:    _ValidatorAPI_GetBlockHeight_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

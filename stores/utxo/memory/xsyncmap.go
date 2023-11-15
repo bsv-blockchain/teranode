@@ -49,6 +49,10 @@ func (m *XsyncMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *XsyncMap) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *XsyncMap) Health(_ context.Context) (int, string, error) {
 	return 0, "XsyncMap Store", nil
 }
