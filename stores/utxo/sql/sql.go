@@ -274,7 +274,10 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
+				}
+				return fmt.Errorf("[sql.go.Store] context cancelled, managed to get through %d of %d", i, len(utxoHashes))
 			default:
 				_, err = s.db.ExecContext(ctx, q, valuesArgs...)
 				if err != nil {
@@ -350,6 +353,9 @@ func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) error 
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("[sql.go.UnSpend] context cancelled")
+			}
 			return fmt.Errorf("[sql.go.UnSpend] context cancelled")
 		default:
 			if err := s.unSpend(ctx, spend); err != nil {

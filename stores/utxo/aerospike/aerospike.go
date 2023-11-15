@@ -289,7 +289,10 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	for i, hash := range utxoHashes {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(utxoHashes))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(utxoHashes))
+			}
+			return fmt.Errorf("context cancelled storing %d of %d aerospike utxos", i, len(utxoHashes))
 		default:
 			err = s.storeUtxo(policy, hash, storeLockTime)
 			if err != nil {
@@ -391,7 +394,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(spends))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timeout spending %d of %d aerospike utxos", i, len(spends))
+			}
+			return fmt.Errorf("context cancelled spending %d of %d aerospike utxos", i, len(spends))
 		default:
 
 			if err := s.spendUtxo(policy, spend); err != nil {
@@ -473,7 +479,10 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout storing %d of %d aerospike utxos", i, len(spends))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timeout un-spending %d of %d aerospike utxos", i, len(spends))
+			}
+			return fmt.Errorf("context cancelled un-spending %d of %d aerospike utxos", i, len(spends))
 		default:
 
 			if err = s.unSpend(ctx, spend); err != nil {

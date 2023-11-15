@@ -328,7 +328,11 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
+			}
+			return fmt.Errorf("context cancelled spending %d of %d utxos", i, len(spends))
+
 		default:
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
@@ -446,7 +450,10 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout unspending %d of %d utxos", i, len(spends))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("timeout un-spending %d of %d utxos", i, len(spends))
+			}
+			return fmt.Errorf("context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
 			if err = s.unSpend(ctx, spend); err != nil {
 				return err
@@ -519,7 +526,10 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospi
 	for i, utxoHash := range utxoHashes {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timeout storing %d of %d utxos", i, len(utxoHashes))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("timeout getBinsToStore#1 %d of %d utxos", i, len(utxoHashes))
+			}
+			return nil, fmt.Errorf("context cancelled getBinsToStore#1 %d of %d utxos", i, len(utxoHashes))
 		default:
 			utxos[utxoHash.String()] = aerospike.NewNullValue()
 		}
@@ -529,7 +539,10 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospi
 	for i, input := range tx.Inputs {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timeout storing %d of %d utxos", i, len(tx.Inputs))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("timeout getBinsToStore#2 %d of %d utxos", i, len(tx.Inputs))
+			}
+			return nil, fmt.Errorf("context cancelled getBinsToStore#2 %d of %d utxos", i, len(tx.Inputs))
 		default:
 			parentTxIDs = append(parentTxIDs, input.PreviousTxIDChainHash().CloneBytes())
 		}
