@@ -366,9 +366,14 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	}
 
 	// process coinbase into utxos
-	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
-	if err != nil {
-		return fmt.Errorf("could not process coinbase %+v", err)
+	// first check whether we are in sync with the blob server, otherwise we wait for the next block
+	_, blobBestBlockHeight, _ := c.blobServerClient.GetBestBlockHeader(ctx)
+	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
+	if blobBestBlockHeight >= coinbaseBestBlockMeta.Height {
+		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+		if err != nil {
+			return fmt.Errorf("could not process coinbase %+v", err)
+		}
 	}
 
 	return nil
