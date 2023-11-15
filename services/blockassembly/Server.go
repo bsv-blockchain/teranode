@@ -370,6 +370,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		//traceSpan.Finish()
 		stat.AddTime(startTime)
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(util.TimeSince(startTime))
 	}()
 

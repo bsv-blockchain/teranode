@@ -13,6 +13,7 @@ type LockFreeQueue struct {
 	head         atomic.Pointer[txIDAndFee]
 	tail         *txIDAndFee
 	previousTail *txIDAndFee
+	queueLength  atomic.Int64
 	timeDelay    time.Duration
 }
 
@@ -23,12 +24,17 @@ func NewLockFreeQueue(timeDelay time.Duration) *LockFreeQueue {
 		head:         atomic.Pointer[txIDAndFee]{},
 		tail:         firstTail,
 		previousTail: firstTail,
+		queueLength:  atomic.Int64{},
 		timeDelay:    timeDelay,
 	}
 
 	lf.head.Store(nil)
 
 	return lf
+}
+
+func (q *LockFreeQueue) length() int64 {
+	return q.queueLength.Load()
 }
 
 // Enqueue adds a series of Request to the queue
@@ -41,6 +47,7 @@ func (q *LockFreeQueue) enqueue(v *txIDAndFee) {
 		return
 	}
 	prev.next.Store(v)
+	q.queueLength.Add(1)
 }
 
 // Dequeue removes a Request from the queue
@@ -67,6 +74,7 @@ func (q *LockFreeQueue) dequeue() *txIDAndFee {
 	}
 
 	q.previousTail = next
+	q.queueLength.Add(-1)
 	return next
 }
 

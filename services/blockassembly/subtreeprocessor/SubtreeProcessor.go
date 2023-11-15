@@ -164,7 +164,7 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 				for {
 					txReq = stp.queue.dequeue()
 					if txReq == nil || nrProcessed > batcherSize {
-						time.Sleep(10 * time.Millisecond)
+						time.Sleep(1 * time.Millisecond)
 						break
 					}
 
@@ -194,6 +194,10 @@ func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeade
 
 func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
+}
+
+func (stp *SubtreeProcessor) QueueLength() int64 {
+	return stp.queue.length()
 }
 
 func (stp *SubtreeProcessor) SubtreeCount() int {
@@ -312,6 +316,7 @@ func (stp *SubtreeProcessor) setTxCount() {
 		stp.txCount.Add(uint64(subtree.Length()))
 	}
 	stp.txCount.Add(uint64(stp.currentSubtree.Length()))
+	stp.txCount.Add(uint64(stp.queue.length()))
 }
 
 // moveDownBlock adds all transactions that are in the block given to the current subtrees
