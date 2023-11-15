@@ -139,27 +139,33 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		return fmt.Errorf("error registering tx in meta utxoStore: %v", err)
 	}
 
+	// decouple the tracing context to not cancel the context when finalize the block assembly
+	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
+	defer setSpan.Finish()
+
 	if !v.blockAssemblyDisabled {
 		// first we send the tx to the block assembler
-		if err = v.sendToBlockAssembler(traceSpan, &blockassembly.Data{
+		if err = v.sendToBlockAssembler(setSpan, &blockassembly.Data{
 			TxIDChainHash: tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()),
 			LockTime:      tx.LockTime,
 		}, spentUtxos); err != nil {
-			if err := v.txMetaStore.Delete(traceSpan.Ctx, tx.TxIDChainHash()); err != nil {
+			if err := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
 				v.logger.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 			}
 
 			e := fmt.Errorf("error sending tx to block assembler: %v", err)
-			v.reverseSpends(traceSpan, spentUtxos)
-			traceSpan.RecordError(err)
+			v.reverseSpends(setSpan, spentUtxos)
+			setSpan.RecordError(err)
 			return e
 		}
 	}
 
 	// then we store the new utxos from the tx
-	err = v.storeUtxos(traceSpan.Ctx, tx)
+	err = v.storeUtxos(setSpan.Ctx, tx)
 	if err != nil {
 		return err
 	}
