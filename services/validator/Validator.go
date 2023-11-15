@@ -147,9 +147,10 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 				v.logger.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), err)
 			}
 
+			e := fmt.Errorf("error sending tx to block assembler (disabled): %v", err)
 			v.reverseSpends(traceSpan, spentUtxos)
 			traceSpan.RecordError(err)
-			return fmt.Errorf("error sending tx to block assembler (disabled): %v", err)
+			return e
 		}
 	}
 
@@ -285,9 +286,10 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		}
 	} else {
 		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes); err != nil {
+			e := fmt.Errorf("error sending tx to block assembler: %v", err)
 			v.reverseSpends(traceSpan, reservedUtxos)
-			traceSpan.RecordError(err)
-			return fmt.Errorf("error sending tx to block assembler: %v", err)
+			traceSpan.RecordError(err) // modifies err and sets it to nil?
+			return e
 		}
 	}
 
