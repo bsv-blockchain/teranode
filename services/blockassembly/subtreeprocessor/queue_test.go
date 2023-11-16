@@ -154,6 +154,8 @@ func Test_queueLarge(t *testing.T) {
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10_000_000, items)
 
+	runtime.GC()
+
 	enqueueItems(t, q, 10_000, 1_000)
 
 	startTime = time.Now()
@@ -189,13 +191,12 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 						Fee:         uint64(u),
 						SizeInBytes: 0,
 					},
-					waitCh: nil,
 				})
 			}
 		}(n)
 	}
 	wg.Wait()
-	t.Logf("Time: %s\n", time.Since(startTime))
+	t.Logf("Time queue %d items: %s\n", threads*iter, time.Since(startTime))
 }
 
 func printAlloc() string {

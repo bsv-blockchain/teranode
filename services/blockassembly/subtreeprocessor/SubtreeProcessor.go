@@ -173,9 +173,6 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					}
-					if txReq.waitCh != nil {
-						utils.SafeSend(txReq.waitCh, struct{}{})
-					}
 
 					nrProcessed++
 					stp.txCount.Add(1)
