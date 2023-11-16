@@ -146,7 +146,7 @@ func (f *Faucet) faucetHandler(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Invalid request")
 	}
 
-	tx, err := f.coinbaseClient.RequestFunds(c.Request().Context(), payload.Address)
+	tx, err := f.coinbaseClient.RequestFunds(c.Request().Context(), payload.Address, true)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
