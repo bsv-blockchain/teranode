@@ -231,16 +231,8 @@ func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification bo
 }
 
 // Add adds a tx hash to a channel
-func (stp *SubtreeProcessor) Add(node *util.SubtreeNode, optionalWaitCh ...chan struct{}) {
-	var waitCh chan struct{}
-	if len(optionalWaitCh) > 0 {
-		waitCh = optionalWaitCh[0]
-	}
-	//stp.logger.Debugf("[SubtreeProcessor] enqueue tx: %s", node.Hash.String())
-	stp.queue.enqueue(&txIDAndFee{
-		node:   node,
-		waitCh: waitCh,
-	})
+func (stp *SubtreeProcessor) Add(node *util.SubtreeNode) {
+	stp.queue.enqueue(&txIDAndFee{node: node})
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {

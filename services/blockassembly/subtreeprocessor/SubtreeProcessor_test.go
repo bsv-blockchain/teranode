@@ -79,16 +79,13 @@ func TestRotate(t *testing.T) {
 
 	stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
 
-	waitCh := make(chan struct{})
-	defer close(waitCh)
-
 	for _, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-		<-waitCh
+		stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 	}
+	time.Sleep(10 * time.Millisecond)
 
 	assert.Equal(t, 0, stp.currentSubtree.Length())
 
@@ -98,8 +95,9 @@ func TestRotate(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	require.NoError(t, err)
 
-	stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-	<-waitCh
+	stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
+
+	time.Sleep(10 * time.Millisecond)
 
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 
@@ -142,9 +140,6 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		waitCh := make(chan struct{})
-		defer close(waitCh)
-
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
 		stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
 		for i, txid := range txIDs {
@@ -154,8 +149,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-				<-waitCh
+				stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 			}
 		}
 		wg.Wait()
@@ -174,9 +168,6 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		waitCh := make(chan struct{})
-		defer close(waitCh)
-
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 		stp := NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, newSubtreeChan)
 		for i, txid := range txIDs {
@@ -186,8 +177,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-				<-waitCh
+				stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 			}
 		}
 		wg.Wait()
@@ -240,9 +230,6 @@ func TestMoveUpBlock(t *testing.T) {
 		}
 	}()
 
-	waitCh := make(chan struct{})
-	defer close(waitCh)
-
 	subtreeStore, _ := null.New()
 	utxosStore := memory.New(true)
 
@@ -254,8 +241,7 @@ func TestMoveUpBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-			<-waitCh
+			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 		}
 	}
 	wg.Wait()
@@ -319,9 +305,6 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		}
 	}()
 
-	waitCh := make(chan struct{})
-	defer close(waitCh)
-
 	subtreeStore, _ := null.New()
 	utxosStore := memory.New(true)
 
@@ -333,8 +316,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-			<-waitCh
+			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 		}
 	}
 	wg.Wait()
@@ -397,9 +379,6 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 		}
 	}()
 
-	waitCh := make(chan struct{})
-	defer close(waitCh)
-
 	subtreeStore, _ := null.New()
 	utxosStore := memory.New(true)
 
@@ -411,8 +390,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-			<-waitCh
+			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 		}
 	}
 	wg.Wait()
@@ -475,9 +453,6 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		}
 	}()
 
-	waitCh := make(chan struct{})
-	defer close(waitCh)
-
 	subtreeStore, _ := null.New()
 	utxosStore := memory.New(true)
 
@@ -489,8 +464,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1}, waitCh)
-			<-waitCh
+			stp.Add(&util.SubtreeNode{Hash: *hash, Fee: 1})
 		}
 	}
 	wg.Wait()
@@ -749,7 +723,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(&util.SubtreeNode{Hash: *txHashes[i], Fee: 1}, nil)
+		stp.Add(&util.SubtreeNode{Hash: *txHashes[i], Fee: 1})
 	}
 }
 
