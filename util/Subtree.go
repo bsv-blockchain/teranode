@@ -22,8 +22,8 @@ type Subtree struct {
 	Fees             uint64
 	SizeInBytes      uint64
 	FeeHash          chainhash.Hash
-	Nodes            []*SubtreeNode
-	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
+	Nodes            []SubtreeNode
+	ConflictingNodes []chainhash.Hash // conflicting nodes need to be checked when doing block assembly
 
 	// temporary (calculated) variables
 	rootHash     *chainhash.Hash
@@ -36,7 +36,7 @@ type Subtree struct {
 func NewTree(height int) *Subtree {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &Subtree{
-		Nodes:        make([]*SubtreeNode, 0, treeSize),
+		Nodes:        make([]SubtreeNode, 0, treeSize),
 		Height:       height,
 		FeeHash:      chainhash.Hash{},
 		treeSize:     treeSize,
@@ -74,8 +74,8 @@ func (st *Subtree) Duplicate() *Subtree {
 		Fees:             st.Fees,
 		SizeInBytes:      st.SizeInBytes,
 		FeeHash:          st.FeeHash,
-		Nodes:            make([]*SubtreeNode, len(st.Nodes)),
-		ConflictingNodes: make([]*chainhash.Hash, len(st.ConflictingNodes)),
+		Nodes:            make([]SubtreeNode, len(st.Nodes)),
+		ConflictingNodes: make([]chainhash.Hash, len(st.ConflictingNodes)),
 		rootHash:         st.rootHash,
 		treeSize:         st.treeSize,
 		feeBytes:         make([]byte, 8),
@@ -102,13 +102,13 @@ func (st *Subtree) IsComplete() bool {
 
 func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
 	if len(st.Nodes) < 1 {
-		st.Nodes = append(st.Nodes, &SubtreeNode{
+		st.Nodes = append(st.Nodes, SubtreeNode{
 			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
 		})
 	} else {
-		st.Nodes[0] = &SubtreeNode{
+		st.Nodes[0] = SubtreeNode{
 			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
@@ -121,7 +121,7 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes
 	return st.RootHash()
 }
 
-func (st *Subtree) AddSubtreeNode(node *SubtreeNode) error {
+func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
 	}
@@ -143,7 +143,7 @@ func (st *Subtree) AddSubtreeNode(node *SubtreeNode) error {
 	return nil
 }
 
-func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) error {
+func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
 	}
@@ -157,8 +157,8 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64)
 	//	st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
 	//}
 
-	st.Nodes = append(st.Nodes, &SubtreeNode{
-		Hash:        *node,
+	st.Nodes = append(st.Nodes, SubtreeNode{
+		Hash:        node,
 		Fee:         fee,
 		SizeInBytes: sizeInBytes,
 	})
@@ -185,9 +185,9 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
-func (st *Subtree) Difference(ids TxMap) ([]*SubtreeNode, error) {
+func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
-	diff := make([]*SubtreeNode, 0, 1_000)
+	diff := make([]SubtreeNode, 0, 1_000)
 	for _, node := range st.Nodes {
 		if !ids.Exists(node.Hash) {
 			diff = append(diff, node)
@@ -437,7 +437,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
 
 	// read leaves
-	st.Nodes = make([]*SubtreeNode, numLeaves)
+	st.Nodes = make([]SubtreeNode, numLeaves)
 	var hash *chainhash.Hash
 	for i := uint64(0); i < numLeaves; i++ {
 		hash, err = chainhash.NewHash(buf.Next(32))
@@ -451,7 +451,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		sizeBytes := buf.Next(8)
 		sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
 
-		st.Nodes[i] = &SubtreeNode{
+		st.Nodes[i] = SubtreeNode{
 			Hash:        *hash,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
@@ -465,12 +465,14 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	}
 
 	// read conflicting nodes
-	st.ConflictingNodes = make([]*chainhash.Hash, numConflictingLeaves)
+	var conflictingHash *chainhash.Hash
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
 	for i := uint64(0); i < numConflictingLeaves; i++ {
-		st.ConflictingNodes[i], err = chainhash.NewHash(buf.Next(32))
+		conflictingHash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return fmt.Errorf("unable to read conflicting node: %v", err)
 		}
+		st.ConflictingNodes[i] = *conflictingHash
 	}
 
 	// calculate rootHash and compare with given rootHash

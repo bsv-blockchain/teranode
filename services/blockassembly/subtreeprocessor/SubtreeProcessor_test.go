@@ -574,7 +574,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		if idx == 0 {
 			subtree.ReplaceRootNode(coinbaseHash, 0, 0)
 		}
-		err = topTree.AddNode(subtree.RootHash(), 1, 0)
+		err = topTree.AddNode(*subtree.RootHash(), 1, 0)
 		require.NoError(t, err)
 	}
 
@@ -647,7 +647,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		for idx, txid := range txIDs {
 			hash, _ := chainhash.NewHashFromStr(txid)
 			hashes[idx] = hash
-			_ = subtreeProcessor.addNode(&util.SubtreeNode{Hash: *hash, Fee: 1}, false)
+			_ = subtreeProcessor.addNode(util.SubtreeNode{Hash: *hash, Fee: 1}, false)
 		}
 
 		assert.Equal(t, 4, len(subtreeProcessor.chainedSubtrees))

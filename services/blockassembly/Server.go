@@ -538,7 +538,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	var sizeInBytes uint64
 
 	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
-	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
+	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
@@ -556,7 +556,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 			}
 
 			rootHash := subtreesInJob[i].RootHash()
-			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+			subtreeHashes[i] = chainhash.Hash(rootHash[:])
 
 			transactionCount += uint64(subtree.Length())
 			sizeInBytes += subtree.SizeInBytes

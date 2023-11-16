@@ -66,7 +66,7 @@ func Test_main(t *testing.T) {
 				b := make([]byte, 32)
 				binary.LittleEndian.PutUint64(b, uint64(n))
 				hash := chainhash.Hash(b)
-				_ = subtree.AddNode(&hash, uint64(n), uint64(n))
+				_ = subtree.AddNode(hash, uint64(n), uint64(n))
 			}
 		}
 	}()
@@ -102,7 +102,7 @@ func Test_main_batched(t *testing.T) {
 					b := make([]byte, 32)
 					binary.LittleEndian.PutUint64(b, uint64(n))
 					hash := chainhash.Hash(b)
-					_ = subtree.AddNode(&hash, uint64(n), uint64(n))
+					_ = subtree.AddNode(hash, uint64(n), uint64(n))
 				}
 			}
 		}

@@ -310,7 +310,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
 		topTree := util.NewTree(height)
 		for _, subtree := range subtrees {
-			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}

@@ -26,10 +26,10 @@ func TestRootHash(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
 	hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
 	hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
-	_ = st.AddNode(hash3, 111, 0)
-	_ = st.AddNode(hash4, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
+	_ = st.AddNode(*hash3, 111, 0)
+	_ = st.AddNode(*hash4, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
@@ -45,10 +45,10 @@ func TestRootHashSimon(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
-	_ = st.AddNode(hash3, 111, 0)
-	_ = st.AddNode(hash4, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
+	_ = st.AddNode(*hash3, 111, 0)
+	_ = st.AddNode(*hash4, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", rootHash.String())
@@ -62,8 +62,8 @@ func TestTwoTransactions(t *testing.T) {
 
 	hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
 	hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", rootHash.String())
@@ -87,7 +87,7 @@ func TestSubtree_GetMerkleProof(t *testing.T) {
 	var txHash *chainhash.Hash
 	for _, txID := range txIDS {
 		txHash, _ = chainhash.NewHashFromStr(txID)
-		_ = st.AddNode(txHash, 101, 0)
+		_ = st.AddNode(*txHash, 101, 0)
 	}
 
 	proof, err := st.GetMerkleProof(1)
@@ -122,10 +122,10 @@ func Test_Serialize(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-		_ = st.AddNode(hash1, 111, 0)
-		_ = st.AddNode(hash2, 111, 0)
-		_ = st.AddNode(hash3, 111, 0)
-		_ = st.AddNode(hash4, 111, 0)
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
 
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
@@ -154,13 +154,13 @@ func Test_Serialize(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-		_ = st.AddNode(hash1, 111, 0)
-		_ = st.AddNode(hash2, 111, 0)
-		_ = st.AddNode(hash3, 111, 0)
-		_ = st.AddNode(hash4, 111, 0)
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
 
-		st.ConflictingNodes = []*chainhash.Hash{
-			hash3,
+		st.ConflictingNodes = []chainhash.Hash{
+			*hash3,
 		}
 
 		serializedBytes, err := st.Serialize()
@@ -200,7 +200,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 
 		subtree := NewTreeByLeafCount(8)
 		for _, hash := range hashes {
-			_ = subtree.AddNode(hash, 111, 0)
+			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
 		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
@@ -238,7 +238,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		var txHash *chainhash.Hash
 		for _, txID := range txIDS {
 			txHash, _ = chainhash.NewHashFromStr(txID)
-			_ = st.AddNode(txHash, 101, 0)
+			_ = st.AddNode(*txHash, 101, 0)
 		}
 
 		merkleStore, err := st.BuildMerkleTreeStoreFromBytes()
@@ -276,7 +276,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 
 		subtree := NewTreeByLeafCount(8)
 		for _, hash := range hashes {
-			_ = subtree.AddNode(hash, 111, 0)
+			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
 		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
@@ -345,7 +345,7 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = st.AddNode(hashes[i], 111, 0)
+		_ = st.AddNode(*hashes[i], 111, 0)
 	}
 }
 
@@ -356,7 +356,7 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 		// int to bytes
 		var bb [32]byte
 		binary.LittleEndian.PutUint32(bb[:], uint32(i))
-		_ = st.AddNode((*chainhash.Hash)(&bb), 111, 234)
+		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
 	}
 
 	b.ResetTimer()
