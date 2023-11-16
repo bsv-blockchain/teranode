@@ -121,10 +121,28 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	// Experimental QUIC server - to test throughput at scale
 	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
 	if ok {
-		err = ps.quicServer(ctx, quicAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start QUIC server: %v", err)
-		}
+		// Create an error channel
+		errChan := make(chan error, 1) // Buffered channel
+
+		// Context for the QUIC server
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Run the QUIC server in a goroutine
+		go func() {
+			err := ps.quicServer(ctx, quicAddress)
+			if err != nil {
+				errChan <- err // Send any errors to the error channel
+			}
+			close(errChan) // Close the channel when done
+		}()
+
+		go func() {
+			if err := <-errChan; err != nil {
+				ps.logger.Errorf("failed to start QUIC server: %v", err)
+			}
+		}()
+
 	}
 
 	ps.status.Store(2)
@@ -288,12 +306,13 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
-
 	config := &quic.Config{
-		MaxIncomingStreams:         10000,         // for example
-		MaxStreamReceiveWindow:     4 * (1 << 20), // 4 MB for example
-		MaxIncomingUniStreams:      10000,
-		MaxConnectionReceiveWindow: 4 * (1 << 20),
+		MaxIncomingStreams:         1000,          // for example
+		MaxStreamReceiveWindow:     8 * (1 << 20), // 4 MB for example
+		MaxIncomingUniStreams:      1000,
+		MaxConnectionReceiveWindow: 8 * (1 << 20),
+		KeepAlivePeriod:            30 * time.Second,
+		MaxIdleTimeout:             5 * time.Minute,
 		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
 	}
 	listener, err := quic.ListenAddr(quicAddresses, ps.generateTLSConfig(), config)
@@ -301,22 +320,25 @@ func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses strin
 		ps.logger.Fatalf("error starting QUIC listener: %v", err)
 	}
 
-	go func() {
+	for {
 		sess, err := listener.Accept(ctx)
 		if err != nil {
 			ps.logger.Errorf("error accepting new QUIC connection: %v", err)
-			return
+			return err
 		}
-		for {
+		go func() {
+			defer sess.CloseWithError(0, "closing QUIC session")
 			stream, err := sess.AcceptStream(ctx)
 			if err != nil {
 				return
 			}
 			ps.handleStream(ctx, stream)
-		}
-	}()
+			ps.logger.Infof("closing QUIC stream %s", stream.StreamID().StreamNum())
+		}()
+	}
 
-	return nil
+	// return nil
+
 }
 
 func (ps *PropagationServer) handleStream(ctx context.Context, stream quic.Stream) {

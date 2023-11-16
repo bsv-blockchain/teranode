@@ -33,7 +33,7 @@ func InitDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 		go func() {
 			defer wg.Done()
 			if err := h.Connect(ctx, *peerinfo); err != nil {
-				fmt.Println("Bootstrap warning:", err)
+				fmt.Println("DHT Bootstrap warning:", err)
 			}
 		}()
 	}
