@@ -96,7 +96,7 @@ jobs:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/v')
+    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
       region: eu-north-1
 
