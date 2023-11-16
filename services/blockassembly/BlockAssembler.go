@@ -86,13 +86,13 @@ func (b *BlockAssembler) SubtreeCount() int {
 	return b.subtreeProcessor.SubtreeCount()
 }
 
-func (b *BlockAssembler) startChannelListeners(context context.Context) {
+func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	var err error
 
 	// start a subscription for the best block header
 	// this will be used to reset the subtree processor when a new block is mined
 	go func() {
-		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context, "BlockAssembler")
+		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
@@ -105,26 +105,26 @@ func (b *BlockAssembler) startChannelListeners(context context.Context) {
 
 		for {
 			select {
-			case <-context.Done():
+			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
 				return
 
 			case responseCh := <-b.miningCandidateCh:
-				start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
+				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
 				miningCandidate, subtrees, err := b.getMiningCandidate()
 				responseCh <- &miningCandidateResponse{
 					miningCandidate: miningCandidate,
 					subtrees:        subtrees,
 					err:             err,
 				}
-				stat.AddTime(start)
+				// stat.AddTime(start)
 
 			case notification := <-b.blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
-					_, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
+					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
 					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
