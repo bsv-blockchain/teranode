@@ -9,6 +9,7 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
@@ -316,7 +317,9 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	}
 
 	if _, err = w.distributor.SendTransaction(ctx, tx); err != nil {
-		return tx, fmt.Errorf("error sending transaction: %v", err)
+		// return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
+		utxoHash, _ := util.UTXOHashFromInput(tx.Inputs[0])
+		w.logger.Fatalf("error sending transaction: #%d txId: %s parentTxId: %s vout: %s hash: %s", counter.Load(), tx.TxIDChainHash().String(), utxo.TxIDHash.String(), utxo.Vout, utxoHash.String())
 	}
 
 	return tx, nil
