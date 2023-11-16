@@ -58,14 +58,15 @@ func NewClientWithAddress(ctx context.Context, logger utils.Logger, address stri
 	}, nil
 }
 
-func (c Client) Health(ctx context.Context) (*coinbase_api.HealthResponse, error) {
+func (c *Client) Health(ctx context.Context) (*coinbase_api.HealthResponse, error) {
 	return c.client.Health(ctx, &emptypb.Empty{})
 }
 
 // RequestFunds implements ClientI.
-func (c *Client) RequestFunds(ctx context.Context, address string) (*bt.Tx, error) {
+func (c *Client) RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error) {
 	res, err := c.client.RequestFunds(ctx, &coinbase_api.RequestFundsRequest{
-		Address: address,
+		Address:           address,
+		DisableDistribute: disableDistribute,
 	})
 
 	if err != nil {

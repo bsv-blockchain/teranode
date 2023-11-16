@@ -7,5 +7,5 @@ import (
 )
 
 type ClientI interface {
-	RequestFunds(ctx context.Context, address string) (*bt.Tx, error)
+	RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error)
 }

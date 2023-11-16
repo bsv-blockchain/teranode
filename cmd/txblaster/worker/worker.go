@@ -192,9 +192,14 @@ func (w *Worker) Init(ctx context.Context) error {
 	timeStart := time.Now()
 	w.startTime = timeStart
 
-	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString)
+	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString, true)
 	if err != nil {
-		return fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
+		return fmt.Errorf("error getting utxo from coinbaseTracker %s: %v", w.address.AddressString, err)
+	}
+
+	_, err = w.distributor.SendTransaction(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s with %d outputs", tx.TxIDChainHash().String(), len(tx.Outputs))

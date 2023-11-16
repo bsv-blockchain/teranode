@@ -282,7 +282,7 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-		return fmt.Errorf("failed to get fees and utxo hashes: %v", err)
+		return fmt.Errorf("failed to get fees and utxo hashes %s: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	storeLockTime := tx.LockTime

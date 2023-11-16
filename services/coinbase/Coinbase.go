@@ -544,7 +544,7 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 	}
 
 	if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
-		return fmt.Errorf("error sending splitting transaction: %v", err)
+		return fmt.Errorf("error sending splitting transaction %s: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	// Insert the spendable utxos....
@@ -837,7 +837,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 
 	for vout, output := range tx.Outputs {
 		if _, err := stmt.ExecContext(ctx, hash, vout, output.LockingScript, output.Satoshis); err != nil {
-			return fmt.Errorf("could not insert spendable utxo: %+v", err)
+			return fmt.Errorf("could not insert spendable utxo %s: %+v", tx.TxIDChainHash().String(), err)
 		}
 	}
 
