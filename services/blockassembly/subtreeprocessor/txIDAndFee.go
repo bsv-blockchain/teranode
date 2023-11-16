@@ -8,7 +8,7 @@ import (
 )
 
 type txIDAndFee struct {
-	node *util.SubtreeNode
+	node util.SubtreeNode
 	time int64
 	next atomic.Pointer[txIDAndFee]
 }

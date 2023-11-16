@@ -47,7 +47,7 @@ func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.Blo
 		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
 	}
 
-	if err = f.ba.blockAssembler.AddTx(&util.SubtreeNode{
+	if err = f.ba.blockAssembler.AddTx(util.SubtreeNode{
 		Hash:        chainhash.Hash(req.Txid),
 		Fee:         req.Fee,
 		SizeInBytes: req.Size,

@@ -56,6 +56,13 @@ type SubtreeProcessor struct {
 
 var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
+
+	// pool for txIDAndFee
+	//txIDAndFeePool = sync.Pool{
+	//	New: func() interface{} {
+	//		return new(txIDAndFee)
+	//	},
+	//}
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
@@ -169,10 +176,13 @@ func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore 
 					}
 
 					//stp.logger.Debugf("[SubtreeProcessor] addNode tx: %s", txReq.node.Hash.String())
-					err = stp.addNode(txReq.node, false)
+					err = stp.addNode(&txReq.node, false)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					}
+
+					// return the txIDAndFee to the pool
+					//txIDAndFeePool.Put(txReq)
 
 					nrProcessed++
 					stp.txCount.Add(1)
@@ -215,20 +225,24 @@ func (stp *SubtreeProcessor) addNode(node *util.SubtreeNode, skipNotification bo
 		stp.logger.Infof("[SubtreeProcessor] append subtree: %s", stp.currentSubtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 
-		if !skipNotification {
-			// Send the subtree to the newSubtreeChan
-			stp.newSubtreeChan <- stp.currentSubtree
-		}
+		oldSubtree := stp.currentSubtree
 
 		// create a new subtree with the same height as the previous subtree
 		stp.currentSubtree = util.NewTree(stp.currentSubtree.Height)
+
+		if !skipNotification {
+			// Send the subtree to the newSubtreeChan
+			stp.newSubtreeChan <- oldSubtree
+		}
 	}
 
 	return nil
 }
 
 // Add adds a tx hash to a channel
-func (stp *SubtreeProcessor) Add(node *util.SubtreeNode) {
+func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
+	//t := txIDAndFeePool.Get().(*txIDAndFee)
+	//t.node = node
 	stp.queue.enqueue(&txIDAndFee{node: node})
 }
 
