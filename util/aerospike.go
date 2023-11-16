@@ -31,6 +31,9 @@ var writeSleepBetweenRetries time.Duration
 var writeSleepMultiplier float64
 var writeExitFastOnExhaustedConnectionPool bool
 
+var batchTotalTimeout time.Duration
+var batchAllowInlineSSD bool
+
 func init() {
 	aerospikeConnections = make(map[string]*aerospike.Client)
 }
@@ -67,12 +70,12 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 		panic(err)
 	}
 	if !found {
-		panic("no utxostore_aerospike_readPolicy setting found")
+		panic("no aerospike_readPolicy setting found")
 	}
 
-	readMaxRetries = getQueryInt(readPolicyUrl, "ReadMaxRetries", aerospike.NewPolicy().MaxRetries, logger)
-	readTimeout = getQueryDuration(readPolicyUrl, "ReadTimeout", aerospike.NewPolicy().TotalTimeout, logger)
-	readSocketTimeout = getQueryDuration(readPolicyUrl, "ReadSocketTimeout", aerospike.NewPolicy().SocketTimeout, logger)
+	readMaxRetries = getQueryInt(readPolicyUrl, "MaxRetries", aerospike.NewPolicy().MaxRetries, logger)
+	readTimeout = getQueryDuration(readPolicyUrl, "TotalTimeout", aerospike.NewPolicy().TotalTimeout, logger)
+	readSocketTimeout = getQueryDuration(readPolicyUrl, "SocketTimeout", aerospike.NewPolicy().SocketTimeout, logger)
 	readSleepBetweenRetries = getQueryDuration(readPolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
 	readSleepMultiplier = getQueryFloat64(readPolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
 	readExitFastOnExhaustedConnectionPool = getQueryBool(readPolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
@@ -82,15 +85,27 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 		panic(err)
 	}
 	if !found {
-		panic("no utxostore_aerospike_readPolicy setting found")
+		panic("no aerospike_writePolicy setting found")
 	}
 
-	writeMaxRetries = getQueryInt(writePolicyUrl, "WriteMaxRetries", aerospike.NewPolicy().MaxRetries, logger)
-	writeTimeout = getQueryDuration(writePolicyUrl, "WriteTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
-	writeSocketTimeout = getQueryDuration(writePolicyUrl, "WriteSocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
+	writeMaxRetries = getQueryInt(writePolicyUrl, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
+	writeTimeout = getQueryDuration(writePolicyUrl, "TotalTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
+	writeSocketTimeout = getQueryDuration(writePolicyUrl, "SocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
 	writeSleepBetweenRetries = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
 	writeSleepMultiplier = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
 	writeExitFastOnExhaustedConnectionPool = getQueryBool(writePolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
+
+	// batching stuff
+	batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no aerospike_writePolicy setting found")
+	}
+
+	batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
+	batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
 
 	policy := aerospike.NewClientPolicy()
 
@@ -146,6 +161,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 
 	logger.Debugf("url %s policy %#v\n", url, policy)
 
+	// policy = aerospike.NewClientPolicy()
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
@@ -309,4 +325,20 @@ func GetAerospikeWritePolicy(generation, expiration uint32, options ...Aerospike
 	}
 
 	return writePolicy
+}
+
+func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
+	batchPolicy := aerospike.NewBatchPolicy()
+	batchPolicy.TotalTimeout = batchTotalTimeout
+	batchPolicy.AllowInlineSSD = batchAllowInlineSSD
+
+	return batchPolicy
+}
+
+func GetAerospikeBatchWritePolicy(generation, expiration uint32) *aerospike.BatchWritePolicy {
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.Expiration = expiration
+	batchWritePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
+
+	return batchWritePolicy
 }

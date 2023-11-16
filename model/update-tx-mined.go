@@ -8,37 +8,41 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-func UpdateTxMinedStatus(ctx context.Context, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
+func UpdateTxMinedStatus(ctx context.Context, logger utils.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
 	}()
 
-	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024)
+	maxMinedRoutines, _ := gocore.Config().GetInt("txmeta_store_maxMinedRoutines", 128)
+	maxMinedBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
 
-	maxBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
+	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(maxMinedRoutines)
 
 	blockHeaderHash := blockHeader.Hash()
 	for _, subtree := range subtrees {
 		subtree := subtree
 		g.Go(func() error {
-			hashes := make([]*chainhash.Hash, 0, maxBatchSize)
+			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx, node := range subtree.Nodes {
 				hashes = append(hashes, &node.Hash)
-				if idx > 0 && idx%maxBatchSize == 0 {
+				if idx > 0 && idx%maxMinedBatchSize == 0 {
+					logger.Infof("SetMinedMulti for %d hashes, batch %d, for subtree %s in block %s", len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockHeaderHash.String())
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
 						return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 					}
-					hashes = make([]*chainhash.Hash, 0, maxBatchSize)
+					hashes = make([]*chainhash.Hash, 0, maxMinedBatchSize)
 				}
 			}
 
 			if len(hashes) > 0 {
+				logger.Infof("SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %s", len(hashes), subtree.RootHash().String(), blockHeaderHash.String())
 				if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockHeaderHash); err != nil {
 					return fmt.Errorf("[BlockAssembly] error setting mined tx: %v", err)
 				}

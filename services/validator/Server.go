@@ -180,6 +180,24 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				v.logger.Infof("[Validator] Stopping channel listeners go routine")
+				return
+			case s := <-v.newSubscriptions:
+				v.subscribers[s] = true
+				v.logger.Infof("[Validator] New Subscription received from %s (Total=%d).", s.source, len(v.subscribers))
+
+			case s := <-v.deadSubscriptions:
+				delete(v.subscribers, s)
+				safeClose(s.done)
+				v.logger.Infof("[Validator] Subscription removed (Total=%d).", len(v.subscribers))
+			}
+		}
+	}()
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
@@ -460,8 +478,17 @@ func (v *Server) sendInvalidTxNotification(txId string, reason string) {
 		go func(s subscriber) {
 			v.logger.Debugf("[Validator] Sending notification to %s: %s", s.source, notification)
 			if err := s.subscription.Send(notification); err != nil {
+				v.logger.Errorf("[Validator] Error sending notification to %s: %s", s.source, err)
 				v.deadSubscriptions <- s
 			}
 		}(sub)
 	}
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }

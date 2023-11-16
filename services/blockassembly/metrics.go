@@ -24,6 +24,8 @@ var (
 	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
 	prometheusBlockAssemblerTransactions       prometheus.Gauge
+	prometheusBlockAssemblerQueuedTransactions prometheus.Gauge
+	prometheusBlockAssemblerSubtrees           prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
 	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
 	prometheusBlockAssemblerReorg         prometheus.Counter
@@ -143,6 +145,22 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "transactions",
 			Help:      "Number of transactions currently in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerQueuedTransactions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "queued_transactions",
+			Help:      "Number of transactions currently queued in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerSubtrees = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "subtrees",
+			Help:      "Number of subtrees currently in the block assembler subtree processor",
 		},
 	)
 

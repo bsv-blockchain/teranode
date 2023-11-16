@@ -78,6 +78,14 @@ func (b *BlockAssembler) TxCount() uint64 {
 	return b.subtreeProcessor.TxCount()
 }
 
+func (b *BlockAssembler) QueueLength() int64 {
+	return b.subtreeProcessor.QueueLength()
+}
+
+func (b *BlockAssembler) SubtreeCount() int {
+	return b.subtreeProcessor.SubtreeCount()
+}
+
 func (b *BlockAssembler) startChannelListeners(context context.Context) {
 	var err error
 

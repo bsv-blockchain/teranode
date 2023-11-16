@@ -295,10 +295,9 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		return s.storeUtxo(policy, utxoHashes[0], storeLockTime)
 	}
 
-	batchPolicy := aerospike.NewBatchPolicy()
-	batchPolicy.AllowInlineSSD = true
+	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, 0)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(utxoHashes))
@@ -432,7 +431,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			return fmt.Errorf("context cancelled spending %d of %d aerospike utxos", i, len(spends))
 		default:
 
-			if err := s.spendUtxo(policy, spend); err != nil {
+			if err = s.spendUtxo(policy, spend); err != nil {
 
 				// revert the spent utxos
 				_ = s.UnSpend(context.Background(), spentSpends)

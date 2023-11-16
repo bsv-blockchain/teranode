@@ -28,17 +28,19 @@ func (f *fRPC_BlockAssembly) Health(ctx context.Context, message *blockassembly_
 	}, nil
 }
 
-func (f *fRPC_BlockAssembly) NewChaintipAndHeight(ctx context.Context, request *blockassembly_api.BlockassemblyApiNewChaintipAndHeightRequest) (*blockassembly_api.BlockassemblyApiEmptyMessage, error) {
+func (f *fRPC_BlockAssembly) NewChaintipAndHeight(_ context.Context, _ *blockassembly_api.BlockassemblyApiNewChaintipAndHeightRequest) (*blockassembly_api.BlockassemblyApiEmptyMessage, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (resp *blockassembly_api.BlockassemblyApiAddTxResponse, err error) {
+func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (resp *blockassembly_api.BlockassemblyApiAddTxResponse, err error) {
 	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
 		blockAssemblyStat.NewStat("AddTx_frpc").AddTime(startTime)
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblerQueuedTransactions.Set(float64(f.ba.blockAssembler.QueueLength()))
+		prometheusBlockAssemblerSubtrees.Set(float64(f.ba.blockAssembler.SubtreeCount()))
 		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}()
 
