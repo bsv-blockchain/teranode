@@ -1,9 +1,11 @@
 package badger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -106,6 +108,17 @@ func (s *Badger) Close(ctx context.Context) error {
 	return s.store.Close()
 }
 
+func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return s.Set(ctx, key, b, opts...)
+}
+
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentTime()
@@ -152,6 +165,15 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	}
 
 	return s.Set(ctx, key, objectBytes, options.WithTTL(ttl))
+}
+
+func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := s.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
 }
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {

@@ -1,8 +1,10 @@
 package kinesiss3
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -94,6 +96,17 @@ func (g *KinesisS3) Close(_ context.Context) error {
 	return nil
 }
 
+func (g *KinesisS3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return g.Set(ctx, key, b, opts...)
+}
+
 func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	var rec firehose.Record
 	var recInput firehose.PutRecordInput
@@ -121,6 +134,15 @@ func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 
 	// TODO implement
 	return nil
+}
+
+func (g *KinesisS3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := g.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
 }
 
 func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {

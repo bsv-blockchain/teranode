@@ -1,10 +1,12 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -117,6 +119,17 @@ func (m *SQL) Close(_ context.Context) error {
 	return nil
 }
 
+func (m *SQL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return m.Set(ctx, key, b, opts...)
+}
+
 func (m *SQL) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
@@ -128,18 +141,26 @@ func (m *SQL) Set(_ context.Context, hash []byte, value []byte, opts ...options.
 }
 
 func (m *SQL) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
-	// not supported in memory store yet
 	return errors.New("TTL is not supported in a sql store")
+}
+
+func (m *SQL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
 }
 
 func (m *SQL) Get(_ context.Context, hash []byte) ([]byte, error) {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 
-	var bytes []byte
-	err := m.db.QueryRow("SELECT value FROM blob WHERE key = $1", key.CloneBytes()).Scan(&bytes)
+	var b []byte
+	err := m.db.QueryRow("SELECT value FROM blob WHERE key = $1", key.CloneBytes()).Scan(&b)
 
-	return bytes, err
+	return b, err
 }
 
 func (m *SQL) Exists(_ context.Context, hash []byte) (bool, error) {

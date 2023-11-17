@@ -2,6 +2,7 @@ package localttl
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -18,7 +19,9 @@ type BlobStore interface {
 	Health(ctx context.Context) (int, string, error)
 	Exists(ctx context.Context, key []byte) (bool, error)
 	Get(ctx context.Context, key []byte) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
+	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 	Del(ctx context.Context, key []byte) error
 	Close(ctx context.Context) error
@@ -34,87 +37,109 @@ func New(logger utils.Logger, ttlStore, blobStore BlobStore) (*LocalTTL, error) 
 	return b, nil
 }
 
-func (b *LocalTTL) Health(ctx context.Context) (int, string, error) {
-	n, resp, err := b.ttlStore.Health(ctx)
+func (l *LocalTTL) Health(ctx context.Context) (int, string, error) {
+	n, resp, err := l.ttlStore.Health(ctx)
 	if err != nil || n <= 0 {
 		return n, resp, err
 	}
 
-	return b.blobStore.Health(ctx)
+	return l.blobStore.Health(ctx)
 }
 
-func (b *LocalTTL) Close(_ context.Context) error {
+func (l *LocalTTL) Close(_ context.Context) error {
 	return nil
 }
 
-func (b *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	setOptions := options.NewSetOptions(opts...)
 
 	if setOptions.TTL > 0 {
 		// set the value in the ttl store
-		return b.ttlStore.Set(ctx, key, value, opts...)
+		return l.ttlStore.SetFromReader(ctx, key, reader, opts...)
 	}
 
 	// set the value in the blob store
-	return b.blobStore.Set(ctx, key, value, opts...)
+	return l.blobStore.SetFromReader(ctx, key, reader, opts...)
 }
 
-func (b *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duration) error {
+func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+	setOptions := options.NewSetOptions(opts...)
+
+	if setOptions.TTL > 0 {
+		// set the value in the ttl store
+		return l.ttlStore.Set(ctx, key, value, opts...)
+	}
+
+	// set the value in the blob store
+	return l.blobStore.Set(ctx, key, value, opts...)
+}
+
+func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duration) error {
 	if duration <= 0 {
 		// move the file from the TTL store to the blob store
-		value, err := b.ttlStore.Get(ctx, key)
+		reader, err := l.ttlStore.GetIoReader(ctx, key)
 		if err != nil {
-			if found, _ := b.blobStore.Exists(ctx, key); found {
+			if found, _ := l.blobStore.Exists(ctx, key); found {
 				// already there
 				return nil
 			}
 			return err
 		}
 
-		return b.blobStore.Set(ctx, key, value)
+		return l.blobStore.SetFromReader(ctx, key, reader)
 	}
 
 	// we are setting a ttl, if it's already in the ttl store, reset the ttl, if it is not in the ttl store, move it there
-	found, _ := b.ttlStore.Exists(ctx, key)
+	found, _ := l.ttlStore.Exists(ctx, key)
 	if found {
-		return b.ttlStore.SetTTL(ctx, key, duration)
+		return l.ttlStore.SetTTL(ctx, key, duration)
 	}
 
 	// move the file from the blob store to the TTL store
-	value, err := b.blobStore.Get(ctx, key)
+	reader, err := l.blobStore.GetIoReader(ctx, key)
 	if err != nil {
 		return err
 	}
 
-	if err = b.ttlStore.Set(ctx, key, value, options.WithTTL(duration)); err != nil {
+	if err = l.ttlStore.SetFromReader(ctx, key, reader, options.WithTTL(duration)); err != nil {
 		return err
 	}
 
 	// delete from the blob store ?
-	return b.blobStore.Del(ctx, key)
+	return l.blobStore.Del(ctx, key)
 }
 
-func (b *LocalTTL) Get(ctx context.Context, key []byte) ([]byte, error) {
-	value, err := b.ttlStore.Get(ctx, key)
+func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	value, err := l.ttlStore.GetIoReader(ctx, key)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
-		return b.blobStore.Get(ctx, key)
+		return l.blobStore.GetIoReader(ctx, key)
 	}
 
 	return value, nil
 }
 
-func (b *LocalTTL) Exists(ctx context.Context, key []byte) (bool, error) {
-	found, err := b.ttlStore.Exists(ctx, key)
+func (l *LocalTTL) Get(ctx context.Context, key []byte) ([]byte, error) {
+	value, err := l.ttlStore.Get(ctx, key)
+	if err != nil {
+		// couldn't find it in the ttl store, try the blob store
+		return l.blobStore.Get(ctx, key)
+	}
+
+	return value, nil
+}
+
+func (l *LocalTTL) Exists(ctx context.Context, key []byte) (bool, error) {
+	found, err := l.ttlStore.Exists(ctx, key)
 	if err != nil || !found {
 		// couldn't find it in the ttl store, try the blob store
-		return b.blobStore.Exists(ctx, key)
+		return l.blobStore.Exists(ctx, key)
 	}
 
 	return found, nil
 }
 
-func (b *LocalTTL) Del(ctx context.Context, key []byte) error {
-	_ = b.ttlStore.Del(ctx, key)
-	return b.blobStore.Del(ctx, key)
+func (l *LocalTTL) Del(ctx context.Context, key []byte) error {
+	_ = l.ttlStore.Del(ctx, key)
+	return l.blobStore.Del(ctx, key)
 }

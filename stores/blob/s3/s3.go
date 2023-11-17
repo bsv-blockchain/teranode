@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -120,7 +121,38 @@ func (g *S3) Close(_ context.Context) error {
 	traceSpan := tracing.Start(context.Background(), "s3:Close")
 	defer traceSpan.Finish()
 
-	// return g.client.Close()
+	return nil
+}
+
+func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	start := gocore.CurrentTime()
+	defer func() {
+		_ = reader.Close()
+		gocore.NewStat("prop_store_s3", true).NewStat("SetFromReader").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
+	defer traceSpan.Finish()
+
+	objectKey := g.getObjectKey(key)
+
+	uploadInput := &s3manager.UploadInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+		Body:   reader,
+	}
+
+	o := options.NewSetOptions(opts...)
+	if o.TTL > 0 {
+		expires := time.Now().Add(o.TTL)
+		uploadInput.Expires = &expires
+	}
+
+	_, err := g.uploader.Upload(uploadInput)
+	if err != nil {
+		traceSpan.RecordError(err)
+		return fmt.Errorf("failed to set data from reader: %w", err)
+	}
+
 	return nil
 }
 
@@ -170,6 +202,27 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 
 	// TODO implement
 	return nil
+}
+
+func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
+	}()
+	traceSpan := tracing.Start(ctx, "s3:Get")
+	defer traceSpan.Finish()
+
+	objectKey := g.getObjectKey(key)
+
+	result, err := g.client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get s3 data: %w", err)
+	}
+
+	return result.Body, nil
 }
 
 func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {

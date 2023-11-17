@@ -87,6 +87,17 @@ func (s *SeaweedFS) generateKey(key []byte) string {
 	return utils.ReverseAndHexEncodeSlice(key)
 }
 
+func (s *SeaweedFS) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return s.Set(ctx, key, b, opts...)
+}
+
 func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	// start := gocore.CurrentTime()
 	// defer func() {
@@ -129,6 +140,15 @@ func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 
 	// TODO implement
 	return nil
+}
+
+func (s *SeaweedFS) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := s.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
 }
 
 func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {

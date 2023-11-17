@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -37,6 +38,10 @@ func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
 	return r.store.Exists(ctx, key)
 }
 
+func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	return r.store.GetIoReader(ctx, key)
+}
+
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	subtreeBytes, _ := r.blockValidationClient.Get(ctx, key)
 	if subtreeBytes == nil {
@@ -44,6 +49,15 @@ func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	}
 
 	return subtreeBytes, nil
+}
+
+func (r Wrapper) SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error {
+	b, err := io.ReadAll(value)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return r.Set(ctx, key, b, opts...)
 }
 
 func (r Wrapper) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {

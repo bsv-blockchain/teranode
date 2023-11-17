@@ -3,6 +3,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -132,19 +133,55 @@ func (s *File) Close(_ context.Context) error {
 	return nil
 }
 
+func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
+	defer reader.Close()
+
+	fileName, err := s.getFileNameForSet(key, opts)
+	if err != nil {
+		return fmt.Errorf("failed to get file name: %w", err)
+	}
+
+	// write the bytes from the reader to a file with the filename
+	file, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err = io.Copy(file, reader); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	return nil
+}
+
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
+
+	fileName, err := s.getFileNameForSet(hash, opts)
+	if err != nil {
+		return fmt.Errorf("failed to get file name: %w", err)
+	}
+
+	// write bytes to file
+	if err = os.WriteFile(fileName, value, 0644); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
-	// TODO: handle options
-	// TTL is not supported by file store
 	fileOptions := options.NewSetOptions(opts...)
 
 	if fileOptions.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(fileOptions.TTL)
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return fmt.Errorf("failed to write ttl to file: %w", err)
+			return "", fmt.Errorf("failed to write ttl to file: %w", err)
 		}
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
@@ -155,18 +192,23 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
 	}
 
-	// write bytes to file
-	if err := os.WriteFile(fileName, value, 0644); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
-	}
-
-	return nil
+	return fileName, nil
 }
 
 func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 	s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
 	// not supported on files yet
 	return nil
+}
+
+func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
+	fileName := s.filename(hash)
+	file, err := os.Open(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+	}
+
+	return file, nil
 }
 
 func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {

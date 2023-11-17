@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -182,6 +183,17 @@ func (b *Batcher) Close(_ context.Context) error {
 	return nil
 }
 
+func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	bb, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return b.Set(ctx, key, bb, opts...)
+}
+
 func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	b.queue.enqueue(&BatchItem{
 		hash:  chainhash.Hash(hash),
@@ -193,6 +205,10 @@ func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...opti
 
 func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
 	return errors.New("TTL is not supported in a batcher store")
+}
+
+func (b *Batcher) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("getIoReader is not supported in a batcher store")
 }
 
 func (b *Batcher) Get(_ context.Context, _ []byte) ([]byte, error) {

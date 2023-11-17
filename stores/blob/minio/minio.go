@@ -110,6 +110,17 @@ func (m *Minio) Close(ctx context.Context) error {
 	return nil //m.client.Close()
 }
 
+func (m *Minio) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return m.Set(ctx, key, b, opts...)
+}
+
 func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
@@ -184,6 +195,15 @@ func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) erro
 	}
 
 	return nil
+}
+
+func (m *Minio) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
 }
 
 func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {
