@@ -3,6 +3,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'scaling-v*'
     branches:
       - master
       - staging
