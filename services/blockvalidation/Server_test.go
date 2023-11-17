@@ -37,7 +37,7 @@ func TestOneTransaction(t *testing.T) {
 
 	subtrees[0] = util.NewTree(1)
 
-	err := subtrees[0].AddNode(model.CoinbasePlaceholderHash, 0, 0)
+	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
 	require.NoError(t, err)
 
 	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
@@ -91,10 +91,10 @@ func TestTwoTransactions(t *testing.T) {
 	subtrees[0] = util.NewTree(1)
 
 	empty := &chainhash.Hash{}
-	err := subtrees[0].AddNode(empty, 0, 0)
+	err := subtrees[0].AddNode(*empty, 0, 0)
 	require.NoError(t, err)
 
-	err = subtrees[0].AddNode(txid1, 0, 0)
+	err = subtrees[0].AddNode(*txid1, 0, 0)
 	require.NoError(t, err)
 
 	// blockValidationService, err := New(p2p.TestLogger{}, nil, nil, nil, nil)
@@ -142,22 +142,22 @@ func TestMerkleRoot(t *testing.T) {
 	subtrees[0] = util.NewTreeByLeafCount(2) // height = 1
 	subtrees[1] = util.NewTreeByLeafCount(2) // height = 1
 
-	err := subtrees[0].AddNode(model.CoinbasePlaceholderHash, 0, 0)
+	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
 	require.NoError(t, err)
 
 	hash1, err := chainhash.NewHashFromStr(txIds[1])
 	require.NoError(t, err)
-	err = subtrees[0].AddNode(hash1, 1, 0)
+	err = subtrees[0].AddNode(*hash1, 1, 0)
 	require.NoError(t, err)
 
 	hash2, err := chainhash.NewHashFromStr(txIds[2])
 	require.NoError(t, err)
-	err = subtrees[1].AddNode(hash2, 1, 0)
+	err = subtrees[1].AddNode(*hash2, 1, 0)
 	require.NoError(t, err)
 
 	hash3, err := chainhash.NewHashFromStr(txIds[3])
 	require.NoError(t, err)
-	err = subtrees[1].AddNode(hash3, 1, 0)
+	err = subtrees[1].AddNode(*hash3, 1, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, txIds[0], coinbaseTx.TxID())

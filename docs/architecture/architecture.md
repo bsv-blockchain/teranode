@@ -128,9 +128,6 @@ Blocks contain all transaction data for the transactions included.
 Note how the Bitcoin block contains all transactions (including ALL transaction data) for each transaction it contains, not just the transaction Id. This means that the block size would be very large if many transactions were included. At scale, this is not practical, as the block size would be too large to propagate across the network in a timely manner.
 
 
-Additionally, this is very inefficient. The receiving nodes will be idle for periods of approx 10 mins, and then receive a large amount of data to be validated in one go. This is a poor use of resources, and cannot scale to the levels required for a global payment system.
-
-
 Let's see next how the UBSV data model addresses these issues.
 
 ### UBSV Data Model
@@ -217,8 +214,6 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 ![UBSV_Block.png](img%2FUBSV_Block.png)
 
 ### Advantages of the UBSV Model
-- **Continuous Data Flow**: Instead of nodes being idle between blocks, they are continuously receiving and processing subtrees.
-
 
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
 

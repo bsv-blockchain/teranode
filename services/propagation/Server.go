@@ -327,7 +327,10 @@ func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses strin
 			return err
 		}
 		go func() {
-			defer sess.CloseWithError(0, "closing QUIC session")
+			defer func() {
+				_ = sess.CloseWithError(0, "closing QUIC session")
+			}()
+
 			stream, err := sess.AcceptStream(ctx)
 			if err != nil {
 				return

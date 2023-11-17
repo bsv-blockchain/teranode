@@ -109,11 +109,13 @@ func (m *Miner) mine(ctx context.Context) error {
 	// wait is simulating a high difficulty
 	waitSeconds, _ := gocore.Config().GetInt("miner_waitSeconds", 30)
 
-	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < 200 {
+	intialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
+
+	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < uint32(intialBlockCount) {
 		waitSeconds = 0
 	}
 
-	if waitSeconds > 0 { // SAO - Mine the first 200 blocks without delay
+	if waitSeconds > 0 { // SAO - Mine the first <intialBlockCount> blocks without delay
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
 

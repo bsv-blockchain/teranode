@@ -186,7 +186,7 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
 				q.enqueue(&txIDAndFee{
-					node: &util.SubtreeNode{
+					node: util.SubtreeNode{
 						Hash:        chainhash.Hash{},
 						Fee:         uint64(u),
 						SizeInBytes: 0,

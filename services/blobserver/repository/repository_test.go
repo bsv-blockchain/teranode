@@ -71,7 +71,7 @@ func TestSubtree(t *testing.T) {
 
 	subtree := util.NewTreeByLeafCount(itemsPerSubtree)
 
-	txns := make([]*chainhash.Hash, itemsPerSubtree)
+	txns := make([]chainhash.Hash, itemsPerSubtree)
 
 	for i := 0; i < itemsPerSubtree; i++ {
 		txid := make([]byte, 32)
@@ -79,10 +79,7 @@ func TestSubtree(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 32, n)
 
-		hash, err := chainhash.NewHash(txid)
-		require.NoError(t, err)
-
-		txns[i] = hash
+		txns[i] = chainhash.HashH(txid)
 	}
 
 	for _, hash := range txns {
@@ -121,10 +118,9 @@ func TestSubtree(t *testing.T) {
 	b, err := st.SerializeNodes()
 	require.NoError(t, err)
 
-	subtreeNodes := make([]*chainhash.Hash, len(b)/32)
+	subtreeNodes := make([]chainhash.Hash, len(b)/32)
 	for i := 0; i < len(b); i += 32 {
-		subtreeNodes[i/32], err = chainhash.NewHash(b[i : i+32])
-		require.NoError(t, err)
+		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
 	}
 
 	subtree2 := util.NewTreeByLeafCount(len(b) / 32)
@@ -133,6 +129,6 @@ func TestSubtree(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, *txns[0], subtree2.Nodes[0].Hash)
-	assert.Equal(t, *txns[1], subtree2.Nodes[1].Hash)
+	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
+	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
 }

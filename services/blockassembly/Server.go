@@ -382,15 +382,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
 	}
 
-	// create the subtree node
-	node := &util.SubtreeNode{
-		Hash:        chainhash.Hash(req.Txid),
-		Fee:         req.Fee,
-		SizeInBytes: req.Size,
-	}
-
 	if !ba.blockAssemblyDisabled {
-		if err = ba.blockAssembler.AddTx(node); err != nil {
+		if err = ba.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        chainhash.Hash(req.Txid),
+			Fee:         req.Fee,
+			SizeInBytes: req.Size,
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -406,13 +403,25 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	// 	addTxBatchGrpc.AddTime(start)
 	// }()
 
+	requests := batch.GetTxRequests()
+	if len(requests) == 0 {
+		return nil, fmt.Errorf("no tx requests in batch")
+	}
+
 	var batchError error = nil
-	txIdErrors := make([][]byte, 0)
-	for _, req := range batch.GetTxRequests() {
-		_, err := ba.AddTx(ctx, req)
-		if err != nil {
-			batchError = err
-			txIdErrors = append(txIdErrors, req.Txid)
+	var err error
+	txIdErrors := make([][]byte, 0, len(requests))
+	for _, req := range requests {
+		// create the subtree node
+		if !ba.blockAssemblyDisabled {
+			if err = ba.blockAssembler.AddTx(util.SubtreeNode{
+				Hash:        chainhash.Hash(req.Txid),
+				Fee:         req.Fee,
+				SizeInBytes: req.Size,
+			}); err != nil {
+				batchError = err
+				txIdErrors = append(txIdErrors, req.Txid)
+			}
 		}
 	}
 	return &blockassembly_api.AddTxBatchResponse{
@@ -529,7 +538,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	var sizeInBytes uint64
 
 	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
-	subtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
+	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
@@ -547,7 +556,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 			}
 
 			rootHash := subtreesInJob[i].RootHash()
-			subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
+			subtreeHashes[i] = chainhash.Hash(rootHash[:])
 
 			transactionCount += uint64(subtree.Length())
 			sizeInBytes += subtree.SizeInBytes

@@ -23,16 +23,16 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 
 	t.Run("", func(t *testing.T) {
 		subtree1 := NewTree(2)
-		require.NoError(t, subtree1.AddNode(hash1, 12, 0))
-		require.NoError(t, subtree1.AddNode(hash2, 13, 0))
-		require.NoError(t, subtree1.AddNode(hash3, 14, 0))
-		require.NoError(t, subtree1.AddNode(hash4, 15, 0))
+		require.NoError(t, subtree1.AddNode(*hash1, 12, 0))
+		require.NoError(t, subtree1.AddNode(*hash2, 13, 0))
+		require.NoError(t, subtree1.AddNode(*hash3, 14, 0))
+		require.NoError(t, subtree1.AddNode(*hash4, 15, 0))
 
 		subtree2 := NewTree(2)
-		require.NoError(t, subtree2.AddNode(hash5, 16, 0))
-		require.NoError(t, subtree2.AddNode(hash6, 17, 0))
-		require.NoError(t, subtree2.AddNode(hash7, 18, 0))
-		require.NoError(t, subtree2.AddNode(hash8, 19, 0))
+		require.NoError(t, subtree2.AddNode(*hash5, 16, 0))
+		require.NoError(t, subtree2.AddNode(*hash6, 17, 0))
+		require.NoError(t, subtree2.AddNode(*hash7, 18, 0))
+		require.NoError(t, subtree2.AddNode(*hash8, 19, 0))
 
 		merkleProof, err := GetMerkleProofForCoinbase([]*Subtree{subtree1, subtree2})
 		require.NoError(t, err)
@@ -40,8 +40,8 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		assert.Equal(t, "c32db78e5f8437648888713982ea3d49628dbde0b4b48857147f793b55d26f09", merkleProof[1].String())
 
 		topTree := NewTreeByLeafCount(2)
-		require.NoError(t, topTree.AddNode(subtree1.RootHash(), subtree1.Fees, subtree1.SizeInBytes))
-		require.NoError(t, topTree.AddNode(subtree2.RootHash(), subtree2.Fees, subtree1.SizeInBytes))
+		require.NoError(t, topTree.AddNode(*subtree1.RootHash(), subtree1.Fees, subtree1.SizeInBytes))
+		require.NoError(t, topTree.AddNode(*subtree2.RootHash(), subtree2.Fees, subtree1.SizeInBytes))
 		assert.Equal(t, expectedRootHash, topTree.RootHash().String())
 	})
 }

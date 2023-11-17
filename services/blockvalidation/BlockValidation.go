@@ -307,12 +307,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	start = gocore.CurrentTime()
 	// the subtree bytes we got from our competing miner only contain the transaction hashes
 	// it's basically just a list of 32 byte transaction hashes
-	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
+	txHashes := make([]chainhash.Hash, len(subtreeBytes)/32)
 	for i := 0; i < len(subtreeBytes); i += 32 {
-		txHashes[i/32], err = chainhash.NewHash(subtreeBytes[i : i+32])
-		if err != nil {
-			return errors.Join(errors.New("failed to create transaction hash from bytes"), err)
-		}
+		txHashes[i/32] = chainhash.Hash(subtreeBytes[i : i+32])
 	}
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
@@ -333,15 +330,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	g.SetLimit(1024) // max 1024 concurrent requests
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
+	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := 0
 	var missingTxHashesMu sync.Mutex
 	for idx, txHash := range txHashes {
-		if txHash == nil {
-			// TODO throw error here?
-			continue
-		}
-
 		txHash := txHash
 		idx := idx
 		g.Go(func() error {
@@ -357,13 +350,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				// no - get it from the network
 				// yes - is the txid blessed?
 				// if all txs in tree are blessed, then bless the tree
-				txMeta, err = u.txMetaStore.GetMeta(gCtx, txHash)
+				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
 					if strings.Contains(err.Error(), "not found") {
 						// collect all missing transactions for processing in order
 						// that is why we use an indexed slice instead of just a slice append
 						missingTxHashesMu.Lock()
-						missingTxHashes[idx] = txHash
+						missingTxHashes[idx] = &txHash
 						nrOfMissingTransactions++
 						missingTxHashesMu.Unlock()
 						return nil
@@ -491,12 +484,11 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(32)
 
-	var tx *bt.Tx
 	for idx, txHash := range missingTxHashes {
 		txHash := txHash
 		idx := idx
 		g.Go(func() error {
-			tx, err = u.getMissingTransaction(gCtx, txHash, baseUrl)
+			tx, err := u.getMissingTransaction(gCtx, txHash, baseUrl)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to get transaction", txHash.String()), err)
 			}
@@ -516,9 +508,9 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 }
 
 func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
+	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
 	defer func() {
-		stat.AddTime(startTotal)
+		//stat.AddTime(startTotal)
 	}()
 
 	// get transaction from network over http using the baseUrl
@@ -526,20 +518,20 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
 	}
 
-	start := gocore.CurrentTime()
+	//start := gocore.CurrentTime()
 	alreadyHaveTransaction := true
 	txBytes, err := u.txStore.Get(ctx, txHash[:])
-	stat.NewStat("getTxFromStore").AddTime(start)
+	//stat.NewStat("getTxFromStore").AddTime(start)
 	if txBytes == nil || err != nil {
 		alreadyHaveTransaction = false
 
 		// do http request to baseUrl + txHash.String()
 		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-		startM := gocore.CurrentTime()
-		statM := stat.NewStat("http fetch missing tx")
+		//startM := gocore.CurrentTime()
+		//statM := stat.NewStat("http fetch missing tx")
 		txBytes, err = util.DoHTTPRequest(ctx, url)
-		statM.AddTime(startM)
+		//statM.AddTime(startM)
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
 		}
@@ -552,10 +544,10 @@ func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *cha
 	}
 
 	if !alreadyHaveTransaction {
-		start = gocore.CurrentTime()
+		//start = gocore.CurrentTime()
 		// store the transaction, we did not get it via propagation
 		err = u.txStore.Set(ctx, txHash[:], txBytes)
-		stat.NewStat("storeTx").AddTime(start)
+		//stat.NewStat("storeTx").AddTime(start)
 		if err != nil {
 			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
 		}

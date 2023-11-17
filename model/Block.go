@@ -476,19 +476,19 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		prometheusBlockCheckMerkleRoot.Observe(time.Since(startTime).Seconds())
 	}()
 
-	hashes := make([]*chainhash.Hash, len(b.Subtrees))
+	hashes := make([]chainhash.Hash, len(b.Subtrees))
 	for i, subtree := range b.SubtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
 			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), uint64(b.CoinbaseTx.Size()), 0)
 		}
 
-		hashes[i] = subtree.RootHash()
+		hashes[i] = *subtree.RootHash()
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
 	if len(hashes) == 1 {
-		calculatedMerkleRootHash = hashes[0]
+		calculatedMerkleRootHash = &hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
 		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))

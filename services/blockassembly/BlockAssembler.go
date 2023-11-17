@@ -271,7 +271,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(node *util.SubtreeNode) error {
+func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
 	b.subtreeProcessor.Add(node)
 	return nil
 }
@@ -310,7 +310,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
 		topTree := util.NewTree(height)
 		for _, subtree := range subtrees {
-			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}

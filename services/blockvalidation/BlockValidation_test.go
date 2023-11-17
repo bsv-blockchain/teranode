@@ -42,10 +42,10 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		defer deferFunc()
 
 		subtree := util.NewTreeByLeafCount(4)
-		require.NoError(t, subtree.AddNode(hash1, 121, 0))
-		require.NoError(t, subtree.AddNode(hash2, 122, 0))
-		require.NoError(t, subtree.AddNode(hash3, 123, 0))
-		require.NoError(t, subtree.AddNode(hash4, 124, 0))
+		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
+		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
+		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
+		require.NoError(t, subtree.AddNode(*hash4, 124, 0))
 
 		_, err := txMetaStore.Create(context.Background(), tx1)
 		require.NoError(t, err)
