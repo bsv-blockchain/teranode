@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -9,8 +10,11 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -118,6 +122,8 @@ type Worker struct {
 	startTime         time.Time
 	unlocker          bt.UnlockerGetter
 	address           *bscript.Address
+	topic             *pubsub.Topic
+	sentTxCache       *RollingCache
 }
 
 func NewWorker(
@@ -133,6 +139,7 @@ func NewWorker(
 	logIdsCh chan string,
 	totalTransactions *atomic.Uint64,
 	globalStartTime *time.Time,
+	topic *pubsub.Topic,
 ) (*Worker, error) {
 
 	// Generate a random private key
@@ -175,6 +182,8 @@ func NewWorker(
 		globalStartTime:   globalStartTime,
 		address:           address,
 		utxoChan:          make(chan *bt.UTXO, 10000),
+		topic:             topic,
+		sentTxCache:       NewRollingCache(1000),
 	}, nil
 }
 
@@ -197,6 +206,7 @@ func (w *Worker) Init(ctx context.Context) error {
 		return fmt.Errorf("error getting utxo from coinbaseTracker %s: %v", w.address.AddressString, err)
 	}
 
+	w.sentTxCache.Add(tx.TxIDChainHash().String())
 	_, err = w.distributor.SendTransaction(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
@@ -227,7 +237,36 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 	var counterLoad uint64
 	var txPs float64
 	var ts float64
+	if w.topic != nil {
+		sub, err := w.topic.Subscribe()
+		if err != nil {
+			panic(err)
+		}
 
+		go func() {
+			var rejectedTxMsg p2p.RejectedTxMessage
+			// Continuously check messages
+			for {
+				msg, err := sub.Next(ctx)
+				if err != nil {
+					return
+				}
+				rejectedTxMsg = p2p.RejectedTxMessage{}
+				err = json.Unmarshal(msg.Data, &rejectedTxMsg)
+				if err != nil {
+					w.logger.Errorf("json unmarshal error: ", err)
+					continue
+				}
+				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
+				if w.sentTxCache.Contains(rejectedTxMsg.TxId) {
+					w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
+					return
+				}
+			}
+		}()
+		sub.Cancel()
+		return fmt.Errorf("RejectedTx caused worker to die")
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -321,6 +360,7 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 		return tx, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
+	w.sentTxCache.Add(tx.TxIDChainHash().String())
 	if _, err = w.distributor.SendTransaction(ctx, tx); err != nil {
 		// return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
 		utxoHash, _ := util.UTXOHashFromInput(tx.Inputs[0])
