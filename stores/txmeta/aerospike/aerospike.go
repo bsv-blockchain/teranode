@@ -26,10 +26,12 @@ import (
 )
 
 var (
-	prometheusTxMetaGet      prometheus.Counter
-	prometheusTxMetaSet      prometheus.Counter
-	prometheusTxMetaSetMined prometheus.Counter
-	prometheusTxMetaDelete   prometheus.Counter
+	prometheusTxMetaGet            prometheus.Counter
+	prometheusTxMetaSet            prometheus.Counter
+	prometheusTxMetaSetMined       prometheus.Counter
+	prometheusTxMetaSetMinedBatch  prometheus.Counter
+	prometheusTxMetaSetMinedBatchN prometheus.Counter
+	prometheusTxMetaDelete         prometheus.Counter
 )
 
 func init() {
@@ -49,6 +51,18 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "aerospike_txmeta_set_mined",
 			Help: "Number of txmeta set_mined calls done to aerospike",
+		},
+	)
+	prometheusTxMetaSetMinedBatch = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_set_mined_batch",
+			Help: "Number of txmeta set_mined_batch calls done to aerospike",
+		},
+	)
+	prometheusTxMetaSetMinedBatchN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_set_mined_batch_n",
+			Help: "Number of txmeta set_mined_batch txs done to aerospike",
 		},
 	)
 	prometheusTxMetaDelete = promauto.NewCounter(
@@ -333,16 +347,21 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 		return err
 	}
 
-	prometheusTxMetaSetMined.Inc()
+	prometheusTxMetaSetMinedBatch.Inc()
 
+	okUpdates := 0
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
 			// TODO what to do here?
 			hash := hashes[idx]
 			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hash.String(), err)
+		} else {
+			okUpdates++
 		}
 	}
+
+	prometheusTxMetaSetMinedBatchN.Add(float64(okUpdates))
 
 	return nil
 }
