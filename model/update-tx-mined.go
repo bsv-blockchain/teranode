@@ -31,6 +31,8 @@ func UpdateTxMinedStatus(ctx context.Context, logger utils.Logger, txMetaStore t
 		g.Go(func() error {
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx, node := range subtree.Nodes {
+				idx := idx
+				node := node
 				hashes = append(hashes, &node.Hash)
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Infof("SetMinedMulti for %d hashes, batch %d, for subtree %s in block %s", len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockHeaderHash.String())

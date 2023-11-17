@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -11,14 +12,21 @@ import (
 )
 
 type Memory struct {
-	mu       sync.Mutex
-	txStatus map[chainhash.Hash]txmeta.Data
+	checkDuplicates bool
+	mu              sync.Mutex
+	txStatus        map[chainhash.Hash]txmeta.Data
 }
 
-func New() *Memory {
-	return &Memory{
+func New(checkDuplicates ...bool) *Memory {
+	m := &Memory{
 		txStatus: make(map[chainhash.Hash]txmeta.Data),
 	}
+
+	if len(checkDuplicates) > 0 {
+		m.checkDuplicates = checkDuplicates[0]
+	}
+
+	return m
 }
 
 func (m *Memory) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
@@ -74,6 +82,15 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 	s, ok := m.txStatus[*hash]
 	if !ok {
 		s = txmeta.Data{}
+	}
+
+	if m.checkDuplicates {
+		// check whether the has is already in the block hashes
+		for _, b := range s.BlockHashes {
+			if b.IsEqual(blockHash) {
+				return fmt.Errorf("block hash %s already exists for tx %s", blockHash.String(), hash.String())
+			}
+		}
 	}
 
 	if s.BlockHashes == nil {
