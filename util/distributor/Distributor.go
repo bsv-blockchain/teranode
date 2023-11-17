@@ -177,6 +177,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				return nil, err
 			}
 		}
+		time.Sleep(10 * time.Millisecond) //
 		return nil, nil
 	} else {
 		var wg sync.WaitGroup
@@ -253,8 +254,6 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		if errorCount > 0 {
 			d.logger.Errorf("error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), builderErrors.String())
-		} else {
-			d.logger.Debugf("successfully distributed transaction %s", tx.TxIDChainHash().String())
 		}
 
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100

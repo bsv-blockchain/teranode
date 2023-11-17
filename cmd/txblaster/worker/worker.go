@@ -244,11 +244,14 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 		}
 
 		go func() {
+			defer sub.Cancel()
 			var rejectedTxMsg p2p.RejectedTxMessage
 			// Continuously check messages
 			for {
 				msg, err := sub.Next(ctx)
+				w.logger.Errorf("Error reading next rejected tx message: %+v", err)
 				if err != nil {
+
 					return
 				}
 				rejectedTxMsg = p2p.RejectedTxMessage{}
@@ -260,12 +263,12 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
 				if w.sentTxCache.Contains(rejectedTxMsg.TxId) {
 					w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
+					// use error channel to kill worker
 					return
 				}
 			}
 		}()
-		sub.Cancel()
-		return fmt.Errorf("RejectedTx caused worker to die")
+
 	}
 	for {
 		select {
