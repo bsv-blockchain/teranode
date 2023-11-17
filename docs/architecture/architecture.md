@@ -56,28 +56,24 @@ The diagram below shows all the different microservices, together with their int
 
 Various services and components are outlined to show their interactions and functions within the system:
 
-1. **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (UBSV) nodes, this service acts as a bridge between the two types of nodes.
-
-2. **TX / TXO Lookup Service**: This is used for querying "in scope" transaction and transaction ouput data.
-
-3. **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
-
-4. **Coinbase Overlay Node**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
-
-5. **UBSV Node Core Services**:
+1. **UBSV Node Core Services**:
   - **Propagation Service**: Responsible for receiving transactions (from other nodes) and propagating transactions (to other nodes).
   - **TX Validation Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks for the blockchain.
   - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
   - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
 
-6. **Ancillary Services**:
+2. **Overlay Services**:
+  - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (UBSV) nodes, this service acts as a bridge between the two types of nodes.
+  - **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
+  - **Coinbase Overlay Node**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
+  - **TX / TXO Lookup Service**: This is used for querying "in scope" transaction and transaction ouput data.
   - **TX Submission (ARC)**: Manages the submission of  transactions to the network on behalf of the propagation service.
   - **Banlist Service**: Maintains and verifies against a list of banned entities or nodes.
   - **UTXO Lookup Service**:
     - **UTXO Lookup Service**: Retrieves information about **unspent** transaction outputs, which are essential for validating new transactions.
 
-7. **Other Components**:
+3. **Other Components**:
   - **Message Broker**: A middleware that facilitates communication between different services.
   - **TX Status Store**: Keeps track of the status of transactions within the system.
   - **Hashers**: Perform the computational work of hashing that is central to the mining process.
@@ -188,7 +184,8 @@ The SubTrees are an innovation aimed at improving scalability and real-time proc
 
 _Unique to UBSV_: The concept of subtrees is a distinct feature not found in the original Bitcoin protocol or other derivatives.
 
-1. A subtree acts as an intermediate data structure to hold batches of 1M transaction IDs (including metadata) and their corresponding Merkle root.
+1. A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root.
+   - Note that the size of the subtree could be any number of transactions, just as long as it is a power of 2 (16, 32, 64...). The only requirement is that all subtrees in a block have to be the same size. At peak throughput, subtrees will contain millions of transaction Ids.
 
 
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
@@ -238,7 +235,7 @@ This proactive approach with subtrees enables the network to handle a significan
 
 At a high level, the UBSV node performs the following functions:
 
-1. **Transaction Submission**: Transactions are submitted to the network via the Submission Service. When a node receives a transaction, it immediately broadcast them to all other nodes in the network.
+1. **Transaction Submission**: Transactions are submitted to the network via the Submission Service. UBSV nodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
 
 
 2. **Transaction Validation**: Transactions are validated by the TX Validation Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service).Once validated, the status of transactions are updated in the TX Status Store, indicating they have not been included in a block yet and are eligible for inclusion.
@@ -249,7 +246,8 @@ At a high level, the UBSV node performs the following functions:
 
 
 4. **Subtree Validation**: The Block Validation Service validates the subtrees it receives. This involves checking the transactions within the subtree against the network's rules and ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of the subtree is updated, marking it as eligible for inclusion.
-   * Note - If a subtree is not valid, it is discarded and not included in the block. If a subtree is valid, it is stored for later use in block assembly.
+   * Note - If a subtree is not valid, it is discarded and not included in the block. If a subtree is valid, it is stored for later use in both block validation, and in block assembly to clean up transactions and prepare for the next block template.
+
 
 
 5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. These templates are pre-blocks that the node miner service will use to create a full block. Once a hashing solution has been found, the block is broadcasted to all other nodes for validation.
@@ -279,7 +277,7 @@ The Propagation service is responsible for:
 
 Here is a breakdown of the components as shown:
 
-1. **TX Storage Service:** This is a datastore that holds transactions that are eligible for inclusion in upcoming blocks.
+1. **TX Storage Service:** This is a datastore that holds all received transactions, either invalid or eligible for inclusion in the next block template.
 
 
 2. **Multicast Receiver Service (Multiple Instances):** These services are responsible for listening to transactions that are being broadcasted over the network. These services listen on IPV6 multicast network addresses reserved for Bitcoin transactions. There are multiple instances, each listening to a set of fixed IPV6 addresses, offering a horizontally scalable design that allows for handling more transactions by increasing the number of service instances. There can be an arbitrary number of these multicast receiver services operating, which is part of how the system achieves scalability.
@@ -333,7 +331,7 @@ Here is a breakdown of the components as shown:
 
 ### 4.3. Block Assembly Service
 
-The service is responsible for creating subtree and block templates for Miner Services to hash against. The Block Assembly will broadcast any newly created subtrees and blocks to the network.
+The service is responsible for creating subtree and block templates for Miner Services to hash against. The Block Assembly will broadcast any newly created subtrees to the network.
 
 There are two distinct processes that the Block Assembly Service performs:
 
@@ -409,7 +407,7 @@ In addition, the Validator service plays a key role in maintaining the Unspent T
 2. **Subtree Storage:** Holds the Merkle subtrees, which are partial hashes of the complete block. These are crucial for quickly validating new blocks found by competing miners. These are discarded once they are no longer required (i.e., after a new block is found and the subtrees are no longer needed).
 
 
-3. **TX Storage Service:** Maintains a record of all recently created transactions, including those that have not yet been confirmed and added to a block on the blockchain.
+3. **TX Storage Service:** Maintains a record of all created transactions, including those that have not yet been confirmed and added to a block on the blockchain.
 
 
 4. **UTXO Service:** Manages the list of all unspent transaction outputs, which represent potential inputs for new transactions.
@@ -474,7 +472,7 @@ The validation process is continuous and iterative, designed to maintain the blo
 
 ### 4.6. Blockchain Service
 
-The service is reponsible for managing block updates and adding them to the blockchain maintained by the node. The blocks can be received from other nodes or mined by the node itself.
+The service is reponsible for managing block updates and adding them to the blockchain maintained by the node. The blocks can be received from other nodes or mined by the node itself. Blocks mined by the node are broadcast to other nodes via the Blockchain Service.
 
 ![UBSV_Blockchain_Service_Overview.png](img%2FUBSV_Blockchain_Service_Overview.png)
 
