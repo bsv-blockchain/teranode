@@ -91,7 +91,7 @@ The UBSV data model addresses scalability and efficiency issues found in the ori
 ### 2.1. Block Size
 - **Bitcoin**: Fixed at 1MB, limiting the number of transactions per block.
 - **BSV**: Increased to 4GB, allowing significantly more transactions per block.
-- **UBSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees due to economies of scale.
+- **UBSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees.
 
 We can then compare the data models of the original Bitcoin and UBSV to understand how the latter improves on the former.
 
@@ -134,7 +134,7 @@ Let's see next how the UBSV data model addresses these issues.
 
 ##### 2.3.1. Transactions:
 
-UBSV Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur.
+UBSV Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur. UBSV works with extended transactions only, and legacy transactions are not supported. A wallet will be required to create transactions in extended format in order to communicate with UBSV.
 
 The Extended Format adds a marker to the transaction format:
 
@@ -435,7 +435,7 @@ In addition, the Validator service plays a key role in maintaining the Unspent T
 - **Efficiency and Scalability**: By validating subtrees in real-time, the system can efficiently manage a high throughput of transactions, reducing bottlenecks that would otherwise arise during block validation.
 
 
-- **Handling Unvalidated Transactions**: If a subtree contains a transaction that hasn't been previously validated or "blessed," the Validator service must retrieve and validate that transaction. If the transaction is valid, it is added to the block assembly process. If it is invalid due to issues like missing inputs or double-spending attempts, the transaction and its subtree are not accepted ("blessed").
+- **Handling Unvalidated Transactions**: If a subtree contains a transaction that hasn't been previously validated or "blessed," the Validator service must retrieve and validate that transaction. If the transaction is valid, it is added to the block assembly process. If it is invalid due to issues like missing inputs, the transaction and its subtree are not accepted ("blessed").
 
 
 #### 4.5.3. Block Validation Details:
@@ -506,6 +506,8 @@ Here is an explanation of the components and the process:
 
 4. **Block Validation Service**: This component is responsible for validating new blocks. It checks if a block complies with the network's consensus rules. After the blockchain server processes a block (Block Found), it will interact with this service to ensure that the block is valid before finalizing it in the blockchain.
 
+
+Note - The Block model described in the [UBSV Data Model](#ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the original Bitcoin format, which is the same as the legacy BSV format.
 
 The system is designed to maintain the blockchain's integrity by ensuring that all blocks are properly assembled, validated, and stored. It enables other services and participants in the network to interact with the blockchain, request data, and understand the current state of the network for further actions like mining.
 
