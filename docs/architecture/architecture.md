@@ -584,7 +584,7 @@ In essence, the CON service operates as a straightforward Simplified Payment Ver
 
 ### 4.9. Bootstrap
 
-The Bootstrap Service, helps new nodes find peers in a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
+The Bootstrap Service helps new nodes find peers in a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
 The service manages a set of subscribers and broadcast notifications and keep-alives to them, to keep them updated about network participants.
 

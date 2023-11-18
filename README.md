@@ -3,33 +3,31 @@
 
 ## Index
 
-
-- [🚀 UBSV](#-ubsv)
-  - [Index](#index)
-  - [_Introduction_](#introduction)
-  - [_Getting Started_](#getting-started)
-    - [Pre-requisites and Installation](#pre-requisites-and-installation)
-    - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
-  - [_Advanced Usage_  \[ TO-DO \]](#advanced-usage---to-do-)
-    - [Settings](#settings)
-    - [Makefile](#makefile)
-      - [Proto buffers (protoc)](#proto-buffers-protoc)
-      - [Running Tests](#running-tests)
-    - [gRPC Logging](#grpc-logging)
-  - [_Running the Node in Production_  \[ TO-DO \]](#running-the-node-in-production---to-do-)
-  - [_Architecture_  \[ TO-DO \]](#architecture---to-do-)
-  - [_Technology_  \[ TO-DO \]](#technology---to-do-)
-  - [_Project Structure and Coding Conventions_](#project-structure-and-coding-conventions)
-    - [Project Structure](#project-structure)
-    - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
-    - [Coding Conventions](#coding-conventions)
-    - [TODO - ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
-    - [Testing Conventions - \[TODO\]](#testing-conventions---todo)
-  - [_License_](#license)
+- [Introduction](#introduction)
+- [Getting Started](#getting-started)
+  - [Pre-requisites and Installation](#pre-requisites-and-installation)
+  - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
+- [Advanced Usage  [ TO-DO ]](#advanced-usage---to-do-)
+  - [Settings](#settings)
+  - [Makefile](#makefile)
+    - [Proto buffers (protoc)](#proto-buffers-protoc)
+    - [Running Tests](#running-tests)
+  - [gRPC Logging](#grpc-logging)
+- [Running the Node in Production  [ TO-DO ]](#running-the-node-in-production---to-do-)
+- [Architecture ](#architecture-)
+- [Technology  [ TO-DO ]](#technology---to-do-)
+- [Project Structure and Coding Conventions](#project-structure-and-coding-conventions)
+  - [Project Structure](#project-structure)
+  - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
+  - [Coding Conventions](#coding-conventions)
+  - [TODO ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
+  - [Testing Conventions [TODO]](#testing-conventions---todo)
+- [License](#license)
 
 
 
-## _Introduction_
+
+## Introduction
 
 ---
 
@@ -42,7 +40,7 @@ The node has been designed as a collection of microservices, each handling speci
 
 ---
 
-## _Getting Started_
+## Getting Started
 
 ---
 
@@ -56,7 +54,7 @@ Please refer to the [Locally Running Services Documentation](docs/locallyRunning
 
 ---
 
-## _Advanced Usage_  [ TO-DO ]
+## Advanced Usage  [ TO-DO ]
 
 ### Settings
 
@@ -102,31 +100,59 @@ Additional logs can be produced when the node is run with the following environm
 
 ---
 
-## _Running the Node in Production_  [ TO-DO ]
+## Running the Node in Production  [ TO-DO ]
 
 ---
 
 
 ---
 
-## _Architecture_  [ TO-DO ]
+## Architecture
 
 ---
 
-Please check the [Architecture Documentation](docs/architecture/architecture.md) for detailed documentation.
-
-Diagram...
-
-...List of services and link to specific README.md per service
-
-....List of commands
-
--- UI dashboard
+Please check the [Architecture Documentation](docs/architecture/architecture.md) for an introduction to the overall architecture of the node.
 
 
 ---
 
-## _Technology_  [ TO-DO ]
+## Micro-Services
+
+---
+
+Detailed Node Service documentation:
+
++ [Bootstrap](services/bootstrap/bootstrap.md)
+
++ [UTXO Service](services/utxo/utxo.md)
+
++ [TXMeta Service](services/txmeta/txmeta.md)
+
++ [Blob Server](services/blobserver/blobServer)
+
++ [Propagation Service](services/propagation/propagation.md)
+
++ [Validator Service ](services/validator/validator.md)
+
++ [Block Validation Service ](services/blockvalidation/blockValidation.md)
+
++ [Block Assembly Service](services/blockassembly/blockAssembly.md)
+
++ [Miner](services/miner/miner.md)
+
++ [Blockchain Service](services/blockchain/blockchain.md)
+
+
+Detailed Overlay Service documentation:
+
++ [Coinbase](services/coinbase/coinbase.md)
+
++ [P2P](services/p2p/p2p.md)
+
+
+---
+
+## Technology  [ TO-DO ]
 
 ---
 
@@ -144,7 +170,7 @@ Diagram...
 
 ---
 
-## _Project Structure and Coding Conventions_
+## Project Structure and Coding Conventions
 
 ---
 
@@ -193,7 +219,7 @@ ubsv/
 ├── scripts/                      # Various scripts
 │
 ├── services/                     # Directory containing all different Services
-│   ├── Asset/                    # Asset Service
+│   ├── blobserver/               # Blob Server Service
 │   ├── blockassembly/            # Block Assembly Service
 │   ├── blockchain/               # Blockchain Service
 │   ├── blockvalidation/          # Block Validation Service
@@ -238,7 +264,7 @@ xxxx
 ---
 
 
-## _License_
+## License
 
 ---
 **Copyright © 2023 BSV Blockchain Org. All rights reserved.**
