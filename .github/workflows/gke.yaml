@@ -93,14 +93,6 @@ jobs:
           docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
           docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
 
-  eks-deploy-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: eu-north-1
-
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
