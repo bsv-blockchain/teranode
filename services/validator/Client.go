@@ -288,6 +288,9 @@ func (c *Client) connectFRPC() {
 			err = client.Connect(validatorFRPCAddress)
 			if err != nil {
 				c.logger.Warnf("Error connecting to fRPC server in validator: %s", err)
+				if i+1 == maxRetries {
+					break
+				}
 				time.Sleep(retryInterval)
 				retryInterval *= 2
 			} else {
