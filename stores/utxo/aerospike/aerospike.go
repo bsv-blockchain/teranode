@@ -543,9 +543,9 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	start := time.Now()
 	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "locktime")
 	if getErr != nil {
-		prometheusUtxoErrors.WithLabelValues("Get", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v\n", time.Since(start).String(), err)
-		return err
+		prometheusUtxoErrors.WithLabelValues("Get", getErr.Error()).Inc()
+		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v\n", time.Since(start).String(), getErr)
+		return getErr
 	}
 	nLockTime, ok := value.Bins["locktime"].(int)
 	if !ok {
