@@ -28,6 +28,7 @@ type Distributor struct {
 	useQuic            bool
 	quicAddresses      []string
 	quicStreams        []quic.Stream
+	waitMsBetweenTxs   int
 }
 
 type Option func(*Distributor)
@@ -96,6 +97,9 @@ func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, erro
 	}
 	logger.Infof("Using QUIC with address %s", quicAddresses)
 
+	waitMsBetweenTxs, _ := gocore.Config().GetInt("distributer_wait_time", 0)
+	logger.Infof("wait time between txs: %d", waitMsBetweenTxs)
+
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"txblaster2"},
@@ -125,6 +129,7 @@ func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, erro
 		useQuic:            true,
 		quicAddresses:      quicAddresses,
 		quicStreams:        quicStreams,
+		waitMsBetweenTxs:   waitMsBetweenTxs,
 	}
 
 	for _, opt := range opts {
@@ -177,7 +182,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				return nil, err
 			}
 		}
-		time.Sleep(10 * time.Millisecond) //
+		time.Sleep(time.Duration(d.waitMsBetweenTxs) * time.Millisecond) //
 		return nil, nil
 	} else {
 		var wg sync.WaitGroup
