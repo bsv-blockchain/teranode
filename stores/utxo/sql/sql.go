@@ -299,7 +299,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 }
 
 func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	defer func() {
@@ -351,7 +351,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 }
 
 func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	for _, spend := range spends {
@@ -387,7 +387,7 @@ func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 	for vOut, output := range tx.Outputs {
 		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(vOut))
