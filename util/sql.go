@@ -83,7 +83,7 @@ func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */
-		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=1000&_pragma=journal_mode=WAL", filename)
+		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL", filename)
 	}
 
 	logger.Infof("Using sqlite DB: %s", filename)
