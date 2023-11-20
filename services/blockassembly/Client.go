@@ -145,6 +145,9 @@ func (s *Client) connectFRPC() {
 			err = client.Connect(blockAssemblyFRPCAddress)
 			if err != nil {
 				s.logger.Warnf("Error connecting to fRPC server in blockassembly: %s", err)
+				if i+1 == maxRetries {
+					break
+				}
 				time.Sleep(retryInterval)
 				retryInterval *= 2
 			} else {
