@@ -90,8 +90,8 @@ jobs:
 
       - name: Push to eu-north-1
         run: |
-          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
-          docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.sha }}
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_type == 'tag' ? github.ref_name : github.sha }}
+          docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_type == 'tag' ? github.ref_name : github.sha }}
 
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
