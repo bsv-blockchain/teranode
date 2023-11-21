@@ -57,7 +57,7 @@ jobs:
         run: |-
 
           # Setting Image
-          cd ./deploy/k8s/${{ inputs.region }}
+          cd ./deploy/k8s/${{ inputs.region }}/$${{ inputs.env }}
           echo "Setting image"
           kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
 
