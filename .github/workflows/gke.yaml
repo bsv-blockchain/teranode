@@ -107,7 +107,7 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: eu-west-1
-      env: allinone
+      ubsv_env: allinone
 
   eks-deploy-eu-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -116,7 +116,7 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
       region: eu-west-1
-      env: scaling
+      ubsv_env: scaling
 
   eks-deploy-asia-allinone:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -125,7 +125,7 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: ap-northeast-1
-      env: allinone
+      ubsv_env: allinone
 
   eks-deploy-asia-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -134,7 +134,7 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
       region: ap-northeast-1
-      env: scaling
+      ubsv_env: scaling
 
   eks-deploy-us-allinone:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -143,7 +143,7 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: us-east-1
-      env: allinone
+      ubsv_env: allinone
 
   eks-deploy-us-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -152,4 +152,4 @@ jobs:
     if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
       region: us-east-1
-      env: scaling
+      ubsv_env: scaling
