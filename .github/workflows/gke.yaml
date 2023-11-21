@@ -97,8 +97,8 @@ jobs:
             export tag=${{ github.sha }}
             echo "version tag is $tag"
           fi
-          docker tag ubsv:${{ github.sha }} REPO:IMAGE:TAG
-          docker push REPO:IMAGE:TAG
+          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
+          docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
 
   eks-deploy-eu:
     uses: ./.github/workflows/deploy-to-region.yaml
