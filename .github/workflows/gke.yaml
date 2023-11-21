@@ -100,26 +100,56 @@ jobs:
           docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
           docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
 
-  eks-deploy-eu:
+  eks-deploy-eu-allinone:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: eu-west-1
+      env: allinone
 
-  eks-deploy-asia:
+  eks-deploy-eu-scaling:
+    uses: ./.github/workflows/deploy-to-region.yaml
+    needs: [build-docker, go-lint-and-test]
+    secrets: inherit
+    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
+    with:
+      region: eu-west-1
+      env: scaling
+
+  eks-deploy-asia-allinone:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: ap-northeast-1
+      env: allinone
 
-  eks-deploy-us:
+  eks-deploy-asia-scaling:
+    uses: ./.github/workflows/deploy-to-region.yaml
+    needs: [build-docker, go-lint-and-test]
+    secrets: inherit
+    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
+    with:
+      region: ap-northeast-1
+      env: scaling
+
+  eks-deploy-us-allinone:
     uses: ./.github/workflows/deploy-to-region.yaml
     needs: [build-docker, go-lint-and-test]
     secrets: inherit
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: us-east-1
+      env: allinone
+
+  eks-deploy-us-scaling:
+    uses: ./.github/workflows/deploy-to-region.yaml
+    needs: [build-docker, go-lint-and-test]
+    secrets: inherit
+    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
+    with:
+      region: us-east-1
+      env: scaling
