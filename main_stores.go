@@ -31,8 +31,11 @@ func getTxMetaStore(logger *gocore.Logger) txmetastore.Store {
 	// if not found it reverts to the non-appended key. nice
 	// used for asset_service so that it has a connection to aerospike but doesn't set min connections to 512 (only needs a handful)
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
-	key := fmt.Sprintf("txmeta_store.%s", serviceName)
+	key := fmt.Sprintf("txmeta_store_%s", serviceName)
 	txMetaStoreURL, err, found := gocore.Config().GetURL(key)
+	if err != nil {
+		txMetaStoreURL, err, found = gocore.Config().GetURL("txmeta_store")
+	}
 	if err != nil {
 		panic(err)
 	}
