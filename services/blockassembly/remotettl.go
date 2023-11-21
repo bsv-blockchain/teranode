@@ -18,14 +18,14 @@ type WrapperInterface interface {
 
 type Wrapper struct {
 	store                 blob.Store
-	blobServerClient      WrapperInterface
+	AssetClient           WrapperInterface
 	blockValidationClient WrapperInterface
 }
 
-func NewRemoteTTLWrapper(store blob.Store, blobServerClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
+func NewRemoteTTLWrapper(store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
 	return &Wrapper{
 		store:                 store,
-		blobServerClient:      blobServerClient,
+		AssetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
 	}, nil
 }
@@ -61,11 +61,11 @@ func (r Wrapper) SetFromReader(ctx context.Context, key []byte, value io.ReadClo
 }
 
 func (r Wrapper) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	return r.blobServerClient.Set(ctx, key, value, opts...)
+	return r.AssetClient.Set(ctx, key, value, opts...)
 }
 
 func (r Wrapper) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	return r.blobServerClient.SetTTL(ctx, key, ttl)
+	return r.AssetClient.SetTTL(ctx, key, ttl)
 }
 
 func (r Wrapper) Del(_ context.Context, key []byte) error {

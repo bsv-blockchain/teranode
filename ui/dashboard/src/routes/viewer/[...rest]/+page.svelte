@@ -1,5 +1,5 @@
 <script>
-  import { blobServerHTTPAddress } from '@stores/nodeStore.js'
+  import { assetHTTPAddress } from '@stores/nodeStore.js'
   import { goto } from '$app/navigation'
   import JSONTree from '@components/JSONTree.svelte'
   import Spinner from '@components/Spinner.svelte'
@@ -12,12 +12,12 @@
   let url = ''
 
   $: if (
-    $blobServerHTTPAddress &&
+    $assetHTTPAddress &&
     data.type &&
     data.hash &&
     data.hash.length === 64
   ) {
-    url = $blobServerHTTPAddress + '/' + data.type + '/' + data.hash + '/json'
+    url = $assetHTTPAddress + '/' + data.type + '/' + data.hash + '/json'
     fetchData()
   } else {
     url = ''

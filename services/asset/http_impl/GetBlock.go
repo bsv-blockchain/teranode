@@ -15,10 +15,10 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetBlock_http").AddTime(start)
+			AssetStat.NewStat("GetBlock_http").AddTime(start)
 		}()
 
-		h.logger.Debugf("[BlobServer_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
+		h.logger.Debugf("[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
 		height, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -32,7 +32,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
-		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			return c.JSONPretty(200, block, "  ")
@@ -56,7 +56,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		h.logger.Debugf("[BlobServer_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Debugf("[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -71,7 +71,7 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusBlobServerHttpGetBlock.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			return c.JSONPretty(200, block, "  ")

@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"

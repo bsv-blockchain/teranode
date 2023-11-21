@@ -12,16 +12,16 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetBestBlockHeader_http").AddTime(start)
+			AssetStat.NewStat("GetBestBlockHeader_http").AddTime(start)
 		}()
 
-		h.logger.Debugf("[BlobServer_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
+		h.logger.Debugf("[Asset_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
 
 		blockHeader, meta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-		prometheusBlobServerHttpGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		r := &blockHeaderResponse{
 			BlockHeader: blockHeader,

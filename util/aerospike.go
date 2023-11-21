@@ -27,6 +27,7 @@ var readExitFastOnExhaustedConnectionPool bool
 var writeMaxRetries int
 var writeTimeout time.Duration
 var writeSocketTimeout time.Duration
+
 var writeSleepBetweenRetries time.Duration
 var writeSleepMultiplier float64
 var writeExitFastOnExhaustedConnectionPool bool

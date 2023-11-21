@@ -29,8 +29,8 @@ message HealthResponse {
 // swagger:enum Peer
 message Info {
   google.protobuf.Timestamp connectedAt = 1;
-  string blobServerGRPCAddress = 2;
-  string blobServerHTTPAddress = 3;
+  string AssetGRPCAddress = 2;
+  string AssetHTTPAddress = 3;
   string source = 4;
   string ip = 5;
   string name = 6;

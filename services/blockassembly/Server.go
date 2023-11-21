@@ -51,7 +51,7 @@ type BlockAssembly struct {
 	txMetaStore           txmeta_store.Store
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
-	blobServerClient      WrapperInterface
+	AssetClient           WrapperInterface
 	blockValidationClient WrapperInterface
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
@@ -65,7 +65,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
-	blockchainClient blockchain.ClientI, blobServerClient, blockValidationClient WrapperInterface) *BlockAssembly {
+	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
@@ -81,7 +81,7 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
 		subtreeTTL:            subtreeTTL,
-		blobServerClient:      blobServerClient,
+		AssetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
@@ -174,7 +174,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
 	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
 	if remoteTTLStores {
-		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.subtreeStore, ba.blobServerClient, ba.blockValidationClient)
+		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
 		if err != nil {
 			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
 		}

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
@@ -53,7 +53,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 				}
 
 				data, err := json.MarshalIndent(&notificationMsg{
-					Type: blobserver_api.Type_Ping.String(),
+					Type: asset_api.Type_Ping.String(),
 				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %w", err)

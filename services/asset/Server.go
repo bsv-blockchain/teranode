@@ -1,14 +1,14 @@
-package blobserver
+package asset
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/grpc_impl"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/http_impl"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/grpc_impl"
+	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
+	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
@@ -38,13 +38,13 @@ type Server struct {
 	grpcServer     *grpc_impl.GRPC
 	httpServer     *http_impl.HTTP
 	peers          map[string]peerWithContext
-	notificationCh chan *blobserver_api.Notification
+	notificationCh chan *asset_api.Notification
 	useP2P         bool
 }
 
 func Enabled() bool {
-	_, grpcOk := gocore.Config().Get("blobserver_grpcListenAddress")
-	_, httpOk := gocore.Config().Get("blobserver_httpListenAddress")
+	_, grpcOk := gocore.Config().Get("asset_grpcListenAddress")
+	_, httpOk := gocore.Config().Get("asset_httpListenAddress")
 	return grpcOk || httpOk
 }
 
@@ -57,7 +57,7 @@ func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store
 		txMetaStore:    txMetaStore,
 		subtreeStore:   subtreeStore,
 		peers:          make(map[string]peerWithContext),
-		notificationCh: make(chan *blobserver_api.Notification, 100),
+		notificationCh: make(chan *asset_api.Notification, 100),
 	}
 
 	return s
@@ -65,11 +65,11 @@ func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store
 
 func (v *Server) Init(ctx context.Context) (err error) {
 	var grpcOk, httpOk bool
-	v.grpcAddr, grpcOk = gocore.Config().Get("blobserver_grpcListenAddress")
-	v.httpAddr, httpOk = gocore.Config().Get("blobserver_httpListenAddress")
+	v.grpcAddr, grpcOk = gocore.Config().Get("asset_grpcListenAddress")
+	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
 	if !grpcOk && !httpOk {
-		return fmt.Errorf("no blobserver_grpcListenAddress or blobserver_httpListenAddress setting found")
+		return fmt.Errorf("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
 	blockchainClient, err := blockchain.NewClient(ctx)
@@ -130,7 +130,7 @@ func (v *Server) Start(ctx context.Context) error {
 
 		// We need to react to new nodes connecting to the network and we do this by subscribing to
 		// the bootstrap service.  Each time a new node connects to the network, we will start a new
-		// blobserver subscription for that node.
+		// Asset subscription for that node.
 
 		// We define a channel that will receive a notification whenever a new block or subtree is announced
 		// by any Peer.  This will be handled by a WebSocket service that will push messages to any registered
@@ -138,20 +138,20 @@ func (v *Server) Start(ctx context.Context) error {
 
 		// TODO - This may need to be moved to a separate location in the code
 
-		blobServerGrpcAddress, _ := gocore.Config().Get("blobserver_grpcAddress")
+		AssetGrpcAddress, _ := gocore.Config().Get("asset_grpcAddress")
 
-		blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
+		AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 		securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
-		if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
-			blobServerHttpAddressURL.Scheme = "https"
-			v.logger.Warnf("blobserver_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-		} else if blobServerHttpAddressURL.Scheme == "https" && securityLevel == 0 {
-			blobServerHttpAddressURL.Scheme = "http"
-			v.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+		if AssetHttpAddressURL.Scheme == "http" && securityLevel == 1 {
+			AssetHttpAddressURL.Scheme = "https"
+			v.logger.Warnf("asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+		} else if AssetHttpAddressURL.Scheme == "https" && securityLevel == 0 {
+			AssetHttpAddressURL.Scheme = "http"
+			v.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 		}
 
-		blobServerClientName, _ := gocore.Config().Get("blobserver_clientName")
+		AssetClientName, _ := gocore.Config().Get("asset_clientName")
 
 		if v.useP2P {
 			// if using p2p we are already subscribed but will need to get the best block from peers.
@@ -161,50 +161,50 @@ func (v *Server) Start(ctx context.Context) error {
 			// Start a subscription to the bootstrap service
 
 			g.Go(func() error {
-				bootstrapClient := bootstrap.NewClient("BLOB_SERVER", blobServerClientName).WithCallback(func(p bootstrap.Peer) {
-					if p.BlobServerGrpcAddress != "" {
-						v.logger.Infof("[BlobServer] Connecting to blob server at: %s", p.BlobServerGrpcAddress)
-						if pp, ok := v.peers[p.BlobServerGrpcAddress]; ok {
-							v.logger.Infof("[BlobServer] Already connected to blob server at: %s, stopping...", p.BlobServerGrpcAddress)
+				bootstrapClient := bootstrap.NewClient("BLOB_SERVER", AssetClientName).WithCallback(func(p bootstrap.Peer) {
+					if p.AssetGrpcAddress != "" {
+						v.logger.Infof("[Asset] Connecting to blob server at: %s", p.AssetGrpcAddress)
+						if pp, ok := v.peers[p.AssetGrpcAddress]; ok {
+							v.logger.Infof("[Asset] Already connected to blob server at: %s, stopping...", p.AssetGrpcAddress)
 							_ = pp.peer.Stop()
 							pp.cancelFunc()
-							delete(v.peers, p.BlobServerGrpcAddress)
+							delete(v.peers, p.AssetGrpcAddress)
 						}
 
 						// Start a subscription to the new peer's blob server
 						peerCtx, peerCtxCancel := context.WithCancel(ctx)
 
-						peer := NewPeer(peerCtx, "blobserver_bs", p.BlobServerGrpcAddress, v.notificationCh)
+						peer := NewPeer(peerCtx, "asset_bs", p.AssetGrpcAddress, v.notificationCh)
 
-						v.peers[p.BlobServerGrpcAddress] = peerWithContext{
+						v.peers[p.AssetGrpcAddress] = peerWithContext{
 							peer:       peer,
 							cancelFunc: peerCtxCancel,
 						}
 						g.Go(func() error {
-							return v.peers[p.BlobServerGrpcAddress].peer.Start(peerCtx)
+							return v.peers[p.AssetGrpcAddress].peer.Start(peerCtx)
 						})
 					}
 
-					if p.BlobServerHttpAddress != "" {
+					if p.AssetHttpAddress != "" {
 						// get the best block header and send to the block validation for processing
-						v.logger.Infof("[BlobServer] Getting best block header from server at: %s", p.BlobServerHttpAddress)
-						blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.BlobServerHttpAddress))
+						v.logger.Infof("[Asset] Getting best block header from server at: %s", p.AssetHttpAddress)
+						blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.AssetHttpAddress))
 						if err != nil {
-							v.logger.Errorf("[BlobServer] error getting best block header from %s: %s", p.BlobServerHttpAddress, err)
+							v.logger.Errorf("[Asset] error getting best block header from %s: %s", p.AssetHttpAddress, err)
 							return
 						}
 						blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
 						if err != nil {
-							v.logger.Errorf("[BlobServer] error parsing best block header from %s: %s", p.BlobServerHttpAddress, err)
+							v.logger.Errorf("[Asset] error parsing best block header from %s: %s", p.AssetHttpAddress, err)
 							return
 						}
 
 						validationClient := blockvalidation.NewClient(ctx)
-						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.BlobServerHttpAddress); err != nil {
-							v.logger.Errorf("[BlobServer] error validating block from %s: %s", p.BlobServerHttpAddress, err)
+						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress); err != nil {
+							v.logger.Errorf("[Asset] error validating block from %s: %s", p.AssetHttpAddress, err)
 						}
 					}
-				}).WithBlobServerGrpcAddress(blobServerGrpcAddress).WithBlobServerHttpAddress(blobServerHttpAddressURL.String())
+				}).WithAssetGrpcAddress(AssetGrpcAddress).WithAssetHttpAddress(AssetHttpAddressURL.String())
 
 				return bootstrapClient.Start(ctx)
 			})
@@ -234,16 +234,16 @@ func (v *Server) Stop(ctx context.Context) error {
 	defer cancel()
 
 	if v.grpcServer != nil {
-		v.logger.Infof("[BlobServer] Stopping grpc server")
+		v.logger.Infof("[Asset] Stopping grpc server")
 		if err := v.grpcServer.Stop(ctx); err != nil {
-			v.logger.Errorf("[BlobServer] error stopping grpc server", "error", err)
+			v.logger.Errorf("[Asset] error stopping grpc server", "error", err)
 		}
 	}
 
 	if v.httpServer != nil {
-		v.logger.Infof("[BlobServer] Stopping http server")
+		v.logger.Infof("[Asset] Stopping http server")
 		if err := v.httpServer.Stop(ctx); err != nil {
-			v.logger.Errorf("[BlobServer] error stopping http server", "error", err)
+			v.logger.Errorf("[Asset] error stopping http server", "error", err)
 		}
 	}
 

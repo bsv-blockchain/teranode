@@ -171,7 +171,7 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/blobserver/blobserver_api/blobserver_api.proto
+	services/asset/asset_api/asset_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -254,7 +254,7 @@ clean_gen:
 	rm -f ./services/propagation/propagation_api/*.pb.go
 	rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
-	rm -f ./services/blobserver/blobserver_api/*.pb.go
+	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster

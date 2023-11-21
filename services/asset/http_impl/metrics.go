@@ -6,13 +6,13 @@ import (
 )
 
 var (
-	prometheusBlobServerHttpGetTransaction     *prometheus.CounterVec
-	prometheusBlobServerHttpGetSubtree         *prometheus.CounterVec
-	prometheusBlobServerHttpGetBlockHeader     *prometheus.CounterVec
-	prometheusBlobServerHttpGetBestBlockHeader *prometheus.CounterVec
-	prometheusBlobServerHttpGetBlock           *prometheus.CounterVec
-	prometheusBlobServerHttpGetLastNBlocks     *prometheus.CounterVec
-	prometheusBlobServerHttpGetUTXO            *prometheus.CounterVec
+	prometheusAssetHttpGetTransaction     *prometheus.CounterVec
+	prometheusAssetHttpGetSubtree         *prometheus.CounterVec
+	prometheusAssetHttpGetBlockHeader     *prometheus.CounterVec
+	prometheusAssetHttpGetBestBlockHeader *prometheus.CounterVec
+	prometheusAssetHttpGetBlock           *prometheus.CounterVec
+	prometheusAssetHttpGetLastNBlocks     *prometheus.CounterVec
+	prometheusAssetHttpGetUTXO            *prometheus.CounterVec
 )
 
 var prometheusMetricsInitialized = false
@@ -22,9 +22,9 @@ func initPrometheusMetrics() {
 		return
 	}
 
-	prometheusBlobServerHttpGetTransaction = promauto.NewCounterVec(
+	prometheusAssetHttpGetTransaction = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_transaction",
 			Help:      "Number of Get transactions ops",
 		},
@@ -34,9 +34,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetSubtree = promauto.NewCounterVec(
+	prometheusAssetHttpGetSubtree = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_subtree",
 			Help:      "Number of Get subtree ops",
 		},
@@ -46,9 +46,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetBlockHeader = promauto.NewCounterVec(
+	prometheusAssetHttpGetBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_block_header",
 			Help:      "Number of Get block header ops",
 		},
@@ -58,9 +58,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetLastNBlocks = promauto.NewCounterVec(
+	prometheusAssetHttpGetLastNBlocks = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_last_n_blocks",
 			Help:      "Number of Get last N blocks ops",
 		},
@@ -70,9 +70,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetBestBlockHeader = promauto.NewCounterVec(
+	prometheusAssetHttpGetBestBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_best_block_header",
 			Help:      "Number of Get best block header ops",
 		},
@@ -82,9 +82,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetBlock = promauto.NewCounterVec(
+	prometheusAssetHttpGetBlock = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_block",
 			Help:      "Number of Get block ops",
 		},
@@ -94,9 +94,9 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlobServerHttpGetUTXO = promauto.NewCounterVec(
+	prometheusAssetHttpGetUTXO = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "blobserver",
+			Namespace: "Asset",
 			Name:      "http_get_utxo",
 			Help:      "Number of Get UTXO ops",
 		},

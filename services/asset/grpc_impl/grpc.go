@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -20,16 +20,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var blobServerStat = gocore.NewStat("blobserver")
+var AssetStat = gocore.NewStat("Asset")
 
 type subscriber struct {
-	subscription blobserver_api.BlobServerAPI_SubscribeServer
+	subscription asset_api.AssetAPI_SubscribeServer
 	source       string
 	done         chan struct{}
 }
 
 type GRPC struct {
-	blobserver_api.UnimplementedBlobServerAPIServer
+	asset_api.UnimplementedAssetAPIServer
 	logger               utils.Logger
 	baseURL              string
 	getPeers             func() []string
@@ -37,19 +37,19 @@ type GRPC struct {
 	grpcServer           *grpc.Server
 	blockchainClient     blockchain.ClientI
 	newSubscriptions     chan subscriber
-	newHttpSubscriptions chan chan *blobserver_api.Notification
+	newHttpSubscriptions chan chan *asset_api.Notification
 	deadSubscriptions    chan subscriber
 	subscribers          map[subscriber]bool
-	httpSubscribers      map[chan *blobserver_api.Notification]bool
-	notifications        chan *blobserver_api.Notification
+	httpSubscribers      map[chan *asset_api.Notification]bool
+	notifications        chan *asset_api.Notification
 }
 
 func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
 	initPrometheusMetrics()
 
-	u, err, found := gocore.Config().GetURL("blobserver_httpAddress")
+	u, err, found := gocore.Config().GetURL("asset_httpAddress")
 	if err != nil {
-		logger.Fatalf("blobserver_httpAddress is not a valid URL: %v", err)
+		logger.Fatalf("asset_httpAddress is not a valid URL: %v", err)
 	}
 
 	if !found {
@@ -58,30 +58,30 @@ func New(logger utils.Logger, repo *repository.Repository, getPeers func() []str
 			logger.Fatalf("Failed to get public IP address: %v", err)
 		}
 
-		blobServerPort, _ := gocore.Config().GetInt("blobserver_http_port")
-		if blobServerPort == 0 {
-			logger.Fatalf("blobserver_http_port is not set")
+		AssetPort, _ := gocore.Config().GetInt("asset_http_port")
+		if AssetPort == 0 {
+			logger.Fatalf("asset_http_port is not set")
 		}
 
 		scheme := "http"
 		if logger.LogLevel() > 0 {
 			scheme = "https"
-			blobServerPort, _ = gocore.Config().GetInt("blobserver_https_port")
-			if blobServerPort == 0 {
-				logger.Fatalf("blobserver_https_port is not set")
+			AssetPort, _ = gocore.Config().GetInt("asset_https_port")
+			if AssetPort == 0 {
+				logger.Fatalf("asset_https_port is not set")
 			}
 		}
 
-		u, err = url.ParseRequestURI(fmt.Sprintf("%s://%s:%d", scheme, remoteAddress, blobServerPort))
+		u, err = url.ParseRequestURI(fmt.Sprintf("%s://%s:%d", scheme, remoteAddress, AssetPort))
 		if err != nil {
 			logger.Fatalf("Failed to parse url: %v", err)
 		}
 
 		// Warn if there is a mismatch between log level and scheme
 		if logger.LogLevel() == 0 && u.Scheme != "http" {
-			logger.Warnf("blobserver_httpAddress scheme is not http, but logLevel is set to 0.")
+			logger.Warnf("asset_httpAddress scheme is not http, but logLevel is set to 0.")
 		} else if u.Scheme != "https" {
-			logger.Warnf("blobserver_httpAddress scheme is not https, but logLevel is set to %d.", logger.LogLevel())
+			logger.Warnf("asset_httpAddress scheme is not https, but logLevel is set to %d.", logger.LogLevel())
 		}
 	}
 
@@ -91,18 +91,18 @@ func New(logger utils.Logger, repo *repository.Repository, getPeers func() []str
 		getPeers:             getPeers,
 		repository:           repo,
 		newSubscriptions:     make(chan subscriber, 10),
-		newHttpSubscriptions: make(chan chan *blobserver_api.Notification, 10),
+		newHttpSubscriptions: make(chan chan *asset_api.Notification, 10),
 		deadSubscriptions:    make(chan subscriber, 10),
 		subscribers:          make(map[subscriber]bool),
-		httpSubscribers:      make(map[chan *blobserver_api.Notification]bool),
-		notifications:        make(chan *blobserver_api.Notification, 100),
+		httpSubscribers:      make(map[chan *asset_api.Notification]bool),
+		notifications:        make(chan *asset_api.Notification, 100),
 	}
 
 	return g, nil
 }
 
 func (g *GRPC) Init(ctx context.Context) (err error) {
-	g.logger.Infof("[BlobServer] GRPC service initializing")
+	g.logger.Infof("[Asset] GRPC service initializing")
 
 	g.blockchainClient, err = blockchain.NewClient(ctx)
 	if err != nil {
@@ -113,10 +113,10 @@ func (g *GRPC) Init(ctx context.Context) (err error) {
 }
 
 func (g *GRPC) Start(ctx context.Context, addr string) error {
-	g.logger.Infof("[BlobServer] GRPC service starting")
+	g.logger.Infof("[Asset] GRPC service starting")
 
 	// Subscribe to the blockchain service
-	blockchainSubscription, err := g.blockchainClient.Subscribe(ctx, "blobserver")
+	blockchainSubscription, err := g.blockchainClient.Subscribe(ctx, "Asset")
 	if err != nil {
 		return err
 	}
@@ -124,17 +124,17 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 		for {
 			select {
 			case <-ctx.Done():
-				g.logger.Infof("[BlobServer] GRPC service shutting down")
+				g.logger.Infof("[Asset] GRPC service shutting down")
 				return
 			case notification := <-blockchainSubscription:
 				if notification == nil {
 					continue
 				}
 
-				g.logger.Debugf("Sending %s notification: %s to %d subscribers", blobserver_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
+				g.logger.Debugf("Sending %s notification: %s to %d subscribers", asset_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
 
-				g.notifications <- &blobserver_api.Notification{
-					Type:    blobserver_api.Type(notification.Type),
+				g.notifications <- &asset_api.Notification{
+					Type:    asset_api.Type(notification.Type),
 					Hash:    notification.Hash[:],
 					BaseUrl: g.baseURL,
 				}
@@ -154,36 +154,36 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 			case notification := <-g.notifications:
 				for sub := range g.subscribers {
 					go func(s subscriber) {
-						g.logger.Debugf("Sending %s/%s notification: %s to subscriber %s", blobserver_api.Type(notification.Type).String(), notification.BaseUrl, utils.ReverseAndHexEncodeSlice(notification.Hash), s.source)
+						g.logger.Debugf("Sending %s/%s notification: %s to subscriber %s", asset_api.Type(notification.Type).String(), notification.BaseUrl, utils.ReverseAndHexEncodeSlice(notification.Hash), s.source)
 						if err := s.subscription.Send(notification); err != nil {
 							g.deadSubscriptions <- s
 						}
 					}(sub)
 				}
 				for sub := range g.httpSubscribers {
-					go func(s chan *blobserver_api.Notification) {
+					go func(s chan *asset_api.Notification) {
 						s <- notification
 					}(sub)
 				}
 			case s := <-g.newHttpSubscriptions:
 				g.httpSubscribers[s] = true
-				g.logger.Infof("[BlobServer] New HTTP Subscription received (Total=%d).", len(g.httpSubscribers))
+				g.logger.Infof("[Asset] New HTTP Subscription received (Total=%d).", len(g.httpSubscribers))
 
 			case s := <-g.newSubscriptions:
 				g.subscribers[s] = true
-				g.logger.Infof("[BlobServer] New Subscription received [%s] (Total=%d).", s.source, len(g.subscribers))
+				g.logger.Infof("[Asset] New Subscription received [%s] (Total=%d).", s.source, len(g.subscribers))
 
 			case s := <-g.deadSubscriptions:
 				delete(g.subscribers, s)
 				safeClose(s.done)
-				g.logger.Infof("[BlobServer] Subscription removed [%s] (Total=%d).", s.source, len(g.subscribers))
+				g.logger.Infof("[Asset] Subscription removed [%s] (Total=%d).", s.source, len(g.subscribers))
 			}
 		}
 	}()
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, g.logger, "blobserver", func(server *grpc.Server) {
-		blobserver_api.RegisterBlobServerAPIServer(server, g)
+	if err := util.StartGRPCServer(ctx, g.logger, "Asset", func(server *grpc.Server) {
+		asset_api.RegisterAssetAPIServer(server, g)
 		g.grpcServer = server
 	}); err != nil {
 		return err
@@ -193,33 +193,33 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 }
 
 func (g *GRPC) Stop(ctx context.Context) error {
-	g.logger.Infof("[BlobServer] GRPC (impl) service shutting down")
+	g.logger.Infof("[Asset] GRPC (impl) service shutting down")
 	g.grpcServer.GracefulStop()
 	return nil
 }
 
-func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*blobserver_api.HealthResponse, error) {
+func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*asset_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("Health").AddTime(start)
+		AssetStat.NewStat("Health").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCHealth.Inc()
-	g.logger.Debugf("[BlobServer_grpc] Health check")
+	prometheusAssetGRPCHealth.Inc()
+	g.logger.Debugf("[Asset_grpc] Health check")
 
-	return &blobserver_api.HealthResponse{
+	return &asset_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),
 	}, nil
 }
 
-func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockRequest) (*blobserver_api.GetBlockResponse, error) {
+func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest) (*asset_api.GetBlockResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetBlock").AddTime(start)
+		AssetStat.NewStat("GetBlock").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCGetBlock.Inc()
+	prometheusAssetGRPCGetBlock.Inc()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -242,7 +242,7 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 		subtreeHashes[i] = subtreeHash[:]
 	}
 
-	return &blobserver_api.GetBlockResponse{
+	return &asset_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           height,
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
@@ -252,10 +252,10 @@ func (g *GRPC) GetBlock(ctx context.Context, request *blobserver_api.GetBlockReq
 	}, nil
 }
 
-func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockHeaderRequest) (*blobserver_api.GetBlockHeaderResponse, error) {
+func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeaderRequest) (*asset_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetBlockHeader").AddTime(start)
+		AssetStat.NewStat("GetBlockHeader").AddTime(start)
 	}()
 
 	hash, err := chainhash.NewHash(req.BlockHash)
@@ -268,21 +268,21 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *blobserver_api.GetBlockH
 		return nil, err
 	}
 
-	prometheusBlobServerGRPCGetBlockHeader.Inc()
+	prometheusAssetGRPCGetBlockHeader.Inc()
 
-	return &blobserver_api.GetBlockHeaderResponse{
+	return &asset_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
 		Height:      meta.Height,
 	}, nil
 }
 
-func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlockHeadersRequest) (*blobserver_api.GetBlockHeadersResponse, error) {
+func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeadersRequest) (*asset_api.GetBlockHeadersResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetBlockHeaders").AddTime(start)
+		AssetStat.NewStat("GetBlockHeaders").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCGetBlockHeaders.Inc()
+	prometheusAssetGRPCGetBlockHeaders.Inc()
 
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
@@ -307,26 +307,26 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *blobserver_api.GetBlock
 		blockHeaderBytes[i] = blockHeader.Bytes()
 	}
 
-	return &blobserver_api.GetBlockHeadersResponse{
+	return &asset_api.GetBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
 		Heights:      heights,
 	}, nil
 }
 
-func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobserver_api.GetBlockHeaderResponse, error) {
+func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*asset_api.GetBlockHeaderResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetBestBlockHeader").AddTime(start)
+		AssetStat.NewStat("GetBestBlockHeader").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCGetBestBlockHeader.Inc()
+	prometheusAssetGRPCGetBestBlockHeader.Inc()
 
 	blockHeader, meta, err := g.repository.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &blobserver_api.GetBlockHeaderResponse{
+	return &asset_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
 		Height:      meta.Height,
 		TxCount:     meta.TxCount,
@@ -335,20 +335,20 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*blobs
 	}, nil
 }
 
-func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*blobserver_api.GetNodesResponse, error) {
+func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*asset_api.GetNodesResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetNodes").AddTime(start)
+		AssetStat.NewStat("GetNodes").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCGetNodes.Inc()
+	prometheusAssetGRPCGetNodes.Inc()
 
-	return &blobserver_api.GetNodesResponse{
+	return &asset_api.GetNodesResponse{
 		Nodes: g.getPeers(),
 	}, nil
 }
 
-func (g *GRPC) Get(ctx context.Context, request *blobserver_api.GetSubtreeRequest) (*blobserver_api.GetSubtreeResponse, error) {
+func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*asset_api.GetSubtreeResponse, error) {
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -359,38 +359,38 @@ func (g *GRPC) Get(ctx context.Context, request *blobserver_api.GetSubtreeReques
 		return nil, err
 	}
 
-	return &blobserver_api.GetSubtreeResponse{
+	return &asset_api.GetSubtreeResponse{
 		Subtree: subtreeBytes,
 	}, nil
 }
 
-func (g *GRPC) Set(ctx context.Context, request *blobserver_api.SetSubtreeRequest) (*emptypb.Empty, error) {
+func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*emptypb.Empty, error) {
 	ttl := time.Duration(request.Ttl) * time.Second
 	return &emptypb.Empty{}, g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
 }
 
-func (g *GRPC) SetTTL(ctx context.Context, request *blobserver_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
+func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
 	ttl := time.Duration(request.Ttl) * time.Second
 	return &emptypb.Empty{}, g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
 }
 
-func (g *GRPC) AddHttpSubscriber(ch chan *blobserver_api.Notification) {
+func (g *GRPC) AddHttpSubscriber(ch chan *asset_api.Notification) {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("AddHttpSubscriber").AddTime(start)
+		AssetStat.NewStat("AddHttpSubscriber").AddTime(start)
 	}()
 
 	g.newHttpSubscriptions <- ch
 }
 
-func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_api.BlobServerAPI_SubscribeServer) error {
+func (g *GRPC) Subscribe(req *asset_api.SubscribeRequest, sub asset_api.AssetAPI_SubscribeServer) error {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("Subscribe").AddTime(start)
+		AssetStat.NewStat("Subscribe").AddTime(start)
 	}()
 
-	prometheusBlobServerGRPCSubscribe.Inc()
-	g.logger.Debugf("[BlobServer_grpc] Subscribe: %s", req.Source)
+	prometheusAssetGRPCSubscribe.Inc()
+	g.logger.Debugf("[Asset_grpc] Subscribe: %s", req.Source)
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
@@ -405,7 +405,7 @@ func (g *GRPC) Subscribe(req *blobserver_api.SubscribeRequest, sub blobserver_ap
 		select {
 		case <-sub.Context().Done():
 			// Client disconnected.
-			g.logger.Infof("[BlobServer] GRPC client disconnected: %s", req.Source)
+			g.logger.Infof("[Asset] GRPC client disconnected: %s", req.Source)
 			return nil
 		case <-ch:
 			// Subscription ended.

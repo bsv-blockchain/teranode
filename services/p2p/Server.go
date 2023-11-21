@@ -57,9 +57,9 @@ type Server struct {
 	blockValidationClient *blockvalidation.Client
 	validatorClient       *validator.Client
 
-	blobServerHttpAddressURL string
-	e                        *echo.Echo
-	notificationCh           chan *notificationMsg
+	AssetHttpAddressURL string
+	e                   *echo.Echo
+	notificationCh      chan *notificationMsg
 }
 
 type BestBlockMessage struct {
@@ -173,17 +173,17 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
 	}
 
-	blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
+	AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
-	if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
-		blobServerHttpAddressURL.Scheme = "https"
-		s.logger.Warnf("blobserver_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-	} else if blobServerHttpAddressURL.Scheme == "https" && securityLevel == 0 {
-		blobServerHttpAddressURL.Scheme = "http"
-		s.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+	if AssetHttpAddressURL.Scheme == "http" && securityLevel == 1 {
+		AssetHttpAddressURL.Scheme = "https"
+		s.logger.Warnf("asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+	} else if AssetHttpAddressURL.Scheme == "https" && securityLevel == 0 {
+		AssetHttpAddressURL.Scheme = "http"
+		s.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 	}
-	s.blobServerHttpAddressURL = blobServerHttpAddressURL.String()
+	s.AssetHttpAddressURL = AssetHttpAddressURL.String()
 
 	s.blockValidationClient = blockvalidation.NewClient(ctx)
 
@@ -310,7 +310,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// if it's a block notification send it on the block channel.
 				blockMessage = BlockMessage{
 					Hash:       notification.Hash.String(),
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.host.ID().String(),
 				}
 
@@ -333,7 +333,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				miningOnMessage = MiningOnMessage{
 					Hash:         header.Hash().String(),
 					PreviousHash: header.HashPrevBlock.String(),
-					DataHubUrl:   s.blobServerHttpAddressURL,
+					DataHubUrl:   s.AssetHttpAddressURL,
 					PeerId:       s.host.ID().String(),
 					Height:       meta.Height,
 					Miner:        meta.Miner,
@@ -353,7 +353,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = SubtreeMessage{
 					Hash:       notification.Hash.String(),
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.host.ID().String(),
 				}
 				msgBytes, err = json.Marshal(subtreeMessage)
@@ -617,7 +617,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 				blockMessage = BlockMessage{
 					Hash:       bh.Hash().String(),
 					Height:     bhMeta.Height,
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 				}
 
 				msgBytes, err = json.Marshal(blockMessage)

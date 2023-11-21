@@ -66,12 +66,12 @@ func (s *Server) Init(_ context.Context) (err error) {
 
 	e.GET("/nodes", func(c echo.Context) error {
 		type node struct {
-			Source                string `json:"source"`
-			BlobServerGRPCAddress string `json:"blobServerGRPCAddress"`
-			BlobServerHTTPAddress string `json:"blobServerHTTPAddress"`
-			ConnectedAt           string `json:"connectedAt"`
-			Name                  string `json:"name"`
-			IP                    string `json:"ip"`
+			Source           string `json:"source"`
+			AssetGRPCAddress string `json:"AssetGRPCAddress"`
+			AssetHTTPAddress string `json:"AssetHTTPAddress"`
+			ConnectedAt      string `json:"connectedAt"`
+			Name             string `json:"name"`
+			IP               string `json:"ip"`
 		}
 
 		nodes := make([]*node, 0, len(s.subscribers))
@@ -79,12 +79,12 @@ func (s *Server) Init(_ context.Context) (err error) {
 		s.mu.RLock()
 		for _, s := range s.subscribers {
 			nodes = append(nodes, &node{
-				Source:                s.Source,
-				BlobServerGRPCAddress: s.BlobServerGRPCAddress,
-				BlobServerHTTPAddress: s.BlobServerHTTPAddress,
-				ConnectedAt:           utils.ISOFormat(s.ConnectedAt.AsTime()),
-				IP:                    s.Ip,
-				Name:                  s.Name,
+				Source:           s.Source,
+				AssetGRPCAddress: s.AssetGRPCAddress,
+				AssetHTTPAddress: s.AssetHTTPAddress,
+				ConnectedAt:      utils.ISOFormat(s.ConnectedAt.AsTime()),
+				IP:               s.Ip,
+				Name:             s.Name,
 			})
 		}
 		s.mu.RUnlock()
@@ -222,10 +222,10 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 	ch := make(chan *bootstrap_api.Notification)
 
 	s.mu.RLock()
-	if info.BlobServerGRPCAddress == "" {
+	if info.AssetGRPCAddress == "" {
 		s.logger.Infof("[Bootstrap] New Anonymous Subscription received [%s] (Total=%d).", info.Source, len(s.subscribers)+1)
 	} else {
-		s.logger.Infof("[Bootstrap] New Subscription received [%s / %s] (Total=%d).", info.Source, info.BlobServerGRPCAddress, len(s.subscribers)+1)
+		s.logger.Infof("[Bootstrap] New Subscription received [%s / %s] (Total=%d).", info.Source, info.AssetGRPCAddress, len(s.subscribers)+1)
 	}
 
 	// Set the time this node connected
@@ -233,7 +233,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 
 	// Send this new subscriber all the existing subscribers...
 	for _, info := range s.subscribers {
-		if info.BlobServerGRPCAddress != "" {
+		if info.AssetGRPCAddress != "" {
 			if err := stream.Send(&bootstrap_api.Notification{
 				Type: bootstrap_api.Type_ADD,
 				Info: info,
@@ -264,10 +264,10 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 		safeClose(ch)
 
 		s.mu.RLock()
-		if info.BlobServerGRPCAddress == "" {
+		if info.AssetGRPCAddress == "" {
 			s.logger.Infof("[Bootstrap] Anonymous Subscription removed [%s] (Total=%d).", info.Source, len(s.subscribers))
 		} else {
-			s.logger.Infof("[Bootstrap] Subscription removed [%s / %s] (Total=%d).", info.Source, info.BlobServerGRPCAddress, len(s.subscribers))
+			s.logger.Infof("[Bootstrap] Subscription removed [%s / %s] (Total=%d).", info.Source, info.AssetGRPCAddress, len(s.subscribers))
 		}
 		s.mu.RUnlock()
 

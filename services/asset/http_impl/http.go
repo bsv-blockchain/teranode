@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
@@ -16,16 +16,16 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var blobServerStat = gocore.NewStat("blobserver")
+var AssetStat = gocore.NewStat("Asset")
 
 type HTTP struct {
 	logger         utils.Logger
 	repository     *repository.Repository
 	e              *echo.Echo
-	notificationCh chan *blobserver_api.Notification
+	notificationCh chan *asset_api.Notification
 }
 
-func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *blobserver_api.Notification) (*HTTP, error) {
+func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -51,7 +51,7 @@ func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *
 
 	e.GET("/health", func(c echo.Context) error {
 		_, details, err := repo.Health(c.Request().Context())
-		logger.Debugf("[BlobServer_http] Health check")
+		logger.Debugf("[Asset_http] Health check")
 
 		if err != nil {
 			return c.String(http.StatusInternalServerError, details)
@@ -125,14 +125,14 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 		mode = "HTTP"
 	}
 
-	h.logger.Infof("BlobServer %s service listening on %s", mode, addr)
+	h.logger.Infof("Asset %s service listening on %s", mode, addr)
 
 	go func() {
 		<-ctx.Done()
-		h.logger.Infof("[BlobServer] %s (impl) service shutting down", mode)
+		h.logger.Infof("[Asset] %s (impl) service shutting down", mode)
 		err := h.e.Shutdown(ctx)
 		if err != nil {
-			h.logger.Errorf("[BlobServer] %s (impl) service shutdown error: %s", mode, err)
+			h.logger.Errorf("[Asset] %s (impl) service shutdown error: %s", mode, err)
 		}
 	}()
 
@@ -144,7 +144,7 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	var err error
 
 	if mode == "HTTP" {
-		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTP listening on %s", addr))
+		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTP listening on %s", addr))
 		err = h.e.Start(addr)
 
 	} else {
@@ -158,7 +158,7 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 			return errors.New("server_keyFile is required for HTTPS")
 		}
 
-		servicemanager.AddListenerInfo(fmt.Sprintf("blobserver HTTPS listening on %s", addr))
+		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTPS listening on %s", addr))
 		err = h.e.StartTLS(addr, certFile, keyFile)
 	}
 

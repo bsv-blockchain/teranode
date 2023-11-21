@@ -15,10 +15,10 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetSubtree_http").AddTime(start)
+			AssetStat.NewStat("GetSubtree_http").AddTime(start)
 		}()
 
-		h.logger.Debugf("[BlobServer_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Debugf("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -33,7 +33,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusBlobServerHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			return c.JSONPretty(200, subtree, "  ")

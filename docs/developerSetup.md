@@ -171,8 +171,8 @@ Follow these steps to add the required settings to the `settings_local.conf` fil
 
    ```conf
    coinbase_arbitrary_text.dev.NEW_USER_TEMPLATE=/NEW_USER_TEMPLATE/ # template for future new users (referenced in documentation)
-   blobserver_httpAddress.dev.NEW_USER_TEMPLATE=https://bastion.ubsv.dev:18x90 # template for future new users (referenced in documentation)
-   blobserver_clientName.dev.NEW_USER_TEMPLATE=NEW_USER_TEMPLATE # template for future new users (referenced in documentation)
+   asset_httpAddress.dev.NEW_USER_TEMPLATE=https://bastion.ubsv.dev:18x90 # template for future new users (referenced in documentation)
+   asset_clientName.dev.NEW_USER_TEMPLATE=NEW_USER_TEMPLATE # template for future new users (referenced in documentation)
    ```
 
 3. **Duplicate each line** and replace `NEW_USER_TEMPLATE` with your first name. If there's already another user with the same first name, use both your first name and last name.
@@ -182,16 +182,16 @@ Follow these steps to add the required settings to the `settings_local.conf` fil
 
    ```conf
    settings_local.conf:coinbase_arbitrary_text.dev.John=/John/
-   settings_local.conf:blobserver_httpAddress.dev.John=https://bastion.ubsv.dev:18x90
-   settings_local.conf:blobserver_clientName.dev.John=John
+   settings_local.conf:asset_httpAddress.dev.John=https://bastion.ubsv.dev:18x90
+   settings_local.conf:asset_clientName.dev.John=John
    ```
 
    If there's already a user named `John`, then use:
 
    ```conf
    settings_local.conf:coinbase_arbitrary_text.dev.JohnDoe=/JohnDoe/
-   settings_local.conf:blobserver_httpAddress.dev.JohnDoe=https://bastion.ubsv.dev:18x90
-   settings_local.conf:blobserver_clientName.dev.JohnDoe=JohnDoe
+   settings_local.conf:asset_httpAddress.dev.JohnDoe=https://bastion.ubsv.dev:18x90
+   settings_local.conf:asset_clientName.dev.JohnDoe=JohnDoe
    ```
 
 4. **Save the file**.

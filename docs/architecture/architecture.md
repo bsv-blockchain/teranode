@@ -21,23 +21,39 @@
 - [2.5. Network Behavior](#25-network-behavior)
 3. [Node Workflow](#3-node-workflow)
 4. [Services](#4-services)
-- [4.1. Transaction Propagation Service](#41-transaction-propagation-service)
-- [4.2. Transaction Validator](#42-transaction-validator)
-- [4.3. Block Assembly Service](#43-block-assembly-service)
-- [4.4. Miner / Hasher](#44-miner--hasher)
-- [4.5. Subtree and Block Validator](#45-subtree-and-block-validator)
-  - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
-  - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
-  - [4.5.3. Block Validation Details:](#453-block-validation-details)
-  - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
-- [4.6. Blockchain Service](#46-blockchain-service)
-- [4.7. Blob Server / Asset Server](#47-blob-server--asset-server)
-- [4.8. Coinbase Service](#48-coinbase-service)
-- [4.9. Bootstrap](#49-bootstrap)
-- [4.10. P2P](#410-p2p)
-- [4.11. UTXO Store](#411-utxo-store)
-- [4.12. Transaction Meta Store](#412-transaction-meta-store)
-- [4.13. Banlist Service](#413-banlist-service)
+- [UBSV (Unbounded Bitcoin Satoshi Vision) - Architecture Overview](#ubsv-unbounded-bitcoin-satoshi-vision---architecture-overview)
+  - [Index](#index)
+  - [1. Overview](#1-overview)
+  - [2. Data Model and Propagation](#2-data-model-and-propagation)
+    - [2.1. Block Size](#21-block-size)
+    - [2.2. Original Bitcoin Data Model](#22-original-bitcoin-data-model)
+        - [2.2.1. Transactions](#221-transactions)
+        - [2.2.2. Blocks:](#222-blocks)
+    - [2.3. UBSV Data Model](#23-ubsv-data-model)
+        - [2.3.1. Transactions:](#231-transactions)
+        - [2.3.2. SubTrees:](#232-subtrees)
+        - [2.3.3. Blocks:](#233-blocks)
+    - [2.4. Advantages of the UBSV Model](#24-advantages-of-the-ubsv-model)
+    - [2.5. Network Behavior](#25-network-behavior)
+  - [3. Node Workflow](#3-node-workflow)
+  - [4. Services](#4-services)
+    - [4.1. Transaction Propagation Service](#41-transaction-propagation-service)
+    - [4.2. Transaction Validator](#42-transaction-validator)
+    - [4.3. Block Assembly Service](#43-block-assembly-service)
+    - [4.4. Miner / Hasher](#44-miner--hasher)
+    - [4.5. Subtree and Block Validator](#45-subtree-and-block-validator)
+      - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
+      - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
+      - [4.5.3. Block Validation Details:](#453-block-validation-details)
+      - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
+    - [4.6. Blockchain Service](#46-blockchain-service)
+    - [4.7. Asset Service](#47-asset-service)
+    - [4.8. Coinbase Service](#48-coinbase-service)
+    - [4.9. Bootstrap](#49-bootstrap)
+    - [4.10. P2P](#410-p2p)
+    - [4.11. UTXO Store](#411-utxo-store)
+    - [4.12. Transaction Meta Store](#412-transaction-meta-store)
+    - [4.13. Banlist Service](#413-banlist-service)
 
 
 ## 1. Overview
@@ -513,9 +529,9 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 ---
 
 
-### 4.7. Blob Server / Asset Server
+### 4.7. Asset Service
 
-The Blob Server (also known as Asset Server) serves as an asset server in a read-only capacity, acting as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
+The Asset Serice serves as an asset server in a read-only capacity, acting as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
 - **Transactions (TX)**.
 
@@ -541,7 +557,7 @@ The server uses both HTTP and gRPC as communication protocols:
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
-For clarity, the assets are served in a read-only mode. The various micro-services write directly to the data stores, but the blob server fronts them as a read-only interface.
+For clarity, the assets are served in a read-only mode. The various micro-services write directly to the data stores, but the asset service fronts them as a read-only interface.
 
 ---
 

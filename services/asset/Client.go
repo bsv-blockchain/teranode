@@ -1,4 +1,4 @@
-package blobserver
+package asset
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -19,7 +19,7 @@ import (
 )
 
 type Client struct {
-	client  blobserver_api.BlobServerAPIClient
+	client  asset_api.AssetAPIClient
 	logger  utils.Logger
 	running bool
 	conn    *grpc.ClientConn
@@ -33,11 +33,11 @@ type BestBlockHeader struct {
 func NewClient(ctx context.Context, logger utils.Logger, address string) (*Client, error) {
 	var err error
 	var blobConn *grpc.ClientConn
-	var blobClient blobserver_api.BlobServerAPIClient
+	var blobClient asset_api.AssetAPIClient
 
 	// retry a few times to connect to the blob service
-	maxRetries, _ := gocore.Config().GetInt("blobserver_maxRetries", 3)
-	retrySleep, _ := gocore.Config().GetInt("blobserver_retrySleep", 1000)
+	maxRetries, _ := gocore.Config().GetInt("asset_maxRetries", 3)
+	retrySleep, _ := gocore.Config().GetInt("asset_retrySleep", 1000)
 
 	retries := 0
 	for {
@@ -50,7 +50,7 @@ func NewClient(ctx context.Context, logger utils.Logger, address string) (*Clien
 			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
 		}
 
-		blobClient = blobserver_api.NewBlobServerAPIClient(blobConn)
+		blobClient = asset_api.NewAssetAPIClient(blobConn)
 
 		_, err = blobClient.Health(ctx, &emptypb.Empty{})
 		if err != nil {
@@ -85,7 +85,7 @@ func (c Client) Health(ctx context.Context) (bool, error) {
 }
 
 func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	resp, err := c.client.GetBlock(ctx, &blobserver_api.GetBlockRequest{
+	resp, err := c.client.GetBlock(ctx, &asset_api.GetBlockRequest{
 		Hash: blockHash[:],
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uin
 }
 
 func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
-	resp, err := c.client.GetBlockHeader(ctx, &blobserver_api.GetBlockHeaderRequest{
+	resp, err := c.client.GetBlockHeader(ctx, &asset_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
@@ -145,7 +145,7 @@ func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (
 }
 
 func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
-	resp, err := c.client.GetBlockHeaders(ctx, &blobserver_api.GetBlockHeadersRequest{
+	resp, err := c.client.GetBlockHeaders(ctx, &asset_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
 	})
@@ -170,11 +170,11 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing subscription: %s", source)
+		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
 		c.running = false
 		err := c.conn.Close()
 		if err != nil {
-			c.logger.Errorf("[BlobServer] failed to close connection", err)
+			c.logger.Errorf("[Asset] failed to close connection", err)
 		}
 	}()
 
@@ -182,7 +182,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 		defer close(ch)
 
 		for c.running {
-			stream, err := c.client.Subscribe(ctx, &blobserver_api.SubscribeRequest{
+			stream, err := c.client.Subscribe(ctx, &asset_api.SubscribeRequest{
 				Source: source,
 			})
 			if err != nil {
@@ -194,7 +194,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
-						c.logger.Errorf("[BlobServer] failed to receive notification: %v", err)
+						c.logger.Errorf("[Asset] failed to receive notification: %v", err)
 					}
 					time.Sleep(1 * time.Second)
 					break
@@ -202,11 +202,11 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 
 				hash, err := chainhash.NewHash(resp.Hash)
 				if err != nil {
-					c.logger.Errorf("[BlobServer] failed to parse hash", err)
+					c.logger.Errorf("[Asset] failed to parse hash", err)
 					continue
 				}
 
-				c.logger.Debugf("[BlobServer] received notification %s: %s", model.NotificationType(resp.Type).String(), hash.String())
+				c.logger.Debugf("[Asset] received notification %s: %s", model.NotificationType(resp.Type).String(), hash.String())
 				ch <- &model.Notification{
 					Type:    model.NotificationType(resp.Type),
 					Hash:    hash,
@@ -220,7 +220,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 }
 
 func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
-	response, err := c.client.Get(ctx, &blobserver_api.GetSubtreeRequest{
+	response, err := c.client.Get(ctx, &asset_api.GetSubtreeRequest{
 		Hash: subtreeHash,
 	})
 	if err != nil {
@@ -230,14 +230,14 @@ func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	return response.Subtree, nil
 }
 
-func (c Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*blobserver_api.GetNodesResponse, error) {
+func (c Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
 func (c Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	blobOptions := options.NewSetOptions(opts...)
 
-	_, err := c.client.Set(ctx, &blobserver_api.SetSubtreeRequest{
+	_, err := c.client.Set(ctx, &asset_api.SetSubtreeRequest{
 		Hash:    key[:],
 		Subtree: value,
 		Ttl:     uint32(blobOptions.TTL.Seconds()),
@@ -250,7 +250,7 @@ func (c Client) Set(ctx context.Context, key []byte, value []byte, opts ...optio
 }
 
 func (c Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	_, err := c.client.SetTTL(ctx, &blobserver_api.SetSubtreeTTLRequest{
+	_, err := c.client.SetTTL(ctx, &asset_api.SetSubtreeTTLRequest{
 		Hash: key[:],
 		Ttl:  uint32(int64(ttl.Seconds())),
 	})

@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-option go_package = ".;blobserver_api";
+option go_package = ".;asset_api";
 
-package blobserver_api;
+package asset_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-service BlobServerAPI {
+service AssetAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}

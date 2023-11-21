@@ -4,26 +4,28 @@
 ## Index
 
 
-- [_Introduction_](#introduction)
-- [_Getting Started_](#getting-started)
-  - [Pre-requisites and Installation](#pre-requisites-and-installation)
-  - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
-- [_Advanced Usage_  [ TO-DO ]](#advanced-usage---to-do-)
-  - [Settings](#settings)
-  - [Makefile](#makefile)
-    - [Proto buffers (protoc)](#proto-buffers-protoc)
-    - [Running Tests](#running-tests)
-  - [gRPC Logging](#grpc-logging)
-- [_Running the Node in Production_  [ TO-DO ]](#running-the-node-in-production---to-do-)
-- [_Architecture_  [ TO-DO ]](#architecture---to-do-)
-- [_Technology_  [ TO-DO ]](#technology---to-do-)
-- [_Project Structure and Coding Conventions_](#project-structure-and-coding-conventions)
-  - [Project Structure](#project-structure)
-  - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
-  - [Coding Conventions](#coding-conventions)
-  - [TODO ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
-  - [Testing Conventions [TODO]](#testing-conventions---todo)
-- [_License_](#license)
+- [🚀 UBSV](#-ubsv)
+  - [Index](#index)
+  - [_Introduction_](#introduction)
+  - [_Getting Started_](#getting-started)
+    - [Pre-requisites and Installation](#pre-requisites-and-installation)
+    - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
+  - [_Advanced Usage_  \[ TO-DO \]](#advanced-usage---to-do-)
+    - [Settings](#settings)
+    - [Makefile](#makefile)
+      - [Proto buffers (protoc)](#proto-buffers-protoc)
+      - [Running Tests](#running-tests)
+    - [gRPC Logging](#grpc-logging)
+  - [_Running the Node in Production_  \[ TO-DO \]](#running-the-node-in-production---to-do-)
+  - [_Architecture_  \[ TO-DO \]](#architecture---to-do-)
+  - [_Technology_  \[ TO-DO \]](#technology---to-do-)
+  - [_Project Structure and Coding Conventions_](#project-structure-and-coding-conventions)
+    - [Project Structure](#project-structure)
+    - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
+    - [Coding Conventions](#coding-conventions)
+    - [TODO - ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
+    - [Testing Conventions - \[TODO\]](#testing-conventions---todo)
+  - [_License_](#license)
 
 
 
@@ -191,7 +193,7 @@ ubsv/
 ├── scripts/                      # Various scripts
 │
 ├── services/                     # Directory containing all different Services
-│   ├── blobserver/               # Blob Server Service
+│   ├── Asset/                    # Asset Service
 │   ├── blockassembly/            # Block Assembly Service
 │   ├── blockchain/               # Blockchain Service
 │   ├── blockvalidation/          # Block Validation Service

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -25,7 +25,7 @@ var (
 	}
 )
 
-func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification) func(c echo.Context) error {
+func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
 	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
@@ -47,7 +47,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *blobserver_api.Notification)
 				}
 
 				data, err := json.MarshalIndent(&notificationMsg{
-					Type: blobserver_api.Type_Ping.String(),
+					Type: asset_api.Type_Ping.String(),
 				}, "", "  ")
 				if err != nil {
 					h.logger.Errorf("Error marshaling notification: %w", err)

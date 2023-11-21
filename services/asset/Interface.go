@@ -1,4 +1,4 @@
-package blobserver
+package asset
 
 import "context"
 

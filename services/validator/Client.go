@@ -312,11 +312,11 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing subscription: %s", source)
+		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
 		c.running = false
 		err := c.conn.Close()
 		if err != nil {
-			c.logger.Errorf("[BlobServer] failed to close connection", err)
+			c.logger.Errorf("[Asset] failed to close connection", err)
 		}
 	}()
 

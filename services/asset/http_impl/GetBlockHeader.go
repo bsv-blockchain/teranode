@@ -15,11 +15,11 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetBlockHeader_http").AddTime(start)
+			AssetStat.NewStat("GetBlockHeader_http").AddTime(start)
 		}()
 
 		hashParam := c.Param("hash")
-		h.logger.Debugf("[BlobServer_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam)
+		h.logger.Debugf("[Asset_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam)
 
 		var hash *chainhash.Hash
 		var err error
@@ -41,7 +41,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case BINARY_STREAM:

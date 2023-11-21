@@ -1,4 +1,4 @@
-package blobserver
+package asset
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -21,10 +21,10 @@ type Peer struct {
 	logger           utils.Logger
 	address          string
 	running          bool
-	notificationCh   chan *blobserver_api.Notification
+	notificationCh   chan *asset_api.Notification
 }
 
-func NewPeer(ctx context.Context, source string, addr string, notificationCh chan *blobserver_api.Notification) *Peer {
+func NewPeer(ctx context.Context, source string, addr string, notificationCh chan *asset_api.Notification) *Peer {
 	return &Peer{
 		logger:           gocore.Log("blobC"),
 		address:          addr,
@@ -37,8 +37,8 @@ func NewPeer(ctx context.Context, source string, addr string, notificationCh cha
 
 func (c *Peer) Start(ctx context.Context) error {
 	// define here to prevent malloc
-	var stream blobserver_api.BlobServerAPI_SubscribeClient
-	var resp *blobserver_api.Notification
+	var stream asset_api.AssetAPI_SubscribeClient
+	var resp *asset_api.Notification
 	var hash *chainhash.Hash
 
 	var conn *grpc.ClientConn
@@ -58,7 +58,7 @@ func (c *Peer) Start(ctx context.Context) error {
 			}
 
 			c.logger.Infof("starting new subscription to blob server: %v", c.address)
-			stream, err = blobserver_api.NewBlobServerAPIClient(conn).Subscribe(ctx, &blobserver_api.SubscribeRequest{
+			stream, err = asset_api.NewAssetAPIClient(conn).Subscribe(ctx, &asset_api.SubscribeRequest{
 				Source: c.source,
 			})
 			if err != nil {
@@ -71,7 +71,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				resp, err = stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) && !strings.Contains(err.Error(), io.EOF.Error()) {
-						c.logger.Errorf("[BlobServer] could not receive: %v", err)
+						c.logger.Errorf("[Asset] could not receive: %v", err)
 					}
 					_ = stream.CloseSend()
 					time.Sleep(10 * time.Second)
@@ -85,9 +85,9 @@ func (c *Peer) Start(ctx context.Context) error {
 				}
 
 				switch resp.Type {
-				case blobserver_api.Type_Ping:
+				case asset_api.Type_Ping:
 					// do nothing except pass it to clients
-				case blobserver_api.Type_Subtree:
+				case asset_api.Type_Subtree:
 					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())
 
 					if err = c.validationClient.SubtreeFound(ctx, hash, resp.BaseUrl); err != nil {
@@ -95,7 +95,7 @@ func (c *Peer) Start(ctx context.Context) error {
 						continue
 					}
 
-				case blobserver_api.Type_Block:
+				case asset_api.Type_Block:
 					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
 
 					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl); err != nil {
@@ -112,12 +112,12 @@ func (c *Peer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing peer")
+		c.logger.Infof("[Asset] context done, closing peer")
 		c.running = false
 		if conn != nil {
 			err = conn.Close()
 			if err != nil {
-				c.logger.Errorf("[BlobServer] failed to close connection", err)
+				c.logger.Errorf("[Asset] failed to close connection", err)
 			}
 		}
 	}()

@@ -12,7 +12,7 @@ import (
 func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 	start := gocore.CurrentTime()
 	defer func() {
-		blobServerStat.NewStat("GetLastNBlocks_http").AddTime(start)
+		AssetStat.NewStat("GetLastNBlocks_http").AddTime(start)
 	}()
 
 	n := int64(10)
@@ -30,7 +30,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		includeOrphans = true
 	}
 
-	h.logger.Debugf("[BlobServer_http] GetBlockChain for %s for last %d blocks", c.Request().RemoteAddr, n)
+	h.logger.Debugf("[Asset_http] GetBlockChain for %s for last %d blocks", c.Request().RemoteAddr, n)
 
 	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n, includeOrphans)
 	if err != nil {
@@ -40,7 +40,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 	}
-	prometheusBlobServerHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
+	prometheusAssetHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
 
 	return c.JSONPretty(200, blocks, "  ")
 }

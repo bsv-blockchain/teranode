@@ -21,7 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/status/status"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
-	"github.com/bitcoin-sv/ubsv/services/blobserver"
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -118,7 +118,7 @@ func main() {
 	startPropagation := shouldStart("Propagation")
 	startSeeder := shouldStart("Seeder")
 	startMiner := shouldStart("Miner")
-	startBlobServer := shouldStart("BlobServer")
+	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
@@ -224,10 +224,10 @@ func main() {
 		}
 	}
 
-	// blob server
-	if startBlobServer {
-		if err := sm.AddService("BlobServer", blobserver.NewServer(
-			gocore.Log("blob"),
+	// asset service
+	if startAsset {
+		if err := sm.AddService("Asset", asset.NewServer(
+			gocore.Log("asset"),
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
 			getTxMetaStore(logger),
@@ -246,15 +246,15 @@ func main() {
 				panic(err)
 			}
 
-			blobServerAddr, ok := gocore.Config().Get("coinbase_blobserverGrpcAddress")
+			AssetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
 			if !ok {
-				blobServerAddr, ok = gocore.Config().Get("blobserver_grpcAddress")
+				AssetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 				if !ok {
 					panic(err)
 				}
 			}
 
-			blobServerClient, err := blobserver.NewClient(ctx, logger, blobServerAddr)
+			AssetClient, err := asset.NewClient(ctx, logger, AssetAddr)
 			if err != nil {
 				panic(err)
 			}
@@ -268,7 +268,7 @@ func main() {
 				getTxMetaStore(logger),
 				getSubtreeStore(logger),
 				blockchainClient,
-				blobServerClient,
+				AssetClient,
 				blockValidationClient,
 			)); err != nil {
 				panic(err)
@@ -522,8 +522,8 @@ func printUsage() {
 	fmt.Println("    -miner=<1|0>")
 	fmt.Println("          whether to start the miner service")
 	fmt.Println("")
-	fmt.Println("    -blobserver=<1|0>")
-	fmt.Println("          whether to start the blob server")
+	fmt.Println("    -asset=<1|0>")
+	fmt.Println("          whether to start the assert service")
 	fmt.Println("")
 	fmt.Println("    -coinbase=<1|0>")
 	fmt.Println("          whether to start the coinbase server")

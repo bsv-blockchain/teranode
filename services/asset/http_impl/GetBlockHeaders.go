@@ -16,7 +16,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetBlockHeaders_http").AddTime(start)
+			AssetStat.NewStat("GetBlockHeaders_http").AddTime(start)
 		}()
 
 		hashStr := c.Param("hash")
@@ -33,7 +33,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		h.logger.Debugf("[BlobServer_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr)
+		h.logger.Debugf("[Asset_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr)
 
 		var headers []*model.BlockHeader
 		var heights []uint32
@@ -51,7 +51,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusBlobServerHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			headerResponses := make([]*blockHeaderResponse, 0, len(headers))

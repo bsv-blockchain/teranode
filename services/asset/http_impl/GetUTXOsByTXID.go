@@ -31,10 +31,10 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			blobServerStat.NewStat("GetUTXOsByTXID_http").AddTime(start)
+			AssetStat.NewStat("GetUTXOsByTXID_http").AddTime(start)
 		}()
 
-		h.logger.Debugf("[BlobServer_http] GetUTXOsByTXID in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Debugf("[Asset_http] GetUTXOsByTXID in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -128,7 +128,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 			return utxos[i].Vout < utxos[j].Vout
 		})
 
-		prometheusBlobServerHttpGetUTXO.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHttpGetUTXO.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case JSON:

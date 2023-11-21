@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver"
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -36,18 +36,18 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db               *sql.DB
-	engine           util.SQLEngine
-	store            blockchain.Store
-	blobServerClient *blobserver.Client
-	distributor      *distributor.Distributor
-	privateKey       *bec.PrivateKey
-	running          bool
-	blockFoundCh     chan processBlockFound
-	catchupCh        chan processBlockCatchup
-	logger           utils.Logger
-	address          string
-	dbTimeout        time.Duration
+	db           *sql.DB
+	engine       util.SQLEngine
+	store        blockchain.Store
+	AssetClient  *asset.Client
+	distributor  *distributor.Distributor
+	privateKey   *bec.PrivateKey
+	running      bool
+	blockFoundCh chan processBlockFound
+	catchupCh    chan processBlockCatchup
+	logger       utils.Logger
+	address      string
+	dbTimeout    time.Duration
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -101,17 +101,17 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to create coinbase tables: %s", err)
 	}
 
-	blobServerAddr, ok := gocore.Config().Get("coinbase_blobserverGrpcAddress")
+	AssetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
 	if !ok {
-		blobServerAddr, ok = gocore.Config().Get("blobserver_grpcAddress")
+		AssetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 		if !ok {
-			return errors.New("no blobserver_grpcAddress setting found")
+			return errors.New("no asset_grpcAddress setting found")
 		}
 	}
 
-	c.blobServerClient, err = blobserver.NewClient(ctx, c.logger, blobServerAddr)
+	c.AssetClient, err = asset.NewClient(ctx, c.logger, AssetAddr)
 	if err != nil {
-		return fmt.Errorf("failed to create blobserver client: %s", err)
+		return fmt.Errorf("failed to create Asset client: %s", err)
 	}
 
 	// process blocks found from channel
@@ -144,7 +144,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 	}()
 
 	go func() {
-		ch, err := c.blobServerClient.Subscribe(ctx, "")
+		ch, err := c.AssetClient.Subscribe(ctx, "")
 		if err != nil {
 			c.logger.Errorf("could not subscribe to blob server: %v", err)
 			return
@@ -167,7 +167,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 
 	// get the best block header on startup and process
 	go func() {
-		blockHeader, _, err := c.blobServerClient.GetBestBlockHeader(ctx)
+		blockHeader, _, err := c.AssetClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			c.logger.Errorf("could not get best block header from blob server [%v]", err)
 			return
@@ -259,7 +259,7 @@ func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseUR
 LOOP:
 	for {
 		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
-		blockHeaders, _, err := c.blobServerClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+		blockHeaders, _, err := c.AssetClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
 		if err != nil {
 			return err
 		}
@@ -292,7 +292,7 @@ LOOP:
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, err := c.blobServerClient.GetBlock(ctx, blockHeader.Hash())
+		block, err := c.AssetClient.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
 			return errors.Join(fmt.Errorf("failed to get block [%s]", blockHeader.String()), err)
 		}
@@ -323,7 +323,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 		return nil, nil
 	}
 
-	block, err := c.blobServerClient.GetBlock(ctx, blockHash)
+	block, err := c.AssetClient.GetBlock(ctx, blockHash)
 	if err != nil {
 		return block, err
 	}
@@ -367,7 +367,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 
 	// process coinbase into utxos
 	// first check whether we are in sync with the blob server, otherwise we wait for the next block
-	_, blobBestBlockHeight, _ := c.blobServerClient.GetBestBlockHeader(ctx)
+	_, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
 	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
 	if blobBestBlockHeight >= coinbaseBestBlockMeta.Height {
 		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
