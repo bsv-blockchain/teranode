@@ -182,7 +182,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 	}()
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, g.logger, "Asset", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, g.logger, "asset", func(server *grpc.Server) {
 		asset_api.RegisterAssetAPIServer(server, g)
 		g.grpcServer = server
 	}); err != nil {
