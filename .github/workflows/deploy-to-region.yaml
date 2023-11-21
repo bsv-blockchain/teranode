@@ -64,7 +64,7 @@ jobs:
           # Setting Image
           cd ./deploy/k8s/${{ inputs.region }}/${{ inputs.ubsv_env }}
           echo "Setting image"
-          if [[ '$GITHUB_REF_TYPE' == 'tag' ]]; then
+          if [[ $GITHUB_REF_TYPE == 'tag' ]]; then
             export tag=$GITHUB_REF_NAME
             echo "version tag is $tag"
           else
