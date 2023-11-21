@@ -4,9 +4,11 @@ on:
       ubsv_env:
         description: 'Environment that we are deploying to (either scaling or allinone)'
         required: true
+        type: string
       logLevel:
         description: 'Log level'
         required: true
+        type: string
         default: 'debug'
 
   workflow_call:
@@ -17,6 +19,7 @@ on:
       ubsv_env:
         description: 'Environment that we are deploying to (either scaling or allinone)'
         required: true
+        type: string
 
 jobs:
   deploy-to-region:
