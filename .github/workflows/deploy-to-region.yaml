@@ -62,7 +62,7 @@ jobs:
         run: |-
 
           # Setting Image
-          cd ./deploy/k8s/${{ inputs.region }}/$${{ inputs.ubsv_env }}
+          cd ./deploy/k8s/${{ inputs.region }}/${{ inputs.ubsv_env }}
           echo "Setting image"
           kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$GITHUB_SHA
 
@@ -73,7 +73,7 @@ jobs:
       - name: Validate Deployment Healthy
         run: |-
           # Apply latest deployment configuration changes
-          cd ./deploy/k8s/${{ inputs.region }}/$${{ inputs.ubsv_env }}
+          cd ./deploy/k8s/${{ inputs.region }}/${{ inputs.ubsv_env }}
           for file in $(ls *deployment.yaml); do  # Loop over all files with the name pattern
               # Get filename without extension. Remove everything after the first dot in the file name
               FILE_NAME="${file%%.*}"
