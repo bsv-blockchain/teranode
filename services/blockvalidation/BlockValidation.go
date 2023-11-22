@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"sync"
@@ -474,26 +475,26 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 }
 
 func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []*chainhash.Hash, baseUrl string) (missingTxs []*bt.Tx, err error) {
-	// TODO get these in proper batches
-
 	// transactions have to be returned in the same order as they were requested
-	missingTxs = make([]*bt.Tx, len(missingTxHashes))
+	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
 
-	// TODO #148 should be using ctx, but there is a race condition in the StatsContext
-	g, gCtx := errgroup.WithContext(context.Background())
+	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(32)
 
-	for idx, txHash := range missingTxHashes {
-		txHash := txHash
-		idx := idx
+	// get the transactions in batches of 500
+	for i := 0; i < len(missingTxHashes); i += 500 {
+		missingTxHashesBatch := missingTxHashes[i:Min(i+500, len(missingTxHashes))]
 		g.Go(func() error {
-			tx, err := u.getMissingTransaction(gCtx, txHash, baseUrl)
+			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to get transaction", txHash.String()), err)
+				return errors.Join(fmt.Errorf("[getMissingTransactions] failed to get missing transactions batch"), err)
 			}
+
 			missingTxsMu.Lock()
-			missingTxs[idx] = tx
+			for _, tx := range missingTxsBatch {
+				missingTxsMap[*tx.TxIDChainHash()] = tx
+			}
 			missingTxsMu.Unlock()
 
 			return nil
@@ -502,6 +503,51 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 
 	if err = g.Wait(); err != nil {
 		return nil, errors.Join(fmt.Errorf("[blessMissingTransaction] failed to get all transactions"), err)
+	}
+
+	// sort the transactions in the same order as the missingTxHashes
+	missingTxs = make([]*bt.Tx, len(missingTxHashes))
+	for idx, txHash := range missingTxHashes {
+		tx, ok := missingTxsMap[*txHash]
+		if !ok {
+			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", txHash.String())
+		}
+		missingTxs[idx] = tx
+	}
+
+	return missingTxs, nil
+}
+
+// getMissingTransactionsBatch gets a batch of transactions from the network
+// NOTE: it does not return the transactions in the same order as the txHashes
+func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []*chainhash.Hash, baseUrl string) ([]*bt.Tx, error) {
+	txIDBytes := make([]byte, 32*len(txHashes))
+	for idx, txHash := range txHashes {
+		copy(txIDBytes[idx*32:(idx+1)*32], txHash[:])
+	}
+
+	// do http request to baseUrl + txHash.String()
+	u.logger.Infof("[getMissingTransactionsBatch] getting %d txs from other miner", len(txHashes), baseUrl)
+	url := fmt.Sprintf("%s/txs", baseUrl)
+	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to do http request"), err)
+	}
+	defer body.Close()
+
+	// read the body into transactions using go-bt
+	missingTxs := make([]*bt.Tx, 0, len(txHashes))
+	for {
+		tx := &bt.Tx{}
+		_, err = tx.ReadFrom(body)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read transaction from body"), err)
+		}
+
+		missingTxs = append(missingTxs, tx)
 	}
 
 	return missingTxs, nil
@@ -587,4 +633,11 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	}
 
 	return txMeta, nil
+}
+
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

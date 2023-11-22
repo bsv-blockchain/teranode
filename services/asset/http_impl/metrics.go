@@ -7,6 +7,7 @@ import (
 
 var (
 	prometheusAssetHttpGetTransaction     *prometheus.CounterVec
+	prometheusAssetHttpGetTransactions    *prometheus.CounterVec
 	prometheusAssetHttpGetSubtree         *prometheus.CounterVec
 	prometheusAssetHttpGetBlockHeader     *prometheus.CounterVec
 	prometheusAssetHttpGetBestBlockHeader *prometheus.CounterVec
@@ -26,6 +27,18 @@ func initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Namespace: "Asset",
 			Name:      "http_get_transaction",
+			Help:      "Number of Get transactions ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHttpGetTransactions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "http_get_transactions",
 			Help:      "Number of Get transactions ops",
 		},
 		[]string{

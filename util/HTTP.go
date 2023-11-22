@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,11 +9,16 @@ import (
 	"net/http"
 )
 
-func DoHTTPRequest(ctx context.Context, url string) ([]byte, error) {
+func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to create http request"), err)
+	}
+
+	// write request body
+	if len(requestBody) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 	}
 
 	resp, err := httpClient.Do(req)
@@ -31,4 +37,28 @@ func DoHTTPRequest(ctx context.Context, url string) ([]byte, error) {
 	}
 
 	return blockBytes, nil
+}
+
+func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	httpClient := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to create http request"), err)
+	}
+
+	// write request body
+	if len(requestBody) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to do http request"), err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
+	}
+
+	return resp.Body, nil
 }

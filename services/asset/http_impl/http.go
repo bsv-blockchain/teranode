@@ -64,6 +64,8 @@ func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *
 	e.GET("/tx/:hash/hex", h.GetTransaction(HEX))
 	e.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
+	e.GET("/txs", h.GetTransactions()) // BINARY_STREAM
+
 	e.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
 	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
