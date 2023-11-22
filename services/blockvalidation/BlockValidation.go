@@ -539,8 +539,15 @@ func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHas
 	// read the body into transactions using go-bt
 	missingTxs := make([]*bt.Tx, 0, len(txHashes))
 	for {
-		tx := &bt.Tx{}
-		_, err = tx.ReadFrom(body)
+		data, err := io.ReadAll(body)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read all body data"), err)
+		}
+		err = body.Close()
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to close body"), err)
+		}
+		tx, _, err := bt.NewTxFromStream(data)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
