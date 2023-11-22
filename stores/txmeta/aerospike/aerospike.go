@@ -124,20 +124,10 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 }
 
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
-	var e error
-	defer func() {
-		if e != nil {
-			s.logger.Errorf("txmeta get error for %s: %v", hash.String(), e)
-		} else {
-			s.logger.Warnf("txmeta get success for %s", hash.String())
-		}
-	}()
-
 	prometheusTxMetaGet.Inc()
 
 	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
 	if aeroErr != nil {
-		e = aeroErr
 		return nil, aeroErr
 	}
 
@@ -147,7 +137,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	start := time.Now()
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
-		e = aeroErr
 		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
 			return nil, txmeta.ErrNotFound
 		}
@@ -155,7 +144,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	}
 
 	if value == nil {
-		e = errors.New("value is nil")
 		return nil, nil
 	}
 
@@ -189,7 +177,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 			for i := 0; i < len(parentTxHashesInterface); i += 32 {
 				cHash, err = chainhash.NewHash(parentTxHashesInterface[i : i+32])
 				if err != nil {
-					e = err
 					return nil, err
 				}
 				parentTxHashes = append(parentTxHashes, cHash)
@@ -207,7 +194,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 			for i := 0; i < len(blockHashesInterface); i += 32 {
 				cHash, err = chainhash.NewHash(blockHashesInterface[i : i+32])
 				if err != nil {
-					e = err
 					return nil, err
 				}
 				blockHashes = append(blockHashes, cHash)
@@ -220,14 +206,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	if value.Bins["tx"] != nil {
 		b, ok := value.Bins["tx"].([]byte)
 		if !ok {
-			e = errors.New("could not convert tx to []byte")
-			return nil, e
+			return nil, errors.New("could not convert tx to []byte")
 		}
 
 		tx, err := bt.NewTxFromBytes(b)
 		if err != nil {
-			e = errors.New("could not convert tx bytes to bt.Tx")
-			return nil, e
+			return nil, errors.Join(errors.New("could not convert tx bytes to bt.Tx"), err)
 		}
 		status.Tx = tx
 	}
