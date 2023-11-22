@@ -326,7 +326,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	start = gocore.CurrentTime()
 	// validate the subtree
-	txMetaMap := util.SyncedMap[chainhash.Hash, *txmeta.Data]{}
+	txMetaMap := util.NewSyncedMap[chainhash.Hash, *txmeta.Data]()
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(1024) // max 1024 concurrent requests
 
@@ -395,7 +395,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			}
 		}
 
-		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, &txMetaMap)
+		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaMap)
 		if err != nil {
 			return err
 		}

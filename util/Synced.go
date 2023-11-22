@@ -7,6 +7,12 @@ type SyncedMap[K comparable, V any] struct {
 	m  map[K]V
 }
 
+func NewSyncedMap[K comparable, V any]() *SyncedMap[K, V] {
+	return &SyncedMap[K, V]{
+		m: make(map[K]V),
+	}
+}
+
 func (m *SyncedMap[K, V]) Get(key K) (V, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
