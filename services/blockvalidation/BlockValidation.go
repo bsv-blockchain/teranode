@@ -326,7 +326,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	start = gocore.CurrentTime()
 	// validate the subtree
-	txMetaMap := sync.Map{}
+	txMetaMap := util.SyncedMap[chainhash.Hash, *txmeta.Data]{}
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(1024) // max 1024 concurrent requests
 
@@ -371,7 +371,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 				return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
 			}
 
-			txMetaMap.Store(txHash, txMeta)
+			txMetaMap.Set(txHash, txMeta)
 
 			return nil
 		})
@@ -404,17 +404,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	start = gocore.CurrentTime()
 	var txMeta *txmeta.Data
+	var ok bool
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
 	for _, txHash := range txHashes {
 		// finally add the transaction hash and fee to the subtree
-		_txMeta, ok := txMetaMap.Load(txHash)
+		txMeta, ok = txMetaMap.Get(txHash)
 		if !ok {
 			return fmt.Errorf("[validateSubtree][%s] tx meta not found in map [%s]", subtreeHash.String(), txHash.String())
-		}
-
-		txMeta, ok = _txMeta.(*txmeta.Data)
-		if !ok {
-			return fmt.Errorf("[validateSubtree][%s] tx meta is not of type *txmeta.Data [%s]", subtreeHash.String(), txHash.String())
 		}
 
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
@@ -451,15 +447,15 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	return nil
 }
 
-func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []*chainhash.Hash, baseUrl string, txMetaMap *sync.Map) (err error) {
+func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
+	missingTxHashes []*chainhash.Hash, baseUrl string, txMetaMap *util.SyncedMap[chainhash.Hash, *txmeta.Data]) error {
+
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
 	defer func() {
 		span.Finish()
 	}()
 
-	// process all the missing transactions in order, there might be parent / child dependencies
-	var missingTxs []*bt.Tx
-	missingTxs, err = u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
+	missingTxs, err := u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
 	}
@@ -471,7 +467,9 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String()), err)
 		}
-		txMetaMap.Store(tx.TxIDChainHash(), txMeta)
+
+		u.logger.Infof("[validateSubtree][%s] adding missing tx to txMetaMap: %s", subtreeHash.String(), tx.TxIDChainHash().String())
+		txMetaMap.Set(*tx.TxIDChainHash(), txMeta)
 	}
 
 	return nil
