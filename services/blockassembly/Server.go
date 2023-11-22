@@ -96,6 +96,14 @@ func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface,
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	newSubtreeChan := make(chan *util.Subtree)
 
+	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
+	if remoteTTLStores {
+		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
+		if err != nil {
+			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
+		}
+	}
+
 	// init the block assembler for this server
 	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
@@ -171,14 +179,6 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 // Start function
 func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
-
-	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
-	if remoteTTLStores {
-		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
-		if err != nil {
-			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
-		}
-	}
 
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
