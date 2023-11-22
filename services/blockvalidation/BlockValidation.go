@@ -403,12 +403,15 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	start = gocore.CurrentTime()
-	var ok bool
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
 	for _, txHash := range txHashes {
 		// finally add the transaction hash and fee to the subtree
-		_txMeta, _ := txMetaMap.Load(txHash)
+		_txMeta, ok := txMetaMap.Load(txHash)
+		if !ok {
+			return fmt.Errorf("[validateSubtree][%s] tx meta not found in map [%s]", subtreeHash.String(), txHash.String())
+		}
+
 		txMeta, ok = _txMeta.(*txmeta.Data)
 		if !ok {
 			return fmt.Errorf("[validateSubtree][%s] tx meta is not of type *txmeta.Data [%s]", subtreeHash.String(), txHash.String())
@@ -630,6 +633,10 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	stat.NewStat("getTxMeta").AddTime(start)
 	if err != nil {
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", tx.TxID(), err.Error())
+	}
+
+	if txMeta == nil {
+		return nil, fmt.Errorf("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
 	}
 
 	return txMeta, nil
