@@ -211,7 +211,7 @@ func Start() {
 				}
 
 				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
-				if err != nil {
+				if err != nil || subtree == nil {
 					logger.Errorf("failed to parse subtree %s for block %s: %s", subtreeHash, block, err)
 					continue
 				}

@@ -59,6 +59,12 @@ func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
 }
 
 func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Recovered in NewSubtreeFromBytes: %v\n", r)
+		}
+	}()
+
 	subtree := &Subtree{}
 	err := subtree.Deserialize(b)
 	if err != nil {

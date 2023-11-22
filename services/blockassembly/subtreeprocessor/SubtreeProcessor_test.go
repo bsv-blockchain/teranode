@@ -658,7 +658,8 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 
 		transactionMap := util.NewSplitSwissMap(4)
 
-		remainder := subtreeProcessor.getRemainderTxHashes(chainedSubtrees, transactionMap)
+		remainder, err := subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		require.NoError(t, err)
 		assert.Equal(t, 17, len(*remainder))
 		for idx, txHash := range *remainder {
 			if idx == 0 {
@@ -691,7 +692,9 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			//"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
 		}
 
-		remainder = subtreeProcessor.getRemainderTxHashes(chainedSubtrees, transactionMap)
+		remainder, err = subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		require.NoError(t, err)
+
 		assert.Equal(t, 13, len(*remainder)) // 3 removed
 		for idx, txHash := range *remainder {
 			if idx == 0 {
