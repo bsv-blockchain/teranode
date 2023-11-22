@@ -538,17 +538,10 @@ func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHas
 
 	// read the body into transactions using go-bt
 	missingTxs := make([]*bt.Tx, 0, len(txHashes))
+	var tx *bt.Tx
 	for {
-		data, err := io.ReadAll(body)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read all body data"), err)
-		}
-		err = body.Close()
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to close body"), err)
-		}
-		tx, _, err := bt.NewTxFromStream(data)
-		if err != nil {
+		tx, err = u.readTxFromReader(body)
+		if err != nil || tx == nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -559,6 +552,31 @@ func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHas
 	}
 
 	return missingTxs, nil
+}
+
+func (u *BlockValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
+	defer func() {
+		// there is a bug in go-bt, that does not check input and throws a runtime error in
+		// github.com/libsv/go-bt/v2@v2.2.2/input.go:76 +0x16b
+		if r := recover(); r != nil {
+			switch x := r.(type) {
+			case string:
+				err = errors.New(x)
+			case error:
+				err = x
+			default:
+				err = fmt.Errorf("unknown panic: %v", r)
+			}
+		}
+	}()
+
+	tx = &bt.Tx{}
+	_, err = tx.ReadFrom(body)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
 }
 
 func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
