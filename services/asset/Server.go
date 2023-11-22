@@ -157,13 +157,13 @@ func (v *Server) Start(ctx context.Context) error {
 			// if using p2p we are already subscribed but will need to get the best block from peers.
 			v.logger.Infof("Using libP2P")
 		} else if gocore.Config().GetBool("feature_bootstrap", true) {
-			v.logger.Infof("Using bootstrap service")
-			// Start a subscription to the bootstrap service
+			v.logger.Infof("Using Asset service")
+			// Start a subscription to the Asset service
 
 			g.Go(func() error {
 				bootstrapClient := bootstrap.NewClient("BLOB_SERVER", AssetClientName).WithCallback(func(p bootstrap.Peer) {
 					if p.AssetGrpcAddress != "" {
-						v.logger.Infof("[Asset] Connecting to blob server at: %s", p.AssetGrpcAddress)
+						v.logger.Infof("[Asset] Connecting to asset service at: %s", p.AssetGrpcAddress)
 						if pp, ok := v.peers[p.AssetGrpcAddress]; ok {
 							v.logger.Infof("[Asset] Already connected to blob server at: %s, stopping...", p.AssetGrpcAddress)
 							_ = pp.peer.Stop()
@@ -209,7 +209,7 @@ func (v *Server) Start(ctx context.Context) error {
 				return bootstrapClient.Start(ctx)
 			})
 		} else {
-			v.logger.Warnf("No P2P or Bootstap client is running")
+			v.logger.Warnf("No P2P or Asset client is running")
 		}
 	}
 
