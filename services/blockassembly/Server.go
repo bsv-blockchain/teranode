@@ -174,7 +174,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
 	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
 	if remoteTTLStores {
-		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
+		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
 		if err != nil {
 			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
 		}

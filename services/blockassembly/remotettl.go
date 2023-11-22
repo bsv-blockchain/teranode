@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/ordishs/go-utils"
 )
 
 type WrapperInterface interface {
@@ -17,13 +18,15 @@ type WrapperInterface interface {
 }
 
 type Wrapper struct {
+	logger                utils.Logger
 	store                 blob.Store
 	AssetClient           WrapperInterface
 	blockValidationClient WrapperInterface
 }
 
-func NewRemoteTTLWrapper(store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
+func NewRemoteTTLWrapper(logger utils.Logger, store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
 	return &Wrapper{
+		logger:                logger,
 		store:                 store,
 		AssetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
@@ -45,7 +48,12 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	subtreeBytes, _ := r.blockValidationClient.Get(ctx, key)
 	if subtreeBytes == nil {
-		return r.store.Get(ctx, key)
+		subtreeBytes, _ = r.AssetClient.Get(ctx, key)
+		if subtreeBytes == nil {
+			return r.store.Get(ctx, key)
+		} else {
+			r.logger.Warnf("Using asset service in block assembly for subtree %x", key)
+		}
 	}
 
 	return subtreeBytes, nil
