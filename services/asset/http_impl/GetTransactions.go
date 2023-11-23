@@ -41,6 +41,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 				if errors.Is(err, io.EOF) {
 					break
 				} else {
+					h.logger.Errorf("[GetTransactions][%s] failed to read tx hash from body: %s", hash.String(), err.Error())
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
 			}
@@ -49,8 +50,10 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 				b, err = h.repository.GetTransaction(gCtx, &hash)
 				if err != nil {
 					if strings.HasSuffix(err.Error(), " not found") {
+						h.logger.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
 						return echo.NewHTTPError(http.StatusNotFound, err.Error())
 					} else {
+						h.logger.Errorf("[GetTransactions][%s] failed to get tx from repository: %s", hash.String(), err.Error())
 						return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 					}
 				}
@@ -66,11 +69,13 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 		}
 
 		if err := g.Wait(); err != nil {
+			h.logger.Errorf("[GetTransactions] failed to get txs from repository: %s", err.Error())
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		prometheusAssetHttpGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))
 
+		h.logger.Infof("[GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
 		return c.Blob(200, echo.MIMEOctetStream, responseBytes)
 	}
 }
