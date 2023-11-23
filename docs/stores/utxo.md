@@ -1,0 +1,485 @@
+# 🗃️ UTXO Store
+
+## Index
+
+1. [Description](#1-description)
+2. [Architecture ](#2-architecture-)
+3. [UTXO - Data Model](#3-utxo---data-model)
+4. [Use Cases](#4-use-cases)
+5. [Technology](#5-technology)
+    - [5.1. Language and Libraries](#51-language-and-libraries)
+    - [5.2. Data Stores](#52-data-stores)
+6. [Directory Structure and Main Files](#-6-directory-structure-and-main-files)
+    - [aerospike Directory:](#aerospike-directory)
+    - [aerospikemap Directory:](#aerospikemap-directory)
+    - [memory Directory:](#memory-directory)
+    - [nullstore Directory:](#nullstore-directory)
+    - [redis Directory:](#redis-directory)
+    - [scylla Directory:](#scylla-directory)
+    - [sql Directory:](#sql-directory)
+    - [tests Directory:](#tests-directory)
+    - [other:](#other)
+7. [Running the Service Locally](#7-running-the-service-locally)
+
+
+## 1. Description [TODO ]
+
+The UTXO Store is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is primarily used by the Validator service to retrieve UTXOs when validating transactions (**TODO - Is this accurate?**). The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
+
+It handles the core functionalities of the UTXO Store:
+
+* **Health**: Check the health status of the UTXO store service.
+* **Get**: Retrieve a specific UTXO.
+* **Store**: Add new UTXOs to the store.
+* **Spend/UnSpend**: Mark UTXOs as spent or reverse such markings, respectively.
+* **Delete**: Remove UTXOs from the store.
+* **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
+
+
+## 2. Architecture
+
+The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
+
+
+![UTXO_Store_Container_Context_Diagram.png](..%2F..%2Fdocs%2Fservices%2Fimg%2FUTXO_Store_Container_Context_Diagram.png)
+
+
+The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.
+
+
+![UTXO_Store_Component_Context_Diagram.png](..%2F..%2Fdocs%2Fservices%2Fimg%2FUTXO_Store_Component_Context_Diagram.png)
+
+The UTXO store implementation is consistent within a UBSV node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
+
+```go
+
+func getUtxoStore(ctx context.Context, logger utils.Logger) utxostore.Interface {
+	if utxoStore != nil {
+		return utxoStore
+	}
+
+	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no utxostore setting found")
+	}
+	utxoStore, err = utxo_factory.NewStore(ctx, logger, utxoStoreURL, "main")
+	if err != nil {
+		panic(err)
+	}
+
+	return utxoStore
+}
+```
+
+The following datastores are supported (either in development / experimental or production mode):
+
+1. **Aerospike**.
+
+2. **Memory (In-Memory Store)**.
+
+3. **Nullstore**.
+
+4. **Redis**.
+
+5. **Scylla**.
+
+6. **SQL**:
+    - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+
+More details about the specific stores can be found in the [Technology](#technology) section.
+
+
+## 3. UTXO - Data Model
+
+The UBSV UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:
+
+- **Transaction Outputs**: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).
+
+Under the external library `github.com/ordishs/go-bt/output.go`, we can see the structure of a transaction output.
+
+```go
+type Output struct {
+	Satoshis      uint64          `json:"satoshis"`
+	LockingScript *bscript.Script `json:"locking_script"`
+}
+```
+
+Components of the `Output` struct:
+
+1. **Satoshis (`uint64`)**:
+    - The amount of BSV cryptocurrency associated with this output.
+    - The unit "Satoshis" refers to the smallest unit of Bitcoin (1 Bitcoin = 100 million Satoshis).
+
+2. **LockingScript (`*bscript.Script`)**:
+    - This field represents the conditions that must be met to spend the Satoshis in this output.
+    - The `LockingScript`, often referred to as the "scriptPubKey" in Bitcoin's technical documentation, is a script written in Bitcoin's scripting language.
+    - This script contains cryptographic conditions to unlock the funds.
+
+
+Equally, we can see how a list of outputs is part of a transaction (`github.com/ordishs/go-bt/tx.go`):
+```go
+type Tx struct {
+	Inputs   []*Input  `json:"inputs"`
+	Outputs  []*Output `json:"outputs"`
+	Version  uint32    `json:"version"`
+	LockTime uint32    `json:"locktime"`
+}
+```
+
+- **Unspent Transaction Outputs (UTXOs)**: A UTXO is a transaction output that hasn't been used as an input in a new transaction.
+
+When a transaction occurs, it consumes one or more UTXOs as inputs and creates new UTXOs as outputs. The sum of the input UTXOs represents the total amount of Bitcoin being transferred, and the outputs represent the distribution of this amount after the transaction.
+
+To "own" bitcoins means to control UTXOs on the blockchain that can be spent by the user (i.e., the user has the private key to unlock these UTXOs).
+
+When a user creates a new transaction, the transaction references these UTXOs as inputs, proving his ownership by fulfilling the spending conditions set in these UTXOs (signing the transaction with the user's private key).
+
+Independent UTXOs can be processed in parallel, potentially improving the efficiency of transaction validation.
+
+To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bitcoin-protocol-documentation/cJw8Rc8JxwBTZVOoBFC6/transaction-lifecycle/transaction-inputs-and-outputs.
+
+## 4. Use Cases
+
+## 4.1. Asset Server:
+
+```plantuml
+@startuml
+actor "UI User" as UI_USER
+participant "UI Dashboard" as UI
+participant "AssetService (HTTP)" as AssetService
+participant "UTXO Store" as UTXOStore
+database "DataStore" as Datastore
+
+UI_USER -> UI: Request to View UTXO Data
+activate UI
+
+UI -> AssetService: Request UTXO Data
+activate AssetService
+
+AssetService -> UTXOStore: Get()
+activate UTXOStore
+
+UTXOStore -> Datastore: Fetch UTXO Data
+activate Datastore
+Datastore --> UTXOStore: UTXO Data
+deactivate Datastore
+
+UTXOStore --> AssetService: UTXO Data
+deactivate UTXOStore
+
+
+AssetService --> UI: Response with UTXO Data
+deactivate AssetService
+
+UI --> UI_USER: UTXO Data Loaded
+
+deactivate UI
+
+@enduml
+```
+
+
+1. The **UI Dashboard** sends a request to the AssetService for UTXO data.
+2. The **AssetService** forwards this request to the **UTXO Store**.
+3. The **UTXO Store** interacts with the underlying **Datastore** implementation to fetch the requested UTXO data and check the health status of the store.
+4. The **Datastore** implementation returns the UTXO data and health status to the UTXO Store.
+5. The UTXO Store sends this information back to the AssetService.
+6. Finally, the AssetService responds back to the UI Dashboard.
+
+To know more about the AssetService, please check its specific documentation.
+
+## 4.2. Block Assembly:
+
+
+```plantuml
+@startuml
+participant "Block Assembly" as BlockAssembly
+participant "UTXO Store" as UTXOStore
+database "Datastore Implementation" as Datastore
+
+== Create Coinbase TX ==
+
+BlockAssembly -> UTXOStore: Store(Coinbase UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Store UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> BlockAssembly: Confirmation
+deactivate UTXOStore
+
+
+== Delete Coinbase TX ==
+
+BlockAssembly -> UTXOStore: Delete(Coinbase UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Delete UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> BlockAssembly: Confirmation
+deactivate UTXOStore
+
+@enduml
+```
+
+Coinbase Transaction creation (UTXO step):
+
+1. The **Block Assembly** service (see `SubtreeProcessor.go`, `processCoinbaseUtxos` method) creates a new Coinbase transaction.
+2. The **Block Assembly** service sends a request to the **UTXO Store** to store the Coinbase UTXO.
+3. The **UTXO Store** interacts with the underlying **Datastore** implementation to store the Coinbase UTXO.
+
+Coinbase Transaction deletion (UTXO step):
+
+1. The **Block Assembly** service (see `SubtreeProcessor.go`, `` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.
+2. The **Block Assembly** service sends a request to the **UTXO Store** to delete the Coinbase UTXO.
+3. The **UTXO Store** interacts with the underlying **Datastore** implementation to delete the Coinbase UTXO.
+
+To know more about the Block Assembly, please check its specific documentation.
+
+## 4.3. Transaction Validator.
+
+```plantuml
+@startuml
+participant "TX Validator (Validator.go)" as TXValidator
+participant "UTXO Store" as UTXOStore
+database "Datastore Implementation" as Datastore
+
+== Fetch Block Height ==
+
+TXValidator -> UTXOStore: getBlockHeight()
+activate UTXOStore
+
+UTXOStore -> Datastore: Fetch Current Block Height
+activate Datastore
+Datastore --> UTXOStore: Current Block Height
+deactivate Datastore
+
+UTXOStore --> TXValidator: Block Height
+deactivate UTXOStore
+
+== Spend Coinbase TX ==
+
+
+TXValidator -> UTXOStore: Spend(UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Mark UTXO as Spent
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Spend
+deactivate UTXOStore
+
+== Unspend Coinbase TX ==
+
+
+TXValidator -> UTXOStore: Unspend(UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Revert UTXO to Unspent
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Unspend
+deactivate UTXOStore
+
+== Store Coinbase TX ==
+
+TXValidator -> UTXOStore: Store(New UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Store New UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Store
+deactivate UTXOStore
+
+@enduml
+
+```
+
+**TODO** More context for this last plantUML
+
+## 5. Technology
+
+### 5.1. Language and Libraries
+
+1. **Go Programming Language (Golang)**:
+
+A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
+The primary language used for implementing the service's logic.
+
+2. **Bitcoin Transaction (BT) GoLang library**: `github.com/ordishs/go-bt/` - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.
+
+### 5.2. Data Stores
+
+The following datastores are supported (either in development / experimental or production mode):
+
+1. **Aerospike**:
+    - A high-performance, NoSQL distributed database.
+    - Suitable for environments requiring high throughput and low latency.
+    - Handles large volumes of UTXO data with fast read/write capabilities.
+    - https://aerospike.com.
+
+2. **Memory (In-Memory Store)**:
+    - Stores UTXOs directly in the application's memory.
+    - Offers the fastest access times but lacks persistence; data is lost if the service restarts.
+    - Useful for development or testing purposes.
+
+3. **Nullstore**:
+    - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
+    - Can be used to mock UTXO store functionality in a development or test environment.
+
+4. **Redis**:
+    - An in-memory data structure store, used as a database, cache, and message broker.
+    - Offers fast data access and can persist data to disk.
+    - Useful for scenarios requiring rapid access combined with the ability to handle volatile or transient data.
+    - https://redis.com.
+
+5. **Scylla**:
+    - A NoSQL database compatible with Apache Cassandra, known for its low-latency and high-throughput capabilities.
+    - Suitable for large-scale deployments where performance and scalability are critical.
+    - https://www.scylladb.com.
+
+6. **SQL**:
+    - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+    - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
+      - https://www.postgresql.org.
+    - SQLite: A lightweight, file-based database, useful for smaller workloads.
+      - https://www.sqlite.org/index.html.
+    - SQLite in-memory: Offers faster data access since the database resides entirely in memory, similar to the Memory store but with SQL capabilities.
+
+- The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
+- Memory-based stores (like in-memory and Redis) are typically faster but may require additional persistence mechanisms.
+- Databases like Aerospike, Scylla, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
+- Nullstore and SQLite (especially in-memory) are more appropriate for testing, development, or lightweight applications.
+
+
+##  6. Directory Structure and Main Files
+
+```
+UTXO Store Package Structure (stores/utxo)
+├── Interface.go
+├── aerospike
+│   ├── aerospike.go
+├── memory
+│   ├── memory.go
+├── nullstore
+│   └── nullstore.go
+├── redis
+│   ├── Redis.go
+├── scylla
+│   └── scylla.go
+├── sql
+│   ├── sql.go
+├── tests
+│   └── tests.go
+└── utils.go
+```
+
+- **Interface.go**: Defines the interface for UTXO store operations.
+
+#### aerospike Directory:
+- **aerospike.go**: Aerospike UTXO store implementation.
+- **aerospike_server_test.go**: Tests for the Aerospike UTXO store.
+
+#### aerospikemap Directory:
+- **aerospikemap.go**: An Aerospike map-based UTXO store implementation.
+
+#### memory Directory:
+- **memory.go**: Basic in-memory UTXO store.
+
+#### nullstore Directory:
+- **nullstore.go**: Implementation of a null or dummy UTXO store.
+
+#### redis Directory:
+- **Redis.go**: Redis UTXO store implementation.
+
+#### scylla Directory:
+- **scylla.go**: ScyllaDB implementation for the UTXO store.
+
+#### sql Directory:
+- **sql.go**: SQL-based implementation for the UTXO store.
+
+#### tests Directory:
+- **tests**: Contains shared or general tests for UTXO store implementations.
+
+#### other:
+
+- **utils.go**: Utility functions used across UTXO store implementations.
+
+
+## 7. Running the Service Locally
+
+
+###     How to run
+
+To run the Bootstrap Service locally, you can execute the following command:
+
+```shell
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
+```
+
+Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+
+###     Settings
+
+The `utxostore` setting must be set to pick a specific datastore implementation. The following values are supported:
+
+- **aerospike**: Aerospike UTXO store implementation.
+
+`utxostore.dev.[YOUR_USERNAME]=aerospike://xxxx.ubsv.dev:3000/ubsv-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
+
+- **memory**: Basic in-memory UTXO store.
+
+`utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash`
+
+- **nullstore**: Implementation of a null or dummy UTXO store.
+
+`utxostore.dev.[YOUR_USERNAME]=null:///`
+
+- **redis**: Redis UTXO store implementation.
+
+`utxostore.dev.[YOUR_USERNAME]=redis://localhost:${REDIS_PORT}`
+
+- **scylla**: ScyllaDB implementation for the UTXO store.
+
+`utxostore.dev.[YOUR_USERNAME]=scylla://127.0.0.1`
+
+- **sql**: SQL-based implementation for the UTXO store.
+
+`utxostore.dev.[YOUR_USERNAME]=sqlite:///utxostore`
+
+or
+
+`utxostore.dev.[YOUR_USERNAME]=postgres://ubsv:ubsv@localhost:5432/ubsv`
+
+
+## 9. References (like third party)
+
+
+# 10. For clarification with Simon and / or Siggi
+
+**TODO - Simon - UTXO - what's the model? We only keep the hash (as per TX outputs) and the tx_id it spent it? How is the value implied? Or when it was created? DO we have to traverse the original transactions for it??? Sequence diag for it?**
+**TODO Who uses the UTXO service then???? Should this be deleted? Ask Simon**
+**TODO What is the UTXO Lookup Service? Does it connect wih the UTXO stores or UTXO Service?**
+
+
+-- Are all stores in scope?
+-- What is GetHeight() For????
+-- Simon - should BanList and UTXO Lookup appear here? What is the UTXO Lookup?
+
+--
+**TODO** Mention to Siggi - blockvalidation/Server.go and BlockAssember.go have `utxoStore        utxostore.Interface` declared but never used. Also, we have a UTXO Service (server.go and client.go) without a purpose.

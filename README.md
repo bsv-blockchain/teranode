@@ -122,32 +122,32 @@ Please check the [Architecture Documentation](docs/architecture/architecture.md)
 
 Detailed Node Service documentation:
 
-+ [Bootstrap](services/bootstrap/bootstrap.md)
++ [Bootstrap](docs/services/bootstrap.md)
 
-+ [UTXO Service](services/utxo/utxo.md)
++ [UTXO Service](docs/stores/utxo.md)
 
-+ [TXMeta Service](services/txmeta/txmeta.md)
++ [TXMeta Service](docs/stores/txmeta.md)
 
-+ [Blob Server](services/blobserver/blobServer)
++ [Blob Server](docs/services/assetServer.md)
 
-+ [Propagation Service](services/propagation/propagation.md)
++ [Propagation Service](docs/services/propagation.md)
 
-+ [Validator Service ](services/validator/validator.md)
++ [Validator Service ](docs/services/validator.md)
 
-+ [Block Validation Service ](services/blockvalidation/blockValidation.md)
++ [Block Validation Service ](docs/services/blockValidation.md)
 
-+ [Block Assembly Service](services/blockassembly/blockAssembly.md)
++ [Block Assembly Service](docs/services/blockAssembly.md)
 
-+ [Miner](services/miner/miner.md)
++ [Miner](docs/services/miner.md)
 
-+ [Blockchain Service](services/blockchain/blockchain.md)
++ [Blockchain Service](docs/services/blockchain.md)
 
 
 Detailed Overlay Service documentation:
 
-+ [Coinbase](services/coinbase/coinbase.md)
++ [Coinbase](docs/services/coinbase.md)
 
-+ [P2P](services/p2p/p2p.md)
++ [P2P](docs/services/p2p.md)
 
 
 ---
