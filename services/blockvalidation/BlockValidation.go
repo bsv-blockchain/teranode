@@ -529,7 +529,7 @@ func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHas
 
 	// do http request to baseUrl + txHash.String()
 	u.logger.Infof("[getMissingTransactionsBatch] getting %d txs from other miner", len(txHashes), baseUrl)
-	url := fmt.Sprintf("%stxs", baseUrl)
+	url := fmt.Sprintf("%s/txs", baseUrl)
 	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to do http request"), err)
