@@ -29,9 +29,9 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 		nrTxAdded := 0
 
 		g, gCtx := errgroup.WithContext(c.Request().Context())
-		g.SetLimit(128)
+		g.SetLimit(1024)
 
-		responseBytes := make([]byte, 0, 2*1024*1024) // 2MB initial capacity
+		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
 		responseBytesMu := sync.Mutex{}
 		for {
 			var hash chainhash.Hash

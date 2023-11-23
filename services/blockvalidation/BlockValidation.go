@@ -484,8 +484,9 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	g.SetLimit(32)
 
 	// get the transactions in batches of 500
-	for i := 0; i < len(missingTxHashes); i += 500 {
-		missingTxHashesBatch := missingTxHashes[i:Min(i+500, len(missingTxHashes))]
+	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
+	for i := 0; i < len(missingTxHashes); i += batchSize {
+		missingTxHashesBatch := missingTxHashes[i:Min(i+batchSize, len(missingTxHashes))]
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
