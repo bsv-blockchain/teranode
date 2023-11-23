@@ -89,7 +89,9 @@ The following datastores are supported (either in development / experimental or 
 6. **SQL**:
     - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
 
-More details about the specific stores can be found in the [Technology](#technology) section.
+Notice how some of the databases are in-memory, while others are persistent (and shared with other services).
+
+More details about the specific stores can be found in the [Technology](#5-technology) section.
 
 
 ## 3. UTXO - Data Model
@@ -295,7 +297,7 @@ UTXO Store Package Structure (stores/utxo)
 
 ###     How to run
 
-To run the Bootstrap Service locally, you can execute the following command:
+To run the UTXO Service locally, you can execute the following command:
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
