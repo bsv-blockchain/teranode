@@ -468,7 +468,7 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String()), err)
 		}
 
-		u.logger.Infof("[validateSubtree][%s] adding missing tx to txMetaMap: %s", subtreeHash.String(), tx.TxIDChainHash().String())
+		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaMap: %s", subtreeHash.String(), tx.TxIDChainHash().String())
 		txMetaMap.Set(*tx.TxIDChainHash(), txMeta)
 	}
 
@@ -528,7 +528,7 @@ func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHas
 	}
 
 	// do http request to baseUrl + txHash.String()
-	u.logger.Infof("[getMissingTransactionsBatch] getting %d txs from other miner", len(txHashes), baseUrl)
+	u.logger.Debugf("[getMissingTransactionsBatch] getting %d txs from other miner %s", len(txHashes), baseUrl)
 	url := fmt.Sprintf("%s/txs", baseUrl)
 	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
@@ -636,7 +636,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 		prometheusBlockValidationBlessMissingTransactionDuration.Observe(util.TimeSince(startTotal))
 	}()
 
-	u.logger.Infof("[blessMissingTransaction][%s] called", tx.TxID())
+	u.logger.Debugf("[blessMissingTransaction][%s] called", tx.TxID())
 
 	if tx.IsCoinbase() {
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
