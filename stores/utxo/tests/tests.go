@@ -53,7 +53,7 @@ func Store(t *testing.T, db utxostore.Interface) {
 	require.NoError(t, err)
 
 	err = db.Store(context.Background(), tx)
-	require.Error(t, err, utxostore.ErrSpent)
+	require.Error(t, err, utxostore.ErrTypeSpent)
 }
 
 func Spend(t *testing.T, db utxostore.Interface) {
@@ -71,7 +71,7 @@ func Spend(t *testing.T, db utxostore.Interface) {
 
 	// try to spend with different txid
 	err = db.Spend(context.Background(), spends2)
-	require.Error(t, err, utxostore.ErrSpent)
+	require.ErrorIs(t, err, utxostore.ErrTypeSpent)
 }
 
 func Restore(t *testing.T, db utxostore.Interface) {
@@ -110,7 +110,7 @@ func LockTime(t *testing.T, db utxostore.Interface) {
 	}}
 
 	err = db.Spend(ctx, spends)
-	require.Error(t, err, utxostore.ErrLockTime)
+	require.ErrorIs(t, err, utxostore.ErrTypeLockTime)
 
 	_ = db.SetBlockHeight(1000)
 

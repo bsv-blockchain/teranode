@@ -337,10 +337,10 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
 					return nil
 				} else {
-					return utxostore.ErrSpent
+					return utxostore.NewErrSpent(utxo.SpendingTxID)
 				}
 			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
-				return utxostore.NewErrLockTimeExtra(utxo.LockTime, s.blockHeight)
+				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight)
 			}
 		}
 

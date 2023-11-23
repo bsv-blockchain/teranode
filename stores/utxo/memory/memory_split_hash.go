@@ -112,14 +112,14 @@ func (m *SplitByHash) Spend(_ context.Context, spends []*utxostore.Spend) error 
 	for idx, spend := range spends {
 		memMap := m.m[[1]byte{spend.Hash[0]}]
 
-		status, _, _ := memMap.Spend(spend.Hash, spend.SpendingTxID)
+		status, lockTime, spendingTxHash, _ := memMap.Spend(spend.Hash, spend.SpendingTxID)
 		var statusErr error
 		if status == int(utxostore_api.Status_NOT_FOUND) {
 			statusErr = utxostore.ErrNotFound
 		} else if status == int(utxostore_api.Status_SPENT) {
-			statusErr = utxostore.ErrSpent
+			statusErr = utxostore.NewErrSpent(spendingTxHash)
 		} else if status == int(utxostore_api.Status_LOCKED) {
-			statusErr = utxostore.ErrLockTime
+			statusErr = utxostore.NewErrLockTime(lockTime, memMap.BlockHeight)
 		}
 
 		if statusErr != nil {

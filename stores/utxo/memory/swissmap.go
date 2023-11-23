@@ -141,7 +141,7 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 					})
 				}
 			} else {
-				return utxostore.ErrLockTime
+				return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 			}
 
 			return nil
@@ -149,7 +149,7 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 			if utxo.Hash == nil {
 				return nil
 			} else {
-				return utxostore.ErrSpent
+				return utxostore.NewErrSpent(utxo.Hash)
 			}
 		}
 	}

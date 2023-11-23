@@ -79,5 +79,5 @@ func TestStoreAndSpend(t *testing.T) {
 		SpendingTxid: spendingHash,
 	})
 
-	assert.Error(t, err, utxo.ErrSpent)
+	assert.Error(t, err, utxo.ErrTypeSpent)
 }

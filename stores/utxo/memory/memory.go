@@ -145,13 +145,13 @@ func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 				return nil
 			}
 
-			return utxostore.ErrLockTime
+			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 		} else {
 			if utxo.Hash.IsEqual(spend.SpendingTxID) {
 				return nil
 			}
 
-			return utxostore.ErrSpent
+			return utxostore.NewErrSpent(utxo.Hash)
 		}
 	}
 

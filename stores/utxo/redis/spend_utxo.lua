@@ -28,14 +28,14 @@ end
 if lockTime > 500000000 then
   local currentUnixTime = tonumber(redis.call('TIME')[1])
   if lockTime > currentUnixTime then
-    return 'LOCKED'
+    return 'LOCKED' .. lockTime
   end
 end
 
 if lockTime > 0 then
   blockHeight = tonumber(blockHeight)
   if lockTime > blockHeight then
-    return 'LOCKED'
+    return 'LOCKED' .. lockTime .. ',' .. blockHeight
   end
 end
 

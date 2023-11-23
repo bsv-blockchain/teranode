@@ -146,7 +146,7 @@ func TestAerospike(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
-		require.Error(t, err, utxostore.ErrSpent)
+		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
@@ -212,7 +212,7 @@ func TestAerospike(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends)
-		require.Error(t, err, utxostore.ErrLockTime)
+		require.ErrorIs(t, err, utxostore.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -255,7 +255,7 @@ func TestAerospike(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends)
-		require.Error(t, err, utxostore.ErrLockTime)
+		require.ErrorIs(t, err, utxostore.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)

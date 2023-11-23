@@ -360,11 +360,11 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 			txid, ok := value.Bins["txid"].([]byte)
 			if ok && len(txid) != 0 {
 				prometheusUtxoStoreSpent.Inc()
-				_, hErr := chainhash.NewHash(txid)
+				spendingTxHash, hErr := chainhash.NewHash(txid)
 				if hErr != nil {
 					return hErr
 				}
-				return utxostore.ErrSpent
+				return utxostore.NewErrSpent(spendingTxHash)
 			}
 
 			prometheusUtxoReStore.Inc()
@@ -467,7 +467,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		prometheusUtxoGet.Inc()
 		readPolicy := util.GetAerospikeReadPolicy()
 		startGet := time.Now()
-		value, getErr := s.client.Get(readPolicy, key, "txid")
+		value, getErr := s.client.Get(readPolicy, key, "txid", "locktime")
 		if getErr != nil {
 			return fmt.Errorf("could not see if the value was the same as before (time taken: %s) : %w", time.Since(startGet).String(), getErr)
 		}
@@ -485,20 +485,34 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 				s.logger.Debugf("utxo %s was spent by %s", spend.Hash.String(), spendingTxHash)
 
-				return utxostore.NewErrSpentExtra(spendingTxHash)
+				return utxostore.NewErrSpent(spendingTxHash)
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			if len(valueBytes) == 32 {
-				s.logger.Errorf("utxo %s is already spent by %s", spend.Hash.String(), valueBytes)
-				return utxostore.ErrSpent
+				spendingTxHash, err := chainhash.NewHash(valueBytes)
+				if err != nil {
+					return fmt.Errorf("chainhash error: %w", err)
+				}
+
+				s.logger.Errorf("utxo %s is already spent by %s", spend.Hash.String(), spendingTxHash.String())
+				spendingTxID, err := chainhash.NewHash(valueBytes)
+				if err != nil {
+					return fmt.Errorf("chainhash error: %w", err)
+				}
+				return utxostore.NewErrSpent(spendingTxID)
 			}
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
 			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
-			return utxostore.ErrLockTime
+			lockTime, ok := value.Bins["locktime"].(uint32)
+			if !ok {
+				lockTime = 0
+			}
+
+			return utxostore.NewErrLockTime(lockTime, s.blockHeight)
 		}
 
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)

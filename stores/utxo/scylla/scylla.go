@@ -192,12 +192,14 @@ func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId
 		return utxostore.ErrNotFound
 	}
 
+	currentHeight := s.getBlockHeight()
+
 	if res.LockTime > 500000000 && int64(res.LockTime) > time.Now().UTC().Unix() {
-		return utxostore.ErrLockTime
+		return utxostore.NewErrLockTime(res.LockTime, currentHeight)
 	}
 
-	if res.LockTime > 0 && res.LockTime < s.getBlockHeight() {
-		return utxostore.ErrLockTime
+	if res.LockTime > 0 && res.LockTime < currentHeight {
+		return utxostore.NewErrLockTime(res.LockTime, currentHeight)
 	}
 	// spent by us
 	if string(res.SpendingTxId) == string(spendingTxId[:]) {
@@ -206,7 +208,11 @@ func (s *Scylla) spendUtxo(_ context.Context, hash *chainhash.Hash, spendingTxId
 
 	// spent by someone else
 	if string(res.SpendingTxId) != "" && string(res.SpendingTxId) != string(spendingTxId[:]) {
-		return utxostore.ErrSpent
+		spendingTxHash, err := chainhash.NewHash(res.SpendingTxId)
+		if err != nil {
+			return fmt.Errorf("could not create chainhash from spendingTxId")
+		}
+		return utxostore.NewErrSpent(spendingTxHash)
 	}
 
 	query := `UPDATE utxos SET spendingTxId = ? WHERE hash = ? IF spendingTxId = null`
