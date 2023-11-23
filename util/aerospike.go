@@ -93,8 +93,14 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	writeTimeout = getQueryDuration(writePolicyUrl, "TotalTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
 	writeSocketTimeout = getQueryDuration(writePolicyUrl, "SocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
 	writeSleepBetweenRetries = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
+	// TODO - remove the next line when this variable is actually used
+	_ = writeSleepBetweenRetries
 	writeSleepMultiplier = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
+	// TODO - remove the next line when this variable is actually used
+	_ = writeSleepMultiplier
 	writeExitFastOnExhaustedConnectionPool = getQueryBool(writePolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
+	// TODO - remove the next line when this variable is actually used
+	_ = writeExitFastOnExhaustedConnectionPool
 
 	// batching stuff
 	batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
