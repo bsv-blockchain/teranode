@@ -31,7 +31,6 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 		g, gCtx := errgroup.WithContext(c.Request().Context())
 		g.SetLimit(128)
 
-		var b []byte
 		responseBytes := make([]byte, 0, 2*1024*1024) // 2MB initial capacity
 		responseBytesMu := sync.Mutex{}
 		for {
@@ -47,7 +46,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			}
 
 			g.Go(func() error {
-				b, err = h.repository.GetTransaction(gCtx, &hash)
+				b, err := h.repository.GetTransaction(gCtx, &hash)
 				if err != nil {
 					if strings.HasSuffix(err.Error(), " not found") {
 						h.logger.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
