@@ -1,6 +1,7 @@
 package http_impl
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -37,7 +38,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			var hash chainhash.Hash
 			_, err := io.ReadFull(body, hash[:])
 			if err != nil {
-				if err.Error() == "EOF" {
+				if errors.Is(err, io.EOF) {
 					break
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -65,7 +66,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 		}
 
 		if err := g.Wait(); err != nil {
-			return err
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		prometheusAssetHttpGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))

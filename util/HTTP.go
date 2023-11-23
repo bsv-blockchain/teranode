@@ -49,6 +49,7 @@ func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]b
 	// write request body
 	if len(requestBody) > 0 {
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+		req.Method = http.MethodPost
 	}
 
 	resp, err := httpClient.Do(req)
@@ -57,6 +58,12 @@ func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]b
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.Body != nil {
+			b, _ := io.ReadAll(resp.Body)
+			if b != nil {
+				return nil, errors.Join(fmt.Errorf("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b)), err)
+			}
+		}
 		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
