@@ -40,67 +40,7 @@ The service manages a set of subscribers and broadcast notifications and keep-al
 
 The high level process flow is as follows:
 
-```plantuml
-@startuml
-participant Client
-participant "Server" as S
-database "Config" as C
-participant "Echo HTTP Server" as E
-participant "GRPC Server" as G
-participant "WebSocket Client" as W
-participant "Subscriber" as Sub
-
-== Initialization ==
-activate S
-S -> S : Init()
-S -> C : Read Config\n(grpcListenAddress, httpListenAddress)
-activate C
-C --> S : Config Data
-deactivate C
-S -> S : Setup Discovery Channel
-S -> E : Setup Echo Server\n(HTTP/HTTPS Endpoints)
-activate E
-E --> S : Echo Server Ready
-deactivate E
-S -> G : Setup GRPC Server
-activate G
-G --> S : GRPC Server Ready
-deactivate G
-deactivate S
-
-== Connection Handling ==
-Client -> S : Connect(info)
-activate S
-S -> Sub : Add New Subscriber\n(info)
-activate Sub
-Sub --> S : Subscriber Added
-deactivate Sub
-S --> Client : Connected
-deactivate S
-
-== Broadcast Notification ==
-Client -> S : BroadcastNotification(notification)
-activate S
-S -> S : Check Subscribers
-loop for each Subscriber
-    S -> Sub : Send Notification
-    activate Sub
-    Sub --> S : Acknowledgment
-    deactivate Sub
-end
-S --> Client : Notifications Sent
-deactivate S
-
-== Get Nodes ==
-Client -> S : GetNodes()
-activate S
-S -> S : Collect Nodes Information
-S --> Client : NodeList
-deactivate S
-
-@enduml
-
-```
+![bootstrap_high_level_overview.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_high_level_overview.svg)
 
 In summary:
 
@@ -117,48 +57,8 @@ Let's go through the different steps closely:
 
 ### 2.1. Initialization
 
-```plantuml
-@startuml
-participant Caller
-participant "Server" as S
-participant "Discovery Channel" as DC
-participant "Echo HTTP Server" as EHS
-participant "CORS Middleware" as CM
-participant "HTTP Routes" as HR
 
-Caller -> S : Init()
-activate S
-
-S -> DC : Create Discovery Channel
-activate DC
-DC --> S : Channel Created
-deactivate DC
-
-S -> EHS : Initialize Echo Server
-activate EHS
-EHS --> S : Server Initialized
-deactivate EHS
-
-S -> CM : Configure CORS
-activate CM
-CM --> S : CORS Configured
-deactivate CM
-
-S -> HR : Define '/ws' WebSocket Route
-activate HR
-HR --> S : Route Defined
-
-S -> HR : Define '/nodes' Route
-HR --> S : Route Defined
-deactivate HR
-
-S --> Caller : Initialization Complete
-deactivate S
-
-@enduml
-
-```
-
+![bootstrap_initalization.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_initalization.svg)
 
 The `Init` function of the `Server` struct in this `server.go` service is responsible for initializing the server, specifically setting up its internal mechanisms for discovery and communication.
 
@@ -188,67 +88,8 @@ The `Init` function of the `Server` struct in this `server.go` service is respon
 
 After the initialisation, the service operations are started:
 
-```plantuml
-@startuml
-participant Caller
-participant "Server" as S
-participant "Ticker" as T
-participant "HTTP Server" as HS
-participant "gRPC Server" as GS
-participant "Config" as C
+![bootstrap_startup.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_startup.svg)
 
-Caller -> S : Start(ctx)
-activate S
-
-create T
-S -> T : Start New Ticker\n(10 seconds)
-activate T
-T --> S : Ticker Started
-deactivate T
-
-S -> S : Start Go Routine\n(for Ticker)
-activate S
-S -> S : Broadcast Ping Notifications\n(Every 10 seconds)
-deactivate S
-
-S -> C : Get HTTP Listen Address
-activate C
-C --> S : Address
-deactivate C
-
-create HS
-S -> HS : Initialize HTTP Server
-activate HS
-HS --> S : HTTP Server Ready
-deactivate HS
-
-S -> S : Start Go Routine\n(for HTTP Server)
-activate S
-
-S -> HS : Start HTTP Server
-HS --> S : HTTP Server Running
-deactivate HS
-deactivate S
-
-create GS
-S -> GS : Initialize gRPC Server
-activate GS
-GS --> S : gRPC Server Ready
-deactivate GS
-
-S -> S : Start Go Routine\n(for gRPC Server)
-activate S
-S -> GS : Start gRPC Server
-GS --> S : gRPC Server Running
-deactivate GS
-deactivate S
-
-S --> Caller : Started
-deactivate S
-
-@enduml
-
-```
 
 The `Start` function in the `Server` struct is a method written in Go that initiates the server's operations.
 
@@ -271,7 +112,6 @@ The `Start` function in the `Server` struct is a method written in Go that initi
      - `Type_PING` - nodes notify they are still alive, and should be kept in the list of nodes.
 
 
-
 ---
 
 
@@ -283,63 +123,7 @@ Clients can either connect by either gRPC or the WebSocket interface. Notificati
 
 The `Connect` function in the `Server` struct handles subscriptions to the server's notification service.
 
-```plantuml
-@startuml
-participant Subscriber
-participant "Server" as S
-participant "Peer Context" as PC
-database "Subscribers" as Subs
-participant "gRPC Stream" as Stream
-participant "Notification Channel" as NC
-
-Subscriber -> S : Connect(info)
-activate S
-
-S -> PC : Extract Peer Info
-activate PC
-PC --> S : Peer Info
-deactivate PC
-
-S -> S : Create Notification Channel
-activate S
-S --> S : Channel Created
-
-S -> Subs : Get Existing Subscribers
-activate Subs
-Subs --> S : Existing Subscribers
-
-loop Each Existing Subscriber
-    S -> Stream : Send Info to New Subscriber
-    activate Stream
-    Stream --> S : Info Sent
-    deactivate Stream
-end
-
-S -> Subs : Add New Subscriber
-Subs --> S : Subscriber Added
-deactivate Subs
-
-S -> NC : Listen for Notifications
-activate NC
-loop Notification Received
-    NC -> Stream : Send Notification to Subscriber
-    activate Stream
-    Stream --> NC : Notification Sent
-    deactivate Stream
-end
-deactivate NC
-
-alt If Disconnection
-    S -> Subs : Remove Subscriber
-    activate Subs
-    Subs --> S : Subscriber Removed
-    deactivate Subs
-end
-
-deactivate S
-@enduml
-
-```
+![bootstrap_connect_grpc.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_connect_grpc.svg)
 
 1. **Extract Peer Information**:
    - `p, _ := peer.FromContext(stream.Context())`: Extracts peer information from the gRPC stream's context. This retrieves the IP address of the connecting peer.
@@ -369,84 +153,7 @@ deactivate S
 
 The `HandleWebSocket` function in the `Server` struct (see `HandleWebsocket.go`) handles WebSocket connections to the server.
 
-
-```plantuml
-@startuml
-participant Client
-participant "WebSocket" as WS
-participant "Server" as S
-database "ClientChannels" as CC
-database "Discovery Channel" as DC
-database "Subscribers" as Subs
-database "Logger" as Log
-
-== WebSocket Connection Handling ==
-Client -> WS : HTTP Request for WebSocket
-
-activate WS
-WS -> WS : Upgrade to WebSocket
-
-WS -> S : HandleWebSocket()
-activate S
-
-S -> CC : Add new client channel
-activate CC
-CC --> S : Client channel added
-
-== Sending List of Existing Subscribers ==
-S -> Subs : Get Subscribers List
-activate Subs
-Subs --> S : Subscribers Data
-deactivate Subs
-
-loop Each Subscriber
-    S -> WS : Send Subscriber Info
-    activate WS
-    WS -> Client: Send Subscriber Info
-    WS --> S : Info Sent
-    deactivate WS
-end
-
-== Broadcasting Messages to Clients ==
-loop New Message on Discovery Channel
-    DC -> S : New Discovery Message
-    activate DC
-    S -> CC : Iterate over Client Channels
-    activate CC
-    loop Each Client Channel
-        S -> WS : Send Message via WebSocket
-        activate WS
-        WS -> Client: Send Message via WebSocket
-        WS --> S : Message Sent
-        deactivate WS
-    end
-    CC --> S : All clients notified
-    deactivate CC
-    deactivate DC
-end
-
-== Client Disconnection ==
-WS -> S : WebSocket Disconnect
-S -> CC : Remove client channel
-CC --> S : Client channel removed
-
-S --> WS : WebSocket Handling Complete
-deactivate S
-WS --> Client : Response
-deactivate WS
-
-== Error Handling ==
-alt If Marshaling Error Occurs
-    S -> Log : Log Error
-    activate Log
-    Log --> S : Error Logged
-    deactivate Log
-end
-
-@enduml
-
-
-```
+![bootstrap_connect_websocket.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_connect_websocket.svg)
 
 The described Go code is part of the `HandleWebSocket` function in the `Server` struct. It handles WebSocket connections to the server.
 
@@ -480,23 +187,7 @@ Peers and unregistered HTTP clients can proactively request the list of nodes fr
 
 An HTTP client can fetch the list of nodes via the `/nodes` endpoint. This is intended for generic HTTP clients, such as web browsers or command-line tools like `curl`. Notice how peers typically use the gRPC interface instead, and native Teranode clients use the WebSocket interface.
 
-```plantuml
-@startuml
-participant "HTTP Client" as client
-participant "HTTP Server (Echo)" as server
-
-client -> server: HTTP GET /nodes
-note right of server: Server processes the request\nand gathers nodes data
-server --> client: HTTP 200 OK with nodes data in JSON
-note left of client: Client processes the response
-
-alt If there is an error
-    server --> client: HTTP Error (e.g., 500 Internal Server Error)
-    note left of client: Client handles the error
-end
-
-@enduml
-```
+![bootstrap_get_request.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_get_request.svg)
 
 1. **HTTP Client Sends the Request**:
     - The client (which could be a web browser, a command-line tool like `curl`, or any HTTP client library in a software application) prepares an HTTP GET request for the `/nodes` endpoint.
@@ -512,25 +203,7 @@ end
 
 ##### 2.3.2. gRPC Request
 
-```plantuml
-@startuml
-participant "Peer (Client)" as Client
-participant "gRPC Server (Bootstrap Service)" as Server
-database "Subscribers" as Subs
-
-Client -> Server : GetNodes()
-activate Server
-
-Server -> Subs : Fetch Nodes List
-activate Subs
-Subs --> Server : Nodes List
-deactivate Subs
-
-Server --> Client : Return Nodes List
-deactivate Server
-@enduml
-
-```
+![bootstrap_grpc_request.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_grpc_request.svg)
 
 
 ---
@@ -599,63 +272,12 @@ There is no action expected from the client upon receiving a ping. This procedur
 
 GRPC subscribers:
 
-```plantuml
-@startuml
-participant "Server" as S
-database "gRPC Subscribers" as GRPC
-participant "gRPC Subscriber" as GS
-
-== Ping gRPC Subscribers ==
-S -> GRPC : Iterate over gRPC Subscribers
-activate GRPC
-loop Each gRPC Subscriber
-    S -> GS : Send Ping via gRPC Stream
-    activate GS
-    alt If Subscriber Responds
-        GS --> S : Acknowledge Ping
-    else If Subscriber Does Not Respond
-        S -> GRPC : Remove Unresponsive Subscriber
-    end
-    deactivate GS
-end
-deactivate GRPC
-deactivate S
-@enduml
-
-```
+![bootstrap_grpc_ping.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_grpc_ping.svg)
 
 Websocket subscribers:
 
-```plantuml
 
-@startuml
-participant "Server" as S
-database "WebSocket Clients" as WS
-participant "WebSocket Client" as WC
-
-== Ping WebSocket Clients ==
-S -> S : Every 10 seconds
-
-S -> WS : Iterate over WebSocket Clients
-activate WS
-loop Each WebSocket Client
-    S -> WC : Send Ping
-    activate WC
-    alt If Client Responds
-        WC --> S : Acknowledge Ping
-    else If Client Does Not Respond
-        S -> WS : Mark Client for Disconnection
-    end
-    deactivate WC
-end
-deactivate WS
-S -> WS : Disconnect Unresponsive Clients
-deactivate S
-@enduml
-
-
-@enduml
-```
+![bootstrap_websocket_ping.svg](img%2Fplantuml%2Fbootstrap%2Fbootstrap_websocket_ping.svg)
 
 
 ----

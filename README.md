@@ -14,7 +14,8 @@
     - [Running Tests](#running-tests)
   - [gRPC Logging](#grpc-logging)
 - [Running the Node in Production  [ TO-DO ]](#running-the-node-in-production---to-do-)
-- [Architecture ](#architecture-)
+- [Architecture](#architecture)
+- [Micro-Services](#micro-services)
 - [Technology  [ TO-DO ]](#technology---to-do-)
 - [Project Structure and Coding Conventions](#project-structure-and-coding-conventions)
   - [Project Structure](#project-structure)
@@ -23,6 +24,7 @@
   - [TODO ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
   - [Testing Conventions [TODO]](#testing-conventions---todo)
 - [License](#license)
+
 
 
 

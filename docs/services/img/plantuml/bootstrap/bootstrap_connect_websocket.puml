@@ -1,0 +1,73 @@
+@startuml
+participant Client
+participant "WebSocket" as WS
+participant "Server" as S
+database "ClientChannels" as CC
+database "Discovery Channel" as DC
+database "Subscribers" as Subs
+database "Logger" as Log
+
+== WebSocket Connection Handling ==
+Client -> WS : HTTP Request for WebSocket
+
+activate WS
+WS -> WS : Upgrade to WebSocket
+
+WS -> S : HandleWebSocket()
+activate S
+
+S -> CC : Add new client channel
+activate CC
+CC --> S : Client channel added
+
+== Sending List of Existing Subscribers ==
+S -> Subs : Get Subscribers List
+activate Subs
+Subs --> S : Subscribers Data
+deactivate Subs
+
+loop Each Subscriber
+    S -> WS : Send Subscriber Info
+    activate WS
+    WS -> Client: Send Subscriber Info
+    WS --> S : Info Sent
+    deactivate WS
+end
+
+== Broadcasting Messages to Clients ==
+loop New Message on Discovery Channel
+    DC -> S : New Discovery Message
+    activate DC
+    S -> CC : Iterate over Client Channels
+    activate CC
+    loop Each Client Channel
+        S -> WS : Send Message via WebSocket
+        activate WS
+        WS -> Client: Send Message via WebSocket
+        WS --> S : Message Sent
+        deactivate WS
+    end
+    CC --> S : All clients notified
+    deactivate CC
+    deactivate DC
+end
+
+== Client Disconnection ==
+WS -> S : WebSocket Disconnect
+S -> CC : Remove client channel
+CC --> S : Client channel removed
+
+S --> WS : WebSocket Handling Complete
+deactivate S
+WS --> Client : Response
+deactivate WS
+
+== Error Handling ==
+alt If Marshaling Error Occurs
+    S -> Log : Log Error
+    activate Log
+    Log --> S : Error Logged
+    deactivate Log
+end
+
+@enduml

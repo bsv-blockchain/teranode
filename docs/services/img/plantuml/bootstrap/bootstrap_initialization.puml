@@ -1,0 +1,38 @@
+@startuml
+participant Caller
+participant "Server" as S
+participant "Discovery Channel" as DC
+participant "Echo HTTP Server" as EHS
+participant "CORS Middleware" as CM
+participant "HTTP Routes" as HR
+
+Caller -> S : Init()
+activate S
+
+S -> DC : Create Discovery Channel
+activate DC
+DC --> S : Channel Created
+deactivate DC
+
+S -> EHS : Initialize Echo Server
+activate EHS
+EHS --> S : Server Initialized
+deactivate EHS
+
+S -> CM : Configure CORS
+activate CM
+CM --> S : CORS Configured
+deactivate CM
+
+S -> HR : Define '/ws' WebSocket Route
+activate HR
+HR --> S : Route Defined
+
+S -> HR : Define '/nodes' Route
+HR --> S : Route Defined
+deactivate HR
+
+S --> Caller : Initialization Complete
+deactivate S
+
+@enduml

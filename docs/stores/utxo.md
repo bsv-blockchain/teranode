@@ -22,9 +22,9 @@
 7. [Running the Service Locally](#7-running-the-service-locally)
 
 
-## 1. Description [TODO ]
+## 1. Description
 
-The UTXO Store is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is primarily used by the Validator service to retrieve UTXOs when validating transactions (**TODO - Is this accurate?**). The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
+The UTXO Store is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is an internal datastore used by some of the services, such as the Asset Server, the TX Validator and the Block Assembly. The main purpose of this store is to maintain the UTXO data on behalf of other micro-services.
 
 It handles the core functionalities of the UTXO Store:
 
@@ -145,42 +145,7 @@ To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bi
 
 ## 4.1. Asset Server:
 
-```plantuml
-@startuml
-actor "UI User" as UI_USER
-participant "UI Dashboard" as UI
-participant "AssetService (HTTP)" as AssetService
-participant "UTXO Store" as UTXOStore
-database "DataStore" as Datastore
-
-UI_USER -> UI: Request to View UTXO Data
-activate UI
-
-UI -> AssetService: Request UTXO Data
-activate AssetService
-
-AssetService -> UTXOStore: Get()
-activate UTXOStore
-
-UTXOStore -> Datastore: Fetch UTXO Data
-activate Datastore
-Datastore --> UTXOStore: UTXO Data
-deactivate Datastore
-
-UTXOStore --> AssetService: UTXO Data
-deactivate UTXOStore
-
-
-AssetService --> UI: Response with UTXO Data
-deactivate AssetService
-
-UI --> UI_USER: UTXO Data Loaded
-
-deactivate UI
-
-@enduml
-```
-
+![utxo_asset_server.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_asset_server.svg)
 
 1. The **UI Dashboard** sends a request to the AssetService for UTXO data.
 2. The **AssetService** forwards this request to the **UTXO Store**.
@@ -194,41 +159,7 @@ To know more about the AssetService, please check its specific documentation.
 ## 4.2. Block Assembly:
 
 
-```plantuml
-@startuml
-participant "Block Assembly" as BlockAssembly
-participant "UTXO Store" as UTXOStore
-database "Datastore Implementation" as Datastore
-
-== Create Coinbase TX ==
-
-BlockAssembly -> UTXOStore: Store(Coinbase UTXO)
-activate UTXOStore
-
-UTXOStore -> Datastore: Store UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
-UTXOStore --> BlockAssembly: Confirmation
-deactivate UTXOStore
-
-
-== Delete Coinbase TX ==
-
-BlockAssembly -> UTXOStore: Delete(Coinbase UTXO)
-activate UTXOStore
-
-UTXOStore -> Datastore: Delete UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
-UTXOStore --> BlockAssembly: Confirmation
-deactivate UTXOStore
-
-@enduml
-```
+![utxo_block_assembly.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_block_assembly.svg)
 
 Coinbase Transaction creation (UTXO step):
 
@@ -246,71 +177,9 @@ To know more about the Block Assembly, please check its specific documentation.
 
 ## 4.3. Transaction Validator.
 
-```plantuml
-@startuml
-participant "TX Validator (Validator.go)" as TXValidator
-participant "UTXO Store" as UTXOStore
-database "Datastore Implementation" as Datastore
+![utxo_transaction_validator.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_transaction_validator.svg)
 
-== Fetch Block Height ==
-
-TXValidator -> UTXOStore: getBlockHeight()
-activate UTXOStore
-
-UTXOStore -> Datastore: Fetch Current Block Height
-activate Datastore
-Datastore --> UTXOStore: Current Block Height
-deactivate Datastore
-
-UTXOStore --> TXValidator: Block Height
-deactivate UTXOStore
-
-== Spend Coinbase TX ==
-
-
-TXValidator -> UTXOStore: Spend(UTXO)
-activate UTXOStore
-
-UTXOStore -> Datastore: Mark UTXO as Spent
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
-UTXOStore --> TXValidator: Confirmation of Spend
-deactivate UTXOStore
-
-== Unspend Coinbase TX ==
-
-
-TXValidator -> UTXOStore: Unspend(UTXO)
-activate UTXOStore
-
-UTXOStore -> Datastore: Revert UTXO to Unspent
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
-UTXOStore --> TXValidator: Confirmation of Unspend
-deactivate UTXOStore
-
-== Store Coinbase TX ==
-
-TXValidator -> UTXOStore: Store(New UTXO)
-activate UTXOStore
-
-UTXOStore -> Datastore: Store New UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
-UTXOStore --> TXValidator: Confirmation of Store
-deactivate UTXOStore
-
-@enduml
-
-```
-
-**TODO** More context for this last plantUML
+**TODO** More context for this last plantUML - DISCUSS WITH SIMON
 
 ## 5. Technology
 
@@ -480,6 +349,6 @@ or
 -- Are all stores in scope?
 -- What is GetHeight() For????
 -- Simon - should BanList and UTXO Lookup appear here? What is the UTXO Lookup?
-
+-- Fill details in section 4.3. Transaction Validator when I have them
 --
 **TODO** Mention to Siggi - blockvalidation/Server.go and BlockAssember.go have `utxoStore        utxostore.Interface` declared but never used. Also, we have a UTXO Service (server.go and client.go) without a purpose.

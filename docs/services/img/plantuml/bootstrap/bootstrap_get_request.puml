@@ -1,0 +1,15 @@
+@startuml
+participant "HTTP Client" as client
+participant "HTTP Server (Echo)" as server
+
+client -> server: HTTP GET /nodes
+note right of server: Server processes the request\nand gathers nodes data
+server --> client: HTTP 200 OK with nodes data in JSON
+note left of client: Client processes the response
+
+alt If there is an error
+    server --> client: HTTP Error (e.g., 500 Internal Server Error)
+    note left of client: Client handles the error
+end
+
+@enduml

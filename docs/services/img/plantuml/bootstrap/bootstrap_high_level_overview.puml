@@ -1,0 +1,58 @@
+@startuml
+participant Client
+participant "Server" as S
+database "Config" as C
+participant "Echo HTTP Server" as E
+participant "GRPC Server" as G
+participant "WebSocket Client" as W
+participant "Subscriber" as Sub
+
+== Initialization ==
+activate S
+S -> S : Init()
+S -> C : Read Config\n(grpcListenAddress, httpListenAddress)
+activate C
+C --> S : Config Data
+deactivate C
+S -> S : Setup Discovery Channel
+S -> E : Setup Echo Server\n(HTTP/HTTPS Endpoints)
+activate E
+E --> S : Echo Server Ready
+deactivate E
+S -> G : Setup GRPC Server
+activate G
+G --> S : GRPC Server Ready
+deactivate G
+deactivate S
+
+== Connection Handling ==
+Client -> S : Connect(info)
+activate S
+S -> Sub : Add New Subscriber\n(info)
+activate Sub
+Sub --> S : Subscriber Added
+deactivate Sub
+S --> Client : Connected
+deactivate S
+
+== Broadcast Notification ==
+Client -> S : BroadcastNotification(notification)
+activate S
+S -> S : Check Subscribers
+loop for each Subscriber
+    S -> Sub : Send Notification
+    activate Sub
+    Sub --> S : Acknowledgment
+    deactivate Sub
+end
+S --> Client : Notifications Sent
+deactivate S
+
+== Get Nodes ==
+Client -> S : GetNodes()
+activate S
+S -> S : Collect Nodes Information
+S --> Client : NodeList
+deactivate S
+
+@enduml

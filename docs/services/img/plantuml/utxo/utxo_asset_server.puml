@@ -1,0 +1,33 @@
+@startuml
+actor "UI User" as UI_USER
+participant "UI Dashboard" as UI
+participant "AssetService (HTTP)" as AssetService
+participant "UTXO Store" as UTXOStore
+database "DataStore" as Datastore
+
+UI_USER -> UI: Request to View UTXO Data
+activate UI
+
+UI -> AssetService: Request UTXO Data
+activate AssetService
+
+AssetService -> UTXOStore: Get()
+activate UTXOStore
+
+UTXOStore -> Datastore: Fetch UTXO Data
+activate Datastore
+Datastore --> UTXOStore: UTXO Data
+deactivate Datastore
+
+UTXOStore --> AssetService: UTXO Data
+deactivate UTXOStore
+
+
+AssetService --> UI: Response with UTXO Data
+deactivate AssetService
+
+UI --> UI_USER: UTXO Data Loaded
+
+deactivate UI
+
+@enduml

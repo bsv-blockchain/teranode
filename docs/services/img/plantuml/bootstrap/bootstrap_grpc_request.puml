@@ -1,0 +1,16 @@
+@startuml
+participant "Peer (Client)" as Client
+participant "gRPC Server (Bootstrap Service)" as Server
+database "Subscribers" as Subs
+
+Client -> Server : GetNodes()
+activate Server
+
+Server -> Subs : Fetch Nodes List
+activate Subs
+Subs --> Server : Nodes List
+deactivate Subs
+
+Server --> Client : Return Nodes List
+deactivate Server
+@enduml

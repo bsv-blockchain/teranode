@@ -1,0 +1,54 @@
+@startuml
+participant Subscriber
+participant "Server" as S
+participant "Peer Context" as PC
+database "Subscribers" as Subs
+participant "gRPC Stream" as Stream
+participant "Notification Channel" as NC
+
+Subscriber -> S : Connect(info)
+activate S
+
+S -> PC : Extract Peer Info
+activate PC
+PC --> S : Peer Info
+deactivate PC
+
+S -> S : Create Notification Channel
+activate S
+S --> S : Channel Created
+
+S -> Subs : Get Existing Subscribers
+activate Subs
+Subs --> S : Existing Subscribers
+
+loop Each Existing Subscriber
+    S -> Stream : Send Info to New Subscriber
+    activate Stream
+    Stream --> S : Info Sent
+    deactivate Stream
+end
+
+S -> Subs : Add New Subscriber
+Subs --> S : Subscriber Added
+deactivate Subs
+
+S -> NC : Listen for Notifications
+activate NC
+loop Notification Received
+    NC -> Stream : Send Notification to Subscriber
+    activate Stream
+    Stream --> NC : Notification Sent
+    deactivate Stream
+end
+deactivate NC
+
+alt If Disconnection
+    S -> Subs : Remove Subscriber
+    activate Subs
+    Subs --> S : Subscriber Removed
+    deactivate Subs
+end
+
+deactivate S
+@enduml
