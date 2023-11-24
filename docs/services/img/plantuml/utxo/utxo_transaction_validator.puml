@@ -16,7 +16,7 @@ deactivate Datastore
 UTXOStore --> TXValidator: Block Height
 deactivate UTXOStore
 
-== Spend Coinbase TX ==
+== Spend TX ==
 
 
 TXValidator -> UTXOStore: Spend(UTXO)
@@ -30,7 +30,7 @@ deactivate Datastore
 UTXOStore --> TXValidator: Confirmation of Spend
 deactivate UTXOStore
 
-== Unspend Coinbase TX ==
+== Unspend TX ==
 
 
 TXValidator -> UTXOStore: Unspend(UTXO)
@@ -44,7 +44,7 @@ deactivate Datastore
 UTXOStore --> TXValidator: Confirmation of Unspend
 deactivate UTXOStore
 
-== Store Coinbase TX ==
+== Store TX ==
 
 TXValidator -> UTXOStore: Store(New UTXO)
 activate UTXOStore
