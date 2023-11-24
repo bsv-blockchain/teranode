@@ -35,7 +35,7 @@ func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
 
 func (e *ErrSpent) Error() string {
 	if e.spendingTxID == nil {
-		return fmt.Sprintf("utxo already spent (invalid use of ErrSpent as spendingTxID is not set)")
+		return "utxo already spent (invalid use of ErrSpent as spendingTxID is not set)"
 	}
 	return fmt.Sprintf("utxo already spent by txid %s", e.spendingTxID.String())
 }
@@ -53,7 +53,7 @@ func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) 
 }
 func (e *ErrLockTime) Error() string {
 	if e.lockTime == 0 {
-		return fmt.Sprintf("utxo is locked (invalid use of ErrLockTime as locktime is zero)")
+		return "utxo is locked (invalid use of ErrLockTime as locktime is zero)"
 	}
 
 	if e.lockTime >= 500000000 {

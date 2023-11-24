@@ -78,7 +78,7 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	if m.timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+		_, cancel = context.WithTimeout(ctx, m.timeout)
 		defer cancel()
 	}
 
