@@ -20,7 +20,7 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	m := &txMetaCache{
 		txMetaStore: txMetaStore,
 		cache:       ttlcache.New[chainhash.Hash, *txmeta.Data](),
-		cacheTTL:    1 * time.Minute,
+		cacheTTL:    15 * time.Minute, // until block is mined
 	}
 
 	go m.cache.Start()
@@ -34,7 +34,7 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 			prometheusBlockValidationTxMetaCacheMisses.Set(float64(metrics.Misses))
 			prometheusBlockValidationTxMetaCacheEvictions.Set(float64(metrics.Evictions))
 
-			time.Sleep(10 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
 	}()
 
@@ -42,7 +42,21 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 }
 
 func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return t.Get(ctx, hash)
+	cached := t.cache.Get(*hash)
+	if cached != nil && cached.Value() != nil {
+		return cached.Value(), nil
+	}
+
+	txMeta, err := t.txMetaStore.GetMeta(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	// add to cache
+	txMeta.Tx = nil
+	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+
+	return txMeta, nil
 }
 
 func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
@@ -51,7 +65,16 @@ func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Dat
 		return cached.Value(), nil
 	}
 
-	return t.txMetaStore.Get(ctx, hash)
+	txMeta, err := t.txMetaStore.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	// add to cache
+	txMeta.Tx = nil
+	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+
+	return txMeta, nil
 }
 
 func (t txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
