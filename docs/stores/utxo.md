@@ -145,19 +145,55 @@ To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bi
 
 ### 3.2. How are UTXOs stored?
 
-![utxo_hash_computation.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_hash_computation.svg)
 
-- To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
-- The existence of the key confirms the details of the UTXO are the same as what the caller has.
-
-
-- The data is stored in this format:
+The UTXO data is stored in the following format:
 
 | Field     | Description                                                   |
 |-----------|---------------------------------------------------------------|
 | hash      | The hash of the UTXO for identification purposes              |
 | lock_time | The block number or timestamp at which this UTXO can be spent |
 | tx_id     | The transaction ID where this UTXO was spent                  |
+
+
+The UTXO will be first persisted with its hash (as key) and a lock time. Once the UTXO is spent, the spending tx_id will be saved.
+
+The process can be summarised here:
+
+![utxo_hash_computation.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_hash_computation.svg)
+
+
+- To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
+
+
+- The hashing logic can be found in `UTXOHash.go`:
+
+```go
+func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
+	if len(lockingScript) == 0 {
+		return nil, fmt.Errorf("locking script is nil")
+	}
+
+	if satoshis == 0 {
+		return nil, fmt.Errorf("satoshis is 0")
+	}
+
+	utxoHash := make([]byte, 0, 256)
+	utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
+	utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
+	utxoHash = append(utxoHash, lockingScript...)
+	utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
+
+	hash := crypto.Sha256(utxoHash)
+	chHash, err := chainhash.NewHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return chHash, nil
+}
+```
+
+- The existence of the key confirms the details of the UTXO are the same as what the caller has.
 
 
 
