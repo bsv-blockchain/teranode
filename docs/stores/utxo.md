@@ -35,6 +35,13 @@ It handles the core functionalities of the UTXO Store:
 * **Delete**: Remove UTXOs from the store.
 * **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
 
+**Principles**:
+
+- All operations are atomic.
+- All data is shared across servers with standard sharing algorithms.
+- In production, the data is stored in a Master and Replica configuration.
+- No centralised broker - all clients know where each hash is stored.
+- No cross-transaction state is stored.
 
 ## 2. Architecture
 
@@ -96,6 +103,8 @@ More details about the specific stores can be found in the [Technology](#5-techn
 
 ## 3. UTXO - Data Model
 
+## 2.1. What is an UTXO?
+
 The UBSV UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:
 
 - **Transaction Outputs**: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).
@@ -143,6 +152,24 @@ Independent UTXOs can be processed in parallel, potentially improving the effici
 
 To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bitcoin-protocol-documentation/cJw8Rc8JxwBTZVOoBFC6/transaction-lifecycle/transaction-inputs-and-outputs.
 
+### 3.2. How are UTXOs stored?
+
+![utxo_hash_computation.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_hash_computation.svg)
+
+- To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
+- The existence of the key confirms the details of the UTXO are the same as what the caller has.
+
+
+- The data is stored in this format:
+
+| Field     | Description                                                   |
+|-----------|---------------------------------------------------------------|
+| hash      | The hash of the UTXO for identification purposes              |
+| lock_time | The block number or timestamp at which this UTXO can be spent |
+| tx_id     | The transaction ID where this UTXO was spent                  |
+
+
+
 ## 4. Use Cases
 
 ## 4.1. Asset Server:
@@ -156,7 +183,7 @@ To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bi
 5. The UTXO Store sends this information back to the AssetService.
 6. Finally, the AssetService responds back to the UI Dashboard.
 
-To know more about the AssetService, please check its specific documentation.
+To know more about the AssetService, please check its specific service documentation.
 
 ## 4.2. Block Assembly:
 
@@ -175,13 +202,29 @@ Coinbase Transaction deletion (UTXO step):
 2. The **Block Assembly** service sends a request to the **UTXO Store** to delete the Coinbase UTXO.
 3. The **UTXO Store** interacts with the underlying **Datastore** implementation to delete the Coinbase UTXO.
 
-To know more about the Block Assembly, please check its specific documentation.
+To know more about the Block Assembly, please check its specific service documentation.
 
 ## 4.3. Transaction Validator.
 
 ![utxo_transaction_validator.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_transaction_validator.svg)
 
-**TODO** More context for this last plantUML - DISCUSS WITH SIMON
+The Transaction Validator uses the UTXO Store to perform a number of UTXO related operations:
+
+1. Obtain the current block height from the **UTXO Store**.
+2. Mark a UTXO as spent. If needed, it can also request to unspend (revert) a UTXO.
+6. Store new UTXOs.
+
+When marking a UTXO as spent, the store will check if the UTXO is known (by its hash), and whether it is spent or not. If it is spent, we will return one response message or another depending on whether the spending tx_id matches. See here:
+
+![utxo_spend_process.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_spend_process.svg)
+
+On the other hand, we can see the process for unspending an UTXO here:
+
+![utxo_unspend_process.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_unspend_process.svg)
+
+To know more about the Transaction Validator, please check its specific service documentation.
+
+
 
 ## 5. Technology
 
@@ -234,9 +277,14 @@ The following datastores are supported (either in development / experimental or 
 
 - The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
 - Memory-based stores (like in-memory and Redis) are typically faster but may require additional persistence mechanisms.
-- Databases like Aerospike, Scylla, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
+- Databases like Aerospike, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore and SQLite (especially in-memory) are more appropriate for testing, development, or lightweight applications.
 
+- Aerospike or Redis are strongly recommended for Production usage.
+
+### 5.3. Data Purging
+
+Stored data is automatically purged a certain TTL (Time To Live) period after it is created. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
 ##  6. Directory Structure and Main Files
 
@@ -336,21 +384,3 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 or
 
 `utxostore.dev.[YOUR_USERNAME]=postgres://ubsv:ubsv@localhost:5432/ubsv`
-
-
-## 9. References (like third party)
-
-
-# 10. For clarification with Simon and / or Siggi
-
-**TODO - Simon - UTXO - what's the model? We only keep the hash (as per TX outputs) and the tx_id it spent it? How is the value implied? Or when it was created? DO we have to traverse the original transactions for it??? Sequence diag for it?**
-**TODO Who uses the UTXO service then???? Should this be deleted? Ask Simon**
-**TODO What is the UTXO Lookup Service? Does it connect wih the UTXO stores or UTXO Service?**
-
-
--- Are all stores in scope?
--- What is GetHeight() For????
--- Simon - should BanList and UTXO Lookup appear here? What is the UTXO Lookup?
--- Fill details in section 4.3. Transaction Validator when I have them
---
-**TODO** Mention to Siggi - blockvalidation/Server.go and BlockAssember.go have `utxoStore        utxostore.Interface` declared but never used. Also, we have a UTXO Service (server.go and client.go) without a purpose.

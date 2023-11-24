@@ -1,0 +1,38 @@
+@startuml
+
+skinparam ParticipantPadding 80
+
+participant "Client" as Client
+participant "UTXO Store" as Store
+
+== Reset a UTXO - Key does not exist ==
+
+Client -> Store: Reset UTXO (UTXO Hash)
+activate Store
+
+alt Key does not exist
+    Store -> Client: NOT_FOUND
+end
+
+== Reset a UTXO - Key exists and Value is NULL ==
+
+Client -> Store: Reset UTXO (UTXO Hash)
+activate Store
+
+alt Key exists and Value is NULL
+    Store -> Client: OK (Idempotent)
+end
+
+== Reset a UTXO - Key exists and Value is not NULL ==
+
+Client -> Store: Reset UTXO (UTXO Hash)
+activate Store
+
+alt Key exists and Value is not NULL
+    Store -> DataStore: Store NULL for UTXO Hash
+    DataStore -> Store: NULL Stored
+    Store -> Client: OK
+end
+
+deactivate Store
+@enduml

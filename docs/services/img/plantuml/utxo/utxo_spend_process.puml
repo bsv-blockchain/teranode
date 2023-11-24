@@ -1,0 +1,52 @@
+@startuml
+skinparam ParticipantPadding 120
+
+participant "Client" as Client
+participant "UTXO Store" as Store
+database "Data Store" as Data
+
+
+== Spend an unknown UTXO (no hash match) ==
+
+Client -> Store: Request to spend UTXO (Spend a UTXO)
+activate Store
+
+alt Key does not exist
+    Store -> Client: NOT FOUND
+end
+
+
+== Spend known UTXO ==
+
+Client -> Store: Request to spend UTXO (Spend a UTXO)
+activate Store
+
+alt Key exists and TX_ID Value is NULL
+    Store -> Data: Set TX_ID Value
+    Data --> Store: TX_ID Value Set OK
+    Store -> Client: OK
+end
+
+
+== Duplicate Spend UTXO (already spent by the same TX) ==
+
+Client -> Store: Request to spend UTXO (Spend a UTXO)
+activate Store
+
+alt Key exists and TX_ID Value matches Spending TXID
+    Store -> Client: ALREADY OK
+end
+
+== Duplicate Spend UTXO (already spent by another TX) ==
+
+Client -> Store: Request to spend UTXO (Spend a UTXO)
+activate Store
+
+alt Key exists and TX_ID Value does not match Spending TXID
+    Store -> Client: SPENT (with existing Spending TXID)
+end
+
+
+
+deactivate Store
+@enduml

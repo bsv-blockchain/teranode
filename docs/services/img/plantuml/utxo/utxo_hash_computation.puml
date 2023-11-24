@@ -1,0 +1,15 @@
+@startuml
+start
+:Receive TXID, VOUT, Script, Satoshis;
+:Compute SHA256 Hash;
+note right: UTXO Hash Created
+:Store UTXO with Hash Key and Lock Time;
+
+stop
+
+start
+:Spend;
+:Update UTXO with Spend TXID;
+note right: UTXO is marked as spent by the specific TX that used it as an input
+stop
+@enduml

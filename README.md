@@ -124,13 +124,7 @@ Please check the [Architecture Documentation](docs/architecture/architecture.md)
 
 Detailed Node Service documentation:
 
-+ [Bootstrap](docs/services/bootstrap.md)
-
-+ [UTXO Service](docs/stores/utxo.md)
-
-+ [TXMeta Service](docs/stores/txmeta.md)
-
-+ [Blob Server](docs/services/assetServer.md)
++ [Asset Server](docs/services/assetServer.md)
 
 + [Propagation Service](docs/services/propagation.md)
 
@@ -144,8 +138,13 @@ Detailed Node Service documentation:
 
 + [Blockchain Service](docs/services/blockchain.md)
 
+Store Documentation:
 
-Detailed Overlay Service documentation:
++ [UTXO Store](docs/stores/utxo.md)
+
++ [TXMeta Service](docs/stores/txmeta.md)
+
+Overlay Service documentation:
 
 + [Coinbase](docs/services/coinbase.md)
 
