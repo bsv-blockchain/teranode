@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,7 +47,7 @@ func TestErrLockTime(t *testing.T) {
 
 func TestSpentWithOptionalError(t *testing.T) {
 	/* create two errors with different optional errors. Do this before asserts */
-	// spendingTxID := chainhash.Hash{}
+	/* want to make sure that err and err2 are not the same instance */
 	spendingTxID, _ := chainhash.NewHashFromStr("01")
 	spendingTxID2, _ := chainhash.NewHashFromStr("02")
 	err := utxo.NewErrSpent(spendingTxID, io.EOF)
@@ -65,4 +66,47 @@ func TestSpentWithOptionalError(t *testing.T) {
 	assert.NotErrorIs(t, err2, io.EOF)
 	assert.NotErrorIs(t, err2, io.ErrUnexpectedEOF)
 	assert.NotErrorIs(t, err2, utxo.ErrTypeLockTime)
+}
+
+func TestDoubleWrappedErrorString(t *testing.T) {
+	err := ubsverrors.Wrap(utxo.ErrNotFound, utxo.NewErrLockTime(1, 1, utxo.ErrAlreadyExists))
+	assert.Equal(t, "utxo not found: utxo is locked until block 1 (height check: 1): utxo already exists", err.Error())
+}
+
+func TestStaticSentinelErrorIs(t *testing.T) {
+	err := utxo.ErrNotFound
+	assert.ErrorIs(t, err, utxo.ErrNotFound)
+	assert.NotErrorIs(t, err, utxo.ErrAlreadyExists)
+}
+
+func TestDynamicSentinelError(t *testing.T) {
+	err := utxo.NewErrLockTime(1, 1)
+	assert.ErrorIs(t, err, utxo.ErrTypeLockTime)
+	assert.NotErrorIs(t, err, utxo.ErrAlreadyExists)
+	var errLockTime *utxo.ErrLockTime
+	assert.ErrorAs(t, err, &errLockTime)
+}
+
+func TestWrappedSentinelErrorIs(t *testing.T) {
+	err := utxo.NewErrLockTime(1, 1, utxo.ErrChainHash)
+	assert.ErrorIs(t, err, utxo.ErrTypeLockTime)
+	assert.ErrorIs(t, err, utxo.ErrChainHash)
+	assert.NotErrorIs(t, err, utxo.ErrAlreadyExists)
+
+	var errLockTime *utxo.ErrLockTime
+	assert.ErrorAs(t, err, &errLockTime)
+}
+
+func TestDoubleWrappedSentinelErrorIs(t *testing.T) {
+	err := ubsverrors.Wrap(utxo.ErrNotFound, utxo.NewErrLockTime(1, 1, utxo.ErrChainHash))
+	assert.ErrorIs(t, err, utxo.ErrNotFound)
+	assert.ErrorIs(t, err, utxo.ErrTypeLockTime)
+	assert.ErrorIs(t, err, utxo.ErrChainHash)
+	assert.NotErrorIs(t, err, utxo.ErrAlreadyExists)
+
+	var errLockTime *utxo.ErrLockTime
+	assert.ErrorAs(t, err, &errLockTime)
+
+	var errError *ubsverrors.Error
+	assert.ErrorAs(t, err, &errError)
 }
