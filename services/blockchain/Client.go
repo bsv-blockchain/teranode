@@ -30,7 +30,7 @@ type BestBlockHeader struct {
 }
 
 func NewClient(ctx context.Context) (ClientI, error) {
-	logger := gocore.Log("blkcC")
+	logger := util.NewLogger("blkcC")
 
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {

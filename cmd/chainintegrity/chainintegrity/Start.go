@@ -46,11 +46,11 @@ func Start() {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
-	debugLevel := gocore.NewLogLevelFromString("INFO")
+	debugLevel := "INFO"
 	if *debug {
-		debugLevel = gocore.NewLogLevelFromString("DEBUG")
+		debugLevel = "DEBUG"
 	}
-	var logger = gocore.Log("chainintegrity", debugLevel)
+	var logger = util.NewLogger("chainintegrity", debugLevel)
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {

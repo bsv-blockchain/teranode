@@ -20,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -88,7 +87,7 @@ func New(u *url.URL) (*Store, error) {
 	asl.Logger.SetLevel(asl.DEBUG)
 	initMu.Unlock()
 
-	logger := gocore.Log("aero_store")
+	logger := util.NewLogger("aero_store")
 
 	namespace := u.Path[1:]
 

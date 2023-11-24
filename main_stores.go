@@ -23,7 +23,7 @@ var (
 	utxoStore    utxostore.Interface
 )
 
-func getTxMetaStore(logger *gocore.Logger) txmetastore.Store {
+func getTxMetaStore(logger utils.Logger) txmetastore.Store {
 	if txMetaStore != nil {
 		return txMetaStore
 	}

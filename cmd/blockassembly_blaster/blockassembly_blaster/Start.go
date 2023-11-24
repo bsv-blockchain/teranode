@@ -2,17 +2,16 @@ package blockassembly_blaster
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"crypto/rand"
-	"net/http"
-	_ "net/http/pprof"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
@@ -88,7 +87,7 @@ func Start() {
 	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
-	logger := gocore.Log("block_assembly_blaster")
+	logger := util.NewLogger("block_assembly_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

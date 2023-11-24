@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/ordishs/go-utils"
@@ -24,7 +25,7 @@ type Minio struct {
 }
 
 func New(minioURL *url.URL) (*Minio, error) {
-	logger := gocore.Log("minio")
+	logger := util.NewLogger("minio")
 
 	useSSL := minioURL.Scheme == "minios"
 	secretAccessKey, _ := minioURL.User.Password()

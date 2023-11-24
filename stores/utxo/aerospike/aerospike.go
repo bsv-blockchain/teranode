@@ -118,7 +118,7 @@ func New(u *url.URL) (*Store, error) {
 	//asl.Logger.SetLevel(asl.DEBUG)
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr))
+	logger := util.NewLogger("aero", logLevelStr)
 
 	namespace := u.Path[1:]
 

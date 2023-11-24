@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -36,12 +35,10 @@ type ServiceManager struct {
 	g                  *errgroup.Group
 }
 
-func NewServiceManager() (*ServiceManager, context.Context) {
+func NewServiceManager(logger utils.Logger) (*ServiceManager, context.Context) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	g, ctx := errgroup.WithContext(ctx)
-
-	logger := gocore.Log("sm")
 
 	sm := &ServiceManager{
 		services:   make([]serviceWrapper, 0),

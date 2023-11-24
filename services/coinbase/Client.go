@@ -36,7 +36,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 
 	return &Client{
 		client:  coinbase_api.NewCoinbaseAPIClient(baConn),
-		logger:  gocore.Log("coinb"),
+		logger:  util.NewLogger("coinb"),
 		running: true,
 		conn:    baConn,
 	}, nil

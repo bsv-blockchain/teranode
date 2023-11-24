@@ -3,6 +3,8 @@ package aerospiketest
 import (
 	"context"
 	"flag"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
@@ -10,16 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"net/http"
-	_ "net/http/pprof"
-
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/direct"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 )
 
 type Strategy interface {
@@ -29,7 +28,7 @@ type Strategy interface {
 }
 
 var (
-	logger             = gocore.Log("test")
+	logger             = util.NewLogger("test")
 	workers            int
 	transactions       int
 	repeat             int

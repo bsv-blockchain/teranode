@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -28,7 +29,7 @@ type SeaweedFS struct {
 }
 
 func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
-	logger := gocore.Log("seaweed")
+	logger := util.NewLogger("seaweed")
 
 	scheme := getQueryParamString(s3GatewayURL, "scheme", "http")
 	s3ForcePathStyle := getQueryParamBool(s3GatewayURL, "S3ForcePathStyle", "false")

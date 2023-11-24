@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/labstack/gommon/random"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -21,7 +22,7 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
-func InitSQLDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
 		return InitPostgresDB(logger, storeUrl)
@@ -32,7 +33,7 @@ func InitSQLDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func InitPostgresDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitPostgresDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	dbHost := storeUrl.Hostname()
 	port := storeUrl.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -61,7 +62,7 @@ func InitPostgresDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return db, nil
 }
 
-func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLiteDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	var filename string
 	var err error
 

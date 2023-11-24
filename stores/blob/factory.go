@@ -21,8 +21,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 // NewStore
@@ -126,8 +126,7 @@ func NewStore(logger utils.Logger, storeUrl *url.URL, opts ...options.Options) (
 			}
 		}
 
-		logger := gocore.Log("localTTL")
-		store, err = localttl.New(logger, ttlStore, store)
+		store, err = localttl.New(util.NewLogger("localTTL"), ttlStore, store)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to create localTTL store"), err)
 		}

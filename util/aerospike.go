@@ -40,7 +40,7 @@ func init() {
 }
 
 func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
-	logger := gocore.Log("uaero", gocore.NewLogLevelFromString("DEBUG"))
+	logger := NewLogger("uaero", "DEBUG")
 
 	aerospikeConnectionMutex.Lock()
 	defer aerospikeConnectionMutex.Unlock()

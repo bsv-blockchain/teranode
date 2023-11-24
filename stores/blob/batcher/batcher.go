@@ -137,7 +137,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		// flush current batch keys
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
-			if err := b.blobStore.Set(b.queueCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
+			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
 				return fmt.Errorf("error putting batch keys: %v", err)
 			}
 			return nil

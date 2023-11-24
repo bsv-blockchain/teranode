@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type File struct {
@@ -26,7 +26,7 @@ type File struct {
 }
 
 func New(dir string) (*File, error) {
-	logger := gocore.Log("file")
+	logger := util.NewLogger("file")
 
 	// create directory if not exists
 	if err := os.MkdirAll(dir, 0755); err != nil {

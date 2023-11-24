@@ -37,7 +37,7 @@ type DumbPropagationServerFrpc struct {
 func NewDumbPropagationServer() *DumbPropagationServer {
 	initPrometheusMetrics()
 
-	logger := gocore.Log("dumbPS")
+	logger := util.NewLogger("dumbPS")
 
 	logger.Warnf("Using DumbPropagationServer (for testing only)")
 

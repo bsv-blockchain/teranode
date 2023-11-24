@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -38,7 +39,7 @@ var (
 )
 
 func New(s3URL *url.URL, opts ...options.Options) (*S3, error) {
-	logger := gocore.Log("s3")
+	logger := util.NewLogger("s3")
 
 	scheme := getQueryParamString(s3URL, "scheme", "http")
 	s3ForcePathStyle := getQueryParamBool(s3URL, "S3ForcePathStyle", "false")

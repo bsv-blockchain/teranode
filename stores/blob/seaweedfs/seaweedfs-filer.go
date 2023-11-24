@@ -14,6 +14,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/linxGnu/goseaweedfs"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -26,7 +27,7 @@ type SeaweedFS struct {
 }
 
 func New(seaweedFsURL *url.URL) (*SeaweedFS, error) {
-	logger := gocore.Log("seaweed")
+	logger := util.NewLogger("seaweed")
 
 	scheme := "http"
 	if seaweedFsURL.Query().Get("scheme") != "" {

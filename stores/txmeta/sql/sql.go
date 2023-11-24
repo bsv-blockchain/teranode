@@ -63,7 +63,7 @@ type Store struct {
 }
 
 func New(storeUrl *url.URL) (*Store, error) {
-	logger := gocore.Log("tmsql")
+	logger := util.NewLogger("tmsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

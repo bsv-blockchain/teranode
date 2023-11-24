@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type Null struct {
@@ -17,7 +17,7 @@ type Null struct {
 }
 
 func New() (*Null, error) {
-	logger := gocore.Log("null")
+	logger := util.NewLogger("null")
 
 	return &Null{
 		logger: logger,

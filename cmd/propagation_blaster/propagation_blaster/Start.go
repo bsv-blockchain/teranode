@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
-	"sync/atomic"
-	"time"
-
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
@@ -100,7 +99,7 @@ func Start() {
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
-	logger := gocore.Log("propagation_blaster")
+	logger := util.NewLogger("propagation_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

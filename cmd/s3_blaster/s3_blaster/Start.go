@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -55,7 +56,7 @@ func Start() {
 	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key")
 	flag.Parse()
 
-	logger := gocore.Log("s3_blaster")
+	logger := util.NewLogger("s3_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

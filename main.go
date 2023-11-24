@@ -38,6 +38,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -101,7 +102,7 @@ func main() {
 		return
 	}
 
-	logger := gocore.Log(progname)
+	logger := util.NewLogger(progname)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -176,14 +177,14 @@ func main() {
 		}
 	}
 
-	sm, ctx := servicemanager.NewServiceManager()
+	sm, ctx := servicemanager.NewServiceManager(logger)
 
 	var blockchainService *blockchain.Blockchain
 
 	// blockchain service needs to start first !
 	if startBlockchain {
 		var err error
-		blockchainService, err = blockchain.New(gocore.Log("bchn"))
+		blockchainService, err = blockchain.New(util.NewLogger("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -196,7 +197,7 @@ func main() {
 	// bootstrap server
 	if startBootstrap {
 		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			gocore.Log("bootS"),
+			util.NewLogger("bootS"),
 		)); err != nil {
 			panic(err)
 		}
@@ -217,7 +218,7 @@ func main() {
 		}
 
 		if err := sm.AddService("TxMetaStore", txmeta.New(
-			gocore.Log("txsts"),
+			util.NewLogger("txsts"),
 			txMetaStoreURL,
 		)); err != nil {
 			panic(err)
@@ -227,7 +228,7 @@ func main() {
 	// asset service
 	if startAsset {
 		if err := sm.AddService("Asset", asset.NewServer(
-			gocore.Log("asset"),
+			util.NewLogger("asset"),
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
 			getTxMetaStore(logger),
@@ -262,7 +263,7 @@ func main() {
 			blockValidationClient := blockvalidation.NewClient(ctx)
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				gocore.Log("bass"),
+				util.NewLogger("bass"),
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
@@ -290,7 +291,7 @@ func main() {
 			}
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
-				gocore.Log("bval"),
+				util.NewLogger("bval"),
 				getUtxoStore(ctx, logger),
 				getSubtreeStore(logger),
 				getTxStore(logger),
@@ -306,7 +307,7 @@ func main() {
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
 			if err := sm.AddService("Validator", validator.NewServer(
-				gocore.Log("valid"),
+				util.NewLogger("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
 			)); err != nil {
@@ -318,7 +319,7 @@ func main() {
 	// utxo store server
 	if startUtxoStore {
 		if err := sm.AddService("UTXOStoreServer", utxo.New(
-			gocore.Log("utxo"),
+			util.NewLogger("utxo"),
 			getUtxoMemoryStore(),
 		)); err != nil {
 			panic(err)
@@ -330,7 +331,7 @@ func main() {
 		_, found := gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
 			if err := sm.AddService("Seeder", seeder.NewServer(
-				gocore.Log("seed"),
+				util.NewLogger("seed"),
 			)); err != nil {
 				panic(err)
 			}
@@ -340,7 +341,7 @@ func main() {
 	// p2p server
 	if startP2P {
 		if err := sm.AddService("P2P", p2p.NewServer(
-			gocore.Log("P2P"),
+			util.NewLogger("P2P"),
 		)); err != nil {
 			panic(err)
 		}
@@ -349,7 +350,7 @@ func main() {
 	// coinbase tracker server
 	if startCoinbase {
 		if err := sm.AddService("Coinbase", coinbase.New(
-			gocore.Log("coinB"),
+			util.NewLogger("coinB"),
 		)); err != nil {
 			panic(err)
 		}
@@ -357,7 +358,7 @@ func main() {
 
 	if startFaucet {
 		if err := sm.AddService("Faucet", faucet.New(
-			gocore.Log("faucet"),
+			util.NewLogger("faucet"),
 		)); err != nil {
 			panic(err)
 		}
@@ -393,7 +394,7 @@ func main() {
 				}
 			} else {
 				if err := sm.AddService("PropagationServer", propagation.New(
-					gocore.Log("prop"),
+					util.NewLogger("prop"),
 					getTxStore(logger),
 					validatorClient,
 				)); err != nil {
@@ -441,7 +442,7 @@ func main() {
 	}
 }
 
-func startSentry(logger *gocore.Logger) {
+func startSentry(logger utils.Logger) {
 	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
 		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")

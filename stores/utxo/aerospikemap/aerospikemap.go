@@ -142,7 +142,7 @@ func New(u *url.URL) (*Store, error) {
 		u:           u,
 		client:      client,
 		namespace:   namespace,
-		logger:      gocore.Log("aero", gocore.NewLogLevelFromString(logLevelStr)),
+		logger:      util.NewLogger("aero", logLevelStr),
 		blockHeight: 0,
 		dbTimeout:   time.Duration(timeoutMillis) * time.Millisecond,
 	}, nil

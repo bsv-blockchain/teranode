@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -17,7 +17,7 @@ const (
 )
 
 var (
-	logger = gocore.Log("k8sres")
+	logger = util.NewLogger("k8sres")
 )
 
 func init() {

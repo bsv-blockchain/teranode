@@ -97,7 +97,7 @@ func Start() {
 	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|scylla|null)")
 	flag.Parse()
 
-	logger := gocore.Log("utxostore_blaster")
+	logger := util.NewLogger("utxostore_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/api/option"
@@ -22,7 +23,7 @@ type GCS struct {
 }
 
 func New(bucketName string) (*GCS, error) {
-	logger := gocore.Log("gcs")
+	logger := util.NewLogger("gcs")
 
 	client, err := storage.NewClient(context.Background(), option.WithCredentialsFile("./keyfile.json"))
 	if err != nil {

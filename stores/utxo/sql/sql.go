@@ -110,7 +110,7 @@ type Store struct {
 }
 
 func New(storeUrl *url.URL) (*Store, error) {
-	logger := gocore.Log("uxsql")
+	logger := util.NewLogger("uxsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -24,7 +25,7 @@ func init() {
 
 func main() {
 	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := gocore.Log(progname, gocore.NewLogLevelFromString(logLevel))
+	logger := util.NewLogger(progname, logLevel)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)

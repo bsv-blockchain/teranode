@@ -40,7 +40,7 @@ require (
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
 	github.com/quic-go/quic-go v0.38.1
 	github.com/redis/go-redis/v9 v9.2.1
-	github.com/rs/zerolog v1.30.0
+	github.com/rs/zerolog v1.31.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/stretchr/testify v1.8.4
 	github.com/uber/jaeger-client-go v2.30.0+incompatible

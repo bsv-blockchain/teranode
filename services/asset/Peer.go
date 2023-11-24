@@ -26,7 +26,7 @@ type Peer struct {
 
 func NewPeer(ctx context.Context, source string, addr string, notificationCh chan *asset_api.Notification) *Peer {
 	return &Peer{
-		logger:           gocore.Log("blobC"),
+		logger:           util.NewLogger("blobC"),
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(ctx),

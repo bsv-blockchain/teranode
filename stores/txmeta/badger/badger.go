@@ -17,7 +17,7 @@ import (
 )
 
 type loggerWrapper struct {
-	*gocore.Logger
+	utils.Logger
 }
 
 type Badger struct {
@@ -31,7 +31,7 @@ func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 }
 
 func New(dir string) (*Badger, error) {
-	logger := loggerWrapper{gocore.Log("bdgr")}
+	logger := loggerWrapper{util.NewLogger("bdgr")}
 
 	opts := badger.DefaultOptions(dir).
 		WithLogger(logger).

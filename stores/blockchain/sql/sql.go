@@ -14,7 +14,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	_ "modernc.org/sqlite"
 )
 
@@ -35,7 +34,7 @@ func init() {
 }
 
 func New(storeUrl *url.URL) (*SQL, error) {
-	logger := gocore.Log("bcsql")
+	logger := util.NewLogger("bcsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

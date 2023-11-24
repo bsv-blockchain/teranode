@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -30,7 +31,7 @@ const (
 func NewMiner(ctx context.Context) *Miner {
 	initPrometheusMetrics()
 
-	logger := gocore.Log("miner")
+	logger := util.NewLogger("miner")
 	return &Miner{
 		logger:              logger,
 		blockAssemblyClient: blockassembly.NewClient(ctx, logger),

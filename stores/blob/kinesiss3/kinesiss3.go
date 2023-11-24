@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -31,7 +32,7 @@ type KinesisS3 struct {
 }
 
 func New(s3URL *url.URL) (*KinesisS3, error) {
-	logger := gocore.Log("kinesisS3")
+	logger := util.NewLogger("kinesisS3")
 
 	region := s3URL.Query().Get("region")
 

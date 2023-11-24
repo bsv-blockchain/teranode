@@ -34,7 +34,7 @@ type Client struct {
 
 func NewClient(source string, name string) *Client {
 	return &Client{
-		logger: gocore.Log("bootC"),
+		logger: util.NewLogger("bootC"),
 		peers:  make(map[Peer]void),
 		source: source,
 		name:   name,
