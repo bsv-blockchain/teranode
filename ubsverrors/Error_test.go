@@ -10,27 +10,27 @@ import (
 )
 
 var (
-	ErrOne   = ubsverrors.New("ErrorOne")
-	ErrTwo   = ubsverrors.New("ErrorTwo")
-	ErrThree = ubsverrors.New("ErrorThree")
+	ErrOne   = ubsverrors.NewErrString("ErrorOne")
+	ErrTwo   = ubsverrors.NewErrString("ErrorTwo")
+	ErrThree = ubsverrors.NewErrString("ErrorThree")
 )
 
 func One() error {
 	if err := Two(); err != nil {
-		return ErrOne.Wrap(err)
+		return ubsverrors.Wrap(ErrOne, err)
 	}
 	return nil
 }
 
 func Two() error {
 	if err := Three(); err != nil {
-		return ErrTwo.Wrap(err)
+		return ubsverrors.Wrap(ErrTwo, err)
 	}
 	return nil
 }
 
 func Three() error {
-	return ErrThree.Wrap(io.EOF, io.ErrClosedPipe)
+	return ubsverrors.Wrap(ErrThree, ubsverrors.Wrap(io.EOF, io.ErrClosedPipe))
 }
 
 func TestWrap(t *testing.T) {

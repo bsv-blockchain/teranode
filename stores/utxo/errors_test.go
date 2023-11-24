@@ -18,6 +18,10 @@ func TestErrSpent(t *testing.T) {
 	err = utxo.NewErrSpent(&spendingTxID)
 	assert.ErrorIs(t, err, utxo.ErrTypeSpent)
 	assert.Equal(t, "utxo already spent by txid 0000000000000000000000000000000000000000000000000000000000000000", err.Error())
+
+	err2 := utxo.NewErrSpent(nil)
+	assert.NotEqual(t, err, err2)
+
 }
 
 func TestErrLockTime(t *testing.T) {
@@ -41,9 +45,24 @@ func TestErrLockTime(t *testing.T) {
 }
 
 func TestSpentWithOptionalError(t *testing.T) {
-	spendingTxID := chainhash.Hash{}
-	err := utxo.NewErrSpent(&spendingTxID, io.EOF)
+	/* create two errors with different optional errors. Do this before asserts */
+	// spendingTxID := chainhash.Hash{}
+	spendingTxID, _ := chainhash.NewHashFromStr("01")
+	spendingTxID2, _ := chainhash.NewHashFromStr("02")
+	err := utxo.NewErrSpent(spendingTxID, io.EOF)
+	err2 := utxo.NewErrSpent(spendingTxID2, io.ErrNoProgress)
 
+	/* err asserts */
 	assert.ErrorIs(t, err, utxo.ErrTypeSpent)
 	assert.ErrorIs(t, err, io.EOF)
+	assert.NotErrorIs(t, err, io.ErrNoProgress)
+	assert.NotErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.NotErrorIs(t, err, utxo.ErrTypeLockTime)
+
+	/* err2 asserts */
+	assert.ErrorIs(t, err2, utxo.ErrTypeSpent)
+	assert.ErrorIs(t, err2, io.ErrNoProgress)
+	assert.NotErrorIs(t, err2, io.EOF)
+	assert.NotErrorIs(t, err2, io.ErrUnexpectedEOF)
+	assert.NotErrorIs(t, err2, utxo.ErrTypeLockTime)
 }

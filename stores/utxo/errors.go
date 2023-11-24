@@ -13,68 +13,53 @@ const (
 )
 
 var (
-	ErrNotFound      = ubsverrors.New("utxo not found")
-	ErrAlreadyExists = ubsverrors.New("utxo already exists")
-	ErrTypeSpent     = ubsverrors.New("utxo already spent")
-	ErrTypeLockTime  = ubsverrors.New("utxo is locked")
-	ErrChainHash     = ubsverrors.New("utxo chain hash could not be calculated")
-	ErrStore         = ubsverrors.New("utxo store error")
+	ErrNotFound      = ubsverrors.NewErrString("utxo not found")
+	ErrAlreadyExists = ubsverrors.NewErrString("utxo already exists")
+	ErrTypeSpent     = &ErrSpent{}
+	ErrTypeLockTime  = &ErrLockTime{}
+	ErrChainHash     = ubsverrors.NewErrString("utxo chain hash could not be calculated")
+	ErrStore         = ubsverrors.NewErrString("utxo store error")
 )
 
 type ErrSpent struct {
-	err          *ubsverrors.Error
 	spendingTxID *chainhash.Hash
 }
 
 func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
-
-	e := &ErrSpent{
-		err:          ErrTypeSpent,
+	e := ubsverrors.Wrap(&ErrSpent{
 		spendingTxID: spendingTxID,
-	}
-
-	_ = e.err.Wrap(optionalErrs...)
+	}, optionalErrs...)
 
 	return e
 }
 
 func (e *ErrSpent) Error() string {
 	if e.spendingTxID == nil {
-		return fmt.Sprintf("%s (invalid use of ErrSpent as spendingTxID is not set)", e.err.Error())
+		return fmt.Sprintf("utxo already spent (invalid use of ErrSpent as spendingTxID is not set)")
 	}
-	return fmt.Sprintf("%s by txid %s", e.err, e.spendingTxID.String())
-}
-
-func (e *ErrSpent) Unwrap() error {
-	return e.err
+	return fmt.Sprintf("utxo already spent by txid %s", e.spendingTxID.String())
 }
 
 type ErrLockTime struct {
-	err         *ubsverrors.Error
 	lockTime    uint32
 	blockHeight uint32
 }
 
-func NewErrLockTime(lockTime uint32, blockHeight uint32) error {
-	return &ErrLockTime{
-		err:         ErrTypeLockTime,
+func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
+	return ubsverrors.Wrap(&ErrLockTime{
 		lockTime:    lockTime,
 		blockHeight: blockHeight,
-	}
+	}, optionalErrs...)
 }
 func (e *ErrLockTime) Error() string {
 	if e.lockTime == 0 {
-		return fmt.Sprintf("%s (invalid use of ErrLockTime as locktime is zero)", e.err.Error())
+		return fmt.Sprintf("utxo is locked (invalid use of ErrLockTime as locktime is zero)")
 	}
 
 	if e.lockTime >= 500000000 {
 		// This is a timestamp based locktime
 		spendableAt := time.Unix(int64(e.lockTime), 0)
-		return fmt.Sprintf("%s until %s", e.err, spendableAt.UTC().Format(isoFormat))
+		return fmt.Sprintf("utxo is locked until %s", spendableAt.UTC().Format(isoFormat))
 	}
-	return fmt.Sprintf("%s until block %d (height check: %d)", e.err, e.lockTime, e.blockHeight)
-}
-
-func (e *ErrLockTime) Unwrap() error {
-	return e.err
+	return fmt.Sprintf("utxo is locked until block %d (height check: %d)", e.lockTime, e.blockHeight)
 }

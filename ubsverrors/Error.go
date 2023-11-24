@@ -1,37 +1,94 @@
 package ubsverrors
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"reflect"
+)
 
 type Error struct {
-	errorMessage  string
-	wrappedErrors []error
-}
-
-func New(errorMessage string, wrappedErrors ...error) *Error {
-	return &Error{
-		wrappedErrors: wrappedErrors,
-		errorMessage:  errorMessage,
-	}
+	Sentinel               error
+	ImplementationSpecific error
 }
 
 func (e *Error) Error() string {
-	var sb strings.Builder
+	if e.ImplementationSpecific == nil {
+		return e.Sentinel.Error()
+	}
+	return fmt.Sprintf("%s: %s", e.Sentinel, e.ImplementationSpecific)
+}
 
-	sb.WriteString(e.errorMessage)
-
-	for _, err := range e.wrappedErrors {
-		sb.WriteString(": ")
-		sb.WriteString(err.Error())
+func (e *Error) As(target interface{}) bool {
+	if target == nil {
+		return false
 	}
 
-	return sb.String()
+	if e.Sentinel != nil {
+		if errors.As(e.Sentinel, target) {
+			return true
+		}
+	}
+
+	if e.ImplementationSpecific != nil {
+		return errors.As(e.ImplementationSpecific, target)
+	}
+
+	return false
 }
 
-func (e *Error) Wrap(err ...error) *Error {
-	e.wrappedErrors = append(e.wrappedErrors, err...)
-	return e
+func (e *Error) Is(target error) bool {
+	if target == nil {
+		return e.Sentinel == nil
+	}
+
+	err := e.Sentinel
+	doTestString := false
+
+	if t, ok := err.(*Error); ok {
+		err = t.Sentinel
+	} else if t, ok := err.(errString); ok {
+		err = t
+		doTestString = true
+	}
+
+	targetType := reflect.TypeOf(target)
+	sentinelType := reflect.TypeOf(err)
+
+	if sentinelType == targetType {
+		if doTestString {
+			return err.Error() == target.Error()
+		}
+		return true
+	}
+
+	if e.ImplementationSpecific != nil {
+		return errors.Is(e.ImplementationSpecific, target)
+	}
+	return false
 }
 
-func (e *Error) Unwrap() []error {
-	return e.wrappedErrors
+func (e *Error) Unwrap() error {
+	return e.ImplementationSpecific
+}
+
+func Wrap(sentinel error, implementationSpecific ...error) *Error {
+	var wrappedErr error
+	if len(implementationSpecific) > 0 {
+		wrappedErr = implementationSpecific[0]
+	}
+
+	return &Error{
+		Sentinel:               sentinel,
+		ImplementationSpecific: wrappedErr,
+	}
+}
+
+type errString string
+
+func (e errString) Error() string {
+	return string(e)
+}
+
+func NewErrString(text string) error {
+	return errString(text)
 }
