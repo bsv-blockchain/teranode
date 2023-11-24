@@ -124,10 +124,10 @@ func (r *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (
 	return blockHeader, blockHeaderMeta, nil
 }
 
-func (r *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
+func (r *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	r.logger.Debugf("[Repository] GetLastNBlocks: %d", n)
 
-	blockInfo, err := r.BlockchainClient.GetLastNBlocks(ctx, n, includeOrphans)
+	blockInfo, err := r.BlockchainClient.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
 	if err != nil {
 		return nil, err
 	}

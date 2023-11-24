@@ -13,14 +13,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
+func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetLastNBlocks")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t", n, includeOrphans)))
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t-%d", n, includeOrphans, fromHeight)))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().([]*model.BlockInfo); ok && cacheData != nil {
@@ -31,6 +31,11 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	fromHeightQuery := ""
+	if fromHeight > 0 {
+		fromHeightQuery = fmt.Sprintf("WHERE height <= %d", fromHeight)
+	}
 
 	var q string
 
@@ -88,6 +93,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 					WHERE bb.id != cb.id
 				)
 				SELECT id FROM ChainBlocks
+				` + fromHeightQuery + `
 				LIMIT $1
 			)
 		)

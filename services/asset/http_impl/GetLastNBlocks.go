@@ -25,6 +25,16 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		}
 	}
 
+	fromHeight := uint64(0)
+	if c.QueryParam("fromHeight") != "" {
+		var err error
+
+		fromHeight, err = strconv.ParseUint(c.QueryParam("fromHeight"), 10, 32)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
+
 	includeOrphans := false
 	if c.QueryParam("includeOrphans") == "true" {
 		includeOrphans = true
@@ -32,7 +42,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	h.logger.Debugf("[Asset_http] GetBlockChain for %s for last %d blocks", c.Request().RemoteAddr, n)
 
-	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n, includeOrphans)
+	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n, includeOrphans, uint32(fromHeight))
 	if err != nil {
 		if strings.HasSuffix(err.Error(), " not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())

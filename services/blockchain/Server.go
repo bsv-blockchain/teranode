@@ -246,7 +246,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 
 	prometheusBlockchainGetLastNBlocks.Inc()
 
-	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans)
+	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
 		return nil, err
 	}
