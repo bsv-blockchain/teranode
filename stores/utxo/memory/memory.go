@@ -85,7 +85,7 @@ func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}

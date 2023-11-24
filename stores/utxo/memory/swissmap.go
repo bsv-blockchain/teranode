@@ -79,7 +79,7 @@ func (m *SwissMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 		defer cancel()
 	}
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}
