@@ -1,4 +1,4 @@
-# 🌐 Bootstrap Service
+# 🌐 Bootstrap Service [LEGACY - No longer in scope - Please refer to the P2P Service instead]
 
 ## Index
 
@@ -21,7 +21,7 @@
 
 ## 1. Description
 
-The Bootstrap Service, helps microservices find peers within a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
+The Bootstrap Service, helps nodes find peers within a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
 The service manages a set of subscribers and broadcast notifications and keep-alives to them, to keep them updated about network participants.
 
@@ -384,12 +384,3 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Bootstrap=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
-
-
-
-## TO CLARIFY
-
-
--- Questions for Simon -
--- So this is for microservices to find each other? No exchange of info other than IPs?
--- Why only BlobServer uses it?
