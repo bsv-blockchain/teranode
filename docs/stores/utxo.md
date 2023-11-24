@@ -275,7 +275,7 @@ The following datastores are supported (either in development / experimental or 
 
 ### 5.3. Data Purging
 
-Stored data is automatically purged a certain TTL (Time To Live) period after it is created. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
+Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
 ##  6. Directory Structure and Main Files
 
