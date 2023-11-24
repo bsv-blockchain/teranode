@@ -108,9 +108,13 @@ func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, erro
 	ctx := context.Background()
 	var err error
 	var session quic.Connection
+	config := &quic.Config{
+		MaxIdleTimeout: 5 * time.Minute,
+		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
+	}
 	// defer session.CloseWithError(0, "closing")
 	for i, quicAddress := range quicAddresses {
-		session, err = quic.DialAddr(ctx, quicAddress, tlsConf, nil)
+		session, err = quic.DialAddr(ctx, quicAddress, tlsConf, config)
 		if err != nil {
 			return nil, err
 		}

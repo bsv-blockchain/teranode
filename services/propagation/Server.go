@@ -358,6 +358,9 @@ func (ps *PropagationServer) handleStream(ctx context.Context, stream quic.Strea
 			return
 		}
 
+		if txLength == 0 {
+			return
+		}
 		// Now read the transaction data
 		buf = make([]byte, txLength)
 		_, err = io.ReadFull(stream, buf)
