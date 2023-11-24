@@ -18,6 +18,7 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Sentinel, e.ImplementationSpecific)
 }
 
+/* Doesn't feel right that I have to implement As() method, but I can't find a way to make it work without them */
 func (e *Error) As(target interface{}) bool {
 	if target == nil {
 		return false
@@ -36,6 +37,7 @@ func (e *Error) As(target interface{}) bool {
 	return false
 }
 
+/* Doesn't feel right that I have to implement Is() method, but I can't find a way to make it work without them */
 func (e *Error) Is(target error) bool {
 	if target == nil {
 		return e.Sentinel == nil
