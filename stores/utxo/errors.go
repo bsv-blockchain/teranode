@@ -13,12 +13,12 @@ const (
 )
 
 var (
-	ErrNotFound      = ubsverrors.NewErrString("utxo not found")
-	ErrAlreadyExists = ubsverrors.NewErrString("utxo already exists")
+	ErrNotFound      = ubsverrors.New("utxo not found")
+	ErrAlreadyExists = ubsverrors.New("utxo already exists")
 	ErrTypeSpent     = &ErrSpent{}
 	ErrTypeLockTime  = &ErrLockTime{}
-	ErrChainHash     = ubsverrors.NewErrString("utxo chain hash could not be calculated")
-	ErrStore         = ubsverrors.NewErrString("utxo store error")
+	ErrChainHash     = ubsverrors.New("utxo chain hash could not be calculated")
+	ErrStore         = ubsverrors.New("utxo store error")
 )
 
 type ErrSpent struct {

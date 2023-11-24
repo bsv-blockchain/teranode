@@ -89,6 +89,6 @@ func (e errString) Error() string {
 	return string(e)
 }
 
-func NewErrString(text string) error {
+func New(text string) error {
 	return errString(text)
 }

@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	ErrOne   = ubsverrors.NewErrString("ErrorOne")
-	ErrTwo   = ubsverrors.NewErrString("ErrorTwo")
-	ErrThree = ubsverrors.NewErrString("ErrorThree")
+	ErrOne   = ubsverrors.New("ErrorOne")
+	ErrTwo   = ubsverrors.New("ErrorTwo")
+	ErrThree = ubsverrors.New("ErrorThree")
 )
 
 func One() error {
