@@ -10,15 +10,6 @@
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
 6. [Directory Structure and Main Files](#-6-directory-structure-and-main-files)
-    - [aerospike Directory:](#aerospike-directory)
-    - [aerospikemap Directory:](#aerospikemap-directory)
-    - [memory Directory:](#memory-directory)
-    - [nullstore Directory:](#nullstore-directory)
-    - [redis Directory:](#redis-directory)
-    - [scylla Directory:](#scylla-directory)
-    - [sql Directory:](#sql-directory)
-    - [tests Directory:](#tests-directory)
-    - [other:](#other)
 7. [Running the Service Locally](#7-running-the-service-locally)
 
 

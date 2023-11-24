@@ -124,19 +124,17 @@ Please check the [Architecture Documentation](docs/architecture/architecture.md)
 
 Detailed Node Service documentation:
 
-+ [Asset Server](docs/services/assetServer.md)
++ [Asset Server - TODO](docs/services/assetServer.md)
 
-+ [Propagation Service](docs/services/propagation.md)
++ [Propagation Service - TODO](docs/services/propagation.md)
 
-+ [Validator Service ](docs/services/validator.md)
++ [Validator Service - TODO](docs/services/validator.md)
 
-+ [Block Validation Service ](docs/services/blockValidation.md)
++ [Block Validation Service - TODO](docs/services/blockValidation.md)
 
-+ [Block Assembly Service](docs/services/blockAssembly.md)
++ [Block Assembly Service - TODO](docs/services/blockAssembly.md)
 
-+ [Miner](docs/services/miner.md)
-
-+ [Blockchain Service](docs/services/blockchain.md)
++ [Blockchain Service - TODO](docs/services/blockchain.md)
 
 Store Documentation:
 
@@ -146,9 +144,10 @@ Store Documentation:
 
 Overlay Service documentation:
 
-+ [Coinbase](docs/services/coinbase.md)
++ [Coinbase - TODO](docs/services/coinbase.md)
 
-+ [P2P](docs/services/p2p.md)
++ [P2P - TODO](docs/services/p2p.md)
++ [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
 
 ---
