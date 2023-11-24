@@ -11,22 +11,22 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
 type File struct {
 	path        string
-	logger      utils.Logger
+	logger      ulogger.Logger
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
 	// mu     sync.RWMutex
 }
 
-func New(dir string) (*File, error) {
-	logger := util.NewLogger("file")
+func New(logger ulogger.Logger, dir string) (*File, error) {
+	logger = logger.New("file")
 
 	// create directory if not exists
 	if err := os.MkdirAll(dir, 0755); err != nil {

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,13 +29,13 @@ var (
 type ServiceManager struct {
 	services           []serviceWrapper
 	dependencyChannels []chan bool
-	logger             utils.Logger
+	logger             ulogger.Logger
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
 	g                  *errgroup.Group
 }
 
-func NewServiceManager(logger utils.Logger) (*ServiceManager, context.Context) {
+func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	g, ctx := errgroup.WithContext(ctx)

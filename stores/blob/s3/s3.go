@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -31,15 +31,15 @@ type S3 struct {
 	downloader *s3manager.Downloader
 	bucket     string
 	prefixDir  int
-	logger     utils.Logger
+	logger     ulogger.Logger
 }
 
 var (
 	cache = expiringmap.New[string, []byte](1 * time.Minute)
 )
 
-func New(s3URL *url.URL, opts ...options.Options) (*S3, error) {
-	logger := util.NewLogger("s3")
+func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
+	logger = logger.New("s3")
 
 	scheme := getQueryParamString(s3URL, "scheme", "http")
 	s3ForcePathStyle := getQueryParamBool(s3URL, "S3ForcePathStyle", "false")

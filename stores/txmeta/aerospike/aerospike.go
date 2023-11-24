@@ -16,10 +16,10 @@ import (
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -76,22 +76,22 @@ type Store struct {
 	client     *aerospike.Client
 	namespace  string
 	expiration uint32
-	logger     utils.Logger
+	logger     ulogger.Logger
 }
 
 var initMu sync.Mutex
 
-func New(u *url.URL) (*Store, error) {
+func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	// this is weird, but if we are starting 2 connections (utxo, txmeta) at the same time, this fails
 	initMu.Lock()
 	asl.Logger.SetLevel(asl.DEBUG)
 	initMu.Unlock()
 
-	logger := util.NewLogger("aero_store")
+	logger = logger.New("aero_store")
 
 	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(u)
+	client, err := util.GetAerospikeClient(logger, u)
 	if err != nil {
 		return nil, err
 	}

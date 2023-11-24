@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -12,7 +13,7 @@ import (
 type NullStore struct {
 }
 
-func New() *NullStore {
+func New(_ ulogger.Logger) *NullStore {
 	return &NullStore{}
 }
 

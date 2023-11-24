@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -16,7 +17,7 @@ func newDB(t *testing.T) (context.Context, *Store) {
 	require.NoError(t, err)
 
 	// ubsv db client
-	db, err := New(sqliteURL)
+	db, err := New(ulogger.TestLogger{}, sqliteURL)
 	require.NoError(t, err)
 
 	return context.Background(), db

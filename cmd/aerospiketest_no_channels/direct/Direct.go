@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 )
 
 type Direct struct {
-	logger    utils.Logger
+	logger    ulogger.Logger
 	client    *aerospike.Client
 	namespace string
 	timeout   time.Duration
 }
 
-func New(logger utils.Logger, timeoutStr string, addr string, port int) *Direct {
+func New(logger ulogger.Logger, timeoutStr string, addr string, port int) *Direct {
 	policy := aerospike.NewClientPolicy()
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies

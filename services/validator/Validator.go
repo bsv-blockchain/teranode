@@ -14,17 +14,17 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Validator struct {
-	logger                utils.Logger
+	logger                ulogger.Logger
 	utxoStore             utxostore.Interface
 	blockAssembler        blockassembly.Store
 	txMetaStore           txmeta.Store
@@ -35,7 +35,7 @@ type Validator struct {
 	blockAssemblyDisabled bool
 }
 
-func New(ctx context.Context, logger utils.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
+func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
 	ba := blockassembly.NewClient(ctx, logger)
 
 	validator := &Validator{

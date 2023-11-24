@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -31,7 +32,6 @@ import (
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -50,7 +50,7 @@ type Server struct {
 	host              host.Host
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
-	logger            utils.Logger
+	logger            ulogger.Logger
 	bitcoinProtocolId string
 
 	blockchainClient      blockchain.ClientI
@@ -94,7 +94,7 @@ type RejectedTxMessage struct {
 	PeerId string
 }
 
-func NewServer(logger utils.Logger) *Server {
+func NewServer(logger ulogger.Logger) *Server {
 	logger.Debugf("Creating P2P service")
 	var pk *crypto.PrivKey
 	var err error
@@ -168,7 +168,7 @@ func NewServer(logger utils.Logger) *Server {
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("P2P service initialising")
 
-	s.blockchainClient, err = blockchain.NewClient(ctx)
+	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
 	if err != nil {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
 	}

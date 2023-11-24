@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -56,14 +56,14 @@ func init() {
 }
 
 type Store struct {
-	logger    utils.Logger
+	logger    ulogger.Logger
 	db        *sql.DB
 	engine    string
 	dbTimeout time.Duration
 }
 
-func New(storeUrl *url.URL) (*Store, error) {
-	logger := util.NewLogger("tmsql")
+func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+	logger = logger.New("tmsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

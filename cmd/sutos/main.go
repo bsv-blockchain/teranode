@@ -7,8 +7,7 @@ import (
 	"os/signal"
 	"sync"
 
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
 
@@ -25,7 +24,7 @@ func init() {
 
 func main() {
 	logLevel, _ := gocore.Config().Get("logLevel")
-	logger := util.NewLogger(progname, logLevel)
+	logger := ulogger.New(progname, ulogger.WithLevel(logLevel))
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -60,7 +59,7 @@ func main() {
 	start()
 }
 
-func appCleanup(logger utils.Logger, shutdownFns []func()) {
+func appCleanup(logger ulogger.Logger, shutdownFns []func()) {
 	logger.Infof("Shutting down...")
 
 	var wg sync.WaitGroup

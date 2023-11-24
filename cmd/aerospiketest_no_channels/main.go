@@ -16,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/simple"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/ubsv"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 type Strategy interface {
@@ -24,7 +24,7 @@ type Strategy interface {
 }
 
 var (
-	logger        = util.NewLogger("test")
+	logger        = ulogger.New("test")
 	workers       int
 	transactions  int
 	timeoutStr    string

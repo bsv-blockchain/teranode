@@ -12,10 +12,10 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +24,7 @@ func getMemoryStore(t *testing.T) blob.Store {
 	memoryURL, err := url.Parse("memory://")
 	require.NoError(t, err)
 
-	txStore, err := blob.NewStore(p2p.TestLogger{}, memoryURL)
+	txStore, err := blob.NewStore(ulogger.TestLogger{}, memoryURL)
 	require.NoError(t, err)
 
 	return txStore
@@ -36,11 +36,11 @@ func TestTransaction(t *testing.T) {
 
 	txStore := getMemoryStore(t)
 
-	txMetaStore := memory.New()
+	txMetaStore := memory.New(ulogger.TestLogger{})
 
-	blockChainStore, err := blockchain_store.NewStore(p2p.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(p2p.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
 	// Put a transaction into the transaction store
@@ -53,7 +53,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -91,11 +91,11 @@ func TestSubtree(t *testing.T) {
 
 	subtreeStore := getMemoryStore(t)
 	txStore := getMemoryStore(t)
-	txMetaStore := memory.New()
+	txMetaStore := memory.New(ulogger.TestLogger{})
 
-	blockChainStore, err := blockchain_store.NewStore(p2p.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(p2p.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
 	// Put the subtree into the subtree store
@@ -108,7 +108,7 @@ func TestSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(p2p.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
 	require.NoError(t, err)
 
 	// Get the subtree node bytes from the repository

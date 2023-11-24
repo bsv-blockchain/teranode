@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -39,8 +39,8 @@ func init() {
 	aerospikeConnections = make(map[string]*aerospike.Client)
 }
 
-func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
-	logger := NewLogger("uaero", "DEBUG")
+func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client, error) {
+	logger = logger.New("uaero")
 
 	aerospikeConnectionMutex.Lock()
 	defer aerospikeConnectionMutex.Unlock()
@@ -61,7 +61,7 @@ func GetAerospikeClient(url *url.URL) (*aerospike.Client, error) {
 	return client, nil
 }
 
-func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, error) {
+func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client, error) {
 	if len(url.Path) < 1 {
 		return nil, fmt.Errorf("aerospike namespace not found")
 	}
@@ -182,7 +182,7 @@ func getAerospikeClient(logger utils.Logger, url *url.URL) (*aerospike.Client, e
 	return client, nil
 }
 
-func getQueryBool(url *url.URL, key string, defaultValue bool, logger utils.Logger) bool {
+func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Logger) bool {
 	value := url.Query().Get(key)
 	if value == "" {
 		logger.Infof("[Aerospike] %s=%t [default]", key, defaultValue)
@@ -196,7 +196,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger utils.Logg
 	return valueBool
 }
 
-func getQueryInt(url *url.URL, key string, defaultValue int, logger utils.Logger) int {
+func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logger) int {
 	value := url.Query().Get(key)
 	if value == "" {
 		logger.Infof("[Aerospike] %s=%d [default]", key, defaultValue)
@@ -210,7 +210,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger utils.Logger
 	return valueInt
 }
 
-func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logger utils.Logger) time.Duration {
+func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logger ulogger.Logger) time.Duration {
 	value := url.Query().Get(key)
 	if value == "" {
 		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue.String())
@@ -224,7 +224,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 	return valueDuration
 }
 
-func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger utils.Logger) float64 {
+func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulogger.Logger) float64 {
 	value := url.Query().Get(key)
 	if value == "" {
 		logger.Infof("[Aerospike] %s=%f [default]", key, defaultValue)

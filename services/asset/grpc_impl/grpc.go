@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -30,7 +31,7 @@ type subscriber struct {
 
 type GRPC struct {
 	asset_api.UnimplementedAssetAPIServer
-	logger               utils.Logger
+	logger               ulogger.Logger
 	baseURL              string
 	getPeers             func() []string
 	repository           *repository.Repository
@@ -44,7 +45,7 @@ type GRPC struct {
 	notifications        chan *asset_api.Notification
 }
 
-func New(logger utils.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
+func New(logger ulogger.Logger, repo *repository.Repository, getPeers func() []string) (*GRPC, error) {
 	initPrometheusMetrics()
 
 	u, err, found := gocore.Config().GetURL("asset_httpAddress")
@@ -104,7 +105,7 @@ func New(logger utils.Logger, repo *repository.Repository, getPeers func() []str
 func (g *GRPC) Init(ctx context.Context) (err error) {
 	g.logger.Infof("[Asset] GRPC service initializing")
 
-	g.blockchainClient, err = blockchain.NewClient(ctx)
+	g.blockchainClient, err = blockchain.NewClient(ctx, g.logger)
 	if err != nil {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
 	}

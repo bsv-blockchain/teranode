@@ -8,7 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 type WrapperInterface interface {
@@ -18,13 +18,13 @@ type WrapperInterface interface {
 }
 
 type Wrapper struct {
-	logger                utils.Logger
+	logger                ulogger.Logger
 	store                 blob.Store
 	AssetClient           WrapperInterface
 	blockValidationClient WrapperInterface
 }
 
-func NewRemoteTTLWrapper(logger utils.Logger, store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
+func NewRemoteTTLWrapper(logger ulogger.Logger, store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
 	return &Wrapper{
 		logger:                logger,
 		store:                 store,

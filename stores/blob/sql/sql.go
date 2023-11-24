@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/labstack/gommon/random"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -23,11 +24,12 @@ import (
 )
 
 type SQL struct {
-	url *url.URL
-	db  *sql.DB
+	url    *url.URL
+	db     *sql.DB
+	logger ulogger.Logger
 }
 
-func New(storeUrl *url.URL) (*SQL, error) {
+func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	var db *sql.DB
 	var err error
 	var q string
@@ -105,8 +107,9 @@ func New(storeUrl *url.URL) (*SQL, error) {
 	}
 
 	return &SQL{
-		url: storeUrl,
-		db:  db,
+		url:    storeUrl,
+		db:     db,
+		logger: logger,
 	}, nil
 }
 

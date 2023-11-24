@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/tests"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,7 +14,7 @@ var storeUrl, _ = url.Parse("sqlitememory:///")
 
 func TestMemory(t *testing.T) {
 	t.Run("sql set", func(t *testing.T) {
-		db, err := New(storeUrl)
+		db, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
 		err = db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
@@ -24,14 +25,14 @@ func TestMemory(t *testing.T) {
 }
 
 func TestMemorySanity(t *testing.T) {
-	db, err := New(storeUrl)
+	db, err := New(ulogger.TestLogger{}, storeUrl)
 	require.NoError(t, err)
 
 	tests.Sanity(t, db)
 }
 
 func BenchmarkMemory(b *testing.B) {
-	db, err := New(storeUrl)
+	db, err := New(ulogger.TestLogger{}, storeUrl)
 	require.NoError(b, err)
 
 	tests.Benchmark(b, db)

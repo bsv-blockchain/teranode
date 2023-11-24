@@ -10,7 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/ordishs/go-utils"
@@ -21,11 +21,11 @@ type Minio struct {
 	client     *minio.Client
 	bucketName string
 	tempTTL    bool
-	logger     utils.Logger
+	logger     ulogger.Logger
 }
 
-func New(minioURL *url.URL) (*Minio, error) {
-	logger := util.NewLogger("minio")
+func New(logger ulogger.Logger, minioURL *url.URL) (*Minio, error) {
+	logger = logger.New("minio")
 
 	useSSL := minioURL.Scheme == "minios"
 	secretAccessKey, _ := minioURL.User.Password()

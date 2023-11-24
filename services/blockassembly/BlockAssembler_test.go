@@ -16,10 +16,10 @@ import (
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -298,10 +298,10 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items := baTestItems{}
 
-	items.utxoStore = utxostore.New(false) // utxo memory store
-	items.txMetaStore = txmetastore.New()  // tx status memory store
-	items.blobStore = memory.New()         // blob memory store
-	items.txStore = memory.New()           // tx memory store
+	items.utxoStore = utxostore.New(false)                    // utxo memory store
+	items.txMetaStore = txmetastore.New(ulogger.TestLogger{}) // tx status memory store
+	items.blobStore = memory.New()                            // blob memory store
+	items.txStore = memory.New()                              // tx memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan *util.Subtree)
@@ -309,16 +309,16 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	blockchainStore, err := blockchainstore.NewStore(p2p.TestLogger{}, storeURL)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
-	items.blockchainClient, err = blockchain.NewLocalClient(p2p.TestLogger{}, blockchainStore)
+	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore)
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment
 	ba := NewBlockAssembler(
 		context.Background(),
-		p2p.TestLogger{},
+		ulogger.TestLogger{},
 		items.utxoStore,
 		items.blobStore,
 		items.blockchainClient,
@@ -326,7 +326,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), p2p.TestLogger{}, nil, nil, items.newSubtreeChan, subtreeprocessor.WithBatcherSize(1))
+	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, items.newSubtreeChan, subtreeprocessor.WithBatcherSize(1))
 
 	items.blockAssembler = ba
 

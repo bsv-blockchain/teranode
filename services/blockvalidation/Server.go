@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -40,7 +41,7 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger           utils.Logger
+	logger           ulogger.Logger
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
@@ -65,7 +66,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
+func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
 	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
 
 	initPrometheusMetrics()
@@ -94,7 +95,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
-	if u.blockchainClient, err = blockchain.NewClient(ctx); err != nil {
+	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
 		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
 	}
 

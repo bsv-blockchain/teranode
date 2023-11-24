@@ -15,10 +15,10 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -108,21 +108,21 @@ type Store struct {
 	u           *url.URL
 	client      *aerospike.Client
 	namespace   string
-	logger      utils.Logger
+	logger      ulogger.Logger
 	blockHeight uint32
 	expiration  uint32
 	dbTimeout   time.Duration
 }
 
-func New(u *url.URL) (*Store, error) {
+func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	//asl.Logger.SetLevel(asl.DEBUG)
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := util.NewLogger("aero", logLevelStr)
+	logger = logger.New("aero", ulogger.WithLevel(logLevelStr))
 
 	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(u)
+	client, err := util.GetAerospikeClient(logger, u)
 	if err != nil {
 		return nil, err
 	}

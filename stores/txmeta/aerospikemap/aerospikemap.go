@@ -9,6 +9,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -57,12 +58,14 @@ type Store struct {
 	namespace string
 }
 
-func New(u *url.URL) (*Store, error) {
+func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	asl.Logger.SetLevel(asl.DEBUG)
+
+	logger = logger.New("aero_map_store")
 
 	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(u)
+	client, err := util.GetAerospikeClient(logger, u)
 	if err != nil {
 		return nil, err
 	}

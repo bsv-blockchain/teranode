@@ -17,7 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -28,11 +28,11 @@ type KinesisS3 struct {
 	uploader       *s3manager.Uploader
 	downloader     *s3manager.Downloader
 	bucket         string
-	logger         utils.Logger
+	logger         ulogger.Logger
 }
 
-func New(s3URL *url.URL) (*KinesisS3, error) {
-	logger := util.NewLogger("kinesisS3")
+func New(logger ulogger.Logger, s3URL *url.URL) (*KinesisS3, error) {
+	logger = logger.New("kinesisS3")
 
 	region := s3URL.Query().Get("region")
 

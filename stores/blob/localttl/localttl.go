@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 type LocalTTL struct {
-	logger    utils.Logger
+	logger    ulogger.Logger
 	ttlStore  BlobStore
 	blobStore BlobStore
 }
@@ -27,7 +27,7 @@ type BlobStore interface {
 	Close(ctx context.Context) error
 }
 
-func New(logger utils.Logger, ttlStore, blobStore BlobStore) (*LocalTTL, error) {
+func New(logger ulogger.Logger, ttlStore, blobStore BlobStore) (*LocalTTL, error) {
 	b := &LocalTTL{
 		logger:    logger,
 		ttlStore:  ttlStore,

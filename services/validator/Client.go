@@ -9,9 +9,9 @@ import (
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
@@ -25,13 +25,13 @@ type Client struct {
 	frpcClient   *validator_api.Client
 	running      bool
 	conn         *grpc.ClientConn
-	logger       utils.Logger
+	logger       ulogger.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
 	batchSize    int
 	batchTimeout int
 }
 
-func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {

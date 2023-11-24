@@ -4,12 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
 func TestFile_Get(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		f, err := New("/tmp/ubsv-tests")
+		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests")
 		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))

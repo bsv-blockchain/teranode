@@ -8,9 +8,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 )
@@ -18,15 +18,15 @@ import (
 type Peer struct {
 	source           string
 	validationClient *blockvalidation.Client
-	logger           utils.Logger
+	logger           ulogger.Logger
 	address          string
 	running          bool
 	notificationCh   chan *asset_api.Notification
 }
 
-func NewPeer(ctx context.Context, source string, addr string, notificationCh chan *asset_api.Notification) *Peer {
+func NewPeer(ctx context.Context, logger ulogger.Logger, source string, addr string, notificationCh chan *asset_api.Notification) *Peer {
 	return &Peer{
-		logger:           util.NewLogger("blobC"),
+		logger:           logger.New("blobC"),
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(ctx),

@@ -11,6 +11,7 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -19,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
@@ -106,7 +106,7 @@ type Ipv6MulticastMsg struct {
 }
 
 type Worker struct {
-	logger            utils.Logger
+	logger            ulogger.Logger
 	rateLimiter       *rate.Limiter
 	coinbaseClient    *coinbase.Client
 	distributor       *distributor.Distributor
@@ -127,7 +127,7 @@ type Worker struct {
 }
 
 func NewWorker(
-	logger utils.Logger,
+	logger ulogger.Logger,
 	rateLimit float64,
 	coinbaseClient *coinbase.Client,
 	distributor *distributor.Distributor,

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -23,7 +23,7 @@ type Peer struct {
 
 type Client struct {
 	client           bootstrap_api.BootstrapAPIClient
-	logger           utils.Logger
+	logger           ulogger.Logger
 	AssetGrpcAddress string
 	AssetHttpAddress string
 	peers            map[Peer]void
@@ -32,9 +32,9 @@ type Client struct {
 	name             string
 }
 
-func NewClient(source string, name string) *Client {
+func NewClient(logger ulogger.Logger, source string, name string) *Client {
 	return &Client{
-		logger: util.NewLogger("bootC"),
+		logger: logger.New("bootC"),
 		peers:  make(map[Peer]void),
 		source: source,
 		name:   name,
@@ -42,7 +42,7 @@ func NewClient(source string, name string) *Client {
 }
 
 // WithLogger overrides with default logger for the client
-func (c *Client) WithLogger(logger utils.Logger) *Client {
+func (c *Client) WithLogger(logger ulogger.Logger) *Client {
 	c.logger = logger
 	return c
 }

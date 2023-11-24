@@ -5,10 +5,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -16,10 +16,10 @@ import (
 
 type Client struct {
 	client txmeta_api.TxMetaAPIClient
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	txmeta_grpcAddress, _ := gocore.Config().Get("txmeta_grpcAddress")
 	conn, err := util.GetGRPCClient(ctx, txmeta_grpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),

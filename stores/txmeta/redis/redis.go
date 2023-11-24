@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,12 +23,13 @@ var luaScript = redis.NewScript(scriptString)
 
 type Redis struct {
 	url       *url.URL
+	logger    ulogger.Logger
 	rdb       redis.Cmdable
 	txMetaTtl time.Duration
 	mode      string
 }
 
-func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	o := &redis.Options{
 		Addr: u.Host,
 	}
@@ -48,13 +50,14 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "client",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,
 	}, nil
 }
 
-func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make([]string, 0)
@@ -80,13 +83,14 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "cluster",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,
 	}, nil
 }
 
-func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make(map[string]string)
@@ -114,6 +118,7 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "ring",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,

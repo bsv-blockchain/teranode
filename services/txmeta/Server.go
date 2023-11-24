@@ -8,10 +8,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,13 +20,13 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	txmeta_api.UnsafeTxMetaAPIServer
-	logger         utils.Logger
+	logger         ulogger.Logger
 	txMetaStoreURL *url.URL
 	store          txmeta.Store
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txMetaStoreURL *url.URL) *Server {
+func New(logger ulogger.Logger, txMetaStoreURL *url.URL) *Server {
 	initPrometheusMetrics()
 	return &Server{
 		logger:         logger,

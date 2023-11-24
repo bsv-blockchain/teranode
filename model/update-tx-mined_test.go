@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +37,7 @@ var (
 
 func TestUpdateTxMinedStatus(t *testing.T) {
 	t.Run("TestUpdateTxMinedStatus", func(t *testing.T) {
-		txMetaStore := memory.New(true)
+		txMetaStore := memory.New(ulogger.TestLogger{}, true)
 
 		_, err := txMetaStore.Create(context.Background(), tx0)
 		require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 
 		err = UpdateTxMinedStatus(
 			context.Background(),
-			p2p.TestLogger{},
+			ulogger.TestLogger{},
 			txMetaStore,
 			subtrees,
 			blockHeader,

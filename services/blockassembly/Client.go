@@ -7,9 +7,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 	"storj.io/drpc/drpcconn"
@@ -19,13 +19,13 @@ type Client struct {
 	client     blockassembly_api.BlockAssemblyAPIClient
 	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
 	frpcClient *blockassembly_api.Client
-	logger     utils.Logger
+	logger     ulogger.Logger
 	batchSize  int
 	batchCh    chan []*blockassembly_api.AddTxRequest
 	batcher    batcher.Batcher[blockassembly_api.AddTxRequest]
 }
 
-func NewClient(ctx context.Context, logger utils.Logger) *Client {
+func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
 		panic("no blockassembly_grpcAddress setting found")

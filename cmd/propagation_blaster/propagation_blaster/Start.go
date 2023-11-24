@@ -17,11 +17,11 @@ import (
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -99,7 +99,7 @@ func Start() {
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
-	logger := util.NewLogger("propagation_blaster")
+	logger := ulogger.New("propagation_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -192,7 +192,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	prometheusWorkers.Inc()
 	defer func() {
 		prometheusWorkers.Dec()
@@ -234,7 +234,7 @@ func worker(logger utils.Logger) {
 	}
 }
 
-func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtendedBytes []byte) error {
+func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExtendedBytes []byte) error {
 	switch broadcastProtocol {
 
 	case "disabled":

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/labstack/gommon/random"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -22,7 +22,7 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
-func InitSQLDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
 		return InitPostgresDB(logger, storeUrl)
@@ -33,7 +33,7 @@ func InitSQLDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func InitPostgresDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	dbHost := storeUrl.Hostname()
 	port := storeUrl.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -62,7 +62,7 @@ func InitPostgresDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return db, nil
 }
 
-func InitSQLiteDB(logger utils.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	var filename string
 	var err error
 

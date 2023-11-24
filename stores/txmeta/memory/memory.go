@@ -6,19 +6,22 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Memory struct {
+	logger          ulogger.Logger
 	checkDuplicates bool
 	mu              sync.Mutex
 	txStatus        map[chainhash.Hash]txmeta.Data
 }
 
-func New(checkDuplicates ...bool) *Memory {
+func New(logger ulogger.Logger, checkDuplicates ...bool) *Memory {
 	m := &Memory{
+		logger:   logger,
 		txStatus: make(map[chainhash.Hash]txmeta.Data),
 	}
 

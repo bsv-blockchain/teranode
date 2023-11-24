@@ -8,33 +8,33 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type loggerWrapper struct {
-	utils.Logger
+	ulogger.Logger
 }
 
 type Badger struct {
 	mu     sync.Mutex
 	store  *badger.DB
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
 }
 
-func New(dir string) (*Badger, error) {
-	logger := loggerWrapper{util.NewLogger("bdgr")}
+func New(logger ulogger.Logger, dir string) (*Badger, error) {
+	bLogger := loggerWrapper{logger.New("bdgr")}
 
 	opts := badger.DefaultOptions(dir).
-		WithLogger(logger).
+		WithLogger(bLogger).
 		WithLoggingLevel(badger.ERROR).WithNumMemtables(32).
 		WithMetricsEnabled(true)
 	s, err := badger.Open(opts)

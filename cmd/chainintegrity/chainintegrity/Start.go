@@ -13,6 +13,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -50,7 +51,7 @@ func Start() {
 	if *debug {
 		debugLevel = "DEBUG"
 	}
-	var logger = util.NewLogger("chainintegrity", debugLevel)
+	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel))
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {

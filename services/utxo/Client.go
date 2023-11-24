@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -12,13 +13,15 @@ import (
 
 type Store struct {
 	db               utxostore_api.UtxoStoreAPIClient
+	logger           ulogger.Logger
 	BlockHeight      uint32
 	DeleteSpentUtxos bool
 }
 
-func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
+func NewClient(logger ulogger.Logger, db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	return &Store{
 		db:          db,
+		logger:      logger,
 		BlockHeight: 0,
 	}, nil
 }

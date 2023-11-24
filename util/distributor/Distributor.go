@@ -11,16 +11,16 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/opentracing/opentracing-go"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/quic-go/quic-go"
 )
 
 type Distributor struct {
-	logger             utils.Logger
+	logger             ulogger.Logger
 	propagationServers map[string]propagation_api.PropagationAPIClient
 	attempts           int32
 	backoff            time.Duration
@@ -51,7 +51,7 @@ func WithFailureTolerance(r int) Option {
 	}
 }
 
-func NewDistributor(logger utils.Logger, opts ...Option) (*Distributor, error) {
+func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
 	if len(addresses) == 0 {
@@ -86,7 +86,7 @@ func NewDistributor(logger utils.Logger, opts ...Option) (*Distributor, error) {
 
 	return d, nil
 }
-func NewQuicDistributor(logger utils.Logger, opts ...Option) (*Distributor, error) {
+func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
 
 	var quicAddresses []string
 	var quicStream quic.Stream

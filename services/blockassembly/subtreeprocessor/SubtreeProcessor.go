@@ -12,9 +12,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -51,14 +51,14 @@ type SubtreeProcessor struct {
 	queue        *LockFreeQueue
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
-	logger       utils.Logger
+	logger       ulogger.Logger
 }
 
 var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(ctx context.Context, logger utils.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
+func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
 	newSubtreeChan chan *util.Subtree, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()

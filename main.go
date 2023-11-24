@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
@@ -35,12 +36,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -102,13 +104,11 @@ func main() {
 		return
 	}
 
-	logger := util.NewLogger(progname)
+	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
+	logger := initLogger(serviceName)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
-
-	// sentry
-	startSentry(logger)
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -160,7 +160,6 @@ func main() {
 		logger.Infof("Starting tracer")
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		samplingRateStr, _ := gocore.Config().Get("tracing_SampleRate", "0.01")
 		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
 		if err != nil {
@@ -184,7 +183,7 @@ func main() {
 	// blockchain service needs to start first !
 	if startBlockchain {
 		var err error
-		blockchainService, err = blockchain.New(util.NewLogger("bchn"))
+		blockchainService, err = blockchain.New(logger.New("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -197,7 +196,7 @@ func main() {
 	// bootstrap server
 	if startBootstrap {
 		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			util.NewLogger("bootS"),
+			logger.New("bootS"),
 		)); err != nil {
 			panic(err)
 		}
@@ -218,7 +217,7 @@ func main() {
 		}
 
 		if err := sm.AddService("TxMetaStore", txmeta.New(
-			util.NewLogger("txsts"),
+			logger.New("txsts"),
 			txMetaStoreURL,
 		)); err != nil {
 			panic(err)
@@ -228,7 +227,7 @@ func main() {
 	// asset service
 	if startAsset {
 		if err := sm.AddService("Asset", asset.NewServer(
-			util.NewLogger("asset"),
+			logger.New("asset"),
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
 			getTxMetaStore(logger),
@@ -242,7 +241,7 @@ func main() {
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
 			// should this be done globally somewhere?
-			blockchainClient, err := blockchain.NewClient(ctx)
+			blockchainClient, err := blockchain.NewClient(ctx, logger)
 			if err != nil {
 				panic(err)
 			}
@@ -263,7 +262,7 @@ func main() {
 			blockValidationClient := blockvalidation.NewClient(ctx)
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				util.NewLogger("bass"),
+				logger.New("bass"),
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
@@ -291,7 +290,7 @@ func main() {
 			}
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
-				util.NewLogger("bval"),
+				logger.New("bval"),
 				getUtxoStore(ctx, logger),
 				getSubtreeStore(logger),
 				getTxStore(logger),
@@ -307,7 +306,7 @@ func main() {
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
 			if err := sm.AddService("Validator", validator.NewServer(
-				util.NewLogger("valid"),
+				logger.New("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
 			)); err != nil {
@@ -318,8 +317,8 @@ func main() {
 
 	// utxo store server
 	if startUtxoStore {
-		if err := sm.AddService("UTXOStoreServer", utxo.New(
-			util.NewLogger("utxo"),
+		if err = sm.AddService("UTXOStoreServer", utxo.New(
+			logger.New("utxo"),
 			getUtxoMemoryStore(),
 		)); err != nil {
 			panic(err)
@@ -330,8 +329,8 @@ func main() {
 	if startSeeder {
 		_, found := gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
-			if err := sm.AddService("Seeder", seeder.NewServer(
-				util.NewLogger("seed"),
+			if err = sm.AddService("Seeder", seeder.NewServer(
+				logger.New("seed"),
 			)); err != nil {
 				panic(err)
 			}
@@ -340,8 +339,8 @@ func main() {
 
 	// p2p server
 	if startP2P {
-		if err := sm.AddService("P2P", p2p.NewServer(
-			util.NewLogger("P2P"),
+		if err = sm.AddService("P2P", p2p.NewServer(
+			logger.New("P2P"),
 		)); err != nil {
 			panic(err)
 		}
@@ -349,16 +348,16 @@ func main() {
 
 	// coinbase tracker server
 	if startCoinbase {
-		if err := sm.AddService("Coinbase", coinbase.New(
-			util.NewLogger("coinB"),
+		if err = sm.AddService("Coinbase", coinbase.New(
+			logger.New("coinB"),
 		)); err != nil {
 			panic(err)
 		}
 	}
 
 	if startFaucet {
-		if err := sm.AddService("Faucet", faucet.New(
-			util.NewLogger("faucet"),
+		if err = sm.AddService("Faucet", faucet.New(
+			logger.New("faucet"),
 		)); err != nil {
 			panic(err)
 		}
@@ -393,8 +392,8 @@ func main() {
 					panic(err)
 				}
 			} else {
-				if err := sm.AddService("PropagationServer", propagation.New(
-					util.NewLogger("prop"),
+				if err = sm.AddService("PropagationServer", propagation.New(
+					logger.New("prop"),
 					getTxStore(logger),
 					validatorClient,
 				)); err != nil {
@@ -406,7 +405,7 @@ func main() {
 
 	// miner
 	if startMiner {
-		if err := sm.AddService("miner", miner.NewMiner(ctx)); err != nil {
+		if err = sm.AddService("miner", miner.NewMiner(ctx, logger.New("miner"))); err != nil {
 			panic(err)
 		}
 	}
@@ -442,24 +441,42 @@ func main() {
 	}
 }
 
-func startSentry(logger utils.Logger) {
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+func initLogger(serviceName string) ulogger.Logger {
+	logLevel, _ := gocore.Config().Get("logLevel", "info")
+	logOptions := []ulogger.Option{
+		ulogger.WithLevel(logLevel),
+	}
+
+	// sentry
+	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
 		if err != nil {
-			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
+			panic("failed to parse sentry_traces_sample_rate: " + err.Error())
 		}
 
-		if err = sentry.Init(sentry.ClientOptions{
-			Dsn:        sentryDns,
-			ServerName: serviceName,
-
-			TracesSampleRate: tracesSampleRate,
-		}); err != nil {
-			logger.Fatalf("sentry.Init: %s", err)
+		w, err := zlogsentry.New(sentryDns,
+			zlogsentry.WithEnvironment("dev"),
+			zlogsentry.WithRelease("1.0.0"),
+			zlogsentry.WithServerName(serviceName),
+			zlogsentry.WithSampleRate(tracesSampleRate),
+		)
+		if err != nil {
+			panic("sentry.Init: " + err.Error())
 		}
+
+		multi := zerolog.MultiLevelWriter(os.Stdout, w)
+		logOptions = append(logOptions, ulogger.WithWriter(multi))
 	}
+
+	useLogger, ok := gocore.Config().Get("logger")
+	if ok && useLogger != "" {
+		logOptions = append(logOptions, ulogger.WithLoggerType(useLogger))
+	}
+
+	logger := ulogger.New(progname, logOptions...)
+
+	return logger
 }
 
 func shouldStart(app string) bool {

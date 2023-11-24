@@ -6,17 +6,17 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 )
 
 // LocalClient is an abstraction for a client that has a stored embedded directly
 type LocalClient struct {
 	store  blockchain.Store
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func NewLocalClient(logger utils.Logger, store blockchain.Store) (ClientI, error) {
+func NewLocalClient(logger ulogger.Logger, store blockchain.Store) (ClientI, error) {
 	return &LocalClient{
 		logger: logger,
 		store:  store,

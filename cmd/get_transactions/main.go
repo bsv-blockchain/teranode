@@ -1,16 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type bestBlock struct {
@@ -32,13 +33,13 @@ type subtreeNodes struct {
 }
 
 var (
-	logger = gocore.Log("test")
+	logger = ulogger.New("test")
 )
 
 func main() {
-	baseUrl := "https://m1.scaling.ubsv.dev/"
+	baseUrl := "https://m1.scaling.ubsv.dev"
 
-	resp, err := util.DoHTTPRequest(context.Background(), baseUrl+"lastblocks?n=1", nil, nil, nil)
+	resp, err := DoHTTPRequest(context.Background(), baseUrl+"/lastblocks?n=1", nil, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -53,7 +54,9 @@ func main() {
 
 	logger.Infof("Best block: %v", blockInfo[0])
 
-	resp, err = util.DoHTTPRequest(context.Background(), fmt.Sprintf("%sblock/%s/json", baseUrl, blockInfo[0].Hash), nil, nil, nil)
+	blockInfo[0].Hash = "00be0eb1a07bcbf9ee1a03a4d85232993ce7be950b778564777a23cd94564ad5"
+
+	resp, err = DoHTTPRequest(context.Background(), fmt.Sprintf("%s/block/%s/json", baseUrl, blockInfo[0].Hash), nil, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -72,7 +75,7 @@ func main() {
 		panic(errors.New("no subtrees"))
 	}
 
-	resp, err = util.DoHTTPRequest(context.Background(), fmt.Sprintf("%ssubtree/%s/json", baseUrl, block.Subtrees[0]), nil, nil, nil)
+	resp, err = DoHTTPRequest(context.Background(), fmt.Sprintf("%s/subtree/%s/json", baseUrl, block.Subtrees[0]), nil, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -123,28 +126,28 @@ func getMissingTransactionsBatch(ctx context.Context, txHashes []subtreeNodes, b
 	logger.Infof("[getMissingTransactionsBatch] getting %d txs from other miner: %d", len(txHashes), len(txIDBytes)/32)
 
 	// do http request to baseUrl + txHash.String()
-	url := fmt.Sprintf("%stxs", baseUrl)
+	url := fmt.Sprintf("%s/txs", baseUrl)
 	logger.Infof("[getMissingTransactionsBatch] getting %d txs from other miner %s", len(txHashes), url)
 
-	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
+	body, err := DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to do http request"), err)
 	}
 	defer body.Close()
 
-	//b, err := io.ReadAll(body)
-	//if err != nil {
-	//	return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read body"), err)
-	//}
+	b, err := io.ReadAll(body)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read body"), err)
+	}
 	//logger.Infof("[getMissingTransactionsBatch] got bytes: %s", string(b))
-	//buf := bytes.NewReader(b)
-	//logger.Infof("[getMissingTransactionsBatch] got %d bytes from other miner", len(b))
+	buf := bytes.NewReader(b)
+	logger.Infof("[getMissingTransactionsBatch] got %d bytes from other miner", len(b))
 
 	// read the body into transactions using go-bt
 	missingTxs := make([]*bt.Tx, 0, len(txHashes))
 	var tx *bt.Tx
 	for {
-		tx, err = readTxFromReader(body)
+		tx, err = readTxFromReader(buf)
 		if err != nil || tx == nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -188,4 +191,65 @@ func Min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
+	httpClient := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to create http request"), err)
+	}
+
+	// write request body
+	if len(requestBody) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to do http request"), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
+	}
+
+	blockBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to read http response body"), err)
+	}
+
+	return blockBytes, nil
+}
+
+func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	httpClient := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to create http request"), err)
+	}
+
+	// write request body
+	if len(requestBody) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+		req.Method = http.MethodPost
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to do http request"), err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.Body != nil {
+			b, _ := io.ReadAll(resp.Body)
+			if b != nil {
+				return nil, errors.Join(fmt.Errorf("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b)), err)
+			}
+		}
+		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
+	}
+
+	return resp.Body, nil
 }

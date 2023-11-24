@@ -51,7 +51,7 @@ The UTXO store implementation is consistent within a UBSV node (every service co
 
 ```go
 
-func getUtxoStore(ctx context.Context, logger utils.Logger) utxostore.Interface {
+func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interface {
 	if utxoStore != nil {
 		return utxoStore
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -37,12 +38,12 @@ func init() {
 
 type Badger struct {
 	store  *badger.DB
-	logger utils.Logger
+	logger ulogger.Logger
 	// mu     sync.RWMutex
 }
 
 type loggerWrapper struct {
-	utils.Logger
+	ulogger.Logger
 }
 
 var (
@@ -53,7 +54,7 @@ func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
 }
 
-func New(logger utils.Logger, dir string) (*Badger, error) {
+func New(logger ulogger.Logger, dir string) (*Badger, error) {
 	bLogger := loggerWrapper{logger}
 	opts := badger.DefaultOptions(dir).
 		WithLogger(bLogger).

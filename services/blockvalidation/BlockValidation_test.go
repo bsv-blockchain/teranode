@@ -8,10 +8,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +68,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
 		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
 		require.NoError(t, err)
 	})
@@ -81,7 +81,7 @@ func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
 		defer deferFunc()
 
-		blockValidation := NewBlockValidation(p2p.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
+		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
 		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
 		require.NoError(t, err)
 
@@ -99,7 +99,7 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
-	txMetaStore := memory.New()
+	txMetaStore := memory.New(ulogger.TestLogger{})
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 

@@ -30,7 +30,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, err)
 
 	//var utxoDb utxostore.Interface
-	//utxoDb, err = utxo.NewStore(context.Background(), p2p.TestLogger{}, aeroURL, "test", false)
+	//utxoDb, err = utxo.NewStore(context.Background(), ulogger.TestLogger{}, aeroURL, "test", false)
 	//_ = utxoDb
 
 	var hash *chainhash.Hash

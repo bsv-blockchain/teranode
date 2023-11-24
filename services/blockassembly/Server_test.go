@@ -16,7 +16,7 @@ import (
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/libsv/go-p2p"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/ordishs/gocore"
@@ -71,12 +71,12 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	opentracing.SetGlobalTracer(mocktracer.New())
 
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(p2p.TestLogger{}, blockchainStoreURL)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL)
 	if err != nil {
 		return nil, err
 	}
 
-	blockchainClient, err := blockchain.NewLocalClient(p2p.TestLogger{}, blockchainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	gocore.Config().Set("tx_chan_buffer_size", "1000000")
 
 	ctx := context.Background()
-	ba := New(p2p.TestLogger{}, memStore, utxoStore, txMetaStore, memStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, memStore, utxoStore, txMetaStore, memStore, blockchainClient)
 	err = ba.Init(ctx)
 	if err != nil {
 		return nil, err

@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	_ "modernc.org/sqlite"
 )
 
 type SQL struct {
 	db     *sql.DB
 	engine util.SQLEngine
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 var (
@@ -33,8 +33,8 @@ func init() {
 	cache = ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](cacheTTL))
 }
 
-func New(storeUrl *url.URL) (*SQL, error) {
-	logger := util.NewLogger("bcsql")
+func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
+	logger = logger.New("bcsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
@@ -222,7 +222,7 @@ func createSqliteSchema(db *sql.DB) error {
 	return nil
 }
 
-func (s *SQL) insertGenesisTransaction(logger utils.Logger) error {
+func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	q := `
 		SELECT
 	     count(*)

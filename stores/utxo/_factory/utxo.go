@@ -9,12 +9,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-var availableDatabases = map[string]func(url *url.URL) (utxo.Interface, error){}
+var availableDatabases = map[string]func(logger ulogger.Logger, url *url.URL) (utxo.Interface, error){}
 
-func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Interface, error) {
+func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Interface, error) {
 
 	var port int
 	var err error
@@ -35,7 +35,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 		// TODO retry on connection failure
 
 		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", storeUrl.Scheme, storeUrl.Hostname(), port)
-		utxoStore, err = dbInit(storeUrl)
+		utxoStore, err = dbInit(logger, storeUrl)
 		if err != nil {
 			return nil, err
 		}
@@ -47,7 +47,7 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 
 		if startBlockchain {
 			// get the latest block height to compare against lock time utxos
-			blockchainClient, err = blockchain.NewClient(ctx)
+			blockchainClient, err = blockchain.NewClient(ctx, logger)
 			if err != nil {
 				panic(err)
 			}
@@ -93,9 +93,9 @@ func NewStore(ctx context.Context, logger utils.Logger, storeUrl *url.URL, sourc
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func BlockHeightListener(ctx context.Context, logger utils.Logger, utxoStore utxo.Interface, source string) {
+func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string) {
 	// get the latest block height to compare against lock time utxos
-	blockchainClient, err := blockchain.NewClient(ctx)
+	blockchainClient, err := blockchain.NewClient(ctx, logger)
 	if err != nil {
 		panic(err)
 	}

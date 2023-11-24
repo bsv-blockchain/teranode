@@ -8,14 +8,14 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Miner struct {
-	logger              utils.Logger
+	logger              ulogger.Logger
 	blockAssemblyClient *blockassembly.Client
 	candidateTimer      *time.Timer
 }
@@ -28,10 +28,8 @@ const (
 	blockFoundInterval = 100
 )
 
-func NewMiner(ctx context.Context) *Miner {
+func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	initPrometheusMetrics()
-
-	logger := util.NewLogger("miner")
 	return &Miner{
 		logger:              logger,
 		blockAssemblyClient: blockassembly.NewClient(ctx, logger),
@@ -54,7 +52,9 @@ func (m *Miner) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			m.logger.Infof("[Miner] Stopping miner as ctx is done")
-			cancel()
+			if cancel != nil {
+				cancel()
+			}
 			return nil // context cancelled
 		case <-m.candidateTimer.C:
 			m.candidateTimer.Reset(candidateRequestInterval * time.Second)

@@ -5,17 +5,17 @@ import (
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-func NewStore(_ utils.Logger, storeUrl *url.URL) (Store, error) {
+func NewStore(logger ulogger.Logger, storeUrl *url.URL) (Store, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
 		fallthrough
 	case "sqlitememory":
 		fallthrough
 	case "sqlite":
-		return sql.New(storeUrl)
+		return sql.New(logger, storeUrl)
 	}
 
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)

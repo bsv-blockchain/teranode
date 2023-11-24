@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/lib/pq"
@@ -19,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -45,14 +45,14 @@ type Coinbase struct {
 	running      bool
 	blockFoundCh chan processBlockFound
 	catchupCh    chan processBlockCatchup
-	logger       utils.Logger
+	logger       ulogger.Logger
 	address      string
 	dbTimeout    time.Duration
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
 // Only SQL databases are supported
-func NewCoinbase(logger utils.Logger, store blockchain.Store) (*Coinbase, error) {
+func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, error) {
 	engine := store.GetDBEngine()
 	if engine != util.Postgres && engine != util.Sqlite && engine != util.SqliteMemory {
 		return nil, fmt.Errorf("unsupported database engine: %s", engine)

@@ -10,11 +10,11 @@ import (
 	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -102,15 +102,15 @@ func init() {
 }
 
 type Store struct {
-	logger      utils.Logger
+	logger      ulogger.Logger
 	db          *sql.DB
 	engine      string
 	blockHeight uint32
 	dbTimeout   time.Duration
 }
 
-func New(storeUrl *url.URL) (*Store, error) {
-	logger := util.NewLogger("uxsql")
+func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+	logger = logger.New("uxsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {

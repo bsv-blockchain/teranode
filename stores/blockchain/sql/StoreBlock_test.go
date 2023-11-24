@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ func Test_StoreBlock(t *testing.T) {
 	storeUrl, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(storeUrl)
+	s, err := New(ulogger.TestLogger{}, storeUrl)
 	require.NoError(t, err)
 
 	_, err = s.StoreBlock(context.Background(), block1)

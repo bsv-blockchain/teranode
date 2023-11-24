@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
-func StartGRPCServer(ctx context.Context, l utils.Logger, serviceName string, register func(server *grpc.Server)) error {
+func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, register func(server *grpc.Server)) error {
 	grpcAddress := fmt.Sprintf("%s_grpcListenAddress", serviceName)
 	address, ok := gocore.Config().Get(grpcAddress)
 	if !ok {

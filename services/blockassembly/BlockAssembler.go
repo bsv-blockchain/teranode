@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -28,7 +29,7 @@ type miningCandidateResponse struct {
 }
 
 type BlockAssembler struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
@@ -45,7 +46,7 @@ type BlockAssembler struct {
 	maxBlockReorgCatchup     int
 }
 
-func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxostore.Interface,
+func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)

@@ -17,7 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -28,7 +28,7 @@ type Strategy interface {
 }
 
 var (
-	logger             = util.NewLogger("test")
+	logger             = ulogger.New("test")
 	workers            int
 	transactions       int
 	repeat             int

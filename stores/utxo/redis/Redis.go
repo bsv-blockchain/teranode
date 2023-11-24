@@ -12,6 +12,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,6 +23,7 @@ import (
 
 type Redis struct {
 	url                *url.URL
+	logger             ulogger.Logger
 	rdb                redis.Cmdable
 	mode               string
 	heightMutex        sync.RWMutex
@@ -30,7 +32,7 @@ type Redis struct {
 	timeout            time.Duration
 }
 
-func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	o := &redis.Options{
 		Addr:        u.Host,
 		PoolTimeout: time.Duration(10) * time.Second,
@@ -53,6 +55,7 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "client",
 		rdb:          rdb,
 		spentUtxoTtl: uint32(spentUtxoTtl),
@@ -60,7 +63,7 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 	}, nil
 }
 
-func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make([]string, 0)
@@ -88,6 +91,7 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "cluster",
 		rdb:          rdb,
 		spentUtxoTtl: uint32(spentUtxoTtl),
@@ -95,7 +99,7 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 	}, nil
 }
 
-func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make(map[string]string)
@@ -125,6 +129,7 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "ring",
 		rdb:          rdb,
 		spentUtxoTtl: uint32(spentUtxoTtl),

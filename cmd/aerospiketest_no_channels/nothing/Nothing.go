@@ -5,14 +5,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 type Nothing struct {
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func New(logger utils.Logger) *Nothing {
+func New(logger ulogger.Logger) *Nothing {
 	return &Nothing{
 		logger: logger,
 	}

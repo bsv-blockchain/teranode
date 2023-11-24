@@ -5,22 +5,20 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils/servicemanager"
-
-	"github.com/ordishs/go-utils"
 )
 
 // SampleService is a mock service for demonstration purposes.
 type SampleService struct {
 	name   string
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 func NewService(name string) *SampleService {
 	return &SampleService{
 		name:   name,
-		logger: util.NewLogger(name),
+		logger: ulogger.New(name),
 	}
 }
 
@@ -68,7 +66,7 @@ func (s *SampleService) Stop(ctx context.Context) error {
 }
 
 func main() {
-	logger := util.NewLogger("main")
+	logger := ulogger.New("main")
 
 	serviceManager := servicemanager.NewServiceManager()
 

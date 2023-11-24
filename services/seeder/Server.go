@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -20,7 +21,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -34,7 +34,7 @@ type Server struct {
 	seeder_api.UnimplementedSeederAPIServer
 	seederStore store.SeederStore
 	utxoStore   utxostore.Interface
-	logger      utils.Logger
+	logger      ulogger.Logger
 }
 
 var (
@@ -72,7 +72,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger) *Server {
+func NewServer(logger ulogger.Logger) *Server {
 	seederStore := memory.NewMemorySeederStore()
 	return &Server{
 		logger:      logger,

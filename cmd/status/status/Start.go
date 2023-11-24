@@ -12,13 +12,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/libsv/go-p2p"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/olekukonko/tablewriter"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
-var logger utils.Logger
+var logger ulogger.Logger
 
 const progname = "blockchain-status"
 
@@ -28,7 +27,7 @@ var commit string
 
 func Init() {
 	gocore.SetInfo(progname, version, commit)
-	logger = p2p.TestLogger{}
+	logger = ulogger.TestLogger{}
 }
 
 func Start() {

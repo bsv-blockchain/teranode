@@ -3,14 +3,14 @@ package tracing
 import (
 	"io"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/opentracing/opentracing-go"
-	"github.com/ordishs/go-utils"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 )
 
 // InitTracer creates a new instance of Jaeger tracer.
-func InitTracer(logger utils.Logger, serviceName string) (opentracing.Tracer, io.Closer) {
+func InitTracer(logger ulogger.Logger, serviceName string) (opentracing.Tracer, io.Closer) {
 	cfg, err := config.FromEnv()
 	if err != nil {
 		logger.Errorf("cannot parse jaeger env vars: %v\n", err.Error())

@@ -26,6 +26,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/wire"
@@ -51,7 +52,7 @@ var (
 type PropagationServer struct {
 	status atomic.Uint32
 	propagation_api.UnsafePropagationAPIServer
-	logger    utils.Logger
+	logger    ulogger.Logger
 	txStore   blob.Store
 	validator validator.Interface
 }
@@ -62,7 +63,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
+func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{

@@ -8,10 +8,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -31,7 +31,7 @@ type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan        chan *blockchain_api.AddBlockRequest
 	store               blockchain_store.Store
-	logger              utils.Logger
+	logger              ulogger.Logger
 	newSubscriptions    chan subscriber
 	deadSubscriptions   chan subscriber
 	subscribers         map[subscriber]bool
@@ -47,7 +47,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) (*Blockchain, error) {
+func New(logger ulogger.Logger) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")

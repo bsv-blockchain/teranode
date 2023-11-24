@@ -9,10 +9,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -20,7 +20,7 @@ import (
 
 type Client struct {
 	client  asset_api.AssetAPIClient
-	logger  utils.Logger
+	logger  ulogger.Logger
 	running bool
 	conn    *grpc.ClientConn
 }
@@ -30,7 +30,7 @@ type BestBlockHeader struct {
 	Height uint32
 }
 
-func NewClient(ctx context.Context, logger utils.Logger, address string) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Client, error) {
 	var err error
 	var blobConn *grpc.ClientConn
 	var blobClient asset_api.AssetAPIClient

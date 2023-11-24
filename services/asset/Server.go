@@ -15,8 +15,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -28,7 +28,7 @@ type peerWithContext struct {
 
 // Server type carries the logger within it
 type Server struct {
-	logger         utils.Logger
+	logger         ulogger.Logger
 	utxoStore      utxo.Interface
 	txStore        blob.Store
 	subtreeStore   blob.Store
@@ -49,7 +49,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
 	s := &Server{
 		logger:         logger,
 		utxoStore:      utxoStore,
@@ -72,7 +72,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx)
+	blockchainClient, err := blockchain.NewClient(ctx, v.logger)
 	if err != nil {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}
@@ -161,7 +161,7 @@ func (v *Server) Start(ctx context.Context) error {
 			// Start a subscription to the Asset service
 
 			g.Go(func() error {
-				bootstrapClient := bootstrap.NewClient("BLOB_SERVER", AssetClientName).WithCallback(func(p bootstrap.Peer) {
+				bootstrapClient := bootstrap.NewClient(v.logger, "BLOB_SERVER", AssetClientName).WithCallback(func(p bootstrap.Peer) {
 					if p.AssetGrpcAddress != "" {
 						v.logger.Infof("[Asset] Connecting to asset service at: %s", p.AssetGrpcAddress)
 						if pp, ok := v.peers[p.AssetGrpcAddress]; ok {
@@ -174,7 +174,7 @@ func (v *Server) Start(ctx context.Context) error {
 						// Start a subscription to the new peer's blob server
 						peerCtx, peerCtxCancel := context.WithCancel(ctx)
 
-						peer := NewPeer(peerCtx, "asset_bs", p.AssetGrpcAddress, v.notificationCh)
+						peer := NewPeer(peerCtx, v.logger, "asset_bs", p.AssetGrpcAddress, v.notificationCh)
 
 						v.peers[p.AssetGrpcAddress] = peerWithContext{
 							peer:       peer,

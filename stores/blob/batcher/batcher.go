@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/exp/rand"
@@ -18,7 +19,7 @@ import (
 )
 
 type Batcher struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	blobStore        BlobStore
 	sizeInBytes      int
 	writeKeys        bool
@@ -39,7 +40,7 @@ type BlobStore interface {
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 }
 
-func New(logger utils.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
+func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
 	b := &Batcher{
 		logger:           logger,
 		blobStore:        blobStore,

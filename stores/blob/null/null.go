@@ -7,17 +7,16 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 )
 
 type Null struct {
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func New() (*Null, error) {
-	logger := util.NewLogger("null")
+func New(logger ulogger.Logger) (*Null, error) {
+	logger = logger.New("null")
 
 	return &Null{
 		logger: logger,

@@ -16,17 +16,17 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
 type BlockValidation struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	blockchainClient blockchain.ClientI
 	subtreeStore     blob.Store
 	subtreeTTL       time.Duration
@@ -35,7 +35,7 @@ type BlockValidation struct {
 	validatorClient  validator.Interface
 }
 
-func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
+func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)

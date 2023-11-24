@@ -11,13 +11,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 )
 
 type Repository struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	UtxoStore        utxo.Interface
 	TxStore          blob.Store
 	TxMetaStore      txmeta.Store
@@ -25,7 +25,7 @@ type Repository struct {
 	BlockchainClient blockchain.ClientI
 }
 
-func NewRepository(logger utils.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
+func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
 	blockchainClient blockchain.ClientI, SubtreeStore blob.Store) (*Repository, error) {
 
 	return &Repository{

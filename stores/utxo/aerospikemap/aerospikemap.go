@@ -14,10 +14,10 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -107,7 +107,7 @@ type Store struct {
 	u           *url.URL
 	client      *aerospike.Client
 	namespace   string
-	logger      utils.Logger
+	logger      ulogger.Logger
 	blockHeight uint32
 	dbTimeout   time.Duration
 }
@@ -124,17 +124,18 @@ var (
 	}
 )
 
-func New(u *url.URL) (*Store, error) {
+func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	//asl.Logger.SetLevel(asl.DEBUG)
 
 	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(u)
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger = logger.New("aero", ulogger.WithLevel(logLevelStr))
+
+	client, err := util.GetAerospikeClient(logger, u)
 	if err != nil {
 		return nil, err
 	}
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 
 	timeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
@@ -142,7 +143,7 @@ func New(u *url.URL) (*Store, error) {
 		u:           u,
 		client:      client,
 		namespace:   namespace,
-		logger:      util.NewLogger("aero", logLevelStr),
+		logger:      logger,
 		blockHeight: 0,
 		dbTimeout:   time.Duration(timeoutMillis) * time.Millisecond,
 	}, nil

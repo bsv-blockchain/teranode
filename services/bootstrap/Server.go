@@ -10,6 +10,7 @@ import (
 	"time"
 
 	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
@@ -26,7 +27,7 @@ import (
 type Server struct {
 	bootstrap_api.UnimplementedBootstrapAPIServer
 	mu          sync.RWMutex
-	logger      utils.Logger
+	logger      ulogger.Logger
 	subscribers map[chan *bootstrap_api.Notification]*bootstrap_api.Info
 	grpc        *grpc.Server
 	e           *echo.Echo
@@ -39,7 +40,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger) *Server {
+func NewServer(logger ulogger.Logger) *Server {
 	initPrometheusMetrics()
 	return &Server{
 		logger:      logger,

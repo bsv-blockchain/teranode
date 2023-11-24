@@ -12,7 +12,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
 
@@ -23,7 +23,7 @@ var (
 	utxoStore    utxostore.Interface
 )
 
-func getTxMetaStore(logger utils.Logger) txmetastore.Store {
+func getTxMetaStore(logger ulogger.Logger) txmetastore.Store {
 	if txMetaStore != nil {
 		return txMetaStore
 	}
@@ -59,7 +59,7 @@ func getTxMetaStore(logger utils.Logger) txmetastore.Store {
 	return txMetaStore
 }
 
-func getUtxoStore(ctx context.Context, logger utils.Logger) utxostore.Interface {
+func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interface {
 	if utxoStore != nil {
 		return utxoStore
 	}
@@ -98,7 +98,7 @@ func getUtxoMemoryStore() utxostore.Interface {
 	return s
 }
 
-func getTxStore(logger utils.Logger) blob.Store {
+func getTxStore(logger ulogger.Logger) blob.Store {
 	if txStore != nil {
 		return txStore
 	}
@@ -118,7 +118,7 @@ func getTxStore(logger utils.Logger) blob.Store {
 	return txStore
 }
 
-func getSubtreeStore(logger utils.Logger) blob.Store {
+func getSubtreeStore(logger ulogger.Logger) blob.Store {
 	if subtreeStore != nil {
 		return subtreeStore
 	}

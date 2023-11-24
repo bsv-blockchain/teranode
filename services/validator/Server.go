@@ -21,9 +21,9 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -44,7 +44,7 @@ type subscriber struct {
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
 	validator           Interface
-	logger              utils.Logger
+	logger              ulogger.Logger
 	utxoStore           utxostore.Interface
 	txMetaStore         txmetastore.Store
 	kafkaSignal         chan os.Signal
@@ -61,7 +61,7 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
 	initPrometheusMetrics()
 	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 

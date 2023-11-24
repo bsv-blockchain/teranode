@@ -1,97 +1,74 @@
-package util
+package ulogger
 
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ordishs/go-utils"
+	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
-)
-
-const (
-	colorBlack = iota + 30
-	colorRed
-	colorGreen
-	colorYellow
-	colorBlue
-	colorMagenta
-	colorCyan
-	colorWhite
-
-	colorBold     = 1
-	colorDarkGray = 90
 )
 
 type ZLoggerWrapper struct {
 	zerolog.Logger
 	service string
+	w       io.Writer
 }
 
-func NewLogger(service string, logLevel ...string) utils.Logger {
-	useLogger, _ := gocore.Config().Get("logger", "zerolog")
-	switch useLogger {
-	case "gocore":
-		if len(logLevel) > 0 {
-			l := gocore.NewLogLevelFromString(logLevel[0])
-			return gocore.Log(service, l)
-		} else {
-			return gocore.Log(service)
-		}
-	default:
-		return NewZeroLogger(service, logLevel...)
-	}
-}
-
-func NewZeroLogger(service string, logLevel ...string) *ZLoggerWrapper {
+func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	if service == "" {
 		service = "ubsv"
 	}
 
+	opts := DefaultOptions()
+	for _, o := range options {
+		o(opts)
+	}
+
+	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
+		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
+		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
+		if err != nil {
+			log.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
+		}
+
+		if err = sentry.Init(sentry.ClientOptions{
+			Dsn:        sentryDns,
+			ServerName: serviceName,
+
+			TracesSampleRate: tracesSampleRate,
+		}); err != nil {
+			log.Fatalf("sentry.Init: %s", err)
+		}
+	}
+
 	var z *ZLoggerWrapper
 	if gocore.Config().GetBool("PRETTY_LOGS", true) {
-		z = prettyZeroLogger(service)
+		z = prettyZeroLogger(opts.writer, service)
 	} else {
 		z = &ZLoggerWrapper{
-			zerolog.New(os.Stdout).With().
+			zerolog.New(opts.writer).With().
 				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 2).
 				Timestamp().
 				Logger(),
 			service,
+			opts.writer,
 		}
 	}
 
-	if len(logLevel) > 0 {
-		setZerologLogLevel(logLevel[0], z)
-	}
+	z.SetLogLevel(opts.logLevel)
 
 	return z
 }
 
-func setZerologLogLevel(logLevel string, z *ZLoggerWrapper) {
-	switch strings.ToUpper(logLevel) {
-	case "DEBUG":
-		z.Logger.Level(zerolog.DebugLevel)
-	case "INFO":
-		z.Logger.Level(zerolog.InfoLevel)
-	case "WARN":
-		z.Logger.Level(zerolog.WarnLevel)
-	case "ERROR":
-		z.Logger.Level(zerolog.ErrorLevel)
-	case "FATAL":
-		z.Logger.Level(zerolog.FatalLevel)
-	case "PANIC":
-		z.Logger.Level(zerolog.PanicLevel)
-	default:
-		z.Logger.Level(zerolog.InfoLevel)
-	}
-}
-
-func prettyZeroLogger(service string) *ZLoggerWrapper {
+func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
 	output := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 
 	output.FormatTimestamp = func(i interface{}) string {
@@ -174,6 +151,46 @@ func prettyZeroLogger(service string) *ZLoggerWrapper {
 			Timestamp().
 			Logger(),
 		service,
+		writer,
+	}
+}
+
+func (z *ZLoggerWrapper) New(service string, options ...Option) Logger {
+	opts := &Options{}
+	opts.writer = z.w
+	opts.loggerType = "zerolog"
+	opts.logLevel = z.Logger.GetLevel().String()
+
+	for _, o := range options {
+		o(opts)
+	}
+
+	// make sure we set the same options as the parent
+	o := []Option{
+		WithWriter(opts.writer),
+		WithLoggerType(opts.loggerType),
+		WithLevel(opts.logLevel),
+	}
+
+	return NewZeroLogger(service, o...)
+}
+
+func (z *ZLoggerWrapper) SetLogLevel(logLevel string) {
+	switch strings.ToUpper(logLevel) {
+	case "DEBUG":
+		z.Logger.Level(zerolog.DebugLevel)
+	case "INFO":
+		z.Logger.Level(zerolog.InfoLevel)
+	case "WARN":
+		z.Logger.Level(zerolog.WarnLevel)
+	case "ERROR":
+		z.Logger.Level(zerolog.ErrorLevel)
+	case "FATAL":
+		z.Logger.Level(zerolog.FatalLevel)
+	case "PANIC":
+		z.Logger.Level(zerolog.PanicLevel)
+	default:
+		z.Logger.Level(zerolog.InfoLevel)
 	}
 }
 
@@ -216,7 +233,7 @@ func (z *ZLoggerWrapper) Fatalf(format string, args ...interface{}) {
 
 // Output duplicates the current logger and sets w as its output.
 func (z *ZLoggerWrapper) Output(w io.Writer) *ZLoggerWrapper {
-	return &ZLoggerWrapper{z.Logger.Output(w), z.service}
+	return &ZLoggerWrapper{z.Logger.Output(w), z.service, w}
 }
 
 // With creates a child logger with the field added to its context.

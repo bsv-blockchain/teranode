@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -43,7 +44,7 @@ var (
 type BlockAssembly struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
 	blockAssembler *BlockAssembler
-	logger         utils.Logger
+	logger         ulogger.Logger
 
 	blockchainClient      blockchain.ClientI
 	txStore               blob.Store
@@ -64,7 +65,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
+func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
 	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once

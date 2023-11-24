@@ -9,20 +9,20 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"storj.io/drpc/drpcmux"
 	"storj.io/drpc/drpcserver"
 )
 
-// PropagationServer type carries the logger within it
+// DumbPropagationServer type carries the logger within it
 type DumbPropagationServer struct {
 	propagation_api.UnimplementedPropagationAPIServer
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 type DumbPropagationServerDrpc struct {
@@ -33,11 +33,11 @@ type DumbPropagationServerFrpc struct {
 	propagation_api.PropagationAPI
 }
 
-// New will return a server instance with the logger stored within it
+// NewDumbPropagationServer will return a server instance with the logger stored within it
 func NewDumbPropagationServer() *DumbPropagationServer {
 	initPrometheusMetrics()
 
-	logger := util.NewLogger("dumbPS")
+	logger := ulogger.New("dumbPS")
 
 	logger.Warnf("Using DumbPropagationServer (for testing only)")
 

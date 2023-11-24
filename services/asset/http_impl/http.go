@@ -9,23 +9,23 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 var AssetStat = gocore.NewStat("Asset")
 
 type HTTP struct {
-	logger         utils.Logger
+	logger         ulogger.Logger
 	repository     *repository.Repository
 	e              *echo.Echo
 	notificationCh chan *asset_api.Notification
 }
 
-func New(logger utils.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
+func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name

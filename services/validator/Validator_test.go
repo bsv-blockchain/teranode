@@ -8,8 +8,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p"
 )
 
 type NullStore struct{}
@@ -63,7 +63,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(context.Background(), p2p.TestLogger{}, ns, memory.New())
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
 	if err != nil {
 		panic(err)
 	}

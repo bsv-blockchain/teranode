@@ -15,8 +15,8 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -87,7 +87,7 @@ func Start() {
 	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
-	logger := util.NewLogger("block_assembly_blaster")
+	logger := ulogger.New("block_assembly_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -169,7 +169,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	var batchCounter = 0
 	txRequests := make([]*blockassembly_api.AddTxRequest, batchSize)
 
@@ -216,7 +216,7 @@ func worker(logger utils.Logger) {
 	}
 }
 
-func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxRequest) error {
+func sendToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxRequest) error {
 	switch broadcastProtocol {
 
 	case "disabled":
@@ -246,7 +246,7 @@ func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *bl
 	return nil
 }
 
-func sendBatchToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxBatchRequest) error {
+func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxBatchRequest) error {
 	switch broadcastProtocol {
 
 	case "grpc":
