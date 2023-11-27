@@ -187,17 +187,7 @@ func NewWorker(
 	}, nil
 }
 
-func (w *Worker) Init(ctx context.Context) error {
-	var err error
-
-	prometheusWorkers.Inc()
-	defer func() {
-		prometheusWorkers.Dec()
-		if err != nil {
-			prometheusWorkerErrors.WithLabelValues("Start", err.Error()).Inc()
-		}
-	}()
-
+func (w *Worker) Init(ctx context.Context) (err error) {
 	timeStart := time.Now()
 	w.startTime = timeStart
 
@@ -229,6 +219,14 @@ func (w *Worker) Init(ctx context.Context) error {
 
 func (w *Worker) Start(ctx context.Context) (err error) {
 	start := time.Now()
+
+	prometheusWorkers.Inc()
+	defer func() {
+		prometheusWorkers.Dec()
+		if err != nil {
+			prometheusWorkerErrors.WithLabelValues("Start", err.Error()).Inc()
+		}
+	}()
 
 	var utxo *bt.UTXO
 	var tx *bt.Tx
