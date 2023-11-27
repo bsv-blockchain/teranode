@@ -1,8 +1,6 @@
 package ulogger
 
 import (
-	"os"
-
 	"github.com/ordishs/gocore"
 )
 
@@ -20,9 +18,10 @@ func NewGoCoreLogger(service string, options ...Option) *GoCoreLogger {
 		o(opts)
 	}
 
-	if _, ok := opts.writer.(*os.File); !ok {
-		panic("GoCoreLogger only supports stdout")
-	}
+	// TODO fix this linux only issue ???
+	//if _, ok := opts.writer.(*os.File); !ok {
+	//	panic("GoCoreLogger only supports stdout")
+	//}
 
 	return &GoCoreLogger{gocore.Log(service, gocore.NewLogLevelFromString(opts.logLevel))}
 }

@@ -64,6 +64,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	}
 
 	z.SetLogLevel(opts.logLevel)
+	z.Logger.Info().Msgf("Zerolog logger initialized with level %s", opts.logLevel)
 
 	return z
 }
@@ -178,19 +179,19 @@ func (z *ZLoggerWrapper) New(service string, options ...Option) Logger {
 func (z *ZLoggerWrapper) SetLogLevel(logLevel string) {
 	switch strings.ToUpper(logLevel) {
 	case "DEBUG":
-		z.Logger.Level(zerolog.DebugLevel)
+		z.Logger = z.Logger.Level(zerolog.DebugLevel)
 	case "INFO":
-		z.Logger.Level(zerolog.InfoLevel)
+		z.Logger = z.Logger.Level(zerolog.InfoLevel)
 	case "WARN":
-		z.Logger.Level(zerolog.WarnLevel)
+		z.Logger = z.Logger.Level(zerolog.WarnLevel)
 	case "ERROR":
-		z.Logger.Level(zerolog.ErrorLevel)
+		z.Logger = z.Logger.Level(zerolog.ErrorLevel)
 	case "FATAL":
-		z.Logger.Level(zerolog.FatalLevel)
+		z.Logger = z.Logger.Level(zerolog.FatalLevel)
 	case "PANIC":
-		z.Logger.Level(zerolog.PanicLevel)
+		z.Logger = z.Logger.Level(zerolog.PanicLevel)
 	default:
-		z.Logger.Level(zerolog.InfoLevel)
+		z.Logger = z.Logger.Level(zerolog.InfoLevel)
 	}
 }
 
