@@ -33,6 +33,15 @@ func StartStatFromContext(ctx context.Context, key string, options ...bool) (tim
 	return NewStatFromContext(ctx, key, defaultStat, options...)
 }
 
+func CopyStatFromContext(ctxFrom context.Context, ctxTo context.Context) context.Context {
+	stat, ok := ctxFrom.Value(statsKey{}).(*gocore.Stat)
+	if !ok {
+		// panic("No stat in context")
+		stat = defaultStat
+	}
+	return context.WithValue(ctxTo, statsKey{}, stat)
+}
+
 func TimeSince(start time.Time) float64 {
 	return float64(time.Since(start))
 }

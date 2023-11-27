@@ -142,6 +142,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	// decouple the tracing context to not cancel the context when finalize the block assembly
 	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	setCtx = util.CopyStatFromContext(traceSpan.Ctx, setCtx)
 	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
 	defer setSpan.Finish()
 
