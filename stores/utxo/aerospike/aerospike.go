@@ -312,7 +312,6 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		// TODO reverse utxos that were already stored
 		return err
 	}
 
