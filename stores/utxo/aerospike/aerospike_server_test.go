@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospike
 
@@ -12,6 +12,7 @@ import (
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -60,7 +61,7 @@ func TestAerospike(t *testing.T) {
 
 	// ubsv db client
 	var db *Store
-	db, err = New(aeroURL)
+	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -316,6 +317,15 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
 		require.Equal(t, uint32(2), value.Generation)
+	})
+
+	t.Run("aerospike store error", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		err = db.Store(context.Background(), tx)
+		require.NoError(t, err)
+
+		err = db.Store(context.Background(), tx)
+		require.Error(t, err)
 	})
 }
 
