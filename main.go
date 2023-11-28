@@ -36,6 +36,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -317,9 +318,19 @@ func main() {
 
 	// utxo store server
 	if startUtxoStore {
+		utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
+		if err != nil {
+			panic(err)
+		}
+		var store utxostore.Interface
+		if utxoStoreURL.Scheme != "memory" {
+			store = getUtxoStore(ctx, logger)
+		} else {
+			store = getUtxoMemoryStore()
+		}
 		if err = sm.AddService("UTXOStoreServer", utxo.New(
 			logger.New("utxo"),
-			getUtxoMemoryStore(),
+			store,
 		)); err != nil {
 			panic(err)
 		}
