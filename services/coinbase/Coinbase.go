@@ -582,11 +582,13 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 		return nil, fmt.Errorf("error creating initial transaction: %v", err)
 	}
 
-	// Split the utxo into 1,000 outputs satoshis
-	sats := utxo.Satoshis / 1000
-	remainder := utxo.Satoshis % 1000
+	splits := uint64(100)
 
-	for i := 0; i < 1000; i++ {
+	// Split the utxo into 100 outputs satoshis
+	sats := utxo.Satoshis / splits
+	remainder := utxo.Satoshis % splits
+
+	for i := 0; i < int(splits); i++ {
 		if i == 0 && remainder > 0 {
 			if err = tx.PayToAddress(address, sats+remainder); err != nil {
 				return nil, fmt.Errorf("error paying to address: %v", err)
