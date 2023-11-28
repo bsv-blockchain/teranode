@@ -105,8 +105,10 @@ func init() {
 }
 
 type storeUtxo struct {
-	hash     *chainhash.Hash
-	lockTime uint32
+	hash       *chainhash.Hash
+	txHash     *chainhash.Hash
+	lockTime   uint32
+	retryCount int
 }
 
 type Store struct {
@@ -178,9 +180,13 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				if errors.As(err, &aErr) && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 					continue
 				}
-				s.logger.Errorf("failed to store aerospike utxo in storeRetryCh: %v", err)
 				// requeue for retry
-				s.storeRetryCh <- utxoStore
+				utxoStore.retryCount++
+				if utxoStore.retryCount < 3 {
+					s.storeRetryCh <- utxoStore
+				} else {
+					s.logger.Errorf("failed to store some utxo in storeRetryCh for txid %s: %v", utxoStore.txHash.String(), err)
+				}
 			}
 		}
 	}()
@@ -354,6 +360,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		for _, hash := range utxoHashes {
 			s.storeRetryCh <- &storeUtxo{
 				hash:     hash,
+				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
 		}
