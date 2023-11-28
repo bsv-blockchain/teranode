@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/Shopify/sarama"
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
@@ -20,30 +21,50 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
+	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 )
 
-type Validator struct {
-	logger                ulogger.Logger
-	utxoStore             utxostore.Interface
-	blockAssembler        blockassembly.Store
-	txMetaStore           txmeta.Store
-	kafkaProducer         sarama.SyncProducer
-	kafkaTopic            string
-	kafkaPartitions       int
-	saveInParallel        bool
-	blockAssemblyDisabled bool
+type blockValidationTxMetaClient interface {
+	SetTxMeta(context.Context, []*txmeta.Data) error
 }
 
-func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
+type Validator struct {
+	logger                 ulogger.Logger
+	utxoStore              utxostore.Interface
+	blockAssembler         blockassembly.Store
+	txMetaStore            txmeta.Store
+	blockValidationClient  blockValidationTxMetaClient
+	blockValidationBatcher batcher.Batcher[txmeta.Data]
+	kafkaProducer          sarama.SyncProducer
+	kafkaTopic             string
+	kafkaPartitions        int
+	saveInParallel         bool
+	blockAssemblyDisabled  bool
+}
+
+func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store, blockValidationClient blockValidationTxMetaClient) (Interface, error) {
 	ba := blockassembly.NewClient(ctx, logger)
 
 	validator := &Validator{
-		logger:         logger,
-		utxoStore:      store,
-		blockAssembler: ba,
-		txMetaStore:    txMetaStore,
-		saveInParallel: true,
+		logger:                logger,
+		utxoStore:             store,
+		blockAssembler:        ba,
+		txMetaStore:           txMetaStore,
+		blockValidationClient: blockValidationClient,
+		saveInParallel:        true,
+	}
+
+	if blockValidationClient != nil {
+		sendBatch := func(batch []*txmeta.Data) {
+			// add data to block validation cache
+			if err := validator.blockValidationClient.SetTxMeta(ctx, batch); err != nil {
+				validator.logger.Errorf("error sending tx meta batch to block validation cache: %v", err)
+			}
+		}
+		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
+		batchTimeOut, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchTimeoutMillis", 10)
+		validator.blockValidationBatcher = *batcher.New[txmeta.Data](batchSize, time.Duration(batchTimeOut)*time.Millisecond, sendBatch, false)
 	}
 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
@@ -218,6 +239,12 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 		return data, errors.Join(fmt.Errorf("error sending tx %s to tx meta utxoStore", tx.TxIDChainHash().String()), err)
 	}
 
+	if v.blockValidationClient != nil {
+		go func() {
+			v.blockValidationBatcher.Put(data)
+		}()
+	}
+
 	return data, nil
 }
 
@@ -322,6 +349,7 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	_, _, ctx = util.StartStatFromContext(setCtx, "reverseSpends")
 
 	if errReset := v.utxoStore.UnSpend(ctx, spentUtxos); errReset != nil {
+		// TODO on error add to a queue to be processed later
 		reverseUtxoSpan.RecordError(errReset)
 		v.logger.Errorf("error resetting utxos %v", errReset)
 	}

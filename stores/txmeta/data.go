@@ -39,6 +39,22 @@ func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
 	d.BlockHeight = binary.LittleEndian.Uint32(dataBytes[20:24])
 	d.LockTime = binary.LittleEndian.Uint32(dataBytes[24:28])
 
+	buf := bytes.NewReader(dataBytes[28:])
+
+	// read the parent tx hashes
+	var hashBytes [32]byte
+	parentTxHashesLen, _ := wire.ReadVarInt(buf, 0)
+	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
+	for i := uint64(0); i < parentTxHashesLen; i++ {
+		_, err := io.ReadFull(buf, hashBytes[:])
+		if err != nil {
+			return nil, err
+		}
+		if d.ParentTxHashes[i], err = chainhash.NewHash(hashBytes[:]); err != nil {
+			return nil, err
+		}
+	}
+
 	return d, nil
 }
 
@@ -113,7 +129,9 @@ func (d *Data) Bytes() []byte {
 	}
 
 	// write the tx data
-	buf = append(buf, d.Tx.ExtendedBytes()...)
+	if d.Tx != nil {
+		buf = append(buf, d.Tx.ExtendedBytes()...)
+	}
 
 	// write a varint for the length and then all the block hashes
 	for _, blockHash := range d.BlockHashes {

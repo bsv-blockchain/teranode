@@ -237,6 +237,11 @@ func main() {
 		}
 	}
 
+	var blockValidationClient *blockvalidation.Client
+	if startBlockAssembly || startPropagation || startValidator {
+		blockValidationClient = blockvalidation.NewClient(ctx)
+	}
+
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
@@ -258,8 +263,6 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
-
-			blockValidationClient := blockvalidation.NewClient(ctx)
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
@@ -284,6 +287,7 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				nil,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -373,6 +377,7 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				blockValidationClient,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)

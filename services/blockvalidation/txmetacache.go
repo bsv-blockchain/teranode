@@ -41,6 +41,13 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	return m
 }
 
+func (t txMetaCache) SetCache(_ context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
+	txMeta.Tx = nil
+	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+
+	return nil
+}
+
 func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cached := t.cache.Get(*hash)
 	if cached != nil && cached.Value() != nil {

@@ -78,7 +78,7 @@ func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
-	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore)
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore, nil)
 	if err != nil {
 		return fmt.Errorf("could not create validator [%w]", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	blockvalidation_api "github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -92,4 +93,28 @@ func (s Client) Set(ctx context.Context, key []byte, value []byte, opts ...optio
 
 func (s Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	return fmt.Errorf("not implemented")
+}
+
+func (s Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data) error {
+	txMetaDataSlice := make([][]byte, 0, len(txMetaData))
+
+	for _, data := range txMetaData {
+		hash := data.Tx.TxIDChainHash()
+
+		b := hash.CloneBytes()
+
+		data.Tx = nil
+		b = append(b, data.Bytes()...)
+
+		txMetaDataSlice = append(txMetaDataSlice, b)
+	}
+
+	_, err := s.apiClient.SetTxMeta(ctx, &blockvalidation_api.SetTxMetaRequest{
+		Data: txMetaDataSlice,
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -484,3 +484,26 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 		Subtree: subtree,
 	}, nil
 }
+
+func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
+	for _, meta := range request.Data {
+		// first 32 bytes is hash
+		hash, err := chainhash.NewHash(meta[:32])
+		if err != nil {
+			u.logger.Errorf("failed to create hash from bytes: %v", err)
+		}
+
+		txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
+		if err != nil {
+			u.logger.Errorf("failed to create tx meta data from bytes: %v", err)
+		}
+
+		if err = u.blockValidation.SetTxMetaCache(ctx, hash, txMetaData); err != nil {
+			u.logger.Errorf("failed to set tx meta data: %v", err)
+		}
+	}
+
+	return &blockvalidation_api.SetTxMetaResponse{
+		Ok: true,
+	}, nil
+}

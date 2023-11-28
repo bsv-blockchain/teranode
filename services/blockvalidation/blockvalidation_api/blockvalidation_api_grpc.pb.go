@@ -24,6 +24,7 @@ const (
 	BlockValidationAPI_BlockFound_FullMethodName   = "/blockvalidation_api.BlockValidationAPI/BlockFound"
 	BlockValidationAPI_SubtreeFound_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SubtreeFound"
 	BlockValidationAPI_Get_FullMethodName          = "/blockvalidation_api.BlockValidationAPI/Get"
+	BlockValidationAPI_SetTxMeta_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/SetTxMeta"
 )
 
 // BlockValidationAPIClient is the client API for BlockValidationAPI service.
@@ -35,6 +36,7 @@ type BlockValidationAPIClient interface {
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
+	SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error)
 }
 
 type blockValidationAPIClient struct {
@@ -81,6 +83,15 @@ func (c *blockValidationAPIClient) Get(ctx context.Context, in *GetSubtreeReques
 	return out, nil
 }
 
+func (c *blockValidationAPIClient) SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error) {
+	out := new(SetTxMetaResponse)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_SetTxMeta_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockValidationAPIServer is the server API for BlockValidationAPI service.
 // All implementations must embed UnimplementedBlockValidationAPIServer
 // for forward compatibility
@@ -90,6 +101,7 @@ type BlockValidationAPIServer interface {
 	BlockFound(context.Context, *BlockFoundRequest) (*emptypb.Empty, error)
 	SubtreeFound(context.Context, *SubtreeFoundRequest) (*emptypb.Empty, error)
 	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
+	SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
 
@@ -108,6 +120,9 @@ func (UnimplementedBlockValidationAPIServer) SubtreeFound(context.Context, *Subt
 }
 func (UnimplementedBlockValidationAPIServer) Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetTxMeta not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) mustEmbedUnimplementedBlockValidationAPIServer() {}
 
@@ -194,6 +209,24 @@ func _BlockValidationAPI_Get_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockValidationAPI_SetTxMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetTxMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).SetTxMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_SetTxMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).SetTxMeta(ctx, req.(*SetTxMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockValidationAPI_ServiceDesc is the grpc.ServiceDesc for BlockValidationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -216,6 +249,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Get",
 			Handler:    _BlockValidationAPI_Get_Handler,
+		},
+		{
+			MethodName: "SetTxMeta",
+			Handler:    _BlockValidationAPI_SetTxMeta_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

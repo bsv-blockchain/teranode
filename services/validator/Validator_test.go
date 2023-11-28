@@ -63,7 +63,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}), nil)
 	if err != nil {
 		panic(err)
 	}

@@ -54,6 +54,19 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	return bv
 }
 
+func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
+	if cache, ok := u.txMetaStore.(*txMetaCache); ok {
+		span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.SetCache(spanCtx, hash, txMeta)
+	}
+
+	return nil
+}
+
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
 	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
