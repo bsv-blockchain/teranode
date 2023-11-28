@@ -1,0 +1,29 @@
+@startuml
+
+skinparam ParticipantPadding 90
+
+participant "BlockAssembly\n(Server.go)" as BlockAssembly
+participant "UpdateTxMinedStatus\n(model/update-tx-mined.go)" as UpdateTxMinedStatus
+participant "TxMetaStore" as TxMetaStore
+
+BlockAssembly -> BlockAssembly: submitMiningSolution()
+activate BlockAssembly
+
+BlockAssembly -> TxMetaStore: Store the Block Coinbase TX: Create(ctx, coinbaseTx)
+activate TxMetaStore
+TxMetaStore --> BlockAssembly: Confirmation
+deactivate TxMetaStore
+
+BlockAssembly -> UpdateTxMinedStatus: UpdateTxMinedStatus()
+activate UpdateTxMinedStatus
+
+UpdateTxMinedStatus -> TxMetaStore: Update meta data for all Txs within the block (record the block that mined them): \nsetMinedMulti(ctx, hashes, blockHash)
+activate TxMetaStore
+TxMetaStore --> UpdateTxMinedStatus: Status Updated
+deactivate TxMetaStore
+
+UpdateTxMinedStatus --> BlockAssembly: Mined Status Updated
+deactivate UpdateTxMinedStatus
+
+deactivate BlockAssembly
+@enduml

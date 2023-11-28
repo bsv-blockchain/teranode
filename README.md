@@ -138,6 +138,8 @@ Detailed Node Service documentation:
 
 Store Documentation:
 
++ [Blob Store](docs/stores/blob.md)
+
 + [UTXO Store](docs/stores/utxo.md)
 
 + [TXMeta Service](docs/stores/txmeta.md)

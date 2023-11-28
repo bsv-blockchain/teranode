@@ -1,0 +1,22 @@
+@startuml
+participant "Block Validation (Server.go)" as Server
+participant "BlockValidation.go" as BlockValidation
+participant "TxMetaStore" as TxMetaStore
+
+Server -> Server: catchup() or processBlockFound()
+
+Server -> BlockValidation: ValidateBlock(ctx, block, baseUrl)
+activate BlockValidation
+
+BlockValidation -> BlockValidation: storeCoinbaseTx(spanCtx, block)
+
+BlockValidation -> TxMetaStore: Create(childSpanCtx, block.CoinbaseTx)
+activate TxMetaStore
+
+TxMetaStore --> BlockValidation: Confirmation
+deactivate TxMetaStore
+
+
+BlockValidation --> Server: Block Validated
+deactivate BlockValidation
+@enduml

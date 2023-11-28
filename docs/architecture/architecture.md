@@ -50,7 +50,7 @@
     - [4.7. Asset Service](#47-asset-service)
     - [4.8. Coinbase Service](#48-coinbase-service)
     - [4.9. Bootstrap](#49-bootstrap)
-    - [4.10. P2P](#410-p2p)
+    - [4.10. P2P Legacy Service](#410-p2p-legacy-service)
     - [4.11. UTXO Store](#411-utxo-store)
     - [4.12. Transaction Meta Store](#412-transaction-meta-store)
     - [4.13. Banlist Service](#413-banlist-service)
@@ -531,7 +531,7 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ### 4.7. Asset Service
 
-The Asset Serice serves as an asset server in a read-only capacity, acting as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
+The Asset Service serves acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
 - **Transactions (TX)**.
 
@@ -557,7 +557,7 @@ The server uses both HTTP and gRPC as communication protocols:
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
-For clarity, the assets are served in a read-only mode. The various micro-services write directly to the data stores, but the asset service fronts them as a read-only interface.
+The various micro-services write directly to the data stores, but the asset service fronts them as a common interface.
 
 ---
 
@@ -593,7 +593,7 @@ The current version uses Google's RPC framework for setting up the server and ha
 ---
 
 
-### 4.10. P2P
+### 4.10. P2P Legacy Service
 
 The P2P service is responsible for managing communications between legacy and UBSV nodes, effectively translating between the old (Legacy Bitcoin) and the new (UBSV) data model. This makes possible to run legacy and UBSV nodes side by side, allowing for a gradual rollout of UBSV.
 
