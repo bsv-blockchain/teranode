@@ -52,5 +52,5 @@ message BlockInfo {
 message AnnounceStatusRequest {
   google.protobuf.Timestamp timestamp = 1;
   string service_name = 2;
-  uint32 status_text = 3;
+  string status_text = 3;
 }

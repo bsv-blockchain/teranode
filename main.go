@@ -16,10 +16,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
-	"github.com/bitcoin-sv/ubsv/cmd/status/status"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
 	"github.com/bitcoin-sv/ubsv/services/asset"
@@ -33,6 +33,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
+	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -90,9 +91,9 @@ func main() {
 		s3_blaster.Init()
 		s3_blaster.Start()
 		return
-	case "status.run":
-		status.Init()
-		status.Start()
+	case "blockchainstatus.run":
+		blockchainstatus.Init()
+		blockchainstatus.Start()
 		return
 	case "blaster.run":
 		// txblaster.Init()
@@ -124,6 +125,7 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
+	startStatus := shouldStart("Status")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -346,6 +348,15 @@ func main() {
 	if startP2P {
 		if err = sm.AddService("P2P", p2p.NewServer(
 			logger.New("P2P"),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
+	// status server
+	if startStatus {
+		if err = sm.AddService("Status", status.New(
+			logger.New("Status"),
 		)); err != nil {
 			panic(err)
 		}

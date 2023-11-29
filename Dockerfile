@@ -34,7 +34,7 @@ COPY --from=0 /app/ubsv.run .
 
 RUN ln -s ubsv.run chainintegrity.run
 RUN ln -s ubsv.run blaster.run
-RUN ln -s ubsv.run status.run
+RUN ln -s ubsv.run blockchainstatus.run
 RUN ln -s ubsv.run propagationblaster.run
 RUN ln -s ubsv.run blockassemblyblaster.run
 RUN ln -s ubsv.run utxostoreblaster.run

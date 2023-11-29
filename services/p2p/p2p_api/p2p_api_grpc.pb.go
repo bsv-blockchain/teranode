@@ -8,7 +8,6 @@ package p2p_api
 
 import (
 	context "context"
-	model "github.com/bitcoin-sv/ubsv/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -21,8 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	P2PAPI_Health_FullMethodName         = "/p2p_api.P2PAPI/Health"
-	P2PAPI_AnnounceStatus_FullMethodName = "/p2p_api.P2PAPI/AnnounceStatus"
+	P2PAPI_Health_FullMethodName = "/p2p_api.P2PAPI/Health"
 )
 
 // P2PAPIClient is the client API for P2PAPI service.
@@ -31,7 +29,6 @@ const (
 type P2PAPIClient interface {
 	// Health returns the health of the API.
 	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
-	AnnounceStatus(ctx context.Context, in *model.AnnounceStatusRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type p2PAPIClient struct {
@@ -51,22 +48,12 @@ func (c *p2PAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...gr
 	return out, nil
 }
 
-func (c *p2PAPIClient) AnnounceStatus(ctx context.Context, in *model.AnnounceStatusRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, P2PAPI_AnnounceStatus_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // P2PAPIServer is the server API for P2PAPI service.
 // All implementations must embed UnimplementedP2PAPIServer
 // for forward compatibility
 type P2PAPIServer interface {
 	// Health returns the health of the API.
 	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
-	AnnounceStatus(context.Context, *model.AnnounceStatusRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedP2PAPIServer()
 }
 
@@ -76,9 +63,6 @@ type UnimplementedP2PAPIServer struct {
 
 func (UnimplementedP2PAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
-}
-func (UnimplementedP2PAPIServer) AnnounceStatus(context.Context, *model.AnnounceStatusRequest) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AnnounceStatus not implemented")
 }
 func (UnimplementedP2PAPIServer) mustEmbedUnimplementedP2PAPIServer() {}
 
@@ -111,24 +95,6 @@ func _P2PAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
-func _P2PAPI_AnnounceStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(model.AnnounceStatusRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(P2PAPIServer).AnnounceStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: P2PAPI_AnnounceStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(P2PAPIServer).AnnounceStatus(ctx, req.(*model.AnnounceStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // P2PAPI_ServiceDesc is the grpc.ServiceDesc for P2PAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -139,10 +105,6 @@ var P2PAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _P2PAPI_Health_Handler,
-		},
-		{
-			MethodName: "AnnounceStatus",
-			Handler:    _P2PAPI_AnnounceStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

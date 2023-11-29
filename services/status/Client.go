@@ -1,10 +1,11 @@
-package p2p
+package status
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/status/status_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
@@ -12,22 +13,21 @@ import (
 )
 
 type ClientI interface {
-	Health(context.Context) (*p2p_api.HealthResponse, error)
+	Health(context.Context) (*status_api.HealthResponse, error)
+	AnnounceStatus(context.Context, *model.AnnounceStatusRequest)
 }
 
 type Client struct {
-	client p2p_api.P2PAPIClient
+	client status_api.StatusAPIClient
 	logger ulogger.Logger
-	// running bool
-	// conn *grpc.ClientConn
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
-	logger = logger.New("blkcC")
+	logger = logger.New("statusC")
 
-	address, ok := gocore.Config().Get("p2p_grpcAddress")
+	address, ok := gocore.Config().Get("status_grpcAddress")
 	if !ok {
-		return nil, fmt.Errorf("no p2p_grpcAddress setting found")
+		return nil, fmt.Errorf("no status_grpcAddress setting found")
 	}
 
 	return NewClientWithAddress(ctx, logger, address)
@@ -44,11 +44,17 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	}
 
 	return &Client{
-		client: p2p_api.NewP2PAPIClient(conn),
+		client: status_api.NewStatusAPIClient(conn),
 		logger: logger,
 	}, nil
 }
 
-func (c Client) Health(ctx context.Context) (*p2p_api.HealthResponse, error) {
+func (c Client) Health(ctx context.Context) (*status_api.HealthResponse, error) {
 	return c.client.Health(ctx, &emptypb.Empty{})
+}
+
+func (c Client) AnnounceStatus(ctx context.Context, status *model.AnnounceStatusRequest) {
+	if _, err := c.client.AnnounceStatus(ctx, status); err != nil {
+		c.logger.Errorf("failed to announce status: %v", err)
+	}
 }

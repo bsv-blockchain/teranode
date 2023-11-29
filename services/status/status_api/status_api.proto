@@ -1,15 +1,17 @@
 syntax = "proto3";
 
-option go_package = ".;p2p_api";
+option go_package = ".;status_api";
 
-package p2p_api;
+package status_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "model/model.proto";
 
-service P2PAPI {
+service StatusAPI {
   // Health returns the health of the API.
   rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc AnnounceStatus (model.AnnounceStatusRequest) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse

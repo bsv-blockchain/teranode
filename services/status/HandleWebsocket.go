@@ -1,0 +1,93 @@
+package status
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/gorilla/websocket"
+	"github.com/labstack/echo/v4"
+)
+
+var (
+	upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+)
+
+func (s *Server) HandleWebSocket(wsCh chan interface{}) func(c echo.Context) error {
+	clientChannels := make(map[chan []byte]struct{})
+	newClientCh := make(chan chan []byte, 10)
+	deadClientCh := make(chan chan []byte, 10)
+
+	pingTimer := time.NewTicker(30 * time.Second)
+
+	go func() {
+		for {
+			select {
+			case newClient := <-newClientCh:
+				clientChannels[newClient] = struct{}{}
+
+			case deadClient := <-deadClientCh:
+				delete(clientChannels, deadClient)
+
+			case <-pingTimer.C:
+				if len(clientChannels) == 0 {
+					continue
+				}
+
+				data, err := json.MarshalIndent(&model.AnnounceStatusRequest{}, "", "  ")
+				if err != nil {
+					s.logger.Errorf("Error marshaling notification: %w", err)
+					continue
+				}
+
+				for clientCh := range clientChannels {
+					clientCh <- data
+				}
+
+			case msg := <-wsCh:
+				if len(clientChannels) == 0 {
+					continue
+				}
+
+				data, err := json.MarshalIndent(msg, "", "  ")
+				if err != nil {
+					s.logger.Errorf("Error marshaling notification: %w", err)
+					continue
+				}
+
+				for clientCh := range clientChannels {
+					clientCh <- data
+				}
+			}
+		}
+	}()
+
+	return func(c echo.Context) error {
+		ch := make(chan []byte)
+
+		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+		if err != nil {
+			return err
+		}
+		defer ws.Close()
+
+		newClientCh <- ch
+
+		for data := range ch {
+			// Write
+			err := ws.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				deadClientCh <- ch
+				s.logger.Errorf("Failed to Send notification WS message: %v", err)
+				break
+			}
+		}
+
+		return nil
+	}
+}
