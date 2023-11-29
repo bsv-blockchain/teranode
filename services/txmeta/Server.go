@@ -146,7 +146,6 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 	return &txmeta_api.GetResponse{
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
-		FirstSeen:      tx.FirstSeen,
 		BlockHashes:    blockHashes,
 	}, nil
 }

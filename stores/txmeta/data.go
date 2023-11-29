@@ -15,18 +15,14 @@ import (
 type Data struct {
 	Tx             *bt.Tx            `json:"tx"`
 	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
-	BlockHashes    []*chainhash.Hash `json:"blockHashes"`
+	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // TODO change this to use the db ids instead of the hashes
 	Fee            uint64            `json:"fee"`
 	SizeInBytes    uint64            `json:"sizeInBytes"`
-	FirstSeen      uint32            `json:"firstSeen"`
-	BlockHeight    uint32            `json:"blockHeight"`
-	LockTime       uint32            `json:"lockTime"`
 }
 
 type MetaData struct {
 	Fee         uint64 `json:"fee"`
 	SizeInBytes uint64 `json:"sizeInBytes"`
-	LockTime    uint32 `json:"lockTime"`
 }
 
 func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
@@ -35,11 +31,8 @@ func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
-	d.FirstSeen = binary.LittleEndian.Uint32(dataBytes[16:20])
-	d.BlockHeight = binary.LittleEndian.Uint32(dataBytes[20:24])
-	d.LockTime = binary.LittleEndian.Uint32(dataBytes[24:28])
 
-	buf := bytes.NewReader(dataBytes[28:])
+	buf := bytes.NewReader(dataBytes[16:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
@@ -64,11 +57,8 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
-	d.FirstSeen = binary.LittleEndian.Uint32(dataBytes[16:20])
-	d.BlockHeight = binary.LittleEndian.Uint32(dataBytes[20:24])
-	d.LockTime = binary.LittleEndian.Uint32(dataBytes[24:28])
 
-	buf := bytes.NewReader(dataBytes[28:])
+	buf := bytes.NewReader(dataBytes[16:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
@@ -114,13 +104,10 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 }
 
 func (d *Data) Bytes() []byte {
-	buf := make([]byte, 28) // 8 for Fee, 8 for SizeInBytes, 4 for FirstSeen, 4 for BlockHeight, 4 for LockTime
+	buf := make([]byte, 16) // 8 for Fee, 8 for SizeInBytes
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
-	binary.LittleEndian.PutUint32(buf[16:20], d.FirstSeen)
-	binary.LittleEndian.PutUint32(buf[20:24], d.BlockHeight)
-	binary.LittleEndian.PutUint32(buf[24:28], d.LockTime)
 
 	// write a varint for the length and then all the parent tx hashes
 	buf = append(buf, bt.VarInt(uint64(len(d.ParentTxHashes))).Bytes()...)

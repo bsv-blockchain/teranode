@@ -21,9 +21,6 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			FirstSeen:   300,
-			BlockHeight: 400,
-			LockTime:    500,
 			ParentTxHashes: []*chainhash.Hash{
 				hash3,
 				hash4,
@@ -42,9 +39,6 @@ func Test_NewDataFromBytes(t *testing.T) {
 
 		assert.Equal(t, data.Fee, d.Fee)
 		assert.Equal(t, data.SizeInBytes, d.SizeInBytes)
-		assert.Equal(t, data.FirstSeen, d.FirstSeen)
-		assert.Equal(t, data.BlockHeight, d.BlockHeight)
-		assert.Equal(t, data.LockTime, d.LockTime)
 
 		require.Len(t, data.ParentTxHashes, 2)
 		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))

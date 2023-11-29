@@ -61,7 +61,7 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 			span.Finish()
 		}()
 
-		return cache.SetCache(hash, txMeta)
+		return cache.SetCache(hash, *txMeta)
 	}
 
 	return nil

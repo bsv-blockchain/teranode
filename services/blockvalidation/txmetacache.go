@@ -18,9 +18,18 @@ type metrics struct {
 	evictions  atomic.Uint64
 }
 
+// CachedData struct for the cached transaction metadata
+// do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
+type CachedData struct {
+	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
+	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // TODO change this to use the db ids instead of the hashes
+	Fee            uint64            `json:"fee"`
+	SizeInBytes    uint64            `json:"sizeInBytes"`
+}
+
 type txMetaCache struct {
 	txMetaStore   txmeta.Store
-	cache         map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]
+	cache         map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, txmeta.Data]
 	cacheTTL      time.Duration
 	cacheTTLQueue *LockFreeTTLQueue
 	metrics       metrics
@@ -29,14 +38,14 @@ type txMetaCache struct {
 func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	m := &txMetaCache{
 		txMetaStore:   txMetaStore,
-		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
+		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, txmeta.Data]),
 		cacheTTL:      15 * time.Minute, // until block is mined
 		cacheTTLQueue: NewLockFreeTTLQueue(),
 		metrics:       metrics{},
 	}
 
 	for i := 0; i < 256; i++ {
-		m.cache[[1]byte{byte(i)}] = util.NewSyncedSwissMap[chainhash.Hash, *txmeta.Data](uint32(1_000_000))
+		m.cache[[1]byte{byte(i)}] = util.NewSyncedSwissMap[chainhash.Hash, txmeta.Data](uint32(1_000_000))
 	}
 
 	go func() {
@@ -69,7 +78,7 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	return m
 }
 
-func (t *txMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
+func (t *txMetaCache) SetCache(hash *chainhash.Hash, txMeta txmeta.Data) error {
 	txMeta.Tx = nil
 	t.cache[[1]byte{hash[0]}].Set(*hash, txMeta)
 	t.cacheTTLQueue.enqueue(&ttlQueueItem{hash: hash})
@@ -83,7 +92,7 @@ func (t *txMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
 	if ok {
 		t.metrics.hits.Add(1)
-		return cached, ok
+		return &cached, ok
 	}
 
 	t.metrics.misses.Add(1)
@@ -103,7 +112,7 @@ func (t *txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	_ = t.SetCache(hash, *txMeta)
 
 	return txMeta, nil
 }
@@ -121,7 +130,7 @@ func (t *txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	_ = t.SetCache(hash, *txMeta)
 
 	return txMeta, nil
 }
@@ -134,7 +143,7 @@ func (t *txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, erro
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.SetCache(tx.TxIDChainHash(), txMeta)
+	_ = t.SetCache(tx.TxIDChainHash(), *txMeta)
 
 	return txMeta, nil
 }
@@ -173,7 +182,7 @@ func (t *txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	var txMeta *txmeta.Data
 	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
 	if ok {
-		txMeta = cached
+		txMeta = &cached
 		if txMeta.BlockHashes == nil {
 			txMeta.BlockHashes = []*chainhash.Hash{
 				blockHash,
@@ -189,7 +198,7 @@ func (t *txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	}
 
 	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	_ = t.SetCache(hash, *txMeta)
 
 	return nil
 }

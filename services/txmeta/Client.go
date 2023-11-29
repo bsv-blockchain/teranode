@@ -74,7 +74,6 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 	return &txmeta.Data{
 		Fee:            resp.Fee,
 		ParentTxHashes: parentTxHashes,
-		FirstSeen:      resp.FirstSeen,
 		BlockHashes:    blockHashes,
 	}, nil
 }

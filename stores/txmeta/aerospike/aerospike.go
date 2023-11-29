@@ -115,11 +115,11 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.get(ctx, hash, []string{"fee", "sizeInBytes", "locktime"})
+	return s.get(ctx, hash, []string{"fee", "sizeInBytes"})
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.get(ctx, hash, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "firstSeen", "blockHashes", "lockTime"})
+	return s.get(ctx, hash, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockHashes"})
 }
 
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
@@ -156,14 +156,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 	if sb, ok := value.Bins["sizeInBytes"].(int); ok {
 		status.SizeInBytes = uint64(sb)
-	}
-
-	if ls, ok := value.Bins["lockTime"].(int); ok {
-		status.LockTime = uint32(ls)
-	}
-
-	if fs, ok := value.Bins["firstSeen"].(int); ok {
-		status.FirstSeen = uint32(fs)
 	}
 
 	var cHash *chainhash.Hash
