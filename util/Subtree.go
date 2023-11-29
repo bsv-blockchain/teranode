@@ -526,6 +526,71 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	return nil
 }
 
+func (st *Subtree) DeserializeChan(b []byte) (<-chan SubtreeNode, <-chan error) {
+	nodeChan := make(chan SubtreeNode)
+	errChan := make(chan error, 1)
+	go func() {
+		defer close(nodeChan)
+		defer close(errChan)
+
+		buf := bytes.NewBuffer(b)
+
+		// read root hash
+		var rootHash [32]byte
+		_, err := buf.Read(rootHash[:])
+		if err != nil {
+			errChan <- fmt.Errorf("unable to read root hash: %v", err)
+			return
+		}
+
+		// read fees
+		st.Fees, err = wire.ReadVarInt(buf, 0)
+		if err != nil {
+			errChan <- fmt.Errorf("unable to read fees: %v", err)
+			return
+		}
+
+		// read sizeInBytes
+		st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
+		if err != nil {
+			errChan <- fmt.Errorf("unable to read sizeInBytes: %v", err)
+			return
+		}
+
+		numLeaves, err := wire.ReadVarInt(buf, 0)
+		if err != nil {
+			errChan <- fmt.Errorf("unable to read number of leaves: %v", err)
+			return
+		}
+
+		st.treeSize = int(numLeaves)
+		st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+		for i := uint64(0); i < numLeaves; i++ {
+			hash, err := chainhash.NewHash(buf.Next(32))
+			if err != nil {
+				errChan <- fmt.Errorf("unable to read leaves: %v", err)
+				return
+			}
+
+			feeBytes := buf.Next(8)
+			fee := binary.LittleEndian.Uint64(feeBytes)
+
+			sizeBytes := buf.Next(8)
+			sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
+
+			nodeChan <- SubtreeNode{
+				Hash:        *hash,
+				Fee:         fee,
+				SizeInBytes: sizeInBytes,
+			}
+		}
+
+	}()
+
+	return nodeChan, errChan
+}
+
 func Min(a, b int) int {
 	if a < b {
 		return a

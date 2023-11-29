@@ -68,7 +68,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	e.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
-	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
+	// e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
+	e.GET("/subtree/:hash", h.GetSubtreeStream())
 	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
