@@ -280,6 +280,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.sendBestBlockMessage(ctx)
 
+	select {
+	case <-ctx.Done():
+	}
+
 	return nil
 }
 
