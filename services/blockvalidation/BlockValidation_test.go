@@ -2,7 +2,11 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"runtime/pprof"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -108,4 +112,56 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 	return txMetaStore, validatorClient, txStore, subtreeStore, func() {
 		httpmock.DeactivateAndReset()
 	}
+}
+
+func TestBlockValidationValidateBigSubtree(t *testing.T) {
+	initPrometheusMetrics()
+
+	cpuprofile := "cpu.prof"
+	memprofile := "mem.prof"
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	numberOfItems := 1_024 * 1_024
+
+	subtree := util.NewTreeByLeafCount(numberOfItems)
+
+	for i := 0; i < numberOfItems; i++ {
+		tx := bt.NewTx()
+		tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
+
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
+
+		_, err := txMetaStore.Create(context.Background(), tx)
+		require.NoError(t, err)
+	}
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+
+	start := time.Now()
+
+	f, _ := os.Create(cpuprofile)
+	defer f.Close()
+
+	pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
+	require.NoError(t, err)
+
+	t.Logf("Time taken: %s\n", time.Since(start))
+
+	f, _ = os.Create(memprofile)
+	defer f.Close()
+	pprof.WriteHeapProfile(f)
 }
