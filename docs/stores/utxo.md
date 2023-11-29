@@ -82,9 +82,7 @@ The following datastores are supported (either in development / experimental or 
 
 4. **Redis**.
 
-5. **Scylla**.
-
-6. **SQL**:
+5. **SQL**:
     - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
 
 Notice how some of the databases are in-memory, while others are persistent (and shared with other services).
@@ -289,12 +287,7 @@ The following datastores are supported (either in development / experimental or 
     - Useful for scenarios requiring rapid access combined with the ability to handle volatile or transient data.
     - https://redis.com.
 
-5. **Scylla**:
-    - A NoSQL database compatible with Apache Cassandra, known for its low-latency and high-throughput capabilities.
-    - Suitable for large-scale deployments where performance and scalability are critical.
-    - https://www.scylladb.com.
-
-6. **SQL**:
+5. **SQL**:
     - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
     - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
       - https://www.postgresql.org.
@@ -326,8 +319,6 @@ UTXO Store Package Structure (stores/utxo)
 │   └── nullstore.go
 ├── redis
 │   ├── Redis.go
-├── scylla
-│   └── scylla.go
 ├── sql
 │   ├── sql.go
 ├── tests
@@ -352,9 +343,6 @@ UTXO Store Package Structure (stores/utxo)
 
 #### redis Directory:
 - **Redis.go**: Redis UTXO store implementation.
-
-#### scylla Directory:
-- **scylla.go**: ScyllaDB implementation for the UTXO store.
 
 #### sql Directory:
 - **sql.go**: SQL-based implementation for the UTXO store.
@@ -399,10 +387,6 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 - **redis**: Redis UTXO store implementation.
 
 `utxostore.dev.[YOUR_USERNAME]=redis://localhost:${REDIS_PORT}`
-
-- **scylla**: ScyllaDB implementation for the UTXO store.
-
-`utxostore.dev.[YOUR_USERNAME]=scylla://127.0.0.1`
 
 - **sql**: SQL-based implementation for the UTXO store.
 

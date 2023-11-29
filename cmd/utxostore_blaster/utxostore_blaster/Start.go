@@ -22,8 +22,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/scylla"
-
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -94,7 +92,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|scylla|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|null)")
 	flag.Parse()
 
 	logger := ulogger.New("utxostore_blaster")
@@ -139,12 +137,6 @@ func Start() {
 			return aerospike.New(logger, u)
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
-	case "scylla":
-		u, _, _ := gocore.Config().GetURL("utxostore")
-		storeFn = func() (utxo.Interface, error) {
-			return scylla.NewScylla(u)
-		}
-		log.Printf("Starting scylla utxostore-blaster url %v with %d worker(s)", u, workerCount)
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
 	}
