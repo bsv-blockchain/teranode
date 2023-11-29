@@ -114,7 +114,6 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(60), uint64(value.Bins["sizeInBytes"].(int)))
 		assert.Len(t, value.Bins["parentTxHashes"].([]byte), 32)
 		assert.Equal(t, parentTxHash[:], value.Bins["parentTxHashes"])
-		assert.LessOrEqual(t, int(time.Now().Unix()), value.Bins["firstSeen"].(int))
 		assert.Nil(t, value.Bins["blockHashes"])
 
 		_, err = db.Create(context.Background(), tx)

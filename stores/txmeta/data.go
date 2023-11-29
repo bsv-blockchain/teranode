@@ -14,7 +14,7 @@ import (
 type Data struct {
 	Tx             *bt.Tx            `json:"tx"`
 	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
-	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // TODO change this to use the db ids instead of the hashes
+	BlockIDs       []uint32          `json:"blockIDs"`
 	Fee            uint64            `json:"fee"`
 	SizeInBytes    uint64            `json:"sizeInBytes"`
 }
@@ -81,22 +81,17 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	}
 
 	// read the block hashes as the remainder data
-	var hash *chainhash.Hash
-	d.BlockHashes = make([]*chainhash.Hash, 0)
+	var blockBytes [4]byte
+	d.BlockIDs = make([]uint32, 0)
 	for {
-		_, err = io.ReadFull(buf, hashBytes[:])
+		_, err = io.ReadFull(buf, blockBytes[:])
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			return nil, err
 		}
-		hash, err = chainhash.NewHash(hashBytes[:])
-		if err != nil {
-			return nil, err
-		}
-
-		d.BlockHashes = append(d.BlockHashes, hash)
+		d.BlockIDs = append(d.BlockIDs, binary.LittleEndian.Uint32(blockBytes[:]))
 	}
 
 	return d, nil
@@ -119,8 +114,10 @@ func (d *Data) Bytes() []byte {
 	}
 
 	// write a varint for the length and then all the block hashes
-	for _, blockHash := range d.BlockHashes {
-		buf = append(buf, blockHash.CloneBytes()...)
+	var blockBytes [4]byte
+	for _, blockID := range d.BlockIDs {
+		binary.LittleEndian.PutUint32(blockBytes[:], blockID)
+		buf = append(buf, blockBytes[:]...)
 	}
 
 	return buf

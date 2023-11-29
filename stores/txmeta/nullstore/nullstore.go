@@ -34,11 +34,11 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return txMeta, nil
 }
 
-func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	return nil
 }
 
-func (m *NullStore) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (m *NullStore) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
 	return nil
 }
 

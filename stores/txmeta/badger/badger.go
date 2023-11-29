@@ -136,9 +136,9 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (b *Badger) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (b *Badger) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = b.SetMined(ctx, hash, blockHash); err != nil {
+		if err = b.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -146,7 +146,7 @@ func (b *Badger) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, bl
 	return nil
 }
 
-func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -155,12 +155,12 @@ func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *
 		return err
 	}
 
-	if data.BlockHashes == nil {
-		data.BlockHashes = []*chainhash.Hash{
-			blockHash,
+	if data.BlockIDs == nil {
+		data.BlockIDs = []uint32{
+			blockID,
 		}
 	} else {
-		data.BlockHashes = append(data.BlockHashes, blockHash)
+		data.BlockIDs = append(data.BlockIDs, blockID)
 	}
 
 	if err = b.store.Update(func(badgerTx *badger.Txn) error {

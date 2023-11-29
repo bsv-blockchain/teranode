@@ -38,7 +38,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	q := `
 		SELECT
-	     b.version
+		 b.id
+	    ,b.version
 		,b.block_time
 	    ,b.nonce
 		,b.previous_hash
@@ -64,6 +65,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	var err error
 	if err = s.db.QueryRowContext(ctx, q).Scan(
+		&blockHeaderMeta.ID,
 		&blockHeader.Version,
 		&blockHeader.Timestamp,
 		&blockHeader.Nonce,

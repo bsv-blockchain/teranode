@@ -12,8 +12,6 @@ import (
 var (
 	hash3, _ = chainhash.NewHashFromStr("300000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	hash4, _ = chainhash.NewHashFromStr("400000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
-	hash5, _ = chainhash.NewHashFromStr("500000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	hash6, _ = chainhash.NewHashFromStr("600000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 )
 
 func Test_NewDataFromBytes(t *testing.T) {
@@ -25,9 +23,9 @@ func Test_NewDataFromBytes(t *testing.T) {
 				hash3,
 				hash4,
 			},
-			BlockHashes: []*chainhash.Hash{
-				hash5,
-				hash6,
+			BlockIDs: []uint32{
+				123,
+				321,
 			},
 			Tx: &bt.Tx{},
 		}
@@ -45,10 +43,10 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.Equal(t, data.ParentTxHashes[0].String(), d.ParentTxHashes[0].String())
 		assert.Equal(t, data.ParentTxHashes[1].String(), d.ParentTxHashes[1].String())
 
-		require.Len(t, data.BlockHashes, 2)
-		require.Equal(t, len(data.BlockHashes), len(d.BlockHashes))
-		assert.Equal(t, data.BlockHashes[0].String(), d.BlockHashes[0].String())
-		assert.Equal(t, data.BlockHashes[1].String(), d.BlockHashes[1].String())
+		require.Len(t, data.BlockIDs, 2)
+		require.Equal(t, len(data.BlockIDs), len(d.BlockIDs))
+		assert.Equal(t, data.BlockIDs[0], d.BlockIDs[0])
+		assert.Equal(t, data.BlockIDs[1], d.BlockIDs[1])
 	})
 }
 

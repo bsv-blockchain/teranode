@@ -177,20 +177,8 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 		}
 	}
 
-	var blockHashes []*chainhash.Hash
-	if value.Bins["blockHashes"] != nil {
-		blockHashesInterface, ok := value.Bins["blockHashes"].([]byte)
-		if ok {
-			blockHashes = make([]*chainhash.Hash, 0, len(blockHashesInterface)/32)
-			for i := 0; i < len(blockHashesInterface); i += 32 {
-				cHash, err = chainhash.NewHash(blockHashesInterface[i : i+32])
-				if err != nil {
-					return nil, err
-				}
-				blockHashes = append(blockHashes, cHash)
-			}
-			status.BlockHashes = blockHashes
-		}
+	if value.Bins["blockIDs"] != nil {
+		status.BlockIDs = value.Bins["blockIDs"].([]uint32)
 	}
 
 	// transform the aerospike interface{} into the correct types
@@ -284,7 +272,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return txMeta, err
 }
 
-func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
 	var e error
 	defer func() {
 		if e != nil {
@@ -301,11 +289,9 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	writePolicy := util.GetAerospikeWritePolicy(0, s.expiration)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
-	bin := aerospike.NewBin("blockHashes", blockHash[:])
-	start := time.Now()
-	err = s.client.AppendBins(writePolicy, key, bin)
+	op := aerospike.ListAppendOp("blockIDs", blockID)
+	_, err = s.client.Operate(writePolicy, key, op)
 	if err != nil {
-		e = fmt.Errorf("aerospike put error (time taken: %s) : %w", time.Since(start).String(), err)
 		return err
 	}
 
@@ -314,7 +300,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	return nil
 }
 
-func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	policy := util.GetAerospikeBatchWritePolicy(0, s.expiration)
@@ -327,8 +313,8 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 		if err != nil {
 			return err
 		}
-		bin := aerospike.NewBin("blockHashes", blockHash[:])
-		record := aerospike.NewBatchWrite(policy, key, aerospike.AppendOp(bin))
+		op := aerospike.ListAppendOp("blockIDs", blockID)
+		record := aerospike.NewBatchWrite(policy, key, op)
 		// Add to batch
 		batchRecords[idx] = record
 	}

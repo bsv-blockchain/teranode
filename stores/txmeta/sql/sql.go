@@ -146,14 +146,15 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		parentTxHashes = append(parentTxHashes, h)
 	}
 
-	blockHashes := make([]*chainhash.Hash, 0, len(blocks)/chainhash.HashSize)
-	for i := 0; i < len(blocks); i += chainhash.HashSize {
-		h, err = chainhash.NewHash(blocks[i : i+chainhash.HashSize])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse block hash: %+v", err)
-		}
-		blockHashes = append(blockHashes, h)
-	}
+	var blockIDs []uint32
+	//blockHashes := make([]*chainhash.Hash, 0, len(blocks)/chainhash.HashSize)
+	//for i := 0; i < len(blocks); i += chainhash.HashSize {
+	//	h, err = chainhash.NewHash(blocks[i : i+chainhash.HashSize])
+	//	if err != nil {
+	//		return nil, fmt.Errorf("failed to parse block hash: %+v", err)
+	//	}
+	//	blockHashes = append(blockHashes, h)
+	//}
 
 	prometheusTxMetaGet.Inc()
 
@@ -162,7 +163,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
+		BlockIDs:       blockIDs,
 	}, nil
 }
 
@@ -202,9 +203,9 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+		if err = s.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -212,7 +213,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	return nil
 }
 
-func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockID uint32) error {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
 	defer cancelTimeout()
 
@@ -229,7 +230,7 @@ func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash 
 		SET blocks = ifnull(blocks, "") || $2
 		WHERE hash = $1`
 	}
-	_, err := s.db.ExecContext(ctx, q, hash[:], blockHash[:])
+	_, err := s.db.ExecContext(ctx, q, hash[:], blockID)
 	if err != nil {
 		return fmt.Errorf("failed to update txmeta: %+v", err)
 	}
