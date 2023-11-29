@@ -117,11 +117,11 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	initPrometheusMetrics()
 
-	cpuprofile := "cpu.prof"
-	memprofile := "mem.prof"
-
 	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+	blockValidation.txMetaStore = newTxMetaCache(txMetaStore)
 
 	numberOfItems := 1_024 * 1_024
 
@@ -133,7 +133,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
 
-		_, err := txMetaStore.Create(context.Background(), tx)
+		_, err := blockValidation.txMetaStore.Create(context.Background(), tx)
 		require.NoError(t, err)
 	}
 
@@ -146,22 +146,20 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-
-	start := time.Now()
-
-	f, _ := os.Create(cpuprofile)
+	f, _ := os.Create("cpu.prof")
 	defer f.Close()
 
 	pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
+
+	start := time.Now()
 
 	err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
 
-	f, _ = os.Create(memprofile)
+	f, _ = os.Create("mem.prof")
 	defer f.Close()
 	pprof.WriteHeapProfile(f)
 }
