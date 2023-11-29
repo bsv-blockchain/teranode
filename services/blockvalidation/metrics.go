@@ -25,6 +25,8 @@ var (
 	prometheusBlockValidationBlessMissingTransactionDuration prometheus.Histogram
 
 	// tx meta cache stats
+	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
 	prometheusBlockValidationTxMetaCacheSize       prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheHits       prometheus.Gauge
@@ -171,6 +173,22 @@ func initPrometheusMetrics() {
 			Name:      "bless_missing_transaction_duration",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockValidationSetTXMetaCache = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_meta_cache",
+			Help:      "Number of tx meta cache sets",
+		},
+	)
+
+	prometheusBlockValidationSetTXMetaCacheFrpc = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_meta_cache_frpc",
+			Help:      "Number of tx meta cache sets",
 		},
 	)
 

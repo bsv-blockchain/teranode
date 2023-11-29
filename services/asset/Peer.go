@@ -29,7 +29,7 @@ func NewPeer(ctx context.Context, logger ulogger.Logger, source string, addr str
 		logger:           logger.New("blobC"),
 		address:          addr,
 		source:           source,
-		validationClient: blockvalidation.NewClient(ctx),
+		validationClient: blockvalidation.NewClient(ctx, logger),
 		running:          true,
 		notificationCh:   notificationCh,
 	}

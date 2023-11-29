@@ -242,6 +242,14 @@ gen-frpc:
 	--go_opt=paths=source_relative \
 	--go-frpc_out=. \
 	--go-frpc_opt=paths=source_relative \
+	services/blockvalidation/blockvalidation_api/blockvalidation_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-frpc_out=. \
+	--go-frpc_opt=paths=source_relative \
 	services/propagation/propagation_api/propagation_api.proto
 
 	protoc \

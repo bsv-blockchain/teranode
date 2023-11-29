@@ -21,15 +21,8 @@ func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.
 	return m.Get(ctx, hash)
 }
 
-func (m *NullStore) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	status := txmeta.Data{
-		// Fee:            fee,
-		// SizeInBytes:    sizeInBytes,
-		// FirstSeen:      time.Now(),
-		// ParentTxHashes: parentTxHashes,
-		// UtxoHashes:     utxoHashes,
-		// LockTime:       nLockTime,
-	}
+func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, error) {
+	status := txmeta.Data{}
 	return &status, nil
 }
 

@@ -2,37 +2,65 @@ package blockvalidation
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/jellydator/ttlcache/v3"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+type metrics struct {
+	insertions atomic.Uint64
+	hits       atomic.Uint64
+	misses     atomic.Uint64
+	evictions  atomic.Uint64
+}
+
 type txMetaCache struct {
-	txMetaStore txmeta.Store
-	cache       *ttlcache.Cache[chainhash.Hash, *txmeta.Data]
-	cacheTTL    time.Duration
+	txMetaStore   txmeta.Store
+	cache         map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]
+	cacheTTL      time.Duration
+	cacheTTLQueue *LockFreeTTLQueue
+	metrics       metrics
 }
 
 func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	m := &txMetaCache{
-		txMetaStore: txMetaStore,
-		cache:       ttlcache.New[chainhash.Hash, *txmeta.Data](),
-		cacheTTL:    15 * time.Minute, // until block is mined
+		txMetaStore:   txMetaStore,
+		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
+		cacheTTL:      15 * time.Minute, // until block is mined
+		cacheTTLQueue: NewLockFreeTTLQueue(),
+		metrics:       metrics{},
 	}
 
-	go m.cache.Start()
+	for i := 0; i < 256; i++ {
+		m.cache[[1]byte{byte(i)}] = util.NewSyncedSwissMap[chainhash.Hash, *txmeta.Data](uint32(1_000_000))
+	}
 
 	go func() {
 		for {
-			metrics := m.cache.Metrics()
-			prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cache.Len()))
-			prometheusBlockValidationTxMetaCacheInsertions.Set(float64(metrics.Insertions))
-			prometheusBlockValidationTxMetaCacheHits.Set(float64(metrics.Hits))
-			prometheusBlockValidationTxMetaCacheMisses.Set(float64(metrics.Misses))
-			prometheusBlockValidationTxMetaCacheEvictions.Set(float64(metrics.Evictions))
+			item := m.cacheTTLQueue.dequeue(time.Now().Add(-m.cacheTTL).UnixMilli())
+			if item == nil {
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			m.cache[[1]byte{item.hash[0]}].Delete(*item.hash)
+		}
+	}()
+
+	// TODO
+	go func() {
+		for {
+			if prometheusBlockValidationTxMetaCacheSize != nil {
+				prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cacheTTLQueue.length()))
+				prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
+				prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
+				prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
+				prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
+			}
 
 			time.Sleep(5 * time.Second)
 		}
@@ -41,17 +69,31 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	return m
 }
 
-func (t txMetaCache) SetCache(_ context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
+func (t *txMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+	t.cache[[1]byte{hash[0]}].Set(*hash, txMeta)
+	t.cacheTTLQueue.enqueue(&ttlQueueItem{hash: hash})
+
+	t.metrics.insertions.Add(1)
 
 	return nil
 }
 
-func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached := t.cache.Get(*hash)
-	if cached != nil && cached.Value() != nil {
-		return cached.Value(), nil
+func (t *txMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
+	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
+	if ok {
+		t.metrics.hits.Add(1)
+		return cached, ok
+	}
+
+	t.metrics.misses.Add(1)
+	return nil, false
+}
+
+func (t *txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	cached, ok := t.GetCache(hash)
+	if ok {
+		return cached, nil
 	}
 
 	txMeta, err := t.txMetaStore.GetMeta(ctx, hash)
@@ -61,15 +103,15 @@ func (t txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+	_ = t.SetCache(hash, txMeta)
 
 	return txMeta, nil
 }
 
-func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached := t.cache.Get(*hash)
-	if cached != nil && cached.Value() != nil {
-		return cached.Value(), nil
+func (t *txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	cached, ok := t.GetCache(hash)
+	if ok {
+		return cached, nil
 	}
 
 	txMeta, err := t.txMetaStore.Get(ctx, hash)
@@ -79,12 +121,12 @@ func (t txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Dat
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+	_ = t.SetCache(hash, txMeta)
 
 	return txMeta, nil
 }
 
-func (t txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (t *txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	txMeta, err := t.txMetaStore.Create(ctx, tx)
 	if err != nil {
 		return txMeta, err
@@ -92,12 +134,12 @@ func (t txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error
 
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.cache.Set(*tx.TxIDChainHash(), txMeta, t.cacheTTL)
+	_ = t.SetCache(tx.TxIDChainHash(), txMeta)
 
 	return txMeta, nil
 }
 
-func (t txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+func (t *txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
 	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockHash)
 	if err != nil {
 		return err
@@ -113,7 +155,7 @@ func (t txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash
 	return nil
 }
 
-func (t txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (t *txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	err := t.txMetaStore.SetMined(ctx, hash, blockHash)
 	if err != nil {
 		return err
@@ -127,11 +169,11 @@ func (t txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHa
 	return nil
 }
 
-func (t txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (t *txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
 	var txMeta *txmeta.Data
-	cached := t.cache.Get(*hash)
-	if cached != nil && cached.Value() != nil {
-		txMeta = cached.Value()
+	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
+	if ok {
+		txMeta = cached
 		if txMeta.BlockHashes == nil {
 			txMeta.BlockHashes = []*chainhash.Hash{
 				blockHash,
@@ -147,18 +189,19 @@ func (t txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, 
 	}
 
 	txMeta.Tx = nil
-	_ = t.cache.Set(*hash, txMeta, t.cacheTTL)
+	_ = t.SetCache(hash, txMeta)
 
 	return nil
 }
 
-func (t txMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
+func (t *txMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	err := t.txMetaStore.Delete(ctx, hash)
 	if err != nil {
 		return err
 	}
 
-	t.cache.Delete(*hash)
+	t.cache[[1]byte{hash[0]}].Delete(*hash)
+	t.metrics.evictions.Add(1)
 
 	return nil
 }

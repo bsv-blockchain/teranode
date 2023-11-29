@@ -1,6 +1,10 @@
 package util
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/dolthub/swiss"
+)
 
 type SyncedMap[K comparable, V any] struct {
 	mu sync.RWMutex
@@ -26,4 +30,45 @@ func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	m.m[key] = value
 	m.mu.Unlock()
+}
+
+func (m *SyncedMap[K, V]) Delete(key K) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	delete(m.m, key)
+
+	return true
+}
+
+type SyncedSwissMap[K comparable, V any] struct {
+	mu       sync.RWMutex
+	swissMap *swiss.Map[K, V]
+}
+
+func NewSyncedSwissMap[K comparable, V any](length uint32) *SyncedSwissMap[K, V] {
+	return &SyncedSwissMap[K, V]{
+		swissMap: swiss.NewMap[K, V](length),
+	}
+}
+
+func (m *SyncedSwissMap[K, V]) Get(key K) (V, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.swissMap.Get(key)
+}
+
+func (m *SyncedSwissMap[K, V]) Set(key K, value V) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.swissMap.Put(key, value)
+}
+
+func (m *SyncedSwissMap[K, V]) Delete(key K) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.swissMap.Delete(key)
 }

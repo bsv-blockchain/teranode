@@ -192,7 +192,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 	s.AssetHttpAddressURL = AssetHttpAddressURL.String()
 
-	s.blockValidationClient = blockvalidation.NewClient(ctx)
+	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
 
 	s.validatorClient, err = validator.NewClient(ctx, s.logger)
 	if err != nil {

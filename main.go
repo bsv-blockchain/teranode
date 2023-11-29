@@ -239,7 +239,7 @@ func main() {
 
 	var blockValidationClient *blockvalidation.Client
 	if startBlockAssembly || startPropagation || startValidator {
-		blockValidationClient = blockvalidation.NewClient(ctx)
+		blockValidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
 	// blockAssembly
@@ -313,6 +313,7 @@ func main() {
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				blockValidationClient,
 			)); err != nil {
 				panic(err)
 			}

@@ -199,7 +199,7 @@ func (v *Server) Start(ctx context.Context) error {
 							return
 						}
 
-						validationClient := blockvalidation.NewClient(ctx)
+						validationClient := blockvalidation.NewClient(ctx, v.logger)
 						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress); err != nil {
 							v.logger.Errorf("[Asset] error validating block from %s: %s", p.AssetHttpAddress, err)
 						}
