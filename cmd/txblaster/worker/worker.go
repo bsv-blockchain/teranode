@@ -108,6 +108,7 @@ type Ipv6MulticastMsg struct {
 type Worker struct {
 	logger            ulogger.Logger
 	rateLimiter       *rate.Limiter
+	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributor       *distributor.Distributor
 	kafkaProducer     sarama.SyncProducer
@@ -129,6 +130,7 @@ type Worker struct {
 func NewWorker(
 	logger ulogger.Logger,
 	rateLimit float64,
+	iterations int,
 	coinbaseClient *coinbase.Client,
 	distributor *distributor.Distributor,
 	kafkaProducer sarama.SyncProducer,
@@ -169,6 +171,7 @@ func NewWorker(
 	return &Worker{
 		logger:            logger,
 		rateLimiter:       rateLimiter,
+		iterations:        iterations,
 		coinbaseClient:    coinbaseClient,
 		distributor:       distributor,
 		kafkaProducer:     kafkaProducer,
@@ -245,7 +248,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			defer sub.Cancel()
 			var rejectedTxMsg p2p.RejectedTxMessage
 			// Continuously check messages
-			for {
+			for i := 0; ; i++ {
 				msg, err := sub.Next(ctx)
 				w.logger.Errorf("Error reading next rejected tx message: %+v", err)
 				if err != nil {
@@ -268,7 +271,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 		}()
 
 	}
-	for {
+	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -339,6 +342,11 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 				_ = w.rateLimiter.Wait(ctx)
 			}
 		}
+
+		if w.iterations >= 0 && i+1 >= w.iterations {
+			return nil // Return nil to exit the worker after the specified iterations
+		}
+
 	}
 }
 
