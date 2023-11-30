@@ -362,7 +362,7 @@ func (u *BlockValidation) validateSubtreeStream(ctx context.Context, subtreeHash
 			// if all txs in tree are blessed, then bless the tree
 			txMeta, err = u.txMetaStore.GetMeta(ctx, &txHash)
 			if err != nil {
-				if strings.Contains(err.Error(), "not found") {
+				if errors.Is(err, txmeta.ErrNotFound) {
 					// collect all missing transactions for processing in order
 					// that is why we use an indexed slice instead of just a slice append
 					isMissing = true
