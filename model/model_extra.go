@@ -97,3 +97,21 @@ func escapeJSON(input string) (string, error) {
 	// Return the escaped string.
 	return escapedString, nil
 }
+
+func (a *AnnounceStatusRequest) MarshalJSON() ([]byte, error) {
+	text, err := escapeJSON(a.StatusText)
+	if err != nil {
+		text = fmt.Sprintf("could not parse status text '%s': %v", a.StatusText, err)
+	}
+
+	return []byte(fmt.Sprintf(`
+		{
+			"timestamp": "%s",
+			"serviceName": "%s",
+			"statusText": "%s"
+		}`,
+		a.Timestamp.AsTime().Format(dateFormat),
+		a.ServiceName,
+		text,
+	)), nil
+}

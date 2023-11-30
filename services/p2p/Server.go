@@ -834,10 +834,6 @@ func (s *Server) Health(ctx context.Context, _ *emptypb.Empty) (*p2p_api.HealthR
 	}, nil
 }
 
-func (s *Server) AnnounceStatus(ctx context.Context, status *model.AnnounceStatusRequest) (*emptypb.Empty, error) {
-	return &emptypb.Empty{}, nil
-}
-
 func (s *Server) StartGRPC(ctx context.Context) (err error) {
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, "p2p", func(server *grpc.Server) {

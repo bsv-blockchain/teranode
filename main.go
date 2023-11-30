@@ -253,17 +253,22 @@ func main() {
 				panic(err)
 			}
 
-			AssetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
+			assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
 			if !ok {
-				AssetAddr, ok = gocore.Config().Get("asset_grpcAddress")
+				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 				if !ok {
 					panic(err)
 				}
 			}
 
-			AssetClient, err := asset.NewClient(ctx, logger, AssetAddr)
+			assetClient, err := asset.NewClient(ctx, logger, assetAddr)
 			if err != nil {
 				panic(err)
+			}
+
+			statusClient, err := status.NewClient(ctx, logger)
+			if err != nil {
+				logger.Fatalf("could not create status client [%v]", err)
 			}
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
@@ -273,8 +278,9 @@ func main() {
 				getTxMetaStore(logger),
 				getSubtreeStore(logger),
 				blockchainClient,
-				AssetClient,
+				assetClient,
 				blockValidationClient,
+				statusClient,
 			)); err != nil {
 				panic(err)
 			}
@@ -295,6 +301,11 @@ func main() {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
 
+			statusClient, err := status.NewClient(ctx, logger)
+			if err != nil {
+				logger.Fatalf("could not create status client [%v]", err)
+			}
+
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
 				getUtxoStore(ctx, logger),
@@ -302,6 +313,7 @@ func main() {
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
+				statusClient,
 			)); err != nil {
 				panic(err)
 			}

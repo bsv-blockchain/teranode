@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -39,7 +40,10 @@ func (s *Server) HandleWebSocket(wsCh chan interface{}) func(c echo.Context) err
 					continue
 				}
 
-				data, err := json.MarshalIndent(&model.AnnounceStatusRequest{}, "", "  ")
+				data, err := json.MarshalIndent(&model.AnnounceStatusRequest{
+					Timestamp:   timestamppb.Now(),
+					ServiceName: "PING",
+				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %w", err)
 					continue

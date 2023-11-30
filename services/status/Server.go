@@ -14,6 +14,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -66,14 +67,19 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
-	if err := s.startHTTP(ctx); err != nil {
-		return err
-	}
+	g, ctx := errgroup.WithContext(ctx)
 
-	// this will block
-	if err := util.StartGRPCServer(ctx, s.logger, "status", func(server *grpc.Server) {
-		status_api.RegisterStatusAPIServer(server, s)
-	}); err != nil {
+	g.Go(func() error {
+		return s.startHTTP(ctx)
+	})
+
+	g.Go(func() error {
+		return util.StartGRPCServer(ctx, s.logger, "status", func(server *grpc.Server) {
+			status_api.RegisterStatusAPIServer(server, s)
+		})
+	})
+
+	if err := g.Wait(); err != nil {
 		return err
 	}
 

@@ -74,7 +74,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-		err = blockValidation.validateSubtree_Old(context.Background(), subtree.RootHash(), "http://localhost:8000")
+		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
 		require.NoError(t, err)
 	})
 }
