@@ -129,7 +129,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	for i := 0; i < numberOfItems; i++ {
 		tx := bt.NewTx()
-		tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
+		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
 
@@ -140,6 +140,9 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
 
+	// this calculation should not be in the test data, in the real world we would be getting this from the other miner
+	rootHash := subtree.RootHash()
+
 	httpmock.RegisterResponder(
 		"GET",
 		`=~^/subtree/[a-z0-9]+\z`,
@@ -149,17 +152,17 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()
 
-	pprof.StartCPUProfile(f)
+	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
 
-	err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
+	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000")
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
 
 	f, _ = os.Create("mem.prof")
 	defer f.Close()
-	pprof.WriteHeapProfile(f)
+	_ = pprof.WriteHeapProfile(f)
 }

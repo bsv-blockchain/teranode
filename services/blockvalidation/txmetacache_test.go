@@ -52,7 +52,7 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		i := i
 		g.Go(func() error {
-			return cache.SetCache(&hashes[i], txmeta.Data{})
+			return cache.SetCache(&hashes[i], &txmeta.Data{})
 		})
 	}
 
