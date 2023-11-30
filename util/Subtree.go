@@ -526,45 +526,41 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	return nil
 }
 
-func (st *Subtree) DeserializeChan(b []byte) (<-chan SubtreeNode, <-chan error) {
+func (st *Subtree) DeserializeChan(b []byte) (<-chan SubtreeNode, <-chan error, error) {
 	nodeChan := make(chan SubtreeNode)
 	errChan := make(chan error, 1)
+	buf := bytes.NewBuffer(b)
+
+	// read root hash
+	var rootHash [32]byte
+	_, err := buf.Read(rootHash[:])
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	// read fees
+	st.Fees, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to read fees: %v", err)
+	}
+
+	// read sizeInBytes
+	st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to read sizeInBytes: %v", err)
+	}
+
+	numLeaves, err := wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to read number of leaves: %v", err)
+	}
+
+	st.treeSize = int(numLeaves)
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
 	go func() {
 		defer close(nodeChan)
 		defer close(errChan)
-
-		buf := bytes.NewBuffer(b)
-
-		// read root hash
-		var rootHash [32]byte
-		_, err := buf.Read(rootHash[:])
-		if err != nil {
-			errChan <- fmt.Errorf("unable to read root hash: %v", err)
-			return
-		}
-
-		// read fees
-		st.Fees, err = wire.ReadVarInt(buf, 0)
-		if err != nil {
-			errChan <- fmt.Errorf("unable to read fees: %v", err)
-			return
-		}
-
-		// read sizeInBytes
-		st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
-		if err != nil {
-			errChan <- fmt.Errorf("unable to read sizeInBytes: %v", err)
-			return
-		}
-
-		numLeaves, err := wire.ReadVarInt(buf, 0)
-		if err != nil {
-			errChan <- fmt.Errorf("unable to read number of leaves: %v", err)
-			return
-		}
-
-		st.treeSize = int(numLeaves)
-		st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
 
 		for i := uint64(0); i < numLeaves; i++ {
 			hash, err := chainhash.NewHash(buf.Next(32))
@@ -588,7 +584,7 @@ func (st *Subtree) DeserializeChan(b []byte) (<-chan SubtreeNode, <-chan error) 
 
 	}()
 
-	return nodeChan, errChan
+	return nodeChan, errChan, nil
 }
 
 func Min(a, b int) int {

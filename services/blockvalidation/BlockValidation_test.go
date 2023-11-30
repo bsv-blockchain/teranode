@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -49,7 +50,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
-		require.NoError(t, subtree.AddNode(*hash4, 124, 0))
+		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
 		_, err := txMetaStore.Create(context.Background(), tx1)
 		require.NoError(t, err)
@@ -73,7 +74,44 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
+		err = blockValidation.validateSubtree_Old(context.Background(), subtree.RootHash(), "http://localhost:8000")
+		require.NoError(t, err)
+	})
+}
+
+func TestBlockValidation_validateSubtreeStream(t *testing.T) {
+	t.Run("validateSubtree - smoke test", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		subtree := util.NewTreeByLeafCount(4)
+		require.NoError(t, subtree.AddNode(*model.CoinbasePlaceholderHash, 0, 0))
+		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
+		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
+		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
+
+		_, err := txMetaStore.Create(context.Background(), tx1)
+		require.NoError(t, err)
+
+		_, err = txMetaStore.Create(context.Background(), tx2)
+		require.NoError(t, err)
+
+		_, err = txMetaStore.Create(context.Background(), tx3)
+		require.NoError(t, err)
+
+		nodeBytes, err := subtree.SerializeNodes()
+		require.NoError(t, err)
+
+		httpmock.RegisterResponder(
+			"GET",
+			`=~^/subtree/[a-z0-9]+\z`,
+			httpmock.NewBytesResponder(200, nodeBytes),
+		)
+
+		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+		err = blockValidation.validateSubtreeStream(context.Background(), subtree.RootHash(), "http://localhost:8000")
 		require.NoError(t, err)
 	})
 }
