@@ -196,6 +196,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	start := time.Now()
 
 	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000")
+	// err = blockValidation.validateSubtreeStream(context.Background(), rootHash, "http://localhost:8000")
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
