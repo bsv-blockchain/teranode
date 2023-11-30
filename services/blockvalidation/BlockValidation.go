@@ -284,7 +284,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	if isStreamMode {
 		return u.validateSubtreeStream(ctx, subtreeHash, baseUrl)
 	}
-	return u.validateSubtree_Old(ctx, subtreeHash, baseUrl)
+	return u.validateSubtreeBlob(ctx, subtreeHash, baseUrl)
 }
 
 func (u *BlockValidation) validateSubtreeStream(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
@@ -320,7 +320,7 @@ func (u *BlockValidation) validateSubtreeStream(ctx context.Context, subtreeHash
 	start = gocore.CurrentTime()
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
-	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
+	url := fmt.Sprintf("%s/stream/subtree/%s", baseUrl, subtreeHash.String())
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 	if err != nil {
@@ -352,8 +352,8 @@ func (u *BlockValidation) validateSubtreeStream(ctx context.Context, subtreeHash
 		var txMeta *txmeta.Data
 		if txHash.IsEqual(model.CoinbasePlaceholderHash) {
 			txMeta = &txmeta.Data{
-				Fee:         math.MaxUint64,
-				SizeInBytes: math.MaxUint64,
+				Fee:         0,
+				SizeInBytes: 0,
 			}
 		} else {
 			// is the txid in the store?
@@ -675,8 +675,8 @@ func Min(a, b int) int {
 }
 
 // ############################### Non-streaming implementation #########################################
-func (u *BlockValidation) validateSubtree_Old(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree_Old")
+func (u *BlockValidation) validateSubtreeBlob(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlob")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
@@ -798,7 +798,7 @@ func (u *BlockValidation) validateSubtree_Old(ctx context.Context, subtreeHash *
 			}
 		}
 
-		err = u.processMissingTransactions_Old(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
+		err = u.processMissingTransactionsBlob(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
 		if err != nil {
 			return err
 		}
@@ -849,7 +849,7 @@ func (u *BlockValidation) validateSubtree_Old(ctx context.Context, subtreeHash *
 	return nil
 }
 
-func (u *BlockValidation) processMissingTransactions_Old(ctx context.Context, subtreeHash *chainhash.Hash,
+func (u *BlockValidation) processMissingTransactionsBlob(ctx context.Context, subtreeHash *chainhash.Hash,
 	missingTxHashes []*chainhash.Hash, baseUrl string, txMetaSlice []*txmeta.Data) error {
 
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
@@ -857,7 +857,7 @@ func (u *BlockValidation) processMissingTransactions_Old(ctx context.Context, su
 		span.Finish()
 	}()
 
-	missingTxs, err := u.getMissingTransactions_Old(spanCtx, missingTxHashes, baseUrl)
+	missingTxs, err := u.getMissingTransactionsBlob(spanCtx, missingTxHashes, baseUrl)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
 	}
@@ -882,7 +882,7 @@ type missingTx struct {
 	idx int
 }
 
-func (u *BlockValidation) getMissingTransactions_Old(ctx context.Context, missingTxHashes []*chainhash.Hash, baseUrl string) (missingTxs []missingTx, err error) {
+func (u *BlockValidation) getMissingTransactionsBlob(ctx context.Context, missingTxHashes []*chainhash.Hash, baseUrl string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
