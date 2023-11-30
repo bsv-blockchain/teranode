@@ -211,7 +211,7 @@ func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
 
 	start := time.Now()
 
-	hashes, err := subtree.BuildMerkleTreeStoreFromBytes()
+	hashes, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 	require.NoError(t, err)
 
 	rootHash, err := chainhash.NewHash((*hashes)[len(*hashes)-1][:])
@@ -243,7 +243,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -281,7 +281,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = st.AddNode(*txHash, 101, 0)
 		}
 
-		merkleStore, err := st.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -319,7 +319,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
