@@ -81,7 +81,10 @@ func (h *HTTP) GetSubtreeStream() func(c echo.Context) error {
 		}
 
 		subtree := &util.Subtree{}
-		nodeChan, errChan := subtree.DeserializeChan(subtreeBytes)
+		nodeChan, errChan, err := subtree.DeserializeChan(subtreeBytes)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
 
 		// Set response type
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
