@@ -172,7 +172,7 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 		b := hash.CloneBytes()
 
 		data.Tx = nil
-		b = append(b, data.Bytes()...)
+		b = append(b, data.MetaBytes()...)
 
 		txMetaDataSlice = append(txMetaDataSlice, b)
 	}

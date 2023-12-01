@@ -555,17 +555,14 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 	for _, meta := range request.Data {
 		go func(meta []byte) {
 			// first 32 bytes is hash
-			hash, err := chainhash.NewHash(meta[:32])
-			if err != nil {
-				u.logger.Errorf("failed to create hash from bytes: %v", err)
-			}
+			hash := chainhash.Hash(meta[:32])
 
 			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
 			if err != nil {
 				u.logger.Errorf("failed to create tx meta data from bytes: %v", err)
 			}
 
-			if err = u.blockValidation.SetTxMetaCache(ctx, hash, txMetaData); err != nil {
+			if err = u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {
 				u.logger.Errorf("failed to set tx meta data: %v", err)
 			}
 		}(meta)
