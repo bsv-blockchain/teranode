@@ -30,32 +30,35 @@ type blockValidationTxMetaClient interface {
 }
 
 type Validator struct {
-	logger                 ulogger.Logger
-	utxoStore              utxostore.Interface
-	blockAssembler         blockassembly.Store
-	txMetaStore            txmeta.Store
-	blockValidationClient  blockValidationTxMetaClient
-	blockValidationBatcher batcher.Batcher[txmeta.Data]
-	kafkaProducer          sarama.SyncProducer
-	kafkaTopic             string
-	kafkaPartitions        int
-	saveInParallel         bool
-	blockAssemblyDisabled  bool
+	logger                        ulogger.Logger
+	utxoStore                     utxostore.Interface
+	blockAssembler                blockassembly.Store
+	txMetaStore                   txmeta.Store
+	blockValidationClient         blockValidationTxMetaClient
+	blockValidationBatcher        batcher.Batcher[txmeta.Data]
+	kafkaProducer                 sarama.SyncProducer
+	kafkaTopic                    string
+	kafkaPartitions               int
+	saveInParallel                bool
+	blockAssemblyDisabled         bool
+	blockValidationBatcherEnabled bool
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store, blockValidationClient blockValidationTxMetaClient) (Interface, error) {
 	ba := blockassembly.NewClient(ctx, logger)
+	enabled := gocore.Config().GetBool("blockvalidation_txMetaCacheBatcherEnabled", true)
 
 	validator := &Validator{
-		logger:                logger,
-		utxoStore:             store,
-		blockAssembler:        ba,
-		txMetaStore:           txMetaStore,
-		blockValidationClient: blockValidationClient,
-		saveInParallel:        true,
+		logger:                        logger,
+		utxoStore:                     store,
+		blockAssembler:                ba,
+		txMetaStore:                   txMetaStore,
+		blockValidationClient:         blockValidationClient,
+		saveInParallel:                true,
+		blockValidationBatcherEnabled: enabled,
 	}
 
-	if blockValidationClient != nil {
+	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
 		sendBatch := func(batch []*txmeta.Data) {
 			// add data to block validation cache
 			if err := validator.blockValidationClient.SetTxMeta(ctx, batch); err != nil {
@@ -239,7 +242,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 		return data, errors.Join(fmt.Errorf("error sending tx %s to tx meta utxoStore", tx.TxIDChainHash().String()), err)
 	}
 
-	if v.blockValidationClient != nil {
+	if v.blockValidationClient != nil && v.blockValidationBatcherEnabled {
 		go func() {
 			v.blockValidationBatcher.Put(data)
 		}()
