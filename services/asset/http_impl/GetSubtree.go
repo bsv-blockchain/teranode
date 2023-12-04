@@ -36,9 +36,13 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
+		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
+
 		if mode == JSON {
 			return c.JSONPretty(200, subtree, "  ")
 		}
+
+		// If we did not serve JSON, we need to serialize the nodes into a byte slice.  We use SerializeNodes() for this which does NOT include the fees and sizes.
 
 		b, err := subtree.SerializeNodes()
 		if err != nil {
