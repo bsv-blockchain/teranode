@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -38,6 +39,11 @@ func (f *fRPC_BlockValidation) Get(ctx context.Context, request *blockvalidation
 }
 
 func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetTxMetaRequest) (*blockvalidation_api.BlockvalidationApiSetTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	prometheusBlockValidationSetTXMetaCacheFrpc.Inc()
 	for _, meta := range request.Data {
 		go func(meta []byte) {

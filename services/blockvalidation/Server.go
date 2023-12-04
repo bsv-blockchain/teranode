@@ -551,6 +551,11 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	prometheusBlockValidationSetTXMetaCache.Inc()
 	for _, meta := range request.Data {
 		go func(meta []byte) {
