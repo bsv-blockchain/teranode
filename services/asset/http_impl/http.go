@@ -53,7 +53,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	}
 
 	e.GET("/alive", func(c echo.Context) error {
-		return c.String(http.StatusOK, fmt.Sprintf("Asset service is alive. Uptime: %s", time.Since(h.startTime)))
+		return c.String(http.StatusOK, fmt.Sprintf("Asset service is alive. Uptime: %s\n", time.Since(h.startTime)))
 	})
 
 	e.GET("/health", func(c echo.Context) error {
