@@ -1,0 +1,20 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "TxMetaStore" as MetaStore
+
+Client -> HTTPServer : GET /txmeta/:hash/json
+activate HTTPServer
+
+HTTPServer -> MetaStore : Get(ctx, hash)
+activate MetaStore
+alt TxMetaStore has metadata
+    MetaStore --> HTTPServer : Transaction metadata in JSON
+else TxMetaStore does not have metadata
+    MetaStore --> HTTPServer : Data not found
+end
+deactivate MetaStore
+
+HTTPServer --> Client : Response (JSON metadata or error)
+deactivate HTTPServer
+@enduml

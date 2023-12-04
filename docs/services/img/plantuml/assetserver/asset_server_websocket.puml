@@ -1,0 +1,36 @@
+@startuml
+participant "WebSocket Client" as Client
+participant "WebSocket Server" as Server
+database "Client Channels" as Channels
+
+== New WebSocket Connection ==
+Client -> Server: Connect to WebSocket
+activate Server
+Server -> Channels: Add new client channel
+deactivate Server
+
+== Notification Broadcasting ==
+Server -> Server: Receive notification
+activate Server
+Server -> Channels: Get all Client Channels
+Channels -> Server: Send all Client Channels
+
+loop For Each Client in Channels
+    Server -> Client: Send Notification
+end
+deactivate Server
+
+== Periodic Ping ==
+Server -> Server: Send periodic ping
+activate Server
+loop For Each Client in Channels
+    Server -> Client: Send Ping
+end
+deactivate Server
+
+== Client Disconnection ==
+Client -> Server: Disconnect WebSocket
+activate Server
+Server -> Channels: Remove client channel
+deactivate Server
+@enduml
