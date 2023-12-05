@@ -22,10 +22,12 @@ import (
 
 type Server struct {
 	status_api.UnimplementedStatusAPIServer
-	logger   ulogger.Logger
-	wsCh     chan interface{}
-	e        *echo.Echo
-	httpAddr string
+	logger      ulogger.Logger
+	wsCh        chan interface{}
+	e           *echo.Echo
+	httpAddr    string
+	name        string
+	statusItems map[string]*model.AnnounceStatusRequest
 }
 
 func Enabled() bool {
@@ -36,8 +38,9 @@ func Enabled() bool {
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger) *Server {
 	return &Server{
-		logger: logger,
-		wsCh:   make(chan interface{}, 100),
+		logger:      logger,
+		wsCh:        make(chan interface{}, 100),
+		statusItems: make(map[string]*model.AnnounceStatusRequest),
 	}
 }
 
@@ -61,6 +64,8 @@ func (s *Server) Init(ctx context.Context) error {
 	e.GET("/ws", s.HandleWebSocket(s.wsCh))
 
 	s.e = e
+
+	s.name, _ = gocore.Config().Get("asset_clientName", "unknown")
 
 	return nil
 }
@@ -144,6 +149,13 @@ func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*status_api.Health
 }
 
 func (s *Server) AnnounceStatus(ctx context.Context, req *model.AnnounceStatusRequest) (*emptypb.Empty, error) {
+	if req.ClusterName == "" {
+		req.ClusterName = s.name
+	}
+
+	s.statusItems[req.ClusterName+req.Type+req.Subtype] = req
+
 	s.wsCh <- req
+
 	return &emptypb.Empty{}, nil
 }

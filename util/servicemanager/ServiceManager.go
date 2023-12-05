@@ -33,6 +33,7 @@ type ServiceManager struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
 	g                  *errgroup.Group
+	// statusClient       status.ClientI
 }
 
 func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context) {
@@ -40,12 +41,18 @@ func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context)
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	// statusClient, err := status.NewClient(context.Background(), logger)
+	// if err != nil {
+	// 	logger.Fatalf("Failed to create status client: %v", err)
+	// }
+
 	sm := &ServiceManager{
 		services:   make([]serviceWrapper, 0),
 		logger:     logger,
 		ctx:        ctx,
 		cancelFunc: cancelFunc,
 		g:          g,
+		// statusClient: statusClient,
 	}
 
 	go func() {
@@ -108,7 +115,17 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		sm.waitForPreviousServiceToStart(sw)
 		close(sm.dependencyChannels[sw.index])
 
-		return service.Start(sm.ctx)
+		if err := service.Start(sm.ctx); err != nil {
+			return err
+		}
+
+		// sm.statusClient.AnnounceStatus(sm.ctx, &model.AnnounceStatusRequest{
+		// 	Timestamp: timestamppb.Now(),
+		// 	Type:      name,
+		// 	Subtype:   "STARTED",
+		// 	json.Valid(data []byte)
+		// })
+		return nil
 	})
 
 	return nil

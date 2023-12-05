@@ -234,23 +234,19 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	if u.statusClient != nil {
-		baseUrl, _, _ := gocore.Config().GetURL("asset_httpAddress")
-
 		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-			ServiceName: "BlockValidation",
-			Type:        "BlockFound",
-			StatusText:  "BlockFound - " + hash.String(),
-			Timestamp:   timestamppb.Now(),
-			BaseUrl:     baseUrl.String(),
+			Timestamp: timestamppb.Now(),
+			Type:      "BlockValidation",
+			Subtype:   "BlockFound (start)",
+			Value:     hash.String(),
 		})
 
 		defer func() {
 			u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-				ServiceName: "BlockValidation",
-				StatusText:  "BlockFound - " + hash.String() + " - DONE",
-				Type:        "BlockFound",
-				Timestamp:   timestamppb.Now(),
-				BaseUrl:     baseUrl.String(),
+				Timestamp: timestamppb.Now(),
+				Type:      "BlockValidation",
+				Subtype:   "BlockFound (end)",
+				Value:     hash.String(),
 			})
 		}()
 	}

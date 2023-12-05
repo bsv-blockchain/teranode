@@ -24,13 +24,21 @@ func (s *Server) HandleWebSocket(wsCh chan interface{}) func(c echo.Context) err
 	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
 
-	pingTimer := time.NewTicker(30 * time.Second)
+	pingTimer := time.NewTicker(20 * time.Second)
 
 	go func() {
 		for {
 			select {
 			case newClient := <-newClientCh:
 				clientChannels[newClient] = struct{}{}
+
+				data, err := json.MarshalIndent(s.statusItems, "", "  ")
+				if err != nil {
+					s.logger.Errorf("Error marshaling status items: %w", err)
+					continue
+				}
+
+				newClient <- data
 
 			case deadClient := <-deadClientCh:
 				delete(clientChannels, deadClient)
@@ -40,9 +48,13 @@ func (s *Server) HandleWebSocket(wsCh chan interface{}) func(c echo.Context) err
 					continue
 				}
 
+				now := time.Now()
+
 				data, err := json.MarshalIndent(&model.AnnounceStatusRequest{
-					Timestamp:   timestamppb.Now(),
-					ServiceName: "PING",
+					Timestamp:   timestamppb.New(now),
+					ClusterName: s.name,
+					Type:        "PING",
+					ExpiresAt:   timestamppb.New(now.Add(30 * time.Second)),
 				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %w", err)

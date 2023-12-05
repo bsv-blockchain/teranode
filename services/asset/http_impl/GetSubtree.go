@@ -3,11 +3,13 @@ package http_impl
 import (
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -65,6 +67,88 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		}
 	}
 }
+
+type SubtreeNodesReader struct {
+	data      []byte
+	pos       int
+	itemCount int
+	itemsRead int
+}
+
+func NewSubtreeNodesReader(subtree []byte) *SubtreeNodesReader {
+	// Calculate the position of the first node
+	position := 32 // root hash
+
+	f, n := bt.NewVarIntFromBytes(subtree[position:]) // fees
+	_ = f
+	position += n
+
+	s, n := bt.NewVarIntFromBytes(subtree[position:]) // sizeInBytes
+	_ = s
+	position += n
+
+	itemCount, n := bt.NewVarIntFromBytes(subtree[position:]) // numberOfLeaves
+	position += n
+
+	return &SubtreeNodesReader{
+		data:      subtree,
+		pos:       position,
+		itemCount: int(itemCount),
+	}
+}
+
+func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF // No more data
+	}
+
+	if r.itemsRead >= r.itemCount {
+		return 0, io.EOF // No more data
+	}
+
+	if len(p) < 32 {
+		return 0, errors.New("buffer too small")
+	}
+
+	// Copy data to p
+	n := copy(p, r.data[r.pos:r.pos+32])
+	r.pos += 48 // Skip 32 bytes of data and 16 bytes of padding
+
+	r.itemsRead++
+
+	return n, nil
+}
+
+func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
+	start := gocore.CurrentTime()
+	stat := AssetStat.NewStat("GetSubtree_http")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+	if err != nil {
+		return err
+	}
+
+	start2 := gocore.CurrentTime()
+	subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
+	if err != nil {
+		if strings.HasSuffix(err.Error(), " not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+	}
+	stat.NewStat("Get Subtree from repository").AddTime(start2)
+
+	prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+
+	r := NewSubtreeNodesReader(subtree)
+
+	return c.Stream(200, echo.MIMEOctetStream, r)
+}
+
 func (h *HTTP) GetSubtreeStream() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()

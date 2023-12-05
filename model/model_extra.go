@@ -99,23 +99,20 @@ func escapeJSON(input string) (string, error) {
 }
 
 func (a *AnnounceStatusRequest) MarshalJSON() ([]byte, error) {
-	text, err := escapeJSON(a.StatusText)
-	if err != nil {
-		text = fmt.Sprintf("could not parse status text '%s': %v", a.StatusText, err)
-	}
-
 	return []byte(fmt.Sprintf(`
 		{
 			"timestamp": "%s",
-			"serviceName": "%s",
-			"statusText": "%s",
-			"base_url": "%s",
-			"type": "%s"
+			"clusterName": "%s",
+			"type": "%s",
+			"subtype": "%s",
+			"value": "%s",
+			"expiresAt": "%s"
 		}`,
 		a.Timestamp.AsTime().Format(dateFormat),
-		a.ServiceName,
-		text,
-		a.BaseUrl,
+		a.ClusterName,
 		a.Type,
+		a.Subtype,
+		a.Value,
+		a.ExpiresAt.AsTime().Format(dateFormat),
 	)), nil
 }
