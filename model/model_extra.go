@@ -108,10 +108,14 @@ func (a *AnnounceStatusRequest) MarshalJSON() ([]byte, error) {
 		{
 			"timestamp": "%s",
 			"serviceName": "%s",
-			"statusText": "%s"
+			"statusText": "%s",
+			"base_url": "%s",
+			"type": "%s"
 		}`,
 		a.Timestamp.AsTime().Format(dateFormat),
 		a.ServiceName,
 		text,
+		a.BaseUrl,
+		a.Type,
 	)), nil
 }

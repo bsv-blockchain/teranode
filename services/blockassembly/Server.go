@@ -479,10 +479,14 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	}
 
 	if ba.statusClient != nil {
+		baseUrl, _, _ := gocore.Config().GetURL("asset_httpAddress")
+
 		ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
 			Timestamp:   timestamppb.Now(),
 			ServiceName: "BlockAssembly",
+			Type:        "GetMiningCandidate",
 			StatusText:  miningCandidate.Stringify(),
+			BaseUrl:     baseUrl.String(),
 		})
 	}
 

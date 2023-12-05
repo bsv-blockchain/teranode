@@ -51,6 +51,8 @@ message BlockInfo {
 // swagger:model AnnounceStatusRequest
 message AnnounceStatusRequest {
   google.protobuf.Timestamp timestamp = 1;
-  string service_name = 2;
-  string status_text = 3;
+  string base_url = 2;
+  string service_name = 3;
+  string type = 4;
+  string status_text = 5;
 }
