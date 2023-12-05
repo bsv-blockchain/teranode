@@ -281,25 +281,25 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	return nil
 }
 
-type txMetaResult struct {
-	Hash chainhash.Hash
-	Meta *txmeta.Data
-	Err  error
-}
+// type txMetaResult struct {
+// 	Hash chainhash.Hash
+// 	Meta *txmeta.Data
+// 	Err  error
+// }
 
-func (u *BlockValidation) processTxMeta(node *util.SubtreeNode, missingChan chan<- *util.SubtreeNode, errChan chan<- *txMetaResult) {
-	// Fetch txMeta and handle errors
-	txMeta, err := u.txMetaStore.GetMeta(context.Background(), &node.Hash)
-	if err != nil {
-		if errors.Is(err, txmeta.ErrNotFound) {
-			missingChan <- node
-		} else {
-			errChan <- &txMetaResult{Hash: node.Hash, Meta: txMeta, Err: err}
-		}
-	}
-	node.Fee = txMeta.Fee
-	node.SizeInBytes = txMeta.SizeInBytes
-}
+// func (u *BlockValidation) processTxMeta(node *util.SubtreeNode, missingChan chan<- *util.SubtreeNode, errChan chan<- *txMetaResult) {
+// 	// Fetch txMeta and handle errors
+// 	txMeta, err := u.txMetaStore.GetMeta(context.Background(), &node.Hash)
+// 	if err != nil {
+// 		if errors.Is(err, txmeta.ErrNotFound) {
+// 			missingChan <- node
+// 		} else {
+// 			errChan <- &txMetaResult{Hash: node.Hash, Meta: txMeta, Err: err}
+// 		}
+// 	}
+// 	node.Fee = txMeta.Fee
+// 	node.SizeInBytes = txMeta.SizeInBytes
+// }
 
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes

@@ -278,7 +278,6 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 			}
 		default:
 			e = err
-			break
 		}
 	}
 
