@@ -127,11 +127,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
 	}()
 
 	prometheusBlockValidationValidateBlockDuration.Observe(util.TimeSince(timeStart))
 
-	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
+	u.logger.Infof("[ValidateBlock][%s] DONE but finalizeBlockValidation will continue in the background", block.Hash().String())
 
 	return nil
 }
@@ -173,6 +174,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%w]", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 
 		return nil
 	})
@@ -185,6 +187,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
 
 		return nil
 	})
