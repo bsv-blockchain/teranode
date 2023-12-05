@@ -246,7 +246,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 		defer func() {
 			u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-				ServiceName: "blockvalidation",
+				ServiceName: "BlockValidation",
 				StatusText:  "BlockFound - " + hash.String() + " - DONE",
 				Type:        "BlockFound",
 				Timestamp:   timestamppb.Now(),
