@@ -15,8 +15,9 @@ import (
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
+		stat := AssetStat.NewStat("GetSubtree_http")
 		defer func() {
-			AssetStat.NewStat("GetSubtree_http").AddTime(start)
+			stat.AddTime(start)
 		}()
 
 		h.logger.Debugf("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
@@ -25,6 +26,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
+		start2 := gocore.CurrentTime()
 		subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
@@ -33,6 +35,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+		stat.NewStat("Get Subtree from repository").AddTime(start2)
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
