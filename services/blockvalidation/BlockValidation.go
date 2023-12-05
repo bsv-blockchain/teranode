@@ -574,6 +574,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			}
 		}
 
+		u.logger.Infof("[validateSubtree][%s] processing %d missing tx for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
 		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
 		if err != nil {
 			return err
@@ -588,7 +589,37 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			return fmt.Errorf("[validateSubtree][%s] tx meta not found in map [%s]", subtreeHash.String(), txHash.String())
+			found := false
+			index := -1
+			for i, h := range txHashes {
+				if h.IsEqual(&txHash) {
+					found = true
+					index = i
+					break
+				}
+			}
+			if found {
+				u.logger.Warnf("[validateSubtree][%s] tx meta exists in txHashes @ %d of %d [%s]", subtreeHash.String(), index, len(txHashes), txHash.String())
+			} else {
+				u.logger.Warnf("[validateSubtree][%s] tx meta not found in txHashes. Not possible? [%s]", subtreeHash.String(), txHash.String())
+			}
+
+			found = false
+			index = -1
+			for i, missingTxHash := range missingTxHashes {
+				if txHash.IsEqual(missingTxHash) {
+					found = true
+					index = i
+					break
+				}
+			}
+			if found {
+				u.logger.Warnf("[validateSubtree][%s] tx meta exists in missingTxHashes but wasn't processed? @ %d of %d [%s]", subtreeHash.String(), index, len(missingTxHashes), txHash.String())
+			} else {
+				u.logger.Warnf("[validateSubtree][%s] tx meta not found in missingTxHashes [%s]", subtreeHash.String(), txHash.String())
+			}
+
+			return fmt.Errorf("[validateSubtree][%s] tx meta not found in txMetaSlice [%s]", subtreeHash.String(), txHash.String())
 		}
 
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
