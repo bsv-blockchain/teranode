@@ -120,6 +120,9 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 	if n, err := r.reader.Read(r.hashBuf); err != nil {
 		return n, err
 	}
+	if n, err := r.reader.Read(r.extraBuf); err != nil {
+		return n, err
+	}
 
 	// Copy data to p
 	n := copy(p, r.hashBuf)

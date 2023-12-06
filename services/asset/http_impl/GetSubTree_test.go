@@ -33,6 +33,7 @@ func TestSubtreeReader(t *testing.T) {
 		n, err := r.Read(buf)
 		require.NoError(t, err)
 		assert.Equal(t, 32, n)
+		t.Logf("Read %s", hex.EncodeToString(buf))
 	}
 
 	assert.Equal(t, 161, r.itemsRead)
