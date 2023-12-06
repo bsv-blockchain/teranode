@@ -32,7 +32,12 @@ func (s *Server) HandleWebSocket(wsCh chan interface{}) func(c echo.Context) err
 			case newClient := <-newClientCh:
 				clientChannels[newClient] = struct{}{}
 
-				data, err := json.MarshalIndent(s.statusItems, "", "  ")
+				values := make([]*model.AnnounceStatusRequest, 0, len(s.statusItems))
+				for _, value := range s.statusItems {
+					values = append(values, value)
+				}
+
+				data, err := json.MarshalIndent(values, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling status items: %w", err)
 					continue

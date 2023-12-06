@@ -72,7 +72,7 @@
       <div>Peer: {message.peer_id}</div>
     </div>
   </div>
-{:else if message.type === 'Ping'}
+{:else if message.type === 'PING'}
   <div class="message-box grey">
     <div class="message-box-title">
       <span>PING</span>

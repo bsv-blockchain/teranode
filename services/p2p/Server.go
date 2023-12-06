@@ -714,7 +714,7 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Timestamp: time.Now().UTC(),
+				Timestamp: time.Now().UTC().Format(isoFormat),
 				Type:      "block",
 				Hash:      blockMessage.Hash,
 				BaseURL:   blockMessage.DataHubUrl,
@@ -764,10 +764,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Type:    "subtree",
-				Hash:    subtreeMessage.Hash,
-				BaseURL: subtreeMessage.DataHubUrl,
-				PeerId:  subtreeMessage.PeerId,
+				Timestamp: time.Now().UTC().Format(isoFormat),
+				Type:      "subtree",
+				Hash:      subtreeMessage.Hash,
+				BaseURL:   subtreeMessage.DataHubUrl,
+				PeerId:    subtreeMessage.PeerId,
 			}
 
 			if pubSubMessage.ReceivedFrom != s.host.ID() {
@@ -812,7 +813,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Timestamp:    time.Now().UTC(),
+				Timestamp:    time.Now().UTC().Format(isoFormat),
 				Type:         "mining_on",
 				Hash:         miningOnMessage.Hash,
 				BaseURL:      miningOnMessage.DataHubUrl,

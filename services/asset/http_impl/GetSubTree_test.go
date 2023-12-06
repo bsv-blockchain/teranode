@@ -33,8 +33,11 @@ func TestSubtreeReader(t *testing.T) {
 		n, err := r.Read(buf)
 		require.NoError(t, err)
 		assert.Equal(t, 32, n)
-		t.Logf("Read %s", hex.EncodeToString(buf))
+		// t.Logf("Read %s", hex.EncodeToString(buf))
 	}
+
+	// At the end of this loop, check the last hash is correct
+	assert.Equal(t, "3b2a83072a9ed1caa2f1d00cee48b7f11ba1c8afc9841d0e04bee7f6cf6d7f4e", hex.EncodeToString(buf))
 
 	assert.Equal(t, 161, r.itemsRead)
 

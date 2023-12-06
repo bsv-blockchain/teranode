@@ -72,24 +72,18 @@ type SubtreeNodesReader struct {
 	reader    io.Reader
 	itemCount int
 	itemsRead int
-	hashBuf   []byte
 	extraBuf  []byte
 }
 
 func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error) {
-	hashBuf := make([]byte, 32)
-	extraBuf := make([]byte, 16)
-
 	// Read the root hash and skip
-	if _, err := subtreeReader.Read(hashBuf); err != nil {
+	if _, err := subtreeReader.Read(make([]byte, 32)); err != nil {
 		return nil, err
 	}
 
-	n, err := wire.ReadVarInt(subtreeReader, 0)
-	if err != nil { // fees
+	if _, err := wire.ReadVarInt(subtreeReader, 0); err != nil { // fees
 		return nil, err
 	}
-	_ = n
 
 	if _, err := wire.ReadVarInt(subtreeReader, 0); err != nil { // sizeInBytes
 		return nil, err
@@ -103,8 +97,7 @@ func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error)
 	return &SubtreeNodesReader{
 		reader:    subtreeReader,
 		itemCount: int(itemCount),
-		hashBuf:   hashBuf,
-		extraBuf:  extraBuf,
+		extraBuf:  make([]byte, 16),
 	}, nil
 }
 
@@ -117,15 +110,16 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 		return 0, errors.New("buffer too small")
 	}
 
-	if n, err := r.reader.Read(r.hashBuf); err != nil {
+	n, err := r.reader.Read(p[:32])
+	if err != nil {
 		return n, err
 	}
+
+	// Read the extra data (16 bytes) and discard
 	if n, err := r.reader.Read(r.extraBuf); err != nil {
 		return n, err
 	}
 
-	// Copy data to p
-	n := copy(p, r.hashBuf)
 	r.itemsRead++
 
 	return n, nil

@@ -30,7 +30,7 @@ message MiningSolution {
 
 // swagger:enum NotificationType
 enum NotificationType {
-  Ping = 0;
+  PING = 0;
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
