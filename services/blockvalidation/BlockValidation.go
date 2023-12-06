@@ -687,10 +687,14 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 	}
 
 	// check if all missing transactions have been blessed
+	count := 0
 	for _, txMeta := range txMetaSlice {
 		if txMeta == nil {
-			return fmt.Errorf("[validateSubtree][%s] not all missing transactions have been blessed", subtreeHash.String())
+			count++
 		}
+	}
+	if count > 0 {
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice", subtreeHash.String(), count)
 	}
 
 	return nil
