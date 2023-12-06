@@ -739,6 +739,10 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 				return errors.Join(fmt.Errorf("[getMissingTransactions] failed to get missing transactions batch"), err)
 			}
 
+			if len(missingTxsBatch) != len(missingTxHashesBatch) {
+				return fmt.Errorf("[getMissingTransactions] missing transactions batch size mismatch [%d] [%d]", len(missingTxsBatch), len(missingTxHashesBatch))
+			}
+
 			missingTxsMu.Lock()
 			for _, tx := range missingTxsBatch {
 				if tx == nil {
