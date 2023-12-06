@@ -1,6 +1,7 @@
 package http_impl
 
 import (
+	"bytes"
 	"encoding/hex"
 	"io"
 	"os"
@@ -14,7 +15,10 @@ func TestSubtreeReader(t *testing.T) {
 	b, err := os.ReadFile("subtree.bin")
 	require.NoError(t, err)
 
-	r := NewSubtreeNodesReader(b)
+	reader := bytes.NewReader(b)
+
+	r, err := NewSubtreeNodesReader(reader)
+	require.NoError(t, err)
 	assert.Equal(t, 161, r.itemCount)
 	assert.Equal(t, 0, r.itemsRead)
 

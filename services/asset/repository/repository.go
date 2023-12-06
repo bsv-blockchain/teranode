@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -153,6 +154,11 @@ func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) 
 
 	return subtreeBytes, nil
 }
+
+func (r *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes())
+}
+
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())

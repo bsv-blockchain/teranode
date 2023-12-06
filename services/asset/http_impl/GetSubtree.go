@@ -9,8 +9,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/gocore"
 )
 
@@ -69,39 +69,46 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 }
 
 type SubtreeNodesReader struct {
-	data      []byte
-	pos       int
+	reader    io.Reader
 	itemCount int
 	itemsRead int
+	hashBuf   []byte
+	extraBuf  []byte
 }
 
-func NewSubtreeNodesReader(subtree []byte) *SubtreeNodesReader {
-	// Calculate the position of the first node
-	position := 32 // root hash
+func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error) {
+	hashBuf := make([]byte, 32)
+	extraBuf := make([]byte, 16)
 
-	f, n := bt.NewVarIntFromBytes(subtree[position:]) // fees
-	_ = f
-	position += n
+	// Read the root hash and skip
+	if _, err := subtreeReader.Read(hashBuf); err != nil {
+		return nil, err
+	}
 
-	s, n := bt.NewVarIntFromBytes(subtree[position:]) // sizeInBytes
-	_ = s
-	position += n
+	n, err := wire.ReadVarInt(subtreeReader, 0)
+	if err != nil { // fees
+		return nil, err
+	}
+	_ = n
 
-	itemCount, n := bt.NewVarIntFromBytes(subtree[position:]) // numberOfLeaves
-	position += n
+	if _, err := wire.ReadVarInt(subtreeReader, 0); err != nil { // sizeInBytes
+		return nil, err
+	}
+
+	itemCount, err := wire.ReadVarInt(subtreeReader, 0) // numberOfLeaves
+	if err != nil {
+		return nil, err
+	}
 
 	return &SubtreeNodesReader{
-		data:      subtree,
-		pos:       position,
+		reader:    subtreeReader,
 		itemCount: int(itemCount),
-	}
+		hashBuf:   hashBuf,
+		extraBuf:  extraBuf,
+	}, nil
 }
 
 func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF // No more data
-	}
-
 	if r.itemsRead >= r.itemCount {
 		return 0, io.EOF // No more data
 	}
@@ -110,10 +117,12 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 		return 0, errors.New("buffer too small")
 	}
 
-	// Copy data to p
-	n := copy(p, r.data[r.pos:r.pos+32])
-	r.pos += 48 // Skip 32 bytes of data and 16 bytes of padding
+	if n, err := r.reader.Read(r.hashBuf); err != nil {
+		return n, err
+	}
 
+	// Copy data to p
+	n := copy(p, r.hashBuf)
 	r.itemsRead++
 
 	return n, nil
@@ -132,7 +141,7 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	}
 
 	start2 := gocore.CurrentTime()
-	subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
+	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 	if err != nil {
 		if strings.HasSuffix(err.Error(), " not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -144,7 +153,10 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 
 	prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
-	r := NewSubtreeNodesReader(subtree)
+	r, err := NewSubtreeNodesReader(subtreeReader)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 
 	return c.Stream(200, echo.MIMEOctetStream, r)
 }
