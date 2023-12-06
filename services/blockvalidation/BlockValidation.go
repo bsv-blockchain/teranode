@@ -418,6 +418,9 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 		prometheusBlockValidationBlessMissingTransactionDuration.Observe(util.TimeSince(startTotal))
 	}()
 
+	if tx == nil {
+		return nil, fmt.Errorf("[blessMissingTransaction] tx is nil")
+	}
 	u.logger.Debugf("[blessMissingTransaction][%s] called", tx.TxID())
 
 	if tx.IsCoinbase() {
@@ -680,6 +683,9 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 	var txMeta *txmeta.Data
 	var mTx missingTx
 	for _, mTx = range missingTxs {
+		if mTx.tx == nil {
+			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+		}
 		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String()), err)
@@ -735,6 +741,10 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 
 			missingTxsMu.Lock()
 			for _, tx := range missingTxsBatch {
+				if tx == nil {
+					missingTxsMu.Unlock()
+					return fmt.Errorf("[getMissingTransactions] #1 missing transaction is nil")
+				}
 				missingTxsMap[*tx.TxIDChainHash()] = tx
 			}
 			missingTxsMu.Unlock()
@@ -750,9 +760,15 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	// populate the missingTx slice with the tx data
 	missingTxs = make([]missingTx, len(missingTxHashes))
 	for _, mTx := range missingTxHashes {
+		if mTx.hash == nil {
+			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.hash.String())
+		}
 		tx, ok := missingTxsMap[*mTx.hash]
 		if !ok {
 			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.hash.String())
+		}
+		if tx == nil {
+			return nil, fmt.Errorf("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.hash.String())
 		}
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.idx})
 	}
