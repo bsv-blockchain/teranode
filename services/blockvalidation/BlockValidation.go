@@ -667,11 +667,13 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 		span.Finish()
 	}()
 
+	u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
 	missingTxs, err := u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
 	}
 
+	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 	var txMeta *txmeta.Data
 	var mTx missingTx
 	for _, mTx = range missingTxs {
@@ -682,6 +684,13 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 
 		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
 		txMetaSlice[mTx.idx] = txMeta
+	}
+
+	// check if all missing transactions have been blessed
+	for _, txMeta := range txMetaSlice {
+		if txMeta == nil {
+			return fmt.Errorf("[validateSubtree][%s] not all missing transactions have been blessed", subtreeHash.String())
+		}
 	}
 
 	return nil
