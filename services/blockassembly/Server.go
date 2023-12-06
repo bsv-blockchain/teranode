@@ -122,8 +122,15 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case subtree := <-newSubtreeChan:
 				// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
-				prometheusBlockAssemblerSubtreeCreated.Inc()
 
+				// check whether this subtree already exists in the store, which would mean it has already been announced
+				if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:]); ok {
+					// subtree already exists, nothing to do
+					ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
+					continue
+				}
+
+				prometheusBlockAssemblerSubtreeCreated.Inc()
 				ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
 
 				if subtreeBytes, err = subtree.Serialize(); err != nil {
