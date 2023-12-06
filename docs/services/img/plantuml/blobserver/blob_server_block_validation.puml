@@ -1,0 +1,62 @@
+@startuml
+participant "Block Validation\n(BlockValidation.go)" as BlockValidation
+participant "Tx Store" as TxStore
+participant "Subtree Store" as SubtreeStore
+
+== Get Missing Transaction ==
+BlockValidation -> BlockValidation : getMissingTransactions()
+activate BlockValidation
+BlockValidation -> TxStore : get(ctx, txHash)
+activate TxStore
+TxStore --> BlockValidation
+deactivate TxStore
+BlockValidation -> TxStore : set(ctx, txHash, missingTx)
+activate TxStore
+TxStore --> BlockValidation
+deactivate TxStore
+deactivate BlockValidation
+
+== Store Coinbase Transaction ==
+BlockValidation -> BlockValidation : ValidateBlock()
+activate BlockValidation
+
+BlockValidation -> TxStore : set(ctx, txHash, coinbaseTx)
+activate TxStore
+TxStore --> BlockValidation
+deactivate TxStore
+deactivate BlockValidation
+
+== Update Subtrees TTL After Block Validation ==
+BlockValidation -> BlockValidation : ValidateBlock()
+activate BlockValidation
+BlockValidation -> BlockValidation : finalizeBlockValidation()
+activate BlockValidation
+BlockValidation -> BlockValidation : updateSubtreesTTL()
+activate BlockValidation
+BlockValidation -> SubtreeStore : SetTTL(ctx, ttl) // ttl to 0
+activate SubtreeStore
+SubtreeStore --> BlockValidation
+deactivate SubtreeStore
+deactivate BlockValidation
+deactivate BlockValidation
+deactivate BlockValidation
+
+== Validate Block Subtrees ==
+BlockValidation -> BlockValidation : ValidateBlock()
+activate BlockValidation
+BlockValidation -> BlockValidation : validateBlockSubtrees()
+activate BlockValidation
+BlockValidation -> SubtreeStore : Exists(ctx, hash)
+activate SubtreeStore
+SubtreeStore --> BlockValidation
+deactivate SubtreeStore
+BlockValidation -> SubtreeStore : Set(ctx, hash, subtree, ttlOptions)
+activate SubtreeStore
+SubtreeStore --> BlockValidation
+deactivate SubtreeStore
+deactivate BlockValidation
+deactivate BlockValidation
+
+
+
+@enduml
