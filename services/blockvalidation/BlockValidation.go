@@ -681,6 +681,9 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String()), err)
 		}
+		if txMeta == nil {
+			u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+		}
 
 		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
 		txMetaSlice[mTx.idx] = txMeta
