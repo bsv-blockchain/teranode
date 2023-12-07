@@ -1,6 +1,7 @@
 package http_impl
 
 import (
+	"bufio"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -69,7 +70,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 }
 
 type SubtreeNodesReader struct {
-	reader    io.Reader
+	reader    *bufio.Reader
 	itemCount int
 	itemsRead int
 	extraBuf  []byte
@@ -95,7 +96,7 @@ func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error)
 	}
 
 	return &SubtreeNodesReader{
-		reader:    subtreeReader,
+		reader:    bufio.NewReader(subtreeReader),
 		itemCount: int(itemCount),
 		extraBuf:  make([]byte, 16),
 	}, nil
@@ -106,37 +107,43 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 		return 0, io.EOF // No more data
 	}
 
-	if len(p) < 32 {
-		return 0, errors.New("buffer too small")
-	}
-
-	// Function to read bytes until the buffer is filled or an error occurs
-	readFull := func(buffer []byte) error {
-		bytesRead := 0
-		for bytesRead < len(buffer) {
-			n, err := r.reader.Read(buffer[bytesRead:])
-			if err != nil {
-				return err
-			}
-			bytesRead += n
+	totalRead := 0
+	for len(p) >= 32 { // Check if there's space for at least one more 32-byte item
+		if r.itemsRead >= r.itemCount {
+			break
 		}
-		return nil
+
+		// Read the 32-byte item
+		n, err := readFull(r.reader, p[:32])
+		if err != nil {
+			return totalRead + n, err
+		}
+		totalRead += n
+		p = p[32:]
+
+		// Skip the next 16 bytes
+		_, err = readFull(r.reader, r.extraBuf[:])
+		if err != nil {
+			return totalRead, err
+		}
+
+		r.itemsRead++
 	}
 
-	// Attempt to read the first 32 bytes
-	err := readFull(p[:32])
-	if err != nil {
-		return 0, err
-	}
+	return totalRead, nil
+}
 
-	// Attempt to read the next 16 bytes into extraBuf
-	err = readFull(r.extraBuf[:16])
-	if err != nil {
-		return 32, err
+// readFull is similar to io.ReadFull but more tailored to this specific use case
+func readFull(reader io.Reader, buf []byte) (int, error) {
+	bytesRead := 0
+	for bytesRead < len(buf) {
+		n, err := reader.Read(buf[bytesRead:])
+		if err != nil {
+			return bytesRead, err
+		}
+		bytesRead += n
 	}
-
-	r.itemsRead++
-	return 32, nil
+	return bytesRead, nil
 }
 
 func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
