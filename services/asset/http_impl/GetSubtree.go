@@ -110,14 +110,23 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 		return 0, errors.New("buffer too small")
 	}
 
-	n, err := r.reader.Read(p[:32])
+	n, err := r.reader.Read(p[0:32])
 	if err != nil {
 		return n, err
 	}
 
+	if n != 32 {
+		return n, errors.New("failed to read 32 bytes")
+	}
+
 	// Read the extra data (16 bytes) and discard
-	if n, err := r.reader.Read(r.extraBuf); err != nil {
-		return n, err
+	n2, err := r.reader.Read(r.extraBuf)
+	if err != nil {
+		return n2, err
+	}
+
+	if n2 != 16 {
+		return n2, errors.New("failed to read 16 bytes")
 	}
 
 	r.itemsRead++
