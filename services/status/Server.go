@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/status/status_api"
@@ -22,12 +23,13 @@ import (
 
 type Server struct {
 	status_api.UnimplementedStatusAPIServer
-	logger      ulogger.Logger
-	wsCh        chan interface{}
-	e           *echo.Echo
-	httpAddr    string
-	name        string
-	statusItems map[string]*model.AnnounceStatusRequest
+	logger          ulogger.Logger
+	wsCh            chan interface{}
+	e               *echo.Echo
+	httpAddr        string
+	name            string
+	statusItems     map[string]*model.AnnounceStatusRequest
+	statusItemMutex sync.RWMutex
 }
 
 func Enabled() bool {
@@ -153,7 +155,9 @@ func (s *Server) AnnounceStatus(ctx context.Context, req *model.AnnounceStatusRe
 		req.ClusterName = s.name
 	}
 
+	s.statusItemMutex.Lock()
 	s.statusItems[req.ClusterName+req.Type+req.Subtype] = req
+	s.statusItemMutex.Unlock()
 
 	s.wsCh <- req
 
