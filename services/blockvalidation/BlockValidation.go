@@ -739,10 +739,6 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 				return errors.Join(fmt.Errorf("[getMissingTransactions] failed to get missing transactions batch"), err)
 			}
 
-			if len(missingTxsBatch) != len(missingTxHashesBatch) {
-				return fmt.Errorf("[getMissingTransactions] missing transactions batch size mismatch [%d] [%d]", len(missingTxsBatch), len(missingTxHashesBatch))
-			}
-
 			missingTxsMu.Lock()
 			for _, tx := range missingTxsBatch {
 				if tx == nil {
@@ -762,7 +758,7 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	}
 
 	// populate the missingTx slice with the tx data
-	missingTxs = make([]missingTx, len(missingTxHashes))
+	missingTxs = make([]missingTx, 0, len(missingTxHashes))
 	for _, mTx := range missingTxHashes {
 		if mTx.hash == nil {
 			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.hash.String())
