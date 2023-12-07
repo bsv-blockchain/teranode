@@ -110,28 +110,33 @@ func (r *SubtreeNodesReader) Read(p []byte) (int, error) {
 		return 0, errors.New("buffer too small")
 	}
 
-	n, err := r.reader.Read(p[0:32])
+	// Function to read bytes until the buffer is filled or an error occurs
+	readFull := func(buffer []byte) error {
+		bytesRead := 0
+		for bytesRead < len(buffer) {
+			n, err := r.reader.Read(buffer[bytesRead:])
+			if err != nil {
+				return err
+			}
+			bytesRead += n
+		}
+		return nil
+	}
+
+	// Attempt to read the first 32 bytes
+	err := readFull(p[:32])
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
-	if n != 32 {
-		return n, errors.New("failed to read 32 bytes")
-	}
-
-	// Read the extra data (16 bytes) and discard
-	n2, err := r.reader.Read(r.extraBuf)
+	// Attempt to read the next 16 bytes into extraBuf
+	err = readFull(r.extraBuf[:16])
 	if err != nil {
-		return n2, err
-	}
-
-	if n2 != 16 {
-		return n2, errors.New("failed to read 16 bytes")
+		return 32, err
 	}
 
 	r.itemsRead++
-
-	return n, nil
+	return 32, nil
 }
 
 func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
