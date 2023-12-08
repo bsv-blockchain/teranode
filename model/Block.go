@@ -222,18 +222,18 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	leb := currentChain[len(currentChain)-11:]
-	prevTimeStamps := make([]time.Time, 11)
-	for i, bh := range leb {
-		prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
-	}
-	ts, err := medianTimestamp(prevTimeStamps)
-	if err != nil {
-		return false, err
-	}
-	if b.Header.Timestamp <= uint32(ts.Unix()) {
-		return false, fmt.Errorf("block timestamp %d is not after median time past of last 11 blocks %d", b.Header.Timestamp, ts.Unix())
-	}
+	// leb := currentChain[len(currentChain)-11:]
+	// prevTimeStamps := make([]time.Time, 11)
+	// for i, bh := range leb {
+	// 	prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+	// }
+	// ts, err := medianTimestamp(prevTimeStamps)
+	// if err != nil {
+	// 	return false, err
+	// }
+	// if b.Header.Timestamp <= uint32(ts.Unix()) {
+	// 	return false, fmt.Errorf("block timestamp %d is not after median time past of last 11 blocks %d", b.Header.Timestamp, ts.Unix())
+	// }
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
