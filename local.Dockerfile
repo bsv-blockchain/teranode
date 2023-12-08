@@ -1,6 +1,6 @@
 # Set the base image
 FROM --platform=linux/amd64 golang:1.21.0-bullseye
-ARG GITHUB_SHA
+ARG GITHUB_SHA=268d6cc
 
 RUN apt update && apt install -y ca-certificates curl gnupg wget build-essential libsecp256k1-dev
 
@@ -58,8 +58,8 @@ COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
-COPY --from=0 /app/blaster.run .
-COPY --from=0 /app/blockchainstatus.run .
+# COPY --from=0 /app/blaster.run .
+# COPY --from=0 /app/blockchainstatus.run .
 COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \

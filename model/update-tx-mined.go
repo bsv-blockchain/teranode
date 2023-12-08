@@ -16,7 +16,7 @@ import (
 func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
 	return nil
 
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
+	opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
 	}()
