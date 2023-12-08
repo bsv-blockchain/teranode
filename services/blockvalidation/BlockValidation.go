@@ -35,6 +35,15 @@ type BlockValidation struct {
 	validatorClient  validator.Interface
 }
 
+type missingTx struct {
+	tx  *bt.Tx
+	idx int
+}
+type missingTxHash struct {
+	hash *chainhash.Hash
+	idx  int
+}
+
 func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
@@ -281,26 +290,6 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	return nil
 }
 
-// type txMetaResult struct {
-// 	Hash chainhash.Hash
-// 	Meta *txmeta.Data
-// 	Err  error
-// }
-
-// func (u *BlockValidation) processTxMeta(node *util.SubtreeNode, missingChan chan<- *util.SubtreeNode, errChan chan<- *txMetaResult) {
-// 	// Fetch txMeta and handle errors
-// 	txMeta, err := u.txMetaStore.GetMeta(context.Background(), &node.Hash)
-// 	if err != nil {
-// 		if errors.Is(err, txmeta.ErrNotFound) {
-// 			missingChan <- node
-// 		} else {
-// 			errChan <- &txMetaResult{Hash: node.Hash, Meta: txMeta, Err: err}
-// 		}
-// 	}
-// 	node.Fee = txMeta.Fee
-// 	node.SizeInBytes = txMeta.SizeInBytes
-// }
-
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
 func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []missingTxHash, baseUrl string) ([]*bt.Tx, error) {
@@ -450,13 +439,6 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	return txMeta, nil
 }
 
-func Min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlob")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
@@ -536,7 +518,7 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 			var txMeta *txmeta.Data
 			var err error
 			// cycle through the batch size, making sure not to go over the length of the txHashes
-			for j := 0; j < Min(batchSize, len(txHashes)-i); j++ {
+			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
 				txHash = txHashes[i+j]
 				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
@@ -712,15 +694,6 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 	return nil
 }
 
-type missingTx struct {
-	tx  *bt.Tx
-	idx int
-}
-type missingTxHash struct {
-	hash *chainhash.Hash
-	idx  int
-}
-
 func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []missingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
@@ -732,7 +705,7 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
 	for i := 0; i < len(missingTxHashes); i += batchSize {
-		missingTxHashesBatch := missingTxHashes[i:Min(i+batchSize, len(missingTxHashes))]
+		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
