@@ -12,10 +12,15 @@ import (
 )
 
 type notificationMsg struct {
-	Type    string `json:"type"`
-	Hash    string `json:"hash,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Hash      string `json:"hash,omitempty"`
+	BaseURL   string `json:"base_url,omitempty"`
 }
+
+const (
+	isoFormat = "2006-01-02T15:04:05Z"
+)
 
 var (
 	upgrader = websocket.Upgrader{
@@ -47,7 +52,8 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 				}
 
 				data, err := json.MarshalIndent(&notificationMsg{
-					Type: asset_api.Type_Ping.String(),
+					Timestamp: time.Now().UTC().Format(isoFormat),
+					Type:      asset_api.Type_PING.String(),
 				}, "", "  ")
 				if err != nil {
 					h.logger.Errorf("Error marshaling notification: %w", err)
@@ -66,9 +72,10 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 				hash, _ := chainhash.NewHash(notification.Hash)
 
 				data, err := json.MarshalIndent(&notificationMsg{
-					Type:    notification.Type.String(),
-					Hash:    hash.String(),
-					BaseURL: notification.BaseUrl,
+					Timestamp: time.Now().UTC().Format(isoFormat),
+					Type:      notification.Type.String(),
+					Hash:      hash.String(),
+					BaseURL:   notification.BaseUrl,
 				}, "", "  ")
 				if err != nil {
 					h.logger.Errorf("Error marshaling notification: %w", err)

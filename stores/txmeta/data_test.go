@@ -51,3 +51,66 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.Equal(t, data.BlockHashes[1].String(), d.BlockHashes[1].String())
 	})
 }
+
+func Benchmark_NewMetaDataFromBytes(b *testing.B) {
+	data := &Data{
+		Fee:         100,
+		SizeInBytes: 200,
+		ParentTxHashes: []*chainhash.Hash{
+			hash3,
+			hash4,
+		},
+		BlockHashes: []*chainhash.Hash{
+			hash5,
+			hash6,
+		},
+		Tx: &bt.Tx{},
+	}
+
+	bb := data.Bytes()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = NewMetaDataFromBytes(bb)
+	}
+}
+
+func Benchmark_Bytes(b *testing.B) {
+	data := &Data{
+		Fee:         100,
+		SizeInBytes: 200,
+		ParentTxHashes: []*chainhash.Hash{
+			hash3,
+			hash4,
+		},
+		BlockHashes: []*chainhash.Hash{
+			hash5,
+			hash6,
+		},
+		Tx: &bt.Tx{},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = data.Bytes()
+	}
+}
+
+func Benchmark_MetaBytes(b *testing.B) {
+	data := &Data{
+		Fee:         100,
+		SizeInBytes: 200,
+		ParentTxHashes: []*chainhash.Hash{
+			hash3,
+			hash4,
+		},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = data.MetaBytes()
+	}
+}

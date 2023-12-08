@@ -1,0 +1,21 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "SubtreeStore" as Store
+
+' GET request for a subtree in different formats
+Client -> HTTPServer : GET /subtree/:hash (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+
+HTTPServer -> Store : Get(ctx, hash)
+activate Store
+alt SubtreeStore has data
+    Store --> HTTPServer : Subtree data
+else SubtreeStore does not have data
+    Store --> HTTPServer : Data not found
+end
+deactivate Store
+
+HTTPServer --> Client : Subtree data (BINARY_STREAM, HEX, JSON)
+deactivate HTTPServer
+@enduml

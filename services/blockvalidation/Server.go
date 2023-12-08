@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -22,6 +23,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var stats = gocore.NewStat("blockvalidation")
@@ -46,6 +48,7 @@ type Server struct {
 	txStore          blob.Store
 	txMetaStore      txmeta_store.Store
 	validatorClient  validator.Interface
+	statusClient     status.ClientI
 
 	blockFoundCh        chan processBlockFound
 	catchupCh           chan processBlockCatchup
@@ -65,7 +68,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
+	txMetaStore txmeta_store.Store, validatorClient validator.Interface, statusClient status.ClientI) *Server {
 
 	initPrometheusMetrics()
 
@@ -75,6 +78,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
 		validatorClient:      validatorClient,
+		statusClient:         statusClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
 		processingSubtree:    make(map[chainhash.Hash]bool),
@@ -227,6 +231,24 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, err
+	}
+
+	if u.statusClient != nil {
+		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+			Timestamp: timestamppb.Now(),
+			Type:      "BlockValidation",
+			Subtype:   "BlockFound (start)",
+			Value:     hash.String(),
+		})
+
+		defer func() {
+			u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+				Timestamp: timestamppb.Now(),
+				Type:      "BlockValidation",
+				Subtype:   "BlockFound (end)",
+				Value:     hash.String(),
+			})
+		}()
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
@@ -531,21 +553,23 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	prometheusBlockValidationSetTXMetaCache.Inc()
 	for _, meta := range request.Data {
 		go func(meta []byte) {
 			// first 32 bytes is hash
-			hash, err := chainhash.NewHash(meta[:32])
-			if err != nil {
-				u.logger.Errorf("failed to create hash from bytes: %v", err)
-			}
+			hash := chainhash.Hash(meta[:32])
 
 			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
 			if err != nil {
 				u.logger.Errorf("failed to create tx meta data from bytes: %v", err)
 			}
 
-			if err = u.blockValidation.SetTxMetaCache(ctx, hash, txMetaData); err != nil {
+			if err = u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {
 				u.logger.Errorf("failed to set tx meta data: %v", err)
 			}
 		}(meta)

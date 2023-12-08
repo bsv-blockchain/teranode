@@ -30,7 +30,7 @@ message MiningSolution {
 
 // swagger:enum NotificationType
 enum NotificationType {
-  Ping = 0;
+  PING = 0;
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
@@ -51,6 +51,9 @@ message BlockInfo {
 // swagger:model AnnounceStatusRequest
 message AnnounceStatusRequest {
   google.protobuf.Timestamp timestamp = 1;
-  string service_name = 2;
-  uint32 status_text = 3;
+  string cluster_name = 2;
+  string type = 3;
+  string subtype = 4;
+  string value = 5;
+  google.protobuf.Timestamp expires_at = 6;
 }

@@ -2,9 +2,10 @@
 
 This Makefile facilitates a variety of development and build tasks for the UBSV project.
 
-- [Environment Configuration](#environment-configuration)
-- [Key Commands:](#key-commands)
-- [All Commands:](#all-commands)
+- [🛠️ Makefile Documentation](#️-makefile-documentation)
+  - [Environment Configuration](#environment-configuration)
+  - [Key Commands:](#key-commands)
+  - [All Commands:](#all-commands)
     - [General Configuration:](#general-configuration)
     - [Setting Debug Flags:](#setting-debug-flags)
     - [Build All Components:](#build-all-components)
@@ -16,7 +17,7 @@ This Makefile facilitates a variety of development and build tasks for the UBSV 
     - [Cleanup:](#cleanup)
     - [Linting and Static Analysis:](#linting-and-static-analysis)
     - [Installation:](#installation)
-- [Notes:](#notes)
+  - [Notes:](#notes)
 
 
 ## Environment Configuration
@@ -81,7 +82,7 @@ Other specific build tasks for different components:
 - `build-utxostore-blaster`: Builds the UTXO store blaster component.
 - `build-s3-blaster`: Builds the S3 blaster component.
 - `build-blockassembly-blaster`: Builds the block assembly blaster component.
-- `build-status`: Builds the status component.
+- `build-blockchainstatus`: Builds the blockchainstatus component.
 - `build-aerospiketest`: Builds the Aerospike test component.
 
 ### Testing:

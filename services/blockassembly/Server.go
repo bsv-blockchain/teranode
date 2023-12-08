@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -28,6 +29,7 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"storj.io/drpc/drpcmux"
 	"storj.io/drpc/drpcserver"
 )
@@ -52,7 +54,8 @@ type BlockAssembly struct {
 	txMetaStore           txmeta_store.Store
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
-	AssetClient           WrapperInterface
+	assetClient           WrapperInterface
+	statusClient          status.ClientI
 	blockValidationClient WrapperInterface
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
@@ -66,7 +69,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
-	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface) *BlockAssembly {
+	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface, statusClient status.ClientI) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
@@ -82,8 +85,9 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
 		subtreeTTL:            subtreeTTL,
-		AssetClient:           AssetClient,
+		assetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
+		statusClient:          statusClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
@@ -99,7 +103,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
 	if remoteTTLStores {
-		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.AssetClient, ba.blockValidationClient)
+		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.assetClient, ba.blockValidationClient)
 		if err != nil {
 			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
 		}
@@ -118,8 +122,15 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case subtree := <-newSubtreeChan:
 				// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
-				prometheusBlockAssemblerSubtreeCreated.Inc()
 
+				// check whether this subtree already exists in the store, which would mean it has already been announced
+				if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:]); ok {
+					// subtree already exists, nothing to do
+					ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
+					continue
+				}
+
+				prometheusBlockAssemblerSubtreeCreated.Inc()
 				ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
 
 				if subtreeBytes, err = subtree.Serialize(); err != nil {
@@ -472,6 +483,26 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if ba.statusClient != nil {
+		now := time.Now()
+
+		ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+			Timestamp: timestamppb.New(now),
+			Type:      "GetMiningCandidate",
+			Subtype:   "Height",
+			Value:     fmt.Sprintf("%d", miningCandidate.Height),
+			ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
+		})
+
+		ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+			Timestamp: timestamppb.New(now),
+			Type:      "GetMiningCandidate",
+			Subtype:   "PreviousHash",
+			Value:     utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash),
+			ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
+		})
 	}
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)

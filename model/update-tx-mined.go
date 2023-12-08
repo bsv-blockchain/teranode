@@ -14,6 +14,8 @@ import (
 )
 
 func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
+	return nil
+
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
@@ -26,6 +28,8 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	g.SetLimit(maxMinedRoutines)
 
 	blockHeaderHash := blockHeader.Hash()
+	logger.Infof("[UpdateTxMinedStatus] begin: block %s", blockHeaderHash.String())
+
 	for _, subtree := range subtrees {
 		subtree := subtree
 		g.Go(func() error {
@@ -57,6 +61,8 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 	}
+
+	logger.Infof("[UpdateTxMinedStatus] end: block %s", blockHeaderHash.String())
 
 	return nil
 }

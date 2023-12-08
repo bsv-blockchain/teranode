@@ -32,7 +32,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-# build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
@@ -63,9 +63,9 @@ build-s3-blaster: set_debug_flags
 build-blockassembly-blaster: set_debug_flags
 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
 
-.PHONY: build-status
-build-status:
-	go build -o status.run ./cmd/status/
+.PHONY: build-blockchainstatus
+build-blockchainstatus:
+	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
 .PHONY: build-aerospiketest
 build-aerospiketest:
@@ -179,6 +179,14 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
+	services/status/status_api/status_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
 	services/bootstrap/bootstrap_api/bootstrap_api.proto
 
 	protoc \
@@ -274,6 +282,7 @@ clean_gen:
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./services/p2p/p2p_api/*.pb.go
+	rm -f ./services/status/status_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go
 
@@ -281,7 +290,7 @@ clean_gen:
 clean:
 	rm -f ./ubsv_*.tar.gz
 	rm -f blaster.run
-	rm -f status.run
+	rm -f blockchainstatus.run
 	rm -rf build/
 	rm -f coverage.out
 

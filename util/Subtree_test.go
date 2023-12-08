@@ -3,8 +3,13 @@ package util
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
+	"os"
+	"runtime/pprof"
 	"testing"
+	"time"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,6 +191,41 @@ func Test_Serialize(t *testing.T) {
 	})
 }
 
+func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
+	SkipVeryLongTests(t)
+
+	numberOfItems := 1_024 * 1_024
+	subtree := NewTreeByLeafCount(numberOfItems)
+
+	for i := 0; i < numberOfItems; i++ {
+		tx := bt.NewTx()
+		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
+	}
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	start := time.Now()
+
+	hashes, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	require.NoError(t, err)
+
+	rootHash, err := chainhash.NewHash((*hashes)[len(*hashes)-1][:])
+	require.NoError(t, err)
+
+	assert.Equal(t, "199037f7b64e6dd88701dab414e88e24c328e7f5907640d00631974894dcc698", rootHash.String())
+
+	t.Logf("Time taken: %s\n", time.Since(start))
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
 func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	t.Run("complete tree", func(t *testing.T) {
 		hashes := make([]*chainhash.Hash, 8)
@@ -203,7 +243,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -241,7 +281,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = st.AddNode(*txHash, 101, 0)
 		}
 
-		merkleStore, err := st.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -279,7 +319,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{

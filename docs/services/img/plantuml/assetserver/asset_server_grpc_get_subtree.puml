@@ -1,0 +1,39 @@
+@startuml
+participant "Block Assembly Server\n(services/blockassembly/Server.go)" as BlockAssemblyServer
+participant "Subtree Processor\n(SubtreeProcessor.go)" as SubtreeProcessor
+participant "Remote TTL\n(remotettl.go)" as RemoteTTL
+participant "Asset Client\n(asset/client.go)" as AssetClient
+participant "Asset Server\n(asset/server.go)" as AssetServer
+database "Blob Subtree Store" as BlobStore
+
+BlockAssemblyServer -> SubtreeProcessor : reorgBlocks()
+activate SubtreeProcessor
+
+SubtreeProcessor -> SubtreeProcessor : moveDownBlock(ctx, block)
+activate SubtreeProcessor
+
+loop For Each Subtree in Block
+
+    SubtreeProcessor -> RemoteTTL : Get(ctx, key)
+    activate RemoteTTL
+    RemoteTTL -> AssetClient : Get(ctx, key)
+    activate AssetClient
+    AssetClient -> AssetServer : Get(ctx, key)
+    activate AssetServer
+    AssetServer -> BlobStore : Get(ctx, hash)
+    activate BlobStore
+    BlobStore --> AssetServer : subtreeData
+    deactivate BlobStore
+    AssetServer --> AssetClient : subtreeData
+    deactivate AssetServer
+    AssetClient --> RemoteTTL : subtreeData
+    deactivate AssetClient
+    RemoteTTL --> SubtreeProcessor : subtreeData
+    deactivate RemoteTTL
+end
+
+deactivate SubtreeProcessor
+
+deactivate SubtreeProcessor
+
+@enduml

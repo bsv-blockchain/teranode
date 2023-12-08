@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -14,7 +13,6 @@ import (
 
 type ClientI interface {
 	Health(context.Context) (*p2p_api.HealthResponse, error)
-	AnnounceStatus(context.Context, *model.AnnounceStatusRequest) error
 }
 
 type Client struct {
@@ -53,9 +51,4 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 
 func (c Client) Health(ctx context.Context) (*p2p_api.HealthResponse, error) {
 	return c.client.Health(ctx, &emptypb.Empty{})
-}
-
-func (c Client) AnnounceStatus(ctx context.Context, status *model.AnnounceStatusRequest) error {
-	_, err := c.client.AnnounceStatus(ctx, status)
-	return err
 }

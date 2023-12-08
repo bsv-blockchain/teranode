@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/gcash/bchd/wire"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -31,12 +30,12 @@ func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
+	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[16:24])
 
-	buf := bytes.NewReader(dataBytes[16:])
+	buf := bytes.NewReader(dataBytes[24:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
-	parentTxHashesLen, _ := wire.ReadVarInt(buf, 0)
 	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
@@ -57,12 +56,12 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
+	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[16:24])
 
-	buf := bytes.NewReader(dataBytes[16:])
+	buf := bytes.NewReader(dataBytes[24:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
-	parentTxHashesLen, _ := wire.ReadVarInt(buf, 0)
 	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
@@ -104,13 +103,12 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 }
 
 func (d *Data) Bytes() []byte {
-	buf := make([]byte, 16) // 8 for Fee, 8 for SizeInBytes
+	buf := make([]byte, 24, 1024) // 8 for Fee, 8 for SizeInBytes
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
 
-	// write a varint for the length and then all the parent tx hashes
-	buf = append(buf, bt.VarInt(uint64(len(d.ParentTxHashes))).Bytes()...)
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(len(d.ParentTxHashes)))
 	for _, parentTxHash := range d.ParentTxHashes {
 		buf = append(buf, parentTxHash.CloneBytes()...)
 	}
@@ -123,6 +121,20 @@ func (d *Data) Bytes() []byte {
 	// write a varint for the length and then all the block hashes
 	for _, blockHash := range d.BlockHashes {
 		buf = append(buf, blockHash.CloneBytes()...)
+	}
+
+	return buf
+}
+
+func (d *Data) MetaBytes() []byte {
+	buf := make([]byte, 24, 1024) // 8 for Fee, 8 for SizeInBytes
+
+	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
+	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(len(d.ParentTxHashes)))
+	for _, parentTxHash := range d.ParentTxHashes {
+		buf = append(buf, parentTxHash.CloneBytes()...)
 	}
 
 	return buf

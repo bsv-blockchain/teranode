@@ -59,7 +59,7 @@ COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
-COPY --from=0 /app/status.run .
+COPY --from=0 /app/blockchainstatus.run .
 COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \

@@ -7,7 +7,7 @@
 - [Getting Started](#getting-started)
   - [Pre-requisites and Installation](#pre-requisites-and-installation)
   - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
-- [Advanced Usage  [ TO-DO ]](#advanced-usage---to-do-)
+- [Advanced Usage  [ TO-DO ]](#advanced-usage)
   - [Settings](#settings)
   - [Makefile](#makefile)
     - [Proto buffers (protoc)](#proto-buffers-protoc)
@@ -56,7 +56,7 @@ Please refer to the [Locally Running Services Documentation](docs/locallyRunning
 
 ---
 
-## Advanced Usage  [ TO-DO ]
+## Advanced Usage
 
 ### Settings
 
@@ -124,7 +124,7 @@ Please check the [Architecture Documentation](docs/architecture/architecture.md)
 
 Detailed Node Service documentation:
 
-+ [Asset Server - TODO](docs/services/assetServer.md)
++ [Asset Server](docs/services/assetServer.md)
 
 + [Propagation Service - TODO](docs/services/propagation.md)
 
@@ -138,7 +138,7 @@ Detailed Node Service documentation:
 
 Store Documentation:
 
-+ [Blob Store](docs/stores/blob.md)
++ [Blob Server](docs/stores/blob.md)
 
 + [UTXO Store](docs/stores/utxo.md)
 
@@ -148,7 +148,7 @@ Overlay Service documentation:
 
 + [Coinbase - TODO](docs/services/coinbase.md)
 
-+ [P2P - TODO](docs/services/p2p.md)
++ [P2P](docs/services/p2p.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
 

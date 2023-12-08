@@ -1,0 +1,54 @@
+@startuml
+participant "Coinbase Service" as Coinbase
+participant "Asset Client\n(asset/Client.go)" as AssetClient
+participant "Asset Server\n(asset/Server.go)" as AssetServer
+participant "Blockchain Client" as BlockchainClient
+
+== Get Block Scenario ==
+Coinbase -> Coinbase : catchup() or processBlock()
+
+Coinbase -> AssetClient : gRPC getBlock(ctx, blockHash)
+activate AssetClient
+AssetClient -> AssetServer : getBlock(ctx, blockHash)
+activate AssetServer
+AssetServer -> BlockchainClient : GetBlock(ctx, blockHash)
+activate BlockchainClient
+BlockchainClient --> AssetServer : blockData
+deactivate BlockchainClient
+AssetServer --> AssetClient : blockData
+deactivate AssetServer
+AssetClient --> Coinbase : blockData
+deactivate AssetClient
+
+== Get Best Block Header Scenario ==
+Coinbase -> Coinbase : init() or storeBlock()
+
+Coinbase -> AssetClient : gRPC getBestBlockHeader(ctx)
+activate AssetClient
+AssetClient -> AssetServer : getBestBlockHeader(ctx)
+activate AssetServer
+AssetServer -> BlockchainClient : GetBestBlockHeader(ctx)
+activate BlockchainClient
+BlockchainClient --> AssetServer : bestBlockHeaderData
+deactivate BlockchainClient
+AssetServer --> AssetClient : bestBlockHeaderData
+deactivate AssetServer
+AssetClient --> Coinbase : bestBlockHeaderData
+deactivate AssetClient
+
+== Get Block Headers Scenario ==
+Coinbase -> Coinbase : catchup()
+
+Coinbase -> AssetClient : gRPC getBlockHeaders(ctx, fromBlockHeaderHash, numberOfHeaders)
+activate AssetClient
+AssetClient -> AssetServer : getBlockHeaders(ctx, fromBlockHeaderHash, numberOfHeaders)
+activate AssetServer
+AssetServer -> BlockchainClient : GetBlockHeaders(ctx, fromBlockHeaderHash, numberOfHeaders)
+activate BlockchainClient
+BlockchainClient --> AssetServer : blockHeadersData
+deactivate BlockchainClient
+AssetServer --> AssetClient : blockHeadersData
+deactivate AssetServer
+AssetClient --> Coinbase : blockHeadersData
+deactivate AssetClient
+@enduml

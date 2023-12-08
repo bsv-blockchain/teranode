@@ -85,7 +85,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				}
 
 				switch resp.Type {
-				case asset_api.Type_Ping:
+				case asset_api.Type_PING:
 					// do nothing except pass it to clients
 				case asset_api.Type_Subtree:
 					c.logger.Debugf("Received SUBTREE notification: %s", hash.String())

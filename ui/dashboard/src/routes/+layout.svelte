@@ -96,6 +96,10 @@
       <a class="navbar-item" href="/network" on:click={handleNavbarItemClick}>
         Network
       </a>
+
+      <a class="navbar-item" href="/status" on:click={handleNavbarItemClick}>
+        Status
+      </a>
     </div>
   </div>
 </nav>

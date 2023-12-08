@@ -211,10 +211,11 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+	start := time.Now()
 	var e error
 	defer func() {
 		if e != nil {
-			s.logger.Errorf("txmeta Create error for %s: %v", tx.TxIDChainHash().String(), e)
+			s.logger.Errorf("txmeta Create error for %s (time taken: %s) : %v", tx.TxIDChainHash().String(), time.Since(start).String(), e)
 		}
 	}()
 
@@ -248,24 +249,39 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
-	start := time.Now()
-	err = s.client.PutBins(policy, key, bins...)
-	if err != nil {
-		aeroErr := &aerospike.AerospikeError{}
-		if ok := errors.As(err, &aeroErr); ok {
-			if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
-				return txMeta, txmeta.ErrAlreadyExists
-			}
+	maxRetries := 5
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = s.client.PutBins(policy, key, bins...)
+
+		if err == nil {
+			prometheusTxMetaSet.Inc()
+			return txMeta, nil
 		}
 
-		err = fmt.Errorf("aerospike put error (time taken: %s) : %w", time.Since(start).String(), err)
-		e = err
-		return txMeta, err
+		aeroErr := &aerospike.AerospikeError{}
+		ok := errors.As(err, &aeroErr)
+		if !ok {
+			e = err
+			break
+		}
+
+		if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
+			return txMeta, txmeta.ErrAlreadyExists
+		}
+		switch aeroErr.ResultCode {
+		case types.NETWORK_ERROR, types.TIMEOUT, types.MAX_ERROR_RATE, types.COMMAND_REJECTED, types.INVALID_NODE_ERROR, types.MAX_RETRIES_EXCEEDED, types.SERVER_ERROR, types.SERVER_NOT_AVAILABLE, types.LOST_CONFLICT:
+			s.logger.Errorf("Aerospike error for %s on attempt %d: %v", tx.TxIDChainHash().String(), attempt+1, err)
+			duration := time.Duration(math.Pow(2, float64(attempt))) * time.Millisecond
+			if attempt < maxRetries-1 { // don't sleep on last attempt
+				time.Sleep(duration)
+			}
+		default:
+			e = err
+		}
 	}
 
-	prometheusTxMetaSet.Inc()
-
-	return txMeta, nil
+	return txMeta, err
 }
 
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {

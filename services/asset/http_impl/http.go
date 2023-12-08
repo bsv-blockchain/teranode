@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
@@ -23,6 +24,7 @@ type HTTP struct {
 	repository     *repository.Repository
 	e              *echo.Echo
 	notificationCh chan *asset_api.Notification
+	startTime      time.Time
 }
 
 func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
@@ -47,7 +49,12 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 		repository:     repo,
 		e:              e,
 		notificationCh: notificationCh,
+		startTime:      time.Now(),
 	}
+
+	e.GET("/alive", func(c echo.Context) error {
+		return c.String(http.StatusOK, fmt.Sprintf("Asset service is alive. Uptime: %s\n", time.Since(h.startTime)))
+	})
 
 	e.GET("/health", func(c echo.Context) error {
 		_, details, err := repo.Health(c.Request().Context())
@@ -68,7 +75,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	e.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
-	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
+	e.GET("/stream/subtree/:hash", h.GetSubtreeStream())
+	e.GET("/subtree/:hash", h.GetSubtreeAsReader)
 	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 

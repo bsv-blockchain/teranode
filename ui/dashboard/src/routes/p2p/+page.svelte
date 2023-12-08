@@ -39,7 +39,7 @@
       let newGroupedMessages = {}
 
       filteredMessages.forEach((message) => {
-        if (message.type !== 'Ping') {
+        if (message.type !== 'PING') {
           if (!newGroupedMessages[message.peer_id]) {
             newGroupedMessages[message.peer_id] = []
           }

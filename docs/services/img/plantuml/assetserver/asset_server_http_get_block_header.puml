@@ -1,0 +1,35 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "BlockchainClient" as Blockchain
+
+' Block headers request
+Client -> HTTPServer : GET /headers/:hash (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+HTTPServer -> Blockchain : GetBlockHeaders(ctx, hash, numberOfHeaders)
+activate Blockchain
+Blockchain --> HTTPServer : Block headers data
+deactivate Blockchain
+HTTPServer --> Client : Response (Block headers data)
+deactivate HTTPServer
+
+' Specific block header request
+Client -> HTTPServer : GET /header/:hash (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+HTTPServer -> Blockchain : GetBlockHeader(ctx, hash)
+activate Blockchain
+Blockchain --> HTTPServer : Specific block header data
+deactivate Blockchain
+HTTPServer --> Client : Response (Specific block header data)
+deactivate HTTPServer
+
+' Best block header request
+Client -> HTTPServer : GET /bestblockheader (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+HTTPServer -> Blockchain : GetBestBlockHeader(ctx)
+activate Blockchain
+Blockchain --> HTTPServer : Best block header data
+deactivate Blockchain
+HTTPServer --> Client : Response (Best block header data)
+deactivate HTTPServer
+@enduml

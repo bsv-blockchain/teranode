@@ -2,7 +2,11 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"runtime/pprof"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -45,7 +49,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
-		require.NoError(t, subtree.AddNode(*hash4, 124, 0))
+		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
 		_, err := txMetaStore.Create(context.Background(), tx1)
 		require.NoError(t, err)
@@ -108,4 +112,57 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 	return txMetaStore, validatorClient, txStore, subtreeStore, func() {
 		httpmock.DeactivateAndReset()
 	}
+}
+
+func TestBlockValidationValidateBigSubtree(t *testing.T) {
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+	blockValidation.txMetaStore = newTxMetaCache(txMetaStore)
+
+	numberOfItems := 1_024 * 1_024
+
+	subtree := util.NewTreeByLeafCount(numberOfItems)
+
+	for i := 0; i < numberOfItems; i++ {
+		tx := bt.NewTx()
+		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
+
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
+
+		_, err := blockValidation.txMetaStore.Create(context.Background(), tx)
+		require.NoError(t, err)
+	}
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	// this calculation should not be in the test data, in the real world we would be getting this from the other miner
+	rootHash := subtree.RootHash()
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	start := time.Now()
+
+	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000")
+	require.NoError(t, err)
+
+	t.Logf("Time taken: %s\n", time.Since(start))
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
 }

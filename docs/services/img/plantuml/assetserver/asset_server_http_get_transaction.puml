@@ -1,0 +1,44 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "TxMetaStore" as MetaStore
+participant "TxStore" as Store
+
+' GET request for a single transaction in different formats
+Client -> HTTPServer : GET /tx/:hash (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+HTTPServer -> MetaStore : Get(ctx, hash)
+activate MetaStore
+alt MetaStore has data
+    MetaStore --> HTTPServer : transactionData
+else MetaStore does not have data
+    MetaStore --> HTTPServer
+    HTTPServer -> Store : Get(ctx, hash)
+    activate Store
+    Store --> HTTPServer : transactionData
+    deactivate Store
+end
+HTTPServer --> Client : transactionData
+deactivate HTTPServer
+
+' POST request for multiple transactions
+Client -> HTTPServer : POST /txs (List of hashes)
+activate HTTPServer
+alt For Each Hash in List
+    loop
+        HTTPServer -> MetaStore : Get(ctx, hash)
+        activate MetaStore
+        alt MetaStore has data
+            MetaStore --> HTTPServer : transactionData
+        else MetaStore does not have data
+            MetaStore --> HTTPServer
+            HTTPServer -> Store : Get(ctx, hash)
+            activate Store
+            Store --> HTTPServer : transactionData
+            deactivate Store
+        end
+    end
+end
+HTTPServer --> Client : All transactionData
+deactivate HTTPServer
+@enduml

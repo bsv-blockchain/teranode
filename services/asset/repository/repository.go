@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -146,18 +147,18 @@ func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, 
 }
 
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtree, err := r.GetSubtree(ctx, hash)
+	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
 		return nil, err
 	}
 
-	subtreeNodeBytes, err := subtree.SerializeNodes()
-	if err != nil {
-		return nil, fmt.Errorf("error in SerializeNodes: %w", err)
-	}
-
-	return subtreeNodeBytes, nil
+	return subtreeBytes, nil
 }
+
+func (r *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes())
+}
+
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
