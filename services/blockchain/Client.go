@@ -102,7 +102,8 @@ func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, err
 	return c.client.Health(ctx, &emptypb.Empty{})
 }
 
-func (c Client) AddBlock(ctx context.Context, block *model.Block, external bool) error {
+func (c Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	external := peerID != ""
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
@@ -110,6 +111,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block, external bool)
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		External:         external,
+		PeerId:           peerID,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -240,6 +242,14 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	}
 
 	return headers, resp.Heights, nil
+}
+
+func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return err
 }
 
 func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {

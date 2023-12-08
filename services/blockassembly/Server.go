@@ -669,7 +669,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain
-	if err = ba.blockchainClient.AddBlock(cntxt, block, false); err != nil {
+	if err = ba.blockchainClient.AddBlock(cntxt, block, ""); err != nil {
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
 
@@ -699,7 +699,10 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		})
 
 		if err = g.Wait(); err != nil {
-			ba.logger.Errorf("[BlockAssembly] error updating status: %w", err)
+			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
+				ba.logger.Errorf("[BlockAssembly] failed to invalidate block: %s", err)
+			}
+			ba.logger.Errorf("[BlockAssembly] error updating status: %s", err)
 		}
 	}()
 

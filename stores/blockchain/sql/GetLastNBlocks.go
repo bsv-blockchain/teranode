@@ -54,6 +54,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		,b.height
 		,b.inserted_at
 		FROM blocks b
+		WHERE invalid = false
 		ORDER BY height DESC
 	  LIMIT $1
 		)
@@ -79,16 +80,18 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 				WITH RECURSIVE ChainBlocks AS (
 					SELECT id, parent_id, height
 					FROM blocks
-					WHERE hash = (
-						SELECT
-	   					b.hash
-							FROM blocks b
-							ORDER BY chain_work DESC, id ASC
+					WHERE invalid = false
+					AND hash = (
+						SELECT b.hash
+						FROM blocks b
+						WHERE b.invalid = false
+						ORDER BY chain_work DESC, peer_id ASC, id ASC
 						LIMIT 1
 					)
 					UNION ALL
 					SELECT bb.id, bb.parent_id, bb.height
 					FROM blocks bb
+					WHERE bb.invalid = false
 					JOIN ChainBlocks cb ON bb.id = cb.parent_id
 					WHERE bb.id != cb.id
 				)

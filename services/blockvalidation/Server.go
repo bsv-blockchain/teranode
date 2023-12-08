@@ -223,6 +223,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockValidationBlockFoundDuration.Observe(util.TimeSince(start))
+		u.logger.Infof("[BlockFound][%s] DONE from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
 	}()
 
 	prometheusBlockValidationBlockFound.Inc()

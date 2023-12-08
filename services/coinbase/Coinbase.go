@@ -360,7 +360,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	//ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
 
-	blockId, err := c.store.StoreBlock(ctx, block)
+	blockId, err := c.store.StoreBlock(ctx, block, "")
 	if err != nil {
 		return fmt.Errorf("could not store block: %+v", err)
 	}

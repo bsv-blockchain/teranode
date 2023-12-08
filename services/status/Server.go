@@ -159,7 +159,9 @@ func (s *Server) AnnounceStatus(ctx context.Context, req *model.AnnounceStatusRe
 	s.statusItems[req.ClusterName+req.Type+req.Subtype] = req
 	s.statusItemMutex.Unlock()
 
-	s.wsCh <- req
+	go func() {
+		s.wsCh <- req
+	}()
 
 	return &emptypb.Empty{}, nil
 }

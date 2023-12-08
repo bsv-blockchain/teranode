@@ -115,13 +115,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(spanCtx, block, true); err != nil {
+	if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
+		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
@@ -175,13 +175,17 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
 
-	g, gCtx := errgroup.WithContext(spanCtx)
+	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	callerSpan := opentracing.SpanFromContext(spanCtx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
+	g, gCtx := errgroup.WithContext(setCtx)
 
 	g.Go(func() error {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
 		err = u.updateSubtreesTTL(gCtx, block)
 		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%w]", block.Hash().String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%s]", block.Hash().String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 
@@ -202,6 +206,9 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	})
 
 	if err = g.Wait(); err != nil {
+		if err = u.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
+			u.logger.Errorf("[ValidateBlock] failed to invalidate block: %s", err)
+		}
 		return fmt.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 	}
 

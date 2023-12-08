@@ -36,13 +36,11 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// TODO prefer our own blocks over the ones from the network
-	//      exclude invalid blocks
 	q := `
 		SELECT
-	   b.version
+	     b.version
 		,b.block_time
-	  ,b.nonce
+	    ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
 		,b.n_bits
@@ -51,7 +49,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.size_in_bytes
 		,b.coinbase_tx
 		FROM blocks b
-		ORDER BY chain_work DESC, id ASC
+		WHERE invalid = false
+		ORDER BY chain_work DESC, peer_id ASC, id ASC
 		LIMIT 1
 	`
 

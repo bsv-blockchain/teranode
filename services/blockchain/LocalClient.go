@@ -29,8 +29,8 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 	}, nil
 }
 
-func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, external bool) error {
-	_, err := c.store.StoreBlock(ctx, block)
+func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	_, err := c.store.StoreBlock(ctx, block, peerID)
 	return err
 }
 
@@ -66,6 +66,10 @@ func (c LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Ha
 
 func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
+}
+
+func (c LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.InvalidateBlock(ctx, blockHash)
 }
 
 func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {

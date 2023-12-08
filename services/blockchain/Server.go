@@ -185,7 +185,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx1, block)
+	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
 	if err != nil {
 		return nil, err
 	}
@@ -414,6 +414,27 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	prometheusBlockchainSetState.Inc()
 
 	err := b.store.SetState(ctx1, req.Key, req.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "InvalidateBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainSetState.Inc()
+
+	blockHash, err := chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.store.InvalidateBlock(ctx1, blockHash)
 	if err != nil {
 		return nil, err
 	}

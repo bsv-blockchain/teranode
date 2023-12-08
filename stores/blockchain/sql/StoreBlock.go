@@ -13,7 +13,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error) {
+func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "StoreBlock")
 	defer func() {
 		stat.AddTime(start)
@@ -31,7 +31,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 	q := `
 		INSERT INTO blocks (
 		 parent_id
-    ,version
+         ,version
 	  ,hash
 	  ,previous_hash
 	  ,merkle_root
@@ -44,8 +44,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 		,size_in_bytes
 		,subtree_count
 		,subtrees
+		,peer_id
     ,coinbase_tx
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
 		RETURNING id
 	`
 
@@ -75,8 +76,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 			,size_in_bytes
 			,subtree_count
 			,subtrees
+			,peer_id
 			,coinbase_tx
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15)
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
 			RETURNING id
 		`
 	} else {
@@ -160,6 +162,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block) (uint64, error
 		block.SizeInBytes,
 		len(block.Subtrees),
 		subtreeBytes,
+		peerID,
 		block.CoinbaseTx.Bytes(),
 	)
 	if err != nil {
