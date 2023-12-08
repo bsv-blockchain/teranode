@@ -1,0 +1,47 @@
+@startuml
+
+participant "Node 1" as Node1
+queue "PubSub System" as PubSub
+participant "Node 2" as Node2
+queue "Notification Channel" as notificationChannel
+participant "Block Validator" as BlockValidationClient
+
+=== New Block Notification ===
+Node1 -> Node1: blockchainSubscriptionListener(ctx)
+alt notification.Type == model.NotificationType_Block
+    Node1 -> PubSub: s.topics[blockTopicName].Publish(ctx, blockMessageBytes)
+end
+
+PubSub -> Node2: s.subscriptions[blockTopicName]
+activate Node2
+Node2 -> Node2: handleBlockTopic(ctx)
+Node2 -> BlockValidationClient: blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl)
+Node2 -> notificationChannel: notify blockMessage to s.notificationCh
+deactivate Node2
+
+=== New Mined Block Notification ===
+Node1 -> Node1: blockchainSubscriptionListener(ctx)
+alt notification.Type == model.NotificationType_MiningOn
+    Node1 -> PubSub: s.topics[miningOnTopicName].Publish(ctx, miningOnMessageBytes)
+end
+
+PubSub -> Node2: s.subscriptions[miningOnTopicName]
+activate Node2
+Node2 -> Node2: handleMiningOnTopic(ctx)
+Node2 -> notificationChannel: notify miningOnMessage to s.notificationCh
+deactivate Node2
+
+=== New Subtree Notification ===
+Node1 -> Node1: blockchainSubscriptionListener(ctx)
+alt notification.Type == model.NotificationType_Subtree
+    Node1 -> PubSub: s.topics[subtreeTopicName].Publish(ctx, subtreeMessageBytes)
+end
+
+PubSub -> Node2: s.subscriptions[subtreeTopicName]
+activate Node2
+Node2 -> Node2: handleSubtreeTopic(ctx)
+Node2 -> BlockValidationClient: s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl)
+Node2 -> notificationChannel: notify subtreeMessage to s.notificationCh
+deactivate Node2
+
+@enduml

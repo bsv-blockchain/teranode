@@ -1,0 +1,39 @@
+@startuml
+
+participant "Node" as Node
+control "DHT (Distributed Hash Table)" as DHT
+control "Routing Discovery" as RoutingDiscovery
+database "Peers" as Peers
+control "Host" as Host
+entity "Topic" as Topic
+
+Node -> DHT: InitDHT(ctx, Host)
+activate DHT
+DHT --> Node: Return DHT instance
+deactivate DHT
+
+Node -> RoutingDiscovery: NewRoutingDiscovery(DHT)
+activate RoutingDiscovery
+Node -> RoutingDiscovery: Advertise topics
+loop for each Topic in tn
+    Node -> Topic: Advertise(ctx, RoutingDiscovery, Topic)
+end
+deactivate RoutingDiscovery
+
+loop Peer Discovery
+    Node -> RoutingDiscovery: FindPeers(ctx, Topic)
+    activate RoutingDiscovery
+    RoutingDiscovery -> Peers: Get peers for Topic
+    deactivate RoutingDiscovery
+    loop for each Peer in Peers
+        Peers --> Node: Peer
+        Node -> Host: Connect(ctx, Peer)
+        alt successful connection
+            Host -> Node: Connected
+        else connection failed
+            Host -> Node: Connection Failed
+        end
+    end
+end
+
+@enduml
