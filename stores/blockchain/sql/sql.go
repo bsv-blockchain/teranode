@@ -114,7 +114,7 @@ func createPostgresSchema(db *sql.DB) error {
         ,subtrees       BYTEA NOT NULL
         ,coinbase_tx    BYTEA NOT NULL
 		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
-        ,peer_id	    VARCHAR(64) NULL
+        ,peer_id	    VARCHAR(64) NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -205,7 +205,7 @@ func createSqliteSchema(db *sql.DB) error {
 		,subtrees       BLOB NOT NULL
         ,coinbase_tx    BLOB NOT NULL
 		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
-		,peer_id	    VARCHAR(64) NULL
+		,peer_id	    VARCHAR(64) NOT NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
