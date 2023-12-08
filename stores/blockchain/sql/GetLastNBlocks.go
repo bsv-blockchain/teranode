@@ -91,9 +91,9 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 					UNION ALL
 					SELECT bb.id, bb.parent_id, bb.height
 					FROM blocks bb
-					WHERE bb.invalid = false
 					JOIN ChainBlocks cb ON bb.id = cb.parent_id
 					WHERE bb.id != cb.id
+					  AND bb.invalid = false
 				)
 				SELECT id FROM ChainBlocks
 				` + fromHeightQuery + `
