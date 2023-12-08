@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -62,6 +63,12 @@ type BlockAssembly struct {
 	blockAssemblyDisabled bool
 }
 
+type subtreeRetrySend struct {
+	subtreeHash  chainhash.Hash
+	subtreeBytes []byte
+	retries      int
+}
+
 func Enabled() bool {
 	_, found := gocore.Config().Get("blockassembly_grpcListenAddress")
 	return found
@@ -99,7 +106,10 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 }
 
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
-	newSubtreeChan := make(chan *util.Subtree)
+	// this is passed into the block assembler and subtree processor where new subtrees are created
+	newSubtreeChan := make(chan *util.Subtree, 100)
+	// retry channel for subtrees that failed to be stored
+	subtreeRetryChan := make(chan *subtreeRetrySend, 100)
 
 	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
 	if remoteTTLStores {
@@ -120,6 +130,44 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 			case <-ctx.Done():
 				ba.logger.Infof("Stopping subtree listener")
 				return
+			case subtreeRetry := <-subtreeRetryChan:
+				if err = ba.subtreeStore.Set(ctx,
+					subtreeRetry.subtreeHash[:],
+					subtreeRetry.subtreeBytes,
+					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+				); err != nil {
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
+
+					if subtreeRetry.retries > 10 {
+						ba.logger.Errorf("[BlockAssembly:Init][%s] failed to retry store subtree, retries exhausted", subtreeRetry.subtreeHash.String())
+						continue
+					}
+
+					subtreeRetry.retries++
+					go func() {
+						// backoff and wait before re-adding to retry queue
+						backoff := time.Duration(math.Pow(2, float64(subtreeRetry.retries))) * time.Second
+						time.Sleep(backoff)
+
+						// re-add the subtree to the retry queue
+						subtreeRetryChan <- subtreeRetry
+					}()
+
+					continue
+				}
+
+				// TODO #145
+				// the repository in the blob server sometimes cannot find subtrees that were just stored
+				// this is the dumbest way we can think of to fix it, at least temporarily
+				time.Sleep(20 * time.Millisecond)
+
+				if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
+					Type: model.NotificationType_Subtree,
+					Hash: &subtreeRetry.subtreeHash,
+				}); err != nil {
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeRetry.subtreeHash.String(), err)
+				}
+
 			case subtree := <-newSubtreeChan:
 				// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
 
@@ -138,33 +186,34 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					continue
 				}
 
-				// TODO context was being canceled, is this hiding a different problem?
-				// start2, stat2, ctx2 := util.NewStatFromContext(ctx, "subtreeStore.Set", stat1)
 				if err = ba.subtreeStore.Set(ctx,
 					subtree.RootHash()[:],
 					subtreeBytes,
 					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
 				); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+
+					// add to retry saving the subtree
+					subtreeRetryChan <- &subtreeRetrySend{
+						subtreeHash:  *subtree.RootHash(),
+						subtreeBytes: subtreeBytes,
+						retries:      0,
+					}
+
 					continue
 				}
-				// stat2.AddTime(start2)
 
 				// TODO #145
 				// the repository in the blob server sometimes cannot find subtrees that were just stored
 				// this is the dumbest way we can think of to fix it, at least temporarily
 				time.Sleep(20 * time.Millisecond)
 
-				// start3, stat3, ctx3 := util.NewStatFromContext(ctx, "SendNotification", stat1)
 				if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
 					Type: model.NotificationType_Subtree,
 					Hash: subtree.RootHash(),
 				}); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtree.RootHash().String(), err)
 				}
-				// stat3.AddTime(start3)
-
-				// stat1.AddTime(start1)
 			}
 		}
 	}()

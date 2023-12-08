@@ -127,9 +127,10 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				}
 
 				getSubtreesChan <- completeSubtrees
+				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
 
 			case reorgReq := <-stp.reorgBlockChan:
-				logger.Infof("[SubtreeProcessor] reorgReq subtree processor")
+				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 				err = stp.reorgBlocks(ctx, reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
 				if err == nil {
 					if len(reorgReq.moveUpBlocks) > 0 {
@@ -139,14 +140,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 					}
 				}
 				reorgReq.errChan <- err
+				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 
 			case moveUpReq := <-stp.moveUpBlockChan:
-				logger.Infof("[SubtreeProcessor] moveUpBlock subtree processor: %s", moveUpReq.block.String())
+				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor", moveUpReq.block.String())
 				err = stp.moveUpBlock(ctx, moveUpReq.block, false)
 				if err == nil {
 					stp.currentBlockHeader = moveUpReq.block.Header
 				}
 				moveUpReq.errChan <- err
+				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor DONE", moveUpReq.block.String())
 
 			default:
 				nrProcessed := 0
