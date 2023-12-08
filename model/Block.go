@@ -201,9 +201,9 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}()
 
 	// fail if we don't have enough blockheaders in the current chain
-	if len(currentChain) < 11 {
-		return false, fmt.Errorf("need at least 11 blocks in the current chain. Have %d", len(currentChain))
-	}
+	// if len(currentChain) < 11 {
+	// 	return false, fmt.Errorf("need at least 11 blocks in the current chain. Have %d", len(currentChain))
+	// }
 
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
