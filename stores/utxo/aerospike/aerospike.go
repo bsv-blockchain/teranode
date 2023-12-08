@@ -376,6 +376,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			errorsThrown = append(errorsThrown, fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err))
 			s.storeRetryCh <- &storeUtxo{
 				hash:     utxoHashes[idx],
+				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
 		}
