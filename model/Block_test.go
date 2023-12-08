@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"testing"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -98,4 +102,82 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, uint64(1), block.TransactionCount)
 		assert.Equal(t, uint64(215), block.SizeInBytes)
 	})
+}
+
+func TestMedianTimestamp(t *testing.T) {
+
+	timestamps := make([]time.Time, 11)
+	now := time.Now()
+	for i := range timestamps {
+		timestamps[i] = now.Add(time.Duration(i) * time.Hour)
+	}
+
+	t.Run("test for correct median time", func(t *testing.T) {
+		expected := timestamps[5]
+		median, err := medianTimestamp(timestamps)
+
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+
+	t.Run("test for correct median time unsorted", func(t *testing.T) {
+		expected := timestamps[4]
+		// add a new timestamp out of sequence
+		now = time.Now()
+		timestamps[5] = now
+		median, err := medianTimestamp(timestamps)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+	t.Run("test for error when not enough timestamps", func(t *testing.T) {
+		_, err := medianTimestamp(timestamps[:10])
+		if err == nil {
+			t.Errorf("Expected error for insufficient timestamps, got none")
+		}
+	})
+}
+
+func TestBlock_Valid(t *testing.T) {
+
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		SizeInBytes:      123,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	subtreeStore, _ := null.New(ulogger.TestLogger{})
+	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+
+	currentChain := make([]*BlockHeader, 11)
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			// set the last 11 block header timestamps to be less than the current timestamps
+			Timestamp: 1231469665 - uint32(i),
+		}
+	}
+	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain)
+	require.NoError(t, err)
+	require.True(t, v)
+
 }

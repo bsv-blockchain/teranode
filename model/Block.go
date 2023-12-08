@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -199,6 +200,11 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		prometheusBlockValid.Observe(time.Since(startTime).Seconds())
 	}()
 
+	// fail if we don't have enough blockheaders in the current chain
+	if len(currentChain) < 11 {
+		return false, fmt.Errorf("need at least 11 blocks in the current chain. Have %d", len(currentChain))
+	}
+
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if !headerValid {
@@ -216,7 +222,18 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	// TODO
+	leb := currentChain[len(currentChain)-11:]
+	prevTimeStamps := make([]time.Time, 11)
+	for i, bh := range leb {
+		prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+	}
+	ts, err := medianTimestamp(prevTimeStamps)
+	if err != nil {
+		return false, err
+	}
+	if b.Header.Timestamp <= uint32(ts.Unix()) {
+		return false, fmt.Errorf("block timestamp %d is not after median time past of last 11 blocks %d", b.Header.Timestamp, ts.Unix())
+	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
@@ -611,4 +628,20 @@ func (b *Block) Bytes() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
+	n := len(timestamps)
+	if n != 11 {
+		return nil, fmt.Errorf("need 11 timestamps to work out median time. Have %d", n)
+	}
+
+	sort.Slice(timestamps, func(i, j int) bool {
+		return timestamps[i].Before(timestamps[j])
+	})
+
+	mid := n / 2
+
+	// return the middle one
+	return &timestamps[mid], nil
 }
