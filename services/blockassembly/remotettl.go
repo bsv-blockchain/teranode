@@ -46,13 +46,21 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 }
 
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
-	subtreeBytes, _ := r.blockValidationClient.Get(ctx, key)
+	subtreeBytes, err := r.blockValidationClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Errorf("using block validation service in block assembly for subtree %x error: %v", key, err)
+	}
+
 	if subtreeBytes == nil {
-		subtreeBytes, _ = r.AssetClient.Get(ctx, key)
+		r.logger.Warnf("using block validation service in block assembly for subtree %x failed", key)
+		subtreeBytes, err = r.AssetClient.Get(ctx, key)
+		if err != nil {
+			r.logger.Errorf("using asset client in block assembly for subtree %x error: %v", key, err)
+		}
+
 		if subtreeBytes == nil {
+			r.logger.Warnf("using asset client in block assembly for subtree %x failed", key)
 			return r.store.Get(ctx, key)
-		} else {
-			r.logger.Warnf("Using asset service in block assembly for subtree %x", key)
 		}
 	}
 

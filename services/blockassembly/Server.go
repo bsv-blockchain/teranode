@@ -610,6 +610,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		return nil, fmt.Errorf("[BlockAssembly] failed to convert hashPrevBlock: %w", err)
 	}
 
+	// TODO check whether we are already mining on a higher chain work, then just ignore this solution
+
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
 		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTx: %w", err)
