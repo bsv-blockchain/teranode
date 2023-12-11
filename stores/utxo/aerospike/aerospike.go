@@ -210,15 +210,17 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				}
 				prometheusUtxoRetryStoreFail.Inc()
 
+				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
+
 				// requeue for retry
 				storeRetryUtxo.retryCount++
 				if storeRetryUtxo.retryCount < 3 {
+					// backoff
+					time.Sleep(time.Duration(storeRetryUtxo.retryCount) * time.Second)
 					s.storeRetryCh <- storeRetryUtxo
-				} else {
-					s.logger.Errorf("[UTXO][%s] failed to store utxo %d in storeRetryCh for txid %s: %v", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
 				}
 			} else {
-				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in storeRetryCh for txid %s", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
+				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
 			}
 		}
 	}()
@@ -441,31 +443,12 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
-		// check whether we already set this utxo
-		prometheusUtxoGet.Inc()
-		readPolicy := util.GetAerospikeReadPolicy()
-		value, getErr := s.client.Get(readPolicy, key, "locktime")
-		if getErr == nil && value != nil {
-			txid, ok := value.Bins["txid"].([]byte)
-			if ok && len(txid) != 0 {
-				prometheusUtxoStoreSpent.Inc()
-				spendingTxHash, hErr := chainhash.NewHash(txid)
-				if hErr != nil {
-					return hErr
-				}
-				return utxostore.NewErrSpent(spendingTxHash)
-			}
-
-			prometheusUtxoReStore.Inc()
-			return nil
+		s.storeRetryCh <- &storeUtxo{
+			idx:      0,
+			hash:     hash,
+			txHash:   hash,
+			lockTime: nLockTime,
 		}
-
-		prometheusUtxoErrors.WithLabelValues("Store", getErr.Error()).Inc()
-		if getErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
-			s.logger.Errorf("Failed to find aerospike key in utxostore: %v\n", err)
-			return utxostore.ErrNotFound
-		}
-
 		return fmt.Errorf("error in aerospike store PutBins (time taken: %s) : %w", time.Since(start).String(), err)
 	}
 
