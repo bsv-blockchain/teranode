@@ -25,19 +25,19 @@ import (
 )
 
 var (
-	prometheusUtxoGet            prometheus.Counter
-	prometheusUtxoStore          prometheus.Counter
-	prometheusUtxoStoreFail      prometheus.Counter
-	prometheusUtxoReStore        prometheus.Counter
+	prometheusUtxoGet       prometheus.Counter
+	prometheusUtxoStore     prometheus.Counter
+	prometheusUtxoStoreFail prometheus.Counter
+	//prometheusUtxoReStore        prometheus.Counter
 	prometheusUtxoRetryStore     prometheus.Counter
 	prometheusUtxoRetryStoreFail prometheus.Counter
-	prometheusUtxoStoreSpent     prometheus.Counter
-	prometheusUtxoSpend          prometheus.Counter
-	prometheusUtxoReSpend        prometheus.Counter
-	prometheusUtxoSpendSpent     prometheus.Counter
-	prometheusUtxoReset          prometheus.Counter
-	prometheusUtxoDelete         prometheus.Counter
-	prometheusUtxoErrors         *prometheus.CounterVec
+	//prometheusUtxoStoreSpent     prometheus.Counter
+	prometheusUtxoSpend      prometheus.Counter
+	prometheusUtxoReSpend    prometheus.Counter
+	prometheusUtxoSpendSpent prometheus.Counter
+	prometheusUtxoReset      prometheus.Counter
+	prometheusUtxoDelete     prometheus.Counter
+	prometheusUtxoErrors     *prometheus.CounterVec
 )
 
 func init() {
@@ -59,18 +59,18 @@ func init() {
 			Help: "Number of utxo store failed calls done to aerospike",
 		},
 	)
-	prometheusUtxoStoreSpent = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_utxo_store_spent",
-			Help: "Number of utxo store calls that were already spent to aerospike",
-		},
-	)
-	prometheusUtxoReStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_utxo_restore",
-			Help: "Number of utxo restore calls done to aerospike",
-		},
-	)
+	//prometheusUtxoStoreSpent = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_utxo_store_spent",
+	//		Help: "Number of utxo store calls that were already spent to aerospike",
+	//	},
+	//)
+	//prometheusUtxoReStore = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_utxo_restore",
+	//		Help: "Number of utxo restore calls done to aerospike",
+	//	},
+	//)
 	prometheusUtxoRetryStore = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_utxo_retry_store",
@@ -391,14 +391,14 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		s.logger.Errorf("Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
-		for idx, hash := range utxoHashes {
-			s.storeRetryCh <- &storeUtxo{
-				idx:      idx,
-				hash:     hash,
-				txHash:   tx.TxIDChainHash(),
-				lockTime: storeLockTime,
-			}
-		}
+		//for idx, hash := range utxoHashes {
+		//s.storeRetryCh <- &storeUtxo{
+		//	idx:      idx,
+		//	hash:     hash,
+		//	txHash:   tx.TxIDChainHash(),
+		//	lockTime: storeLockTime,
+		//}
+		//}
 		prometheusUtxoStoreFail.Add(float64(len(utxoHashes)))
 		return fmt.Errorf("error in aerospike store BatchOperate: %w", err)
 	}
@@ -410,12 +410,12 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		if err != nil {
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
 			errorsThrown = append(errorsThrown, fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err))
-			s.storeRetryCh <- &storeUtxo{
-				idx:      idx,
-				hash:     utxoHashes[idx],
-				txHash:   tx.TxIDChainHash(),
-				lockTime: storeLockTime,
-			}
+			//s.storeRetryCh <- &storeUtxo{
+			//	idx:      idx,
+			//	hash:     utxoHashes[idx],
+			//	txHash:   tx.TxIDChainHash(),
+			//	lockTime: storeLockTime,
+			//}
 		}
 	}
 
@@ -443,12 +443,12 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
-		s.storeRetryCh <- &storeUtxo{
-			idx:      0,
-			hash:     hash,
-			txHash:   hash,
-			lockTime: nLockTime,
-		}
+		//s.storeRetryCh <- &storeUtxo{
+		//	idx:      0,
+		//	hash:     hash,
+		//	txHash:   hash,
+		//	lockTime: nLockTime,
+		//}
 		return fmt.Errorf("error in aerospike store PutBins (time taken: %s) : %w", time.Since(start).String(), err)
 	}
 
