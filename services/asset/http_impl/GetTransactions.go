@@ -17,7 +17,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
-			AssetStat.NewStat("GetTransaction_http").AddTime(start)
+			AssetStat.NewStat("GetTransactions_http").AddTime(start)
 		}()
 
 		body := c.Request().Body
