@@ -684,6 +684,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		}
 	}
 
+	// sizeInBytes from the subtrees, 80 byte header and varint bytes for txcount
+	blockSize := sizeInBytes + 80 + util.VarintSize(transactionCount)
+	// add the size of the coinbase tx to the blocksize
+	blockSize += uint64(coinbaseTx.Size())
+
 	block := &model.Block{
 		Header: &model.BlockHeader{
 			Version:        req.Version,
@@ -695,8 +700,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		},
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: transactionCount,
-		SizeInBytes:      sizeInBytes + 80 + util.VarintSize(transactionCount), // 80 byte header and bytes for txcount, // TODO calculate varint of transaction count
-		Subtrees:         jobSubtreeHashes,                                     // we need to store the hashes of the subtrees in the block, without the coinbase
+		SizeInBytes:      blockSize,
+		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 		SubtreeSlices:    job.Subtrees,
 	}
 
