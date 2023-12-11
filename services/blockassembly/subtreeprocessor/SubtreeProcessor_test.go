@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -741,4 +742,128 @@ func generateTxID() (string, error) {
 	}
 
 	return fmt.Sprintf("%x", b), nil
+}
+
+// generateTxID generates a random chainhash.Hash.
+func generateTxHash() (chainhash.Hash, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+
+	return chainhash.Hash(b), nil
+}
+
+func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
+	t.Run("small", func(t *testing.T) {
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+		n := 18
+		txHashes := make([]chainhash.Hash, n)
+
+		for i := 0; i < n; i++ {
+			txHash, err := generateTxHash()
+			if err != nil {
+				t.Errorf("error generating txid: %s", err)
+			}
+
+			txHashes[i] = txHash
+			fmt.Printf("created txHash: %s\n", txHash.String())
+		}
+
+		newSubtreeChan := make(chan *util.Subtree)
+		var wg sync.WaitGroup
+		wg.Add(4) // we are expecting 4 subtrees
+		go func() {
+			for {
+				// just read the subtrees of the processor
+				<-newSubtreeChan
+				wg.Done()
+			}
+		}()
+
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(true)
+
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+		for _, txHash := range txHashes {
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1})
+		}
+		wg.Wait()
+
+		// this is to make sure the subtrees are added to the chain
+		for stp.txCount.Load() < 17 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// there should be 4 chained subtrees
+		assert.Equal(t, 4, len(stp.chainedSubtrees))
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		assert.Equal(t, 3, stp.currentSubtree.Length())
+
+		// create 2 subtrees from the previous block
+		subtree1 := util.NewTreeByLeafCount(4)
+		err := subtree1.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
+		require.NoError(t, err)
+		for i := uint64(1); i < 4; i++ {
+			txHash, err := generateTxHash()
+			require.NoError(t, err)
+			err = subtree1.AddNode(txHash, i, i)
+			require.NoError(t, err)
+			fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
+		}
+		subtreeBytes, err := subtree1.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree2 := util.NewTreeByLeafCount(4)
+		for i := uint64(0); i < 4; i++ {
+			txHash, err := generateTxHash()
+			require.NoError(t, err)
+			err = subtree2.AddNode(txHash, i, i)
+			require.NoError(t, err)
+			fmt.Printf("created subtree2 txHash: %s\n", txHash.String())
+		}
+		subtreeBytes, err = subtree2.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		stp.SetCurrentBlockHeader(blockHeader)
+		err = stp.moveDownBlock(context.Background(), &model.Block{
+			Header: prevBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+				subtree2.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx,
+		})
+		require.NoError(t, err)
+
+		assert.Equal(t, 6, len(stp.chainedSubtrees))
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		assert.Equal(t, 2, stp.currentSubtree.Length())
+
+		// check that the nodes from subtree1 and subtree2 are the first nodes
+		for i := 0; i < 4; i++ {
+			assert.Equal(t, subtree1.Nodes[i], stp.chainedSubtrees[0].Nodes[i])
+		}
+		for i := 0; i < 4; i++ {
+			assert.Equal(t, subtree2.Nodes[i], stp.chainedSubtrees[1].Nodes[i])
+		}
+
+		// check that the remaining nodes are the same as the original nodes
+		for idx, txHash := range txHashes {
+			fmt.Printf("idx: %d, txHash: %s\n", idx, txHash.String())
+			shouldBeInSubtree := 2 + idx/4
+			shouldBeInNode := idx % 4
+			if shouldBeInSubtree > len(stp.chainedSubtrees)-1 {
+				assert.Equal(t, txHash, stp.currentSubtree.Nodes[shouldBeInNode].Hash)
+			} else {
+				assert.Equal(t, txHash, stp.chainedSubtrees[shouldBeInSubtree].Nodes[shouldBeInNode].Hash)
+			}
+		}
+	})
 }

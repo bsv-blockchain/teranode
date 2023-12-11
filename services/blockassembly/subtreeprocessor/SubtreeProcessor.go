@@ -132,13 +132,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 			case reorgReq := <-stp.reorgBlockChan:
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 				err = stp.reorgBlocks(ctx, reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
-				if err == nil {
-					if len(reorgReq.moveUpBlocks) > 0 {
-						stp.currentBlockHeader = reorgReq.moveUpBlocks[len(reorgReq.moveUpBlocks)-1].Header
-					} else {
-						stp.currentBlockHeader = reorgReq.moveDownBlocks[len(reorgReq.moveDownBlocks)-1].Header
-					}
-				}
 				reorgReq.errChan <- err
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 
@@ -271,10 +264,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		return errors.New("you must pass in blocks to move down the chain")
 	}
 	if moveUpBlocks == nil {
-		return errors.New("you must pass in blocks to move down the chain")
+		return errors.New("you must pass in blocks to move up the chain")
 	}
 
-	// TODO make this more efficient by doing all the moveDownBlocks in 1 go into the subtrees
 	for _, block := range moveDownBlocks {
 		err := stp.moveDownBlock(ctx, block)
 		if err != nil {
@@ -314,6 +306,16 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	startTime := time.Now()
 	prometheusSubtreeProcessorMoveDownBlock.Inc()
 
+	// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees", block.String(), len(block.Subtrees))
+	defer func() {
+		stp.logger.Infof("DONE moveDownBlock with block %s", block.String())
+		err := recover()
+		if err != nil {
+			stp.logger.Errorf("moveDownBlock with block %s: %s", block.String(), err)
+		}
+	}()
+
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
 
@@ -326,32 +328,50 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
 
-	// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
-	stp.logger.Warnf("moveDownBlock %s with %d subtrees", block.String(), len(block.Subtrees))
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// get all the subtrees in parallel
+	subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
 	for idx, subtreeHash := range block.Subtrees {
-		subtreeBytes, err := stp.subtreeStore.Get(ctx, subtreeHash[:])
-		if err != nil {
-			return fmt.Errorf("error getting subtree %s: %s", subtreeHash.String(), err.Error())
-		}
+		idx := idx
+		subtreeHash := subtreeHash
+		g.Go(func() error {
+			subtreeBytes, err := stp.subtreeStore.Get(gCtx, subtreeHash[:])
+			if err != nil {
+				return fmt.Errorf("error getting subtree %s: %s", subtreeHash.String(), err.Error())
+			}
 
-		subtree := &util.Subtree{}
-		err = subtree.Deserialize(subtreeBytes)
-		if err != nil {
-			return fmt.Errorf("error deserializing subtree: %s", err.Error())
-		}
+			subtree := &util.Subtree{}
+			err = subtree.Deserialize(subtreeBytes)
+			if err != nil {
+				return fmt.Errorf("error deserializing subtree: %s", err.Error())
+			}
 
+			subtreesNodes[idx] = subtree.Nodes
+
+			subtree = nil
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("error getting subtrees: %s", err.Error())
+	}
+
+	// run through the nodes of the subtrees in order and add to the new subtrees
+	for idx, subtreeNode := range subtreesNodes {
 		if idx == 0 {
 			// process coinbase utxos
-			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
+			if err := stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
 				return fmt.Errorf("error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error())
 			}
 
 			// skip the first transaction of the first subtree (coinbase)
-			for i := 1; i < len(subtree.Nodes); i++ {
-				_ = stp.addNode(subtree.Nodes[i], true)
+			for i := 1; i < len(subtreeNode); i++ {
+				_ = stp.addNode(subtreeNode[i], true)
 			}
 		} else {
-			for _, node := range subtree.Nodes {
+			for _, node := range subtreeNode {
 				_ = stp.addNode(node, true)
 			}
 		}
@@ -360,7 +380,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			_ = stp.addNode(node, true)
+			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+				_ = stp.addNode(node, true)
+			}
 		}
 	}
 
