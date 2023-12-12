@@ -34,7 +34,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		meta, err := c.Create(ctx, coinbaseTx)
 		require.NoError(t, err)
 
-		hash, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 		metaGet, err := c.GetMeta(ctx, hash)
 		require.NoError(t, err)
 
