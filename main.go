@@ -182,7 +182,17 @@ func main() {
 
 	var blockchainService *blockchain.Blockchain
 
-	// blockchain service needs to start first !
+	// status server
+	if startStatus {
+		if err := sm.AddService("Status", status.New(
+			logger.New("Status"),
+		)); err != nil {
+			panic(err)
+		}
+		time.Sleep(1 * time.Second) // wait for grpc server to start
+	}
+
+	// blockchain service
 	if startBlockchain {
 		var err error
 		blockchainService, err = blockchain.New(logger.New("bchn"))
@@ -360,15 +370,6 @@ func main() {
 	if startP2P {
 		if err = sm.AddService("P2P", p2p.NewServer(
 			logger.New("P2P"),
-		)); err != nil {
-			panic(err)
-		}
-	}
-
-	// status server
-	if startStatus {
-		if err = sm.AddService("Status", status.New(
-			logger.New("Status"),
 		)); err != nil {
 			panic(err)
 		}
