@@ -24,7 +24,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var stats = gocore.NewStat("blockvalidation")
@@ -235,23 +234,23 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		return nil, err
 	}
 
-	if u.statusClient != nil {
-		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-			Timestamp: timestamppb.Now(),
-			Type:      "BlockValidation",
-			Subtype:   "BlockFound (start)",
-			Value:     hash.String(),
-		})
+	// if u.statusClient != nil {
+	// 	u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 		Timestamp: timestamppb.Now(),
+	// 		Type:      "BlockValidation",
+	// 		Subtype:   "BlockFound (start)",
+	// 		Value:     hash.String(),
+	// 	})
 
-		defer func() {
-			u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-				Timestamp: timestamppb.Now(),
-				Type:      "BlockValidation",
-				Subtype:   "BlockFound (end)",
-				Value:     hash.String(),
-			})
-		}()
-	}
+	// 	defer func() {
+	// 		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 			Timestamp: timestamppb.Now(),
+	// 			Type:      "BlockValidation",
+	// 			Subtype:   "BlockFound (end)",
+	// 			Value:     hash.String(),
+	// 		})
+	// 	}()
+	// }
 
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)

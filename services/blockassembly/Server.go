@@ -30,7 +30,6 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"storj.io/drpc/drpcmux"
 	"storj.io/drpc/drpcserver"
 )
@@ -534,25 +533,25 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		return nil, err
 	}
 
-	if ba.statusClient != nil {
-		now := time.Now()
+	// if ba.statusClient != nil {
+	// 	now := time.Now()
 
-		ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-			Timestamp: timestamppb.New(now),
-			Type:      "GetMiningCandidate",
-			Subtype:   "Height",
-			Value:     fmt.Sprintf("%d", miningCandidate.Height),
-			ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-		})
+	// 	ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 		Timestamp: timestamppb.New(now),
+	// 		Type:      "GetMiningCandidate",
+	// 		Subtype:   "Height",
+	// 		Value:     fmt.Sprintf("%d", miningCandidate.Height),
+	// 		ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
+	// 	})
 
-		ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-			Timestamp: timestamppb.New(now),
-			Type:      "GetMiningCandidate",
-			Subtype:   "PreviousHash",
-			Value:     utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash),
-			ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-		})
-	}
+	// 	ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 		Timestamp: timestamppb.New(now),
+	// 		Type:      "GetMiningCandidate",
+	// 		Subtype:   "PreviousHash",
+	// 		Value:     utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash),
+	// 		ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
+	// 	})
+	// }
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 	ba.jobStore.Set(*id, &subtreeprocessor.Job{

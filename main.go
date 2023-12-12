@@ -276,10 +276,10 @@ func main() {
 				panic(err)
 			}
 
-			statusClient, err := status.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("could not create status client [%v]", err)
-			}
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
@@ -290,7 +290,7 @@ func main() {
 				blockchainClient,
 				assetClient,
 				blockValidationClient,
-				statusClient,
+				nil,
 			)); err != nil {
 				panic(err)
 			}
@@ -311,10 +311,10 @@ func main() {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
 
-			statusClient, err := status.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("could not create status client [%v]", err)
-			}
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
@@ -323,7 +323,7 @@ func main() {
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
-				statusClient,
+				nil,
 			)); err != nil {
 				panic(err)
 			}
