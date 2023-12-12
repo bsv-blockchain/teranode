@@ -167,10 +167,10 @@ func NewWorker(
 	}
 
 	// clone the distributor so we create new connections for each worker
-	txDistributor, err = txDistributor.Clone()
-	if err != nil {
-		logger.Fatalf("error creating tx distributor: %v", err)
-	}
+	//txDistributor, err = txDistributor.Clone()
+	//if err != nil {
+	//	logger.Fatalf("error creating tx distributor: %v", err)
+	//}
 
 	return &Worker{
 		logger:            logger,
