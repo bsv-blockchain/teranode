@@ -52,6 +52,26 @@ func WithFailureTolerance(r int) Option {
 }
 
 func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
+	propagationServers, err := getPropagationServers()
+	if err != nil {
+		return nil, err
+	}
+
+	d := &Distributor{
+		logger:             logger,
+		propagationServers: propagationServers,
+		attempts:           1,
+		failureTolerance:   50,
+	}
+
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	return d, nil
+}
+
+func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, error) {
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
 	if len(addresses) == 0 {
@@ -73,19 +93,9 @@ func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error)
 		propagationServers[address] = propagation_api.NewPropagationAPIClient(pConn)
 	}
 
-	d := &Distributor{
-		logger:             logger,
-		propagationServers: propagationServers,
-		attempts:           1,
-		failureTolerance:   50,
-	}
-
-	for _, opt := range opts {
-		opt(d)
-	}
-
-	return d, nil
+	return propagationServers, nil
 }
+
 func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
 
 	var quicAddresses []string
@@ -148,6 +158,28 @@ type ResponseWrapper struct {
 	Duration time.Duration `json:"duration"`
 	Retries  int32         `json:"retries"`
 	Error    error         `json:"error,omitempty"`
+}
+
+// Clone returns a new instance of the Distributor with the same configuration, but with new connections
+func (d *Distributor) Clone() (*Distributor, error) {
+	propagationServers, err := getPropagationServers()
+	if err != nil {
+		return nil, err
+	}
+
+	newDist := &Distributor{
+		logger:             d.logger,
+		propagationServers: propagationServers,
+		attempts:           d.attempts,
+		backoff:            d.backoff,
+		failureTolerance:   d.failureTolerance,
+		useQuic:            d.useQuic,
+		quicAddresses:      d.quicAddresses,
+		quicStreams:        d.quicStreams,
+		waitMsBetweenTxs:   d.waitMsBetweenTxs,
+	}
+
+	return newDist, nil
 }
 
 func (d *Distributor) GetPropagationGRPCAddresses() []string {
