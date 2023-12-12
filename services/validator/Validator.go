@@ -181,7 +181,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
 
-		if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+		if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
 			err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
 		}
 
@@ -207,7 +207,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 				err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 			}
 
-			if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+			if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
 				err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
 			}
 
