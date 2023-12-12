@@ -225,28 +225,30 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// if we don't have 11 blocks then use what we have
 	pruneLength := 11
 	currentChainLength := len(currentChain)
-	if currentChainLength < pruneLength {
-		pruneLength = currentChainLength
-	}
+	// if the current chain length is 0 skip this test
+	if currentChainLength > 0 {
+		if currentChainLength < pruneLength {
+			pruneLength = currentChainLength
+		}
 
-	// prune the last few timestamps from the current chain
-	lastTimeStamps := currentChain[currentChainLength-pruneLength:]
-	prevTimeStamps := make([]time.Time, pruneLength)
-	for i, bh := range lastTimeStamps {
-		prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
-	}
+		// prune the last few timestamps from the current chain
+		lastTimeStamps := currentChain[currentChainLength-pruneLength:]
+		prevTimeStamps := make([]time.Time, pruneLength)
+		for i, bh := range lastTimeStamps {
+			prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+		}
 
-	// calculate the median timestamp
-	ts, err := medianTimestamp(prevTimeStamps)
-	if err != nil {
-		return false, err
-	}
+		// calculate the median timestamp
+		ts, err := medianTimestamp(prevTimeStamps)
+		if err != nil {
+			return false, err
+		}
 
-	// validate that the block's timestamp is after the median timestamp
-	if b.Header.Timestamp <= uint32(ts.Unix()) {
-		return false, fmt.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, ts.Unix())
+		// validate that the block's timestamp is after the median timestamp
+		if b.Header.Timestamp <= uint32(ts.Unix()) {
+			return false, fmt.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, ts.Unix())
+		}
 	}
-
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
 		return false, fmt.Errorf("block has no coinbase tx")
