@@ -421,6 +421,22 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	return &emptypb.Empty{}, nil
 }
 
+func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
+	startHash, err := chainhash.NewHash(request.StartHash)
+	if err != nil {
+		return nil, err
+	}
+
+	ids, err := b.store.GetBlockHeaderIDs(ctx, startHash, request.NumberOfHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetBlockHeaderIDsResponse{
+		Ids: ids,
+	}, nil
+}
+
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "InvalidateBlock", stats)
 	defer func() {

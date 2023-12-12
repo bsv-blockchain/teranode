@@ -51,7 +51,7 @@ message CreateResponse {
 // swagger:model SetMinedRequest
 message SetMinedRequest {
   bytes hash = 1;
-  bytes block_hash = 2;
+  uint32 block_id = 2;
 }
 
 // swagger:model SetMinedResponse
@@ -70,7 +70,7 @@ message GetResponse {
   uint64 Fee = 2;
   repeated bytes ParentTxHashes = 3;
   uint32 FirstSeen = 4;
-  repeated bytes BlockHashes = 5;
+  repeated uint32 BlockIDs = 5;
   uint32 BlockHeight = 6;
   uint64 SizeInBytes = 7;
 }

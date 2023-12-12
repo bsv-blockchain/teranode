@@ -58,9 +58,9 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 			hash3,
 			hash4,
 		},
-		BlockHashes: []*chainhash.Hash{
-			hash5,
-			hash6,
+		BlockIDs: []uint32{
+			5,
+			6,
 		},
 		Tx: &bt.Tx{},
 	}
@@ -82,9 +82,9 @@ func Benchmark_Bytes(b *testing.B) {
 			hash3,
 			hash4,
 		},
-		BlockHashes: []*chainhash.Hash{
-			hash5,
-			hash6,
+		BlockIDs: []uint32{
+			5,
+			6,
 		},
 		Tx: &bt.Tx{},
 	}

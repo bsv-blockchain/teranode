@@ -105,12 +105,7 @@ func (u *Server) SetMined(ctx context.Context, request *txmeta_api.SetMinedReque
 		return nil, err
 	}
 
-	blockHash, err := chainhash.NewHash(request.BlockHash)
-	if err != nil {
-		return nil, err
-	}
-
-	err = u.store.SetMined(ctx, hash, blockHash)
+	err = u.store.SetMined(ctx, hash, request.BlockId)
 	if err != nil {
 		return nil, err
 	}
@@ -138,15 +133,10 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		parentTxHashes[index] = parentTxHash.CloneBytes()
 	}
 
-	blockHashes := make([][]byte, len(tx.BlockHashes))
-	for index, blockHash := range tx.BlockHashes {
-		blockHashes[index] = blockHash.CloneBytes()
-	}
-
 	return &txmeta_api.GetResponse{
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
+		BlockIDs:       tx.BlockIDs,
 	}, nil
 }
 
