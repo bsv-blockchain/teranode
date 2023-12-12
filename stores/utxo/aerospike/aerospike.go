@@ -267,7 +267,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	details := fmt.Sprintf("url: %s, namespace: %s", s.u.String(), s.namespace)
 
 	// Trying to put and get a record to test the connection
-	key, err := aerospike.NewKey("test", "set", "key")
+	key, err := aerospike.NewKey(s.namespace, "set", "key")
 	if err != nil {
 		return -1, details, err
 	}
