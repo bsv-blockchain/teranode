@@ -58,7 +58,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 
 	blockvalidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -71,7 +71,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 
 			err = client.Connect(blockvalidationFRPCAddress)
 			if err != nil {
-				s.logger.Warnf("error connecting to fRPC server in blockvalidation: %s", err)
+				s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
 				if i+1 == maxRetries {
 					break
 				}

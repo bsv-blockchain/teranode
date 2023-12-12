@@ -131,7 +131,7 @@ func (s *Client) connectFRPC() {
 
 	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -144,7 +144,7 @@ func (s *Client) connectFRPC() {
 
 			err = client.Connect(blockAssemblyFRPCAddress)
 			if err != nil {
-				s.logger.Warnf("Error connecting to fRPC server in blockassembly: %s", err)
+				s.logger.Infof("Error connecting to fRPC server in blockassembly: %s", err)
 				if i+1 == maxRetries {
 					break
 				}

@@ -274,7 +274,7 @@ func (c *Client) connectFRPC() {
 
 	validatorFRPCAddress, ok := gocore.Config().Get("validator_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -287,7 +287,7 @@ func (c *Client) connectFRPC() {
 
 			err = client.Connect(validatorFRPCAddress)
 			if err != nil {
-				c.logger.Warnf("Error connecting to fRPC server in validator: %s", err)
+				c.logger.Infof("Error connecting to fRPC server in validator: %s", err)
 				if i+1 == maxRetries {
 					break
 				}
