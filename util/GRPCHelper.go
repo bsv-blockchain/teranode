@@ -28,9 +28,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const ONE_GIGABYTE = 1024 * 1024 * 1024
+const (
+	ONE_GIGABYTE = 1024 * 1024 * 1024
+)
 
-// ---------------------------------------------------------------------
+// PasswordCredentials -----------------------------------------------
 // The PasswordCredentials type and the receivers it implements, allow
 // us to use the grpc.WithPerRPCCredentials() dial option to pass
 // credentials to downstream middleware
@@ -113,6 +115,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallSendMsgSize(connectionOptions.MaxMessageSize),
+			grpc.MaxCallRecvMsgSize(connectionOptions.MaxMessageSize),
 		),
 		grpc.WithDisableServiceConfig(),
 	}
@@ -210,7 +213,10 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 		connectionOptions.MaxMessageSize = ONE_GIGABYTE
 	}
 
-	opts = append(opts, grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize))
+	opts = append(opts,
+		grpc.MaxSendMsgSize(connectionOptions.MaxMessageSize),
+		grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize),
+	)
 
 	// Interceptors.  The order may be important here.
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
