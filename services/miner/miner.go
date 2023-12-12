@@ -58,7 +58,10 @@ func (m *Miner) Start(ctx context.Context) error {
 	}
 	go func() {
 		http.HandleFunc("/", m.handler)
-		http.ListenAndServe(listenAddress, nil)
+		err := http.ListenAndServe(listenAddress, nil)
+		if err != nil {
+			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
+		}
 	}()
 
 	m.candidateTimer = time.NewTimer(2 * time.Second) // wait 2 seconds before starting
@@ -267,7 +270,6 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 				return nil, fmt.Errorf("no mining candidate found")
 			}
 			if previousHash == nil || !bytes.Equal(previousHash[:], candidate.PreviousHash) {
-				previousHash, _ = chainhash.NewHash(candidate.PreviousHash)
 				return candidate, nil
 			}
 			// If the previous hash is the same, apply exponential backoff
