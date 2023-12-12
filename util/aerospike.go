@@ -131,7 +131,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 	policy.OpeningConnectionThreshold = getQueryInt(url, "OpeningConnectionThreshold", policy.OpeningConnectionThreshold, logger)
 
 	if url.User != nil {
-		policy.AuthMode = 2
+		policy.AuthMode = aerospike.AuthModeInternal
 
 		policy.User = url.User.Username()
 		var ok bool
