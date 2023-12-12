@@ -182,10 +182,10 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 
 	go func() {
 		defer func() {
-			s.logger.Infof("[UTXO] stopping retry store utxo goroutine")
+			s.logger.Infof("[UTXO] stopping storeRetryCh utxo goroutine")
 		}()
 
-		s.logger.Infof("[UTXO] starting retry store utxo goroutine")
+		s.logger.Infof("[UTXO] starting storeRetryCh utxo goroutine")
 		policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 		policy.RecordExistsAction = aerospike.CREATE_ONLY
 
@@ -391,14 +391,14 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		s.logger.Errorf("Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
-		//for idx, hash := range utxoHashes {
-		//s.storeRetryCh <- &storeUtxo{
-		//	idx:      idx,
-		//	hash:     hash,
-		//	txHash:   tx.TxIDChainHash(),
-		//	lockTime: storeLockTime,
-		//}
-		//}
+		for idx, hash := range utxoHashes {
+			s.storeRetryCh <- &storeUtxo{
+				idx:      idx,
+				hash:     hash,
+				txHash:   tx.TxIDChainHash(),
+				lockTime: storeLockTime,
+			}
+		}
 		prometheusUtxoStoreFail.Add(float64(len(utxoHashes)))
 		return fmt.Errorf("error in aerospike store BatchOperate: %w", err)
 	}
@@ -412,15 +412,14 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			e := fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err)
 			errorsThrown = append(errorsThrown, e)
 
-			// TEMP TEMP TEMP
 			s.logger.Errorf("%s", e.Error())
 
-			//s.storeRetryCh <- &storeUtxo{
-			//	idx:      idx,
-			//	hash:     utxoHashes[idx],
-			//	txHash:   tx.TxIDChainHash(),
-			//	lockTime: storeLockTime,
-			//}
+			s.storeRetryCh <- &storeUtxo{
+				idx:      idx,
+				hash:     utxoHashes[idx],
+				txHash:   tx.TxIDChainHash(),
+				lockTime: storeLockTime,
+			}
 		}
 	}
 
@@ -448,12 +447,12 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
-		//s.storeRetryCh <- &storeUtxo{
-		//	idx:      0,
-		//	hash:     hash,
-		//	txHash:   hash,
-		//	lockTime: nLockTime,
-		//}
+		s.storeRetryCh <- &storeUtxo{
+			idx:      0,
+			hash:     hash,
+			txHash:   hash,
+			lockTime: nLockTime,
+		}
 		return fmt.Errorf("error in aerospike store PutBins (time taken: %s) : %w", time.Since(start).String(), err)
 	}
 
