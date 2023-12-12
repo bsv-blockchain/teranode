@@ -34,6 +34,7 @@ var writeExitFastOnExhaustedConnectionPool bool
 
 var batchTotalTimeout time.Duration
 var batchAllowInlineSSD bool
+var concurrentNodes int
 
 func init() {
 	aerospikeConnections = make(map[string]*aerospike.Client)
@@ -113,6 +114,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 
 	batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 	batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
+	concurrentNodes = getQueryInt(batchPolicyUrl, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
 
 	policy := aerospike.NewClientPolicy()
 
@@ -338,6 +340,7 @@ func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 	batchPolicy := aerospike.NewBatchPolicy()
 	batchPolicy.TotalTimeout = batchTotalTimeout
 	batchPolicy.AllowInlineSSD = batchAllowInlineSSD
+	batchPolicy.ConcurrentNodes = concurrentNodes
 
 	return batchPolicy
 }
