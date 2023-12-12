@@ -222,18 +222,30 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	// leb := currentChain[len(currentChain)-11:]
-	// prevTimeStamps := make([]time.Time, 11)
-	// for i, bh := range leb {
-	// 	prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
-	// }
-	// ts, err := medianTimestamp(prevTimeStamps)
-	// if err != nil {
-	// 	return false, err
-	// }
-	// if b.Header.Timestamp <= uint32(ts.Unix()) {
-	// 	return false, fmt.Errorf("block timestamp %d is not after median time past of last 11 blocks %d", b.Header.Timestamp, ts.Unix())
-	// }
+	// if we don't have 11 blocks then use what we have
+	pruneLength := 11
+	currentChainLength := len(currentChain)
+	if currentChainLength < pruneLength {
+		pruneLength = currentChainLength
+	}
+
+	// prune the last few timestamps from the current chain
+	lastTimeStamps := currentChain[currentChainLength-pruneLength:]
+	prevTimeStamps := make([]time.Time, pruneLength)
+	for i, bh := range lastTimeStamps {
+		prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+	}
+
+	// calculate the median timestamp
+	ts, err := medianTimestamp(prevTimeStamps)
+	if err != nil {
+		return false, err
+	}
+
+	// validate that the block's timestamp is after the median timestamp
+	if b.Header.Timestamp <= uint32(ts.Unix()) {
+		return false, fmt.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, ts.Unix())
+	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
@@ -430,6 +442,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(1024)
+	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		subtreeHash := subtreeHash
@@ -632,8 +645,9 @@ func (b *Block) Bytes() ([]byte, error) {
 
 func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
 	n := len(timestamps)
-	if n != 11 {
-		return nil, fmt.Errorf("need 11 timestamps to work out median time. Have %d", n)
+
+	if n == 0 {
+		return nil, errors.New("no timestamps provided")
 	}
 
 	sort.Slice(timestamps, func(i, j int) bool {
@@ -641,7 +655,17 @@ func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
 	})
 
 	mid := n / 2
-
-	// return the middle one
+	// NOTE: The consensus rules incorrectly calculate the median for even
+	// numbers of blocks.  A true median averages the middle two elements
+	// for a set with an even number of elements in it.   Since the constant
+	// for the previous number of blocks to be used is odd, this is only an
+	// issue for a few blocks near the beginning of the chain.  I suspect
+	// this is an optimization even though the result is slightly wrong for
+	// a few of the first blocks since after the first few blocks, there
+	// will always be an odd number of blocks in the set per the constant.
+	//
+	// This code follows suit to ensure the same rules are used, however, be
+	// aware that should the medianTimeBlocks constant ever be changed to an
+	// even number, this code will be wrong.
 	return &timestamps[mid], nil
 }
