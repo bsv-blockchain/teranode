@@ -27,7 +27,7 @@ type CachedData struct {
 	SizeInBytes    uint64            `json:"sizeInBytes"`
 }
 
-type txMetaCache struct {
+type TxMetaCache struct {
 	txMetaStore   txmeta.Store
 	cache         map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]
 	cacheTTL      time.Duration
@@ -35,8 +35,8 @@ type txMetaCache struct {
 	metrics       metrics
 }
 
-func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
-	m := &txMetaCache{
+func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
+	m := &TxMetaCache{
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
 		cacheTTL:      15 * time.Minute, // until block is mined
@@ -78,7 +78,7 @@ func newTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	return m
 }
 
-func (t *txMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
+func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
 	t.cache[[1]byte{hash[0]}].Set(*hash, txMeta)
 	t.cacheTTLQueue.enqueue(&ttlQueueItem{hash: hash})
@@ -88,7 +88,7 @@ func (t *txMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 	return nil
 }
 
-func (t *txMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
+func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
 	if ok {
 		t.metrics.hits.Add(1)
@@ -99,7 +99,7 @@ func (t *txMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	return nil, false
 }
 
-func (t *txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cached, ok := t.GetCache(hash)
 	if ok {
 		return cached, nil
@@ -117,7 +117,7 @@ func (t *txMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 	return txMeta, nil
 }
 
-func (t *txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cached, ok := t.GetCache(hash)
 	if ok {
 		return cached, nil
@@ -135,7 +135,7 @@ func (t *txMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	txMeta, err := t.txMetaStore.Create(ctx, tx)
 	if err != nil {
 		return txMeta, err
@@ -148,7 +148,7 @@ func (t *txMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, erro
 	return txMeta, nil
 }
 
-func (t *txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
 	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockHash)
 	if err != nil {
 		return err
@@ -164,7 +164,7 @@ func (t *txMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
-func (t *txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	err := t.txMetaStore.SetMined(ctx, hash, blockHash)
 	if err != nil {
 		return err
@@ -178,7 +178,7 @@ func (t *txMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockH
 	return nil
 }
 
-func (t *txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
 	var txMeta *txmeta.Data
 	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
 	if ok {
@@ -203,7 +203,7 @@ func (t *txMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	return nil
 }
 
-func (t *txMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
+func (t *TxMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	err := t.txMetaStore.Delete(ctx, hash)
 	if err != nil {
 		return err
