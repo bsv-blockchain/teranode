@@ -454,6 +454,11 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
+		var aErr *aerospike.AerospikeError
+		if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+			return nil
+		}
+
 		s.storeRetryCh <- &storeUtxo{
 			idx:      0,
 			hash:     hash,
