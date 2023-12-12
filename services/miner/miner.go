@@ -3,6 +3,7 @@ package miner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -12,11 +13,14 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
+
+var ErrCancelled = ubsverrors.New("mining job cancelled")
 
 type Miner struct {
 	logger                           ulogger.Logger
@@ -89,7 +93,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			m.logger.Infof("[Miner] Mining %d blocks immediately", blocks)
 			err := m.mineBlocks(ctx, blocks)
 			if err != nil {
-				m.logger.Warnf("[Miner] %v", err)
+				m.logger.Errorf("[Miner] %v", err)
 			}
 
 		case <-m.candidateTimer.C:
@@ -106,7 +110,11 @@ func (m *Miner) Start(ctx context.Context) error {
 			go func(ctx context.Context) {
 				err := m.mine(ctx, m.waitSeconds)
 				if err != nil {
-					m.logger.Warnf("[Miner]: %v", err)
+					if errors.Is(err, ErrCancelled) {
+						m.logger.Infof("[Miner]: %v", err)
+					} else {
+						m.logger.Errorf("[Miner]: %v", err)
+					}
 				} else {
 					// start the timer now, so we don't have to wait for the next tick
 					m.candidateTimer.Reset(0)
@@ -173,13 +181,13 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 		blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
-		m.logger.Warnf("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
+		m.logger.Infof("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
 
 	MineWait:
 		for {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("canceled mining on job %s", candidateId)
+				return ErrCancelled
 			default:
 				time.Sleep(1 * time.Second)
 				randWait--
@@ -191,7 +199,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 	} else {
 		blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
-		m.logger.Warnf("[Miner] Found block solution %s, submitting", blockHash.String())
+		m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
 	}
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
