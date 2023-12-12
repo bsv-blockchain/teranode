@@ -205,7 +205,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 
 			if err = s.client.PutBins(policy, key, bins...); err != nil {
 				var aErr *aerospike.AerospikeError
-				if errors.As(err, &aErr) && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 					continue
 				}
 				prometheusUtxoRetryStoreFail.Inc()
@@ -408,6 +408,13 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
+			var aErr *aerospike.AerospikeError
+			// TODO check if this is the correct handling of this
+			// we assume because it exists, it is OK
+			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				continue
+			}
+
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
 			e := fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err)
 			errorsThrown = append(errorsThrown, e)
