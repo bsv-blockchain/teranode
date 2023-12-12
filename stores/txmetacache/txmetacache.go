@@ -1,4 +1,4 @@
-package blockvalidation
+package txmetacache
 
 import (
 	"context"
@@ -36,6 +36,8 @@ type TxMetaCache struct {
 }
 
 func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
+	initPrometheusMetrics()
+
 	m := &TxMetaCache{
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),

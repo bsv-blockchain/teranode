@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -88,7 +89,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	// create a caching tx meta store
 	if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		bVal.txMetaStore = NewTxMetaCache(txMetaStore)
+		bVal.txMetaStore = txmetacache.NewTxMetaCache(txMetaStore)
 	} else {
 		bVal.txMetaStore = txMetaStore
 	}
