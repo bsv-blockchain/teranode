@@ -64,7 +64,7 @@ func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Stor
 		for {
 			item := m.cacheTTLQueue.dequeue(time.Now().Add(-m.cacheTTL).UnixMilli())
 			if item == nil {
-				time.Sleep(5 * time.Second)
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 
