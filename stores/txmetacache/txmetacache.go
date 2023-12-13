@@ -151,14 +151,14 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, erro
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
-	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockHash)
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
 	if err != nil {
 		return err
 	}
 
 	for _, hash := range hashes {
-		err = t.setMinedInCache(ctx, hash, blockHash)
+		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {
 			return err
 		}
@@ -167,13 +167,13 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
-func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	err := t.txMetaStore.SetMined(ctx, hash, blockHash)
+func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
+	err := t.txMetaStore.SetMined(ctx, hash, blockID)
 	if err != nil {
 		return err
 	}
 
-	err = t.setMinedInCache(ctx, hash, blockHash)
+	err = t.setMinedInCache(ctx, hash, blockID)
 	if err != nil {
 		return err
 	}
@@ -181,17 +181,17 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockH
 	return nil
 }
 
-func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *txmeta.Data
 	cached, ok := t.cache[[1]byte{hash[0]}].Get(*hash)
 	if ok {
 		txMeta = cached
-		if txMeta.BlockHashes == nil {
-			txMeta.BlockHashes = []*chainhash.Hash{
-				blockHash,
+		if txMeta.BlockIDs == nil {
+			txMeta.BlockIDs = []uint32{
+				blockID,
 			}
 		} else {
-			txMeta.BlockHashes = append(txMeta.BlockHashes, blockHash)
+			txMeta.BlockIDs = append(txMeta.BlockIDs, blockID)
 		}
 	} else {
 		txMeta, err = t.txMetaStore.Get(ctx, hash)

@@ -504,15 +504,15 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 		return nil, err
 	}
 
-	currentChainMap := ba.blockAssembler.GetCurrentChainMap()
+	currentChainMapIDs := ba.blockAssembler.GetCurrentChainMapIDs()
 
 	// looking this up here and adding to the subtree processor, might create a situation where a transaction
 	// that was in a block from a competing miner, is added to the subtree processor when it shouldn't
-	if len(txMetadata.BlockHashes) > 0 {
-		for _, hash := range txMetadata.BlockHashes {
-			if _, ok := currentChainMap[*hash]; ok {
+	if len(txMetadata.BlockIDs) > 0 {
+		for _, id := range txMetadata.BlockIDs {
+			if _, ok := currentChainMapIDs[id]; ok {
 				// the tx is already in a block on our chain, nothing to do
-				return nil, fmt.Errorf("tx already in a block on the active chain: %s", hash)
+				return nil, fmt.Errorf("tx already in a block on the active chain: %d", id)
 			}
 		}
 	}
@@ -728,6 +728,12 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		return nil, fmt.Errorf("failed to add block: %w", err)
 	}
 
+	ids, err := ba.blockchainClient.GetBlockHeaderIDs(cntxt, block.Header.Hash(), 1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block header ids: %w", err)
+	}
+	blockID := ids[0]
+
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(cntxt)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -747,7 +753,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		g.Go(func() error {
 			// add the transactions in this block to the txMeta block hashes
 			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
-			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.txMetaStore, subtreesInJob, block.Header); err != nil {
+			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.txMetaStore, subtreesInJob, blockID); err != nil {
 				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			}
 			return nil

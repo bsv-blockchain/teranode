@@ -18,6 +18,7 @@ service BlockchainAPI {
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc InvalidateBlock(InvalidateBlockRequest) returns (google.protobuf.Empty) {}
@@ -80,6 +81,11 @@ message GetBlockHeadersRequest {
 message GetBlockHeadersResponse {
   repeated bytes blockHeaders = 1;
   repeated uint32 heights = 2;
+}
+
+// swagger:model GetBlockHeaderIDsResponse
+message GetBlockHeaderIDsResponse {
+  repeated uint32 ids = 1;
 }
 
 // swagger:model GetMedianTimeResponse

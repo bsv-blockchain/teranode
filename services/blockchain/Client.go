@@ -252,6 +252,18 @@ func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) 
 	return err
 }
 
+func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
+		StartHash:       blockHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Ids, nil
+}
+
 func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {
 	_, err := c.client.SendNotification(ctx, &blockchain_api.Notification{
 		Type: notification.Type,

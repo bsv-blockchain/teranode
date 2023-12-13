@@ -16,7 +16,6 @@ func Store(t *testing.T, db txmeta.Store) {
 	ctx := context.Background()
 
 	hash1 := Tx1.TxIDChainHash()
-	hash2 := Tx2.TxIDChainHash()
 
 	t.Run("simple smoke test", func(t *testing.T) {
 		_ = db.Delete(ctx, hash1)
@@ -65,25 +64,25 @@ func Store(t *testing.T, db txmeta.Store) {
 		_, err := db.Create(ctx, Tx1)
 		require.NoError(t, err)
 
-		err = db.SetMined(ctx, hash1, hash2)
+		err = db.SetMined(ctx, hash1, 2)
 		require.NoError(t, err)
 
 		resp, err := db.Get(ctx, hash1)
 		require.NoError(t, err)
 
-		require.Len(t, resp.BlockHashes, 1)
-		assert.Equal(t, hash2, resp.BlockHashes[0])
+		require.Len(t, resp.BlockIDs, 1)
+		assert.Equal(t, uint32(2), resp.BlockIDs[0])
 
 		// set mined again
-		err = db.SetMined(ctx, hash1, hash1)
+		err = db.SetMined(ctx, hash1, 1)
 		require.NoError(t, err)
 
 		resp, err = db.Get(ctx, hash1)
 		require.NoError(t, err)
 
-		require.Len(t, resp.BlockHashes, 2)
-		assert.Equal(t, hash2, resp.BlockHashes[0])
-		assert.Equal(t, hash1, resp.BlockHashes[1])
+		require.Len(t, resp.BlockIDs, 2)
+		assert.Equal(t, uint32(2), resp.BlockIDs[0])
+		assert.Equal(t, uint32(1), resp.BlockIDs[1])
 	})
 }
 

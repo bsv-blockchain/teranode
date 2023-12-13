@@ -182,6 +182,12 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 
 	g, gCtx := errgroup.WithContext(setCtx)
 
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
+	if err != nil {
+		return fmt.Errorf("failed to get block header ids: %w", err)
+	}
+	blockID := ids[0]
+
 	g.Go(func() error {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
 		err = u.updateSubtreesTTL(gCtx, block)
@@ -196,7 +202,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	g.Go(func() error {
 		// add the transactions in this block to the txMeta block hashes
 		u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-		if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, subtrees, block.Header); err != nil {
+		if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, subtrees, blockID); err != nil {
 			// TODO this should be a fatal error, but for now we just log it
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
