@@ -68,7 +68,10 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 // dequeue is not thread safe, it should only be called from a single thread !!!
 func (q *LockFreeTTLQueue) dequeue(upTill int64) *ttlQueueItem {
 	next := q.tail.next.Load()
-	if next == nil || next == q.previousTail || (upTill > 0 && next.time > upTill) {
+	if next == nil || next == q.previousTail {
+		return nil
+	}
+	if q.queueLength.Load() <= q.maxQueueLength && upTill > 0 && next.time > upTill {
 		return nil
 	}
 
