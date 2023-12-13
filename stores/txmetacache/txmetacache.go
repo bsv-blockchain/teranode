@@ -2,7 +2,6 @@ package txmetacache
 
 import (
 	"context"
-	"math"
 	"sync/atomic"
 	"time"
 
@@ -42,7 +41,8 @@ type TxMetaCache struct {
 func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Store {
 	initPrometheusMetrics()
 
-	cacheTTL, _ := gocore.Config().GetInt("txMetaCacheTTL", 5)
+	cacheMaxSize, _ := gocore.Config().GetInt("txMetaCacheMaxSize", 1_000_000_000)
+	cacheTTL, _ := gocore.Config().GetInt("txMetaCacheTTL", 15)
 	if cacheTTL <= 0 {
 		cacheTTL = 5
 	}
@@ -51,7 +51,7 @@ func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Stor
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
 		cacheTTL:      time.Duration(cacheTTL) * time.Minute,
-		cacheTTLQueue: NewLockFreeTTLQueue(math.MaxInt64),
+		cacheTTLQueue: NewLockFreeTTLQueue(int64(cacheMaxSize)),
 		metrics:       metrics{},
 		logger:        logger,
 	}
