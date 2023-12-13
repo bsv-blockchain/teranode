@@ -48,7 +48,7 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	subtreeBytes, err := r.blockValidationClient.Get(ctx, key)
 	if err != nil {
-		r.logger.Errorf("using block validation service in block assembly for subtree %x error: %v", key, err)
+		r.logger.Warnf("using block validation service in block assembly for subtree %x error: %v", key, err)
 	}
 
 	if subtreeBytes == nil {
