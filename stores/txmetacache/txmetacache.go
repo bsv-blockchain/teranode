@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 type metrics struct {
@@ -39,10 +40,15 @@ type TxMetaCache struct {
 func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 	initPrometheusMetrics()
 
+	cacheTTL, _ := gocore.Config().GetInt("txMetaCacheTTL", 5)
+	if cacheTTL <= 0 {
+		cacheTTL = 5
+	}
+
 	m := &TxMetaCache{
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
-		cacheTTL:      15 * time.Minute, // until block is mined
+		cacheTTL:      time.Duration(cacheTTL) * time.Minute,
 		cacheTTLQueue: NewLockFreeTTLQueue(math.MaxInt64),
 		metrics:       metrics{},
 	}
