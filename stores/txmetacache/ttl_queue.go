@@ -56,12 +56,7 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 		prev.next.Store(v)
 	}
 
-	// If the queue is full, dequeue the oldest item.
-	if q.queueLength.Load() >= q.maxQueueLength {
-		q.dequeue(0)
-	} else {
-		q.queueLength.Add(1)
-	}
+	q.queueLength.Add(1)
 }
 
 // Dequeue removes a Request from the queue
