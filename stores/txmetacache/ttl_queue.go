@@ -18,19 +18,21 @@ type ttlQueueItem struct {
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
 type LockFreeTTLQueue struct {
-	head         atomic.Pointer[ttlQueueItem]
-	tail         *ttlQueueItem
-	previousTail *ttlQueueItem
-	queueLength  atomic.Int64
+	head           atomic.Pointer[ttlQueueItem]
+	tail           *ttlQueueItem
+	previousTail   *ttlQueueItem
+	queueLength    atomic.Int64
+	maxQueueLength int64
 }
 
-func NewLockFreeTTLQueue() *LockFreeTTLQueue {
+func NewLockFreeTTLQueue(maxLength int64) *LockFreeTTLQueue {
 	firstTail := &ttlQueueItem{}
 	lf := &LockFreeTTLQueue{
-		head:         atomic.Pointer[ttlQueueItem]{},
-		tail:         firstTail,
-		previousTail: firstTail,
-		queueLength:  atomic.Int64{},
+		head:           atomic.Pointer[ttlQueueItem]{},
+		tail:           firstTail,
+		previousTail:   firstTail,
+		queueLength:    atomic.Int64{},
+		maxQueueLength: maxLength,
 	}
 	lf.head.Store(firstTail)
 
@@ -53,7 +55,13 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 	} else {
 		prev.next.Store(v)
 	}
-	q.queueLength.Add(1)
+
+	// If the queue is full, dequeue the oldest item.
+	if q.queueLength.Load() >= q.maxQueueLength {
+		q.dequeue(0)
+	} else {
+		q.queueLength.Add(1)
+	}
 }
 
 // Dequeue removes a Request from the queue

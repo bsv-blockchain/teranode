@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -42,7 +43,7 @@ func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
 		cacheTTL:      15 * time.Minute, // until block is mined
-		cacheTTLQueue: NewLockFreeTTLQueue(),
+		cacheTTLQueue: NewLockFreeTTLQueue(math.MaxInt64),
 		metrics:       metrics{},
 	}
 
