@@ -24,7 +24,6 @@ type LockFreeTTLQueue struct {
 	queueLength  atomic.Int64
 }
 
-// NewLockFreeTTLQueue creates and initializes a LockFreeQueue
 func NewLockFreeTTLQueue() *LockFreeTTLQueue {
 	firstTail := &ttlQueueItem{}
 	lf := &LockFreeTTLQueue{
@@ -33,8 +32,7 @@ func NewLockFreeTTLQueue() *LockFreeTTLQueue {
 		previousTail: firstTail,
 		queueLength:  atomic.Int64{},
 	}
-
-	lf.head.Store(nil)
+	lf.head.Store(firstTail)
 
 	return lf
 }
@@ -49,10 +47,12 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 	v.time = time.Now().UnixMilli()
 	prev := q.head.Swap(v)
 	if prev == nil {
-		q.tail.next.Store(v)
-		return
+		// Queue was empty, update both head and tail to the new item.
+		q.tail = v
+		q.previousTail = v
+	} else {
+		prev.next.Store(v)
 	}
-	prev.next.Store(v)
 	q.queueLength.Add(1)
 }
 
