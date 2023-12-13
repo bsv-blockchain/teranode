@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -444,7 +445,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i

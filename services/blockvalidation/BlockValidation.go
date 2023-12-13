@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -181,6 +182,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	g, gCtx := errgroup.WithContext(setCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
 	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
 	if err != nil {
@@ -230,6 +232,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 	// update the subtree TTLs
 	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		g.Go(func() error {
@@ -258,6 +261,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
@@ -516,15 +520,15 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// validate the subtree
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024) // max 1024 concurrent requests
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := 0
 
-	// cycle through batches of 1000 txHashes at a time
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1014)
+	// cycle through batches of 1024 txHashes at a time
+	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
 	for i := 0; i < len(txHashes); i += batchSize {
 		i := i
 		g.Go(func() error {
@@ -719,7 +723,7 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	missingTxsMu := sync.Mutex{}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(32)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
