@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -36,7 +37,7 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db           *sql.DB
+	db           *usql.DB
 	engine       util.SQLEngine
 	store        blockchain.Store
 	AssetClient  *asset.Client
@@ -82,7 +83,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	c := &Coinbase{
 		store:        store,
-		db:           store.GetDB(),
+		db:           &usql.DB{DB: store.GetDB()},
 		engine:       engine,
 		blockFoundCh: make(chan processBlockFound, 100),
 		catchupCh:    make(chan processBlockCatchup),

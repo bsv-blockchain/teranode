@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -58,7 +59,7 @@ func init() {
 
 type Store struct {
 	logger    ulogger.Logger
-	db        *sql.DB
+	db        *usql.DB
 	engine    string
 	dbTimeout time.Duration
 }
@@ -90,7 +91,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 
 	s := &Store{
 		logger:    logger,
-		db:        db,
+		db:        &usql.DB{DB: db},
 		engine:    storeUrl.Scheme,
 		dbTimeout: time.Duration(dbTimeout) * time.Millisecond,
 	}
