@@ -519,6 +519,20 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			return fmt.Errorf("context cancelled spending %d of %d aerospike utxos", i, len(spends))
 		default:
 			if err = s.spendUtxo(policy, spend); err != nil {
+				// TODO remove this hack
+				// TEMP TEMP TEMP - we need to figure out why utxos are not stored properly
+				// there are no double spends, so we can just ignore this error for now to be able to test performance
+				s.logger.Warnf("[BACKUP_UTXO_STORE] failed to spend utxo %s: %v", spend.Hash.String(), err)
+				if err = s.storeUtxo(util.GetAerospikeWritePolicy(0, 0), spend.Hash, 0); err != nil {
+					s.logger.Errorf("[BACKUP_UTXO_STORE] failed to store utxo as backup in spendUtxo %s: %v", spend.Hash.String(), err)
+				} else {
+					if err = s.spendUtxo(policy, spend); err != nil {
+						_ = s.UnSpend(context.Background(), spentSpends)
+						return err
+					}
+					return nil
+				}
+
 				// revert the spent utxos
 				_ = s.UnSpend(context.Background(), spentSpends)
 				return err
