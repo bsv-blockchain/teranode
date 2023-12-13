@@ -17,6 +17,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -135,7 +136,7 @@ type storeUtxo struct {
 
 type Store struct {
 	u            *url.URL
-	client       *aerospike.Client
+	client       *uaerospike.Client
 	namespace    string
 	logger       ulogger.Logger
 	blockHeight  uint32
