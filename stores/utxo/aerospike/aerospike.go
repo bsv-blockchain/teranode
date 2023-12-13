@@ -390,7 +390,15 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
+		s.logger.Warnf("[BATCH_ERR] Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
+
+		for idx, batchRecord := range batchRecords {
+			err = batchRecord.BatchRec().Err
+			if err != nil {
+				s.logger.Warnf("[BATCH_ERR] error in aerospike utxo store BatchOperate batchRecord %d of %d (will retry): %s - %w", idx, len(batchRecords), utxoHashes[idx].String(), err)
+			}
+		}
+
 		for idx, hash := range utxoHashes {
 			s.storeRetryCh <- &storeUtxo{
 				idx:      idx,
@@ -400,10 +408,10 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			}
 		}
 		prometheusUtxoStoreFail.Add(float64(len(utxoHashes)))
-		return fmt.Errorf("error in aerospike store BatchOperate: %w", err)
+		return fmt.Errorf("[BATCH_ERR] error in aerospike utxo store BatchOperate (will retry): %w", err)
 	}
 
-	// check for errors
+	// batchOperate may have no errors, but some of the records may have failed
 	errorsThrown := make([]error, 0)
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
