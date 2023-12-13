@@ -21,7 +21,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -29,7 +29,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		meta, err := c.Create(ctx, coinbaseTx)
 		require.NoError(t, err)
@@ -43,7 +43,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 }
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
-	c := NewTxMetaCache(memory.New(ulogger.TestLogger{}))
+	c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	cache := c.(*TxMetaCache)
 
 	hashes := make([]chainhash.Hash, b.N)

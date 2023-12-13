@@ -88,7 +88,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	// create a caching tx meta store
 	if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		bVal.txMetaStore = txmetacache.NewTxMetaCache(txMetaStore)
+		bVal.txMetaStore = txmetacache.NewTxMetaCache(ulogger.TestLogger{}, txMetaStore)
 	} else {
 		bVal.txMetaStore = txMetaStore
 	}

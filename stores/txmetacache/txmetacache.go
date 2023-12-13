@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -35,9 +36,10 @@ type TxMetaCache struct {
 	cacheTTL      time.Duration
 	cacheTTLQueue *LockFreeTTLQueue
 	metrics       metrics
+	logger        ulogger.Logger
 }
 
-func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
+func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Store {
 	initPrometheusMetrics()
 
 	cacheTTL, _ := gocore.Config().GetInt("txMetaCacheTTL", 5)
@@ -51,6 +53,7 @@ func NewTxMetaCache(txMetaStore txmeta.Store) txmeta.Store {
 		cacheTTL:      time.Duration(cacheTTL) * time.Minute,
 		cacheTTLQueue: NewLockFreeTTLQueue(math.MaxInt64),
 		metrics:       metrics{},
+		logger:        logger,
 	}
 
 	for i := 0; i < 256; i++ {
@@ -113,6 +116,8 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 	if ok {
 		return cached, nil
 	}
+
+	t.logger.Warnf("txMetaCache miss for %s", hash.String())
 
 	txMeta, err := t.txMetaStore.GetMeta(ctx, hash)
 	if err != nil {

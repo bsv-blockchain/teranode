@@ -122,7 +122,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(txMetaStore)
+	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(ulogger.TestLogger{}, txMetaStore)
 
 	numberOfItems := 1_024 * 1_024
 
