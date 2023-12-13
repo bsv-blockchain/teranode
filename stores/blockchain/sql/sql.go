@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
@@ -18,7 +19,7 @@ import (
 )
 
 type SQL struct {
-	db     *sql.DB
+	db     *usql.DB
 	engine util.SQLEngine
 	logger ulogger.Logger
 }
@@ -57,7 +58,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	}
 
 	s := &SQL{
-		db:     db,
+		db:     &usql.DB{DB: db},
 		engine: util.SQLEngine(storeUrl.Scheme),
 		logger: logger,
 	}
@@ -71,7 +72,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 }
 
 func (s *SQL) GetDB() *sql.DB {
-	return s.db
+	return s.db.DB
 }
 
 func (s *SQL) GetDBEngine() util.SQLEngine {
