@@ -128,7 +128,7 @@ func loadTxMetaIntoMemory(cachedTxMetaStore txmeta.Store) error {
 	defer file.Close()
 
 	// create a buffered reader for the file
-	bufReader := bufio.NewReader(file)
+	bufReader := bufio.NewReaderSize(file, 55*1024*1024)
 
 	if err = ReadTxMeta(bufReader, cachedTxMetaStore.(*txmetacache.TxMetaCache)); err != nil {
 		return err
@@ -196,6 +196,7 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 	txId := make([]byte, 32)
 	var hash chainhash.Hash
 	fees := uint64(0)
+	var n int
 	for i := 1; i < nrOfIds; i++ {
 		binary.LittleEndian.PutUint64(txId, uint64(i))
 		hash = chainhash.Hash(txId)
@@ -204,9 +205,12 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 			return nil, err
 		}
 
-		_, err = WriteTxMeta(txMetastoreWriter, hash, uint64(i), uint64(i))
+		n, err = WriteTxMeta(txMetastoreWriter, hash, uint64(i), uint64(i))
 		if err != nil {
 			return nil, err
+		}
+		if n != 48 {
+			return nil, fmt.Errorf("expected to write 48 bytes, wrote %d", n)
 		}
 
 		fees += uint64(i)
@@ -326,18 +330,21 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
-		Timestamp:      1231469650,
+		Timestamp:      uint32(time.Now().Unix()),
 		Bits:           nBits,
 		Nonce:          0,
 	}
 
 	// mine to the target difficulty
 	//for {
-	//	fmt.Printf("mining nonce: %d\n", blockHeader.Nonce)
 	//	if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
 	//		break
 	//	}
 	//	blockHeader.Nonce++
+	//
+	//	if blockHeader.Nonce%1000000 == 0 {
+	//		fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+	//	}
 	//}
 
 	if subtreeCount != len(subtreeHashes) {
@@ -347,8 +354,8 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 	block := &Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
-		SizeInBytes:      123,
+		TransactionCount: txIdCount,
+		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes,
 	}
 
@@ -391,7 +398,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 
 	b := make([]byte, 48)
 	for {
-		_, err := r.Read(b)
+		_, err := io.ReadFull(r, b)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -428,7 +435,23 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 		}
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// remainder batch
+	if len(batch) > 0 {
+		for _, data := range batch {
+			if err := txMetaStore.SetCache(&data.hash, &txmeta.Data{
+				Fee:         data.fee,
+				SizeInBytes: data.sizeInBytes,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func WriteTxMeta(w io.Writer, txHash chainhash.Hash, fee, sizeInBytes uint64) (int, error) {
