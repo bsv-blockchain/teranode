@@ -187,6 +187,7 @@ func TestBlock_Valid(t *testing.T) {
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
 
 	currentChain := make([]*BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
 	for i := 0; i < 11; i++ {
 		currentChain[i] = &BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
@@ -194,9 +195,10 @@ func TestBlock_Valid(t *testing.T) {
 			// set the last 11 block header timestamps to be less than the current timestamps
 			Timestamp: 1231469665 - uint32(i),
 		}
+		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain)
+	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -306,19 +308,15 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser,
 }
 
 func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
-	path := filepath.Join("testdata", "testSubtreeHex.txt")
+	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
 	// read the file
-	subtreeHex, err := os.ReadFile(path)
+	subtreeBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read file: %s", err)
+		return nil, fmt.Errorf("failed to read file: %s", err)
 	}
-	// convert hex string to bytes
-	data, err := hex.DecodeString(string(subtreeHex))
-	if err != nil {
-		return nil, fmt.Errorf("Failed to decode hex data: %s", err)
-	}
-	return data, nil
+
+	return subtreeBytes, nil
 }
 
 func (n *BlobStoreStub) Exists(_ context.Context, _ []byte) (bool, error) {

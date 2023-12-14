@@ -104,6 +104,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	if err != nil {
 		return err
 	}
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+	if err != nil {
+		return err
+	}
 	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 	// Add the coinbase transaction to the metaTxStore
@@ -114,10 +118,24 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
+	// decouple the tracing context to not cancel the context when finalize the block processing in the background
+	//callerSpan := opentracing.SpanFromContext(spanCtx)
+	//validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	//
+	//go func() {
+	//	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
+	//	if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	//		if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+	//			u.logger.Errorf("[ValidateBlock] failed to invalidate block: %s", err)
+	//		}
+	//		u.logger.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
+	//	}
+	//}()
+
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
 		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 	}
 	u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())

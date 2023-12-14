@@ -681,7 +681,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 			}
 
 			for _, node := range subtree.Nodes {
-				_ = transactionMap.Put(node.Hash)
+				_ = transactionMap.Put(node.Hash, 0)
 			}
 
 			return nil

@@ -669,10 +669,10 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			assert.Equal(t, txIDs[idx-1], txHash.Hash.String())
 		}
 
-		_ = transactionMap.Put(*hashes[3])
-		_ = transactionMap.Put(*hashes[7])
-		_ = transactionMap.Put(*hashes[11])
-		_ = transactionMap.Put(*hashes[15])
+		_ = transactionMap.Put(*hashes[3], 0)
+		_ = transactionMap.Put(*hashes[7], 0)
+		_ = transactionMap.Put(*hashes[11], 0)
+		_ = transactionMap.Put(*hashes[15], 0)
 
 		expectedTxIDs := []string{
 			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",

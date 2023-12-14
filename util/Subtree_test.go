@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"testing"
 	"time"
@@ -370,6 +371,28 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 //	})
 //}
 
+func Test_Deserialize(t *testing.T) {
+	//SkipLongTests(t)
+	runtime.SetCPUProfileRate(1000)
+
+	size := 1024 * 1024
+	subtreeBytes := generateLargeSubtreeBytes(t, size)
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	subtree := NewTreeByLeafCount(size)
+	err := subtree.Deserialize(subtreeBytes)
+	require.NoError(t, err)
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
 func BenchmarkSubtree_AddNode(b *testing.B) {
 	st := NewTree(20)
 
@@ -404,4 +427,20 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 	ser, err := st.Serialize()
 	require.NoError(b, err)
 	assert.GreaterOrEqual(b, len(ser), 48*b.N)
+}
+
+func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
+	st := NewIncompleteTreeByLeafCount(size)
+
+	var bb [32]byte
+	for i := 0; i < size; i++ {
+		// int to bytes
+		binary.LittleEndian.PutUint32(bb[:], uint32(i))
+		_ = st.AddNode(bb, 111, 234)
+	}
+
+	ser, err := st.Serialize()
+	require.NoError(t, err)
+
+	return ser
 }

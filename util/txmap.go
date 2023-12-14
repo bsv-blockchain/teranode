@@ -1,17 +1,16 @@
 package util
 
 import (
-	"encoding/binary"
-	"hash/maphash"
+	"fmt"
 	"sync"
 
 	"github.com/dolthub/swiss"
-	"github.com/puzpuzpuz/xsync/v2"
 )
 
 type TxMap interface {
+	Put(hash [32]byte, value uint64) error
+	Get(hash [32]byte) (uint64, bool)
 	Exists(hash [32]byte) bool
-	Put(hash [32]byte) error
 	Length() int
 }
 
@@ -33,6 +32,15 @@ func (s *SwissMap) Exists(hash [32]byte) bool {
 
 	_, ok := s.m.Get(hash)
 	return ok
+}
+
+func (s *SwissMap) Get(hash [32]byte) (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.m.Get(hash)
+
+	return 0, ok
 }
 
 func (s *SwissMap) Put(hash [32]byte) error {
@@ -83,9 +91,14 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.length++
+	exists := s.m.Has(hash)
+	if exists {
+		return fmt.Errorf("hash already exists in map")
+	}
 
 	s.m.Put(hash, n)
+	s.length++
+
 	return nil
 }
 
@@ -128,9 +141,14 @@ func (g *SplitSwissMap) Exists(hash [32]byte) bool {
 	return g.m[[1]byte{hash[0]}].Exists(hash)
 }
 
-func (g *SplitSwissMap) Put(hash [32]byte) error {
+func (g *SplitSwissMap) Get(hash [32]byte) (uint64, bool) {
+	return g.m[[1]byte{hash[0]}].Get(hash)
+}
+
+func (g *SplitSwissMap) Put(hash [32]byte, n uint64) error {
 	return g.m[[1]byte{hash[0]}].Put(hash)
 }
+
 func (g *SplitSwissMap) Length() int {
 	length := 0
 	for i := 0; i <= 255; i++ {
@@ -141,13 +159,19 @@ func (g *SplitSwissMap) Length() int {
 }
 
 type SplitSwissMapUint64 struct {
-	m map[[1]byte]*SwissMapUint64
+	m          map[[1]byte]*SwissMapUint64
+	splitIndex int
 	// length int
 }
 
-func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
+func NewSplitSwissMapUint64(length int, splitIndex ...int) *SplitSwissMapUint64 {
 	m := &SplitSwissMapUint64{
-		m: make(map[[1]byte]*SwissMapUint64, 256),
+		m:          make(map[[1]byte]*SwissMapUint64, 256),
+		splitIndex: 0,
+	}
+
+	if len(splitIndex) > 0 {
+		m.splitIndex = splitIndex[0]
 	}
 
 	for i := 0; i <= 255; i++ {
@@ -158,15 +182,15 @@ func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
 }
 
 func (g *SplitSwissMapUint64) Exists(hash [32]byte) bool {
-	return g.m[[1]byte{hash[0]}].Exists(hash)
+	return g.m[[1]byte{hash[g.splitIndex]}].Exists(hash)
 }
 
 func (g *SplitSwissMapUint64) Put(hash [32]byte, n uint64) error {
-	return g.m[[1]byte{hash[0]}].Put(hash, n)
+	return g.m[[1]byte{hash[g.splitIndex]}].Put(hash, n)
 }
 
 func (g *SplitSwissMapUint64) Get(hash [32]byte) (uint64, bool) {
-	return g.m[[1]byte{hash[0]}].Get(hash)
+	return g.m[[1]byte{hash[g.splitIndex]}].Get(hash)
 }
 
 func (g *SplitSwissMapUint64) Length() int {
@@ -178,120 +202,40 @@ func (g *SplitSwissMapUint64) Length() int {
 	return length
 }
 
-type GoMap struct {
-	m map[[32]byte]struct{}
+type Split2SwissMapUint64 struct {
+	m map[[1]byte]*SplitSwissMapUint64
+	// length int
 }
 
-func NewGoMap(length int) *GoMap {
-	return &GoMap{
-		m: make(map[[32]byte]struct{}, length),
-	}
-}
-
-func (g *GoMap) Exists(hash [32]byte) bool {
-	_, ok := g.m[hash]
-	return ok
-}
-
-func (g *GoMap) Put(hash [32]byte) error {
-	g.m[hash] = struct{}{}
-	return nil
-}
-
-type SyncMap struct {
-	m sync.Map
-}
-
-func NewSyncMap(length int) *SyncMap {
-	return &SyncMap{
-		m: sync.Map{}, // can we set the length of the sync.Map ?
-	}
-}
-
-func (s *SyncMap) Exists(hash [32]byte) bool {
-	_, ok := s.m.Load(hash)
-	return ok
-}
-
-func (s *SyncMap) Put(hash [32]byte) error {
-	s.m.Store(hash, struct{}{})
-	return nil
-}
-
-type XSyncMap struct {
-	m *xsync.MapOf[[32]byte, struct{}]
-}
-
-func NewXSyncMap(length int) *XSyncMap {
-	return &XSyncMap{
-		m: xsync.NewTypedMapOf[[32]byte, struct{}](func(seed maphash.Seed, hash [32]byte) uint64 {
-			// provide a hash function when creating the MapOf;
-			// we recommend using the hash/maphash package for the function
-			var h maphash.Hash
-			h.SetSeed(seed)
-			_ = binary.Write(&h, binary.LittleEndian, hash)
-			return h.Sum64()
-		}),
-	}
-}
-
-func (x *XSyncMap) Exists(hash [32]byte) bool {
-	_, ok := x.m.Load(hash)
-	return ok
-}
-
-func (x *XSyncMap) Put(hash [32]byte) error {
-	x.m.Store(hash, struct{}{})
-	return nil
-}
-
-type GoMutexMap struct {
-	m  map[[32]byte]struct{}
-	mx sync.Mutex
-}
-
-func NewGoMutexMap(length int) *GoMutexMap {
-	return &GoMutexMap{
-		m: make(map[[32]byte]struct{}, length),
-	}
-}
-
-func (g *GoMutexMap) Exists(hash [32]byte) bool {
-	g.mx.Lock()
-	defer g.mx.Unlock()
-
-	_, ok := g.m[hash]
-	return ok
-}
-
-func (g *GoMutexMap) Put(hash [32]byte) error {
-	g.mx.Lock()
-	defer g.mx.Unlock()
-
-	g.m[hash] = struct{}{}
-	return nil
-}
-
-type GoSplitMutexMap struct {
-	m map[[1]byte]*GoMutexMap
-}
-
-func NewGoSplitMutexMap(length int) *GoSplitMutexMap {
-	m := &GoSplitMutexMap{
-		m: make(map[[1]byte]*GoMutexMap, 256),
+func NewSplit2SwissMapUint64(length int) *Split2SwissMapUint64 {
+	m := &Split2SwissMapUint64{
+		m: make(map[[1]byte]*SplitSwissMapUint64, 256),
 	}
 
 	for i := 0; i <= 255; i++ {
-		m.m[[1]byte{uint8(i)}] = NewGoMutexMap(length / 256)
+		m.m[[1]byte{uint8(i)}] = NewSplitSwissMapUint64(length/256, 1)
 	}
 
 	return m
 }
 
-func (g *GoSplitMutexMap) Exists(hash [32]byte) bool {
+func (g *Split2SwissMapUint64) Exists(hash [32]byte) bool {
 	return g.m[[1]byte{hash[0]}].Exists(hash)
 }
 
-func (g *GoSplitMutexMap) Put(hash [32]byte) error {
-	return g.m[[1]byte{hash[0]}].Put(hash)
+func (g *Split2SwissMapUint64) Put(hash [32]byte, n uint64) error {
+	return g.m[[1]byte{hash[0]}].Put(hash, n)
+}
+
+func (g *Split2SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
+	return g.m[[1]byte{hash[0]}].Get(hash)
+}
+
+func (g *Split2SwissMapUint64) Length() int {
+	length := 0
+	for i := 0; i <= 255; i++ {
+		length += g.m[[1]byte{uint8(i)}].Length()
+	}
+
+	return length
 }

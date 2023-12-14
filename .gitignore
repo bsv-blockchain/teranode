@@ -26,3 +26,4 @@ private_key
 coverage.out
 
 *.prof
+/model/generated_test_data/
