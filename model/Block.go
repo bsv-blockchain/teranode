@@ -418,15 +418,15 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 						// check whether the parent is in a block on our chain
 						parentTxMeta, err := txMetaStore.Get(gCtx, parentTxHash)
 						if err != nil && !errors.Is(err, txmetastore.ErrNotFound) {
-							return fmt.Errorf("error getting parent transaction %s from txMetaStore: %v", parentTxHash.String(), err)
+							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
 						if parentTxMeta != nil {
 							if len(parentTxMeta.BlockIDs) == 0 {
-								return fmt.Errorf("parent transaction %s is not on our chain", parentTxHash.String())
+								return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
 							} else {
 								for _, blockID := range parentTxMeta.BlockIDs {
 									if _, ok := currentChainIDsMap[blockID]; !ok {
-										return fmt.Errorf("parent transaction %s is not on our chain", parentTxHash.String())
+										return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
 									}
 								}
 							}
