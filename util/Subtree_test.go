@@ -164,6 +164,39 @@ func Test_Serialize(t *testing.T) {
 		}
 	})
 
+	t.Run("Serialize nodes", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
+
+		subtreeBytes, err := st.SerializeNodes()
+		require.NoError(t, err)
+
+		require.Equal(t, chainhash.HashSize*4, len(subtreeBytes))
+
+		txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+		for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+			txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+		}
+
+		assert.Equal(t, hash1.String(), txHashes[0].String())
+		assert.Equal(t, hash2.String(), txHashes[1].String())
+		assert.Equal(t, hash3.String(), txHashes[2].String())
+		assert.Equal(t, hash4.String(), txHashes[3].String())
+	})
+
 	t.Run("Serialize with conflicting", func(t *testing.T) {
 		st, err := NewTree(2)
 		require.NoError(t, err)

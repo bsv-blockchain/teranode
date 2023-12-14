@@ -757,7 +757,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block header ids: %w", err)
 	}
-	blockID := ids[0]
+
+	var blockID uint32
+	if len(ids) > 0 {
+		blockID = ids[0]
+	}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(cntxt)

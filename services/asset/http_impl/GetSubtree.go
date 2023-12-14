@@ -2,6 +2,7 @@ package http_impl
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/gocore"
 )
 
@@ -48,8 +48,8 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return c.JSONPretty(200, subtree, "  ")
 		}
 
-		// If we did not serve JSON, we need to serialize the nodes into a byte slice.  We use SerializeNodes() for this which does NOT include the fees and sizes.
-
+		// If we did not serve JSON, we need to serialize the nodes into a byte slice.
+		// We use SerializeNodes() for this which does NOT include the fees and sizes.
 		b, err := subtree.SerializeNodes()
 		if err != nil {
 			return err
@@ -82,18 +82,17 @@ func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error)
 		return nil, err
 	}
 
-	if _, err := wire.ReadVarInt(subtreeReader, 0); err != nil { // fees
+	b := make([]byte, 8)
+	if _, err := subtreeReader.Read(b); err != nil { // fee
 		return nil, err
 	}
-
-	if _, err := wire.ReadVarInt(subtreeReader, 0); err != nil { // sizeInBytes
+	if _, err := subtreeReader.Read(b); err != nil { // sizeInBytes
 		return nil, err
 	}
-
-	itemCount, err := wire.ReadVarInt(subtreeReader, 0) // numberOfLeaves
-	if err != nil {
+	if _, err := subtreeReader.Read(b); err != nil { // numberOfLeaves
 		return nil, err
 	}
+	itemCount := binary.LittleEndian.Uint64(b)
 
 	return &SubtreeNodesReader{
 		reader:    bufio.NewReader(subtreeReader),
