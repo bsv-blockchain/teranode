@@ -23,6 +23,7 @@ const (
 	BlockAssemblyAPI_Health_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/Health"
 	BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight"
 	BlockAssemblyAPI_AddTx_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/AddTx"
+	BlockAssemblyAPI_RemoveTx_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
 	BlockAssemblyAPI_AddTxBatch_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
 	BlockAssemblyAPI_GetMiningCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
 	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
@@ -36,6 +37,7 @@ type BlockAssemblyAPIClient interface {
 	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
+	RemoveTx(ctx context.Context, in *RemoveTxRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
@@ -70,6 +72,15 @@ func (c *blockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *N
 func (c *blockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error) {
 	out := new(AddTxResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_AddTx_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) RemoveTx(ctx context.Context, in *RemoveTxRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_RemoveTx_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +122,7 @@ type BlockAssemblyAPIServer interface {
 	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
+	RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error)
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -129,6 +141,9 @@ func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context,
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveTx not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTxBatch not implemented")
@@ -206,6 +221,24 @@ func _BlockAssemblyAPI_AddTx_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_RemoveTx_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveTxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).RemoveTx(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_RemoveTx_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).RemoveTx(ctx, req.(*RemoveTxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_AddTxBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddTxBatchRequest)
 	if err := dec(in); err != nil {
@@ -278,6 +311,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddTx",
 			Handler:    _BlockAssemblyAPI_AddTx_Handler,
+		},
+		{
+			MethodName: "RemoveTx",
+			Handler:    _BlockAssemblyAPI_RemoveTx_Handler,
 		},
 		{
 			MethodName: "AddTxBatch",

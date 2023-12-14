@@ -45,6 +45,16 @@ func (s *SwissMap) Put(hash [32]byte) error {
 	return nil
 }
 
+func (s *SwissMap) Delete(hash [32]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.length--
+
+	s.m.Delete(hash)
+	return nil
+}
+
 func (s *SwissMap) Length() int {
 	return s.length
 }

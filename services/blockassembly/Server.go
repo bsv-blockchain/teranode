@@ -457,6 +457,28 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
+func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error) {
+	startTime := time.Now()
+	prometheusBlockAssemblyRemoveTx.Inc()
+	defer func() {
+		prometheusBlockAssemblyRemoveTxDuration.Observe(util.TimeSince(startTime))
+	}()
+
+	if len(req.Txid) != 32 {
+		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
+	}
+
+	hash := chainhash.Hash(req.Txid)
+
+	if !ba.blockAssemblyDisabled {
+		if err := ba.blockAssembler.RemoveTx(hash); err != nil {
+			return nil, err
+		}
+	}
+
+	return &blockassembly_api.EmptyMessage{}, nil
+}
+
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	// start := gocore.CurrentTime()
 	// defer func() {

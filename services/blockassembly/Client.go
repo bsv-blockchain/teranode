@@ -212,6 +212,14 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	return true, nil
 }
 
+func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	_, err := s.client.RemoveTx(ctx, &blockassembly_api.RemoveTxRequest{
+		Txid: hash[:],
+	})
+
+	return err
+}
+
 func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
 	req := &blockassembly_api.EmptyMessage{}
 

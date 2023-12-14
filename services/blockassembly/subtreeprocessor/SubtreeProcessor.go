@@ -49,6 +49,7 @@ type SubtreeProcessor struct {
 	txCount      atomic.Uint64
 	batcher      *txIDAndFeeBatch
 	queue        *LockFreeQueue
+	removeMap    *util.SwissMap
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       ulogger.Logger
@@ -94,6 +95,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		currentSubtree:      firstSubtree,
 		batcher:             newTxIDAndFeeBatch(batcherSize),
 		queue:               queue,
+		removeMap:           util.NewSwissMap(0),
 		subtreeStore:        subtreeStore,
 		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
 		logger:              logger,
@@ -152,6 +154,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						time.Sleep(1 * time.Millisecond)
 						break
 					}
+
+					// check if the tx needs to be removed
+					// TODO turn this on, turned off for now to not influence performance
+					//if stp.removeMap.Exists(txReq.node.Hash) {
+					//	// remove from the map
+					//	if err = stp.removeMap.Delete(txReq.node.Hash); err != nil {
+					//		stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+					//	}
+					//	continue
+					//}
 
 					err = stp.addNode(txReq.node, false)
 					if err != nil {
@@ -220,6 +232,16 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
 	stp.queue.enqueue(&txIDAndFee{node: node})
+}
+
+// Remove prevents a tx to be processed from the queue into a subtree
+// this needs to happen before the delay time in the queue has passed
+func (stp *SubtreeProcessor) Remove(hash chainhash.Hash) error {
+	if err := stp.removeMap.Put(hash); err != nil {
+		return fmt.Errorf("error adding tx to remove map: %s", err.Error())
+	}
+
+	return nil
 }
 
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {

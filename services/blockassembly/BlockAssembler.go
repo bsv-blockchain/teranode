@@ -298,6 +298,10 @@ func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
 	return nil
 }
 
+func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
+	return b.subtreeProcessor.Remove(hash)
+}
+
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	responseCh := make(chan *miningCandidateResponse)
