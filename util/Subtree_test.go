@@ -458,6 +458,24 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 	assert.GreaterOrEqual(b, len(ser), 48*b.N)
 }
 
+func BenchmarkSubtree_SerializeNodes(b *testing.B) {
+	st, err := NewIncompleteTreeByLeafCount(b.N)
+	require.NoError(b, err)
+
+	for i := 0; i < b.N; i++ {
+		// int to bytes
+		var bb [32]byte
+		binary.LittleEndian.PutUint32(bb[:], uint32(i))
+		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
+	}
+
+	b.ResetTimer()
+
+	ser, err := st.SerializeNodes()
+	require.NoError(b, err)
+	assert.GreaterOrEqual(b, len(ser), 32*b.N)
+}
+
 func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
 	st, err := NewIncompleteTreeByLeafCount(size)
 	require.NoError(t, err)

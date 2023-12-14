@@ -265,7 +265,8 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 }
 
 func (st *Subtree) Serialize() ([]byte, error) {
-	buf := bytes.NewBuffer([]byte{})
+	bufBytes := make([]byte, 0, 32+8+8+8+(len(st.Nodes)*32)+8+(len(st.ConflictingNodes)*32))
+	buf := bytes.NewBuffer(bufBytes)
 
 	// write root hash - this is only for checking the correctness of the data
 	_, err := buf.Write(st.RootHash()[:])
@@ -336,7 +337,8 @@ func (st *Subtree) Serialize() ([]byte, error) {
 
 // SerializeNodes serializes only the nodes (list of transaction ids), not the root hash, fees, etc.
 func (st *Subtree) SerializeNodes() ([]byte, error) {
-	buf := bytes.NewBuffer([]byte{})
+	b := make([]byte, 0, len(st.Nodes)*32)
+	buf := bytes.NewBuffer(b)
 
 	var err error
 
