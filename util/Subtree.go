@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-p2p/wire"
 )
 
 type SubtreeNode struct {
@@ -406,6 +407,91 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	//	return fmt.Errorf("root hash mismatch")
 	//}
 
+	return nil
+}
+
+func (st *Subtree) DeserializeOld(b []byte) (err error) {
+	buf := bytes.NewBuffer(b)
+
+	// read root hash
+	var rootHash [32]byte
+	_, err = buf.Read(rootHash[:])
+	if err != nil {
+		return fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	// read fees
+	st.Fees, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read fees: %v", err)
+	}
+
+	// read sizeInBytes
+	st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+	}
+
+	// read number of leaves
+	numLeaves, err := wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read number of leaves: %v", err)
+	}
+
+	// we must be able to support incomplete subtrees
+	//if !IsPowerOfTwo(int(numLeaves)) {
+	//	return fmt.Errorf("numberOfLeaves must be a power of two")
+	//}
+
+	st.treeSize = int(numLeaves)
+	// the height of a subtree is always a power of two
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	// read leaves
+	st.Nodes = make([]SubtreeNode, numLeaves)
+	var hash *chainhash.Hash
+	for i := uint64(0); i < numLeaves; i++ {
+		hash, err = chainhash.NewHash(buf.Next(32))
+		if err != nil {
+			return fmt.Errorf("unable to read leaves: %v", err)
+		}
+
+		feeBytes := buf.Next(8)
+		fee := binary.LittleEndian.Uint64(feeBytes)
+
+		sizeBytes := buf.Next(8)
+		sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
+
+		st.Nodes[i] = SubtreeNode{
+			Hash:        *hash,
+			Fee:         fee,
+			SizeInBytes: sizeInBytes,
+		}
+	}
+
+	// read number of conflicting nodes
+	numConflictingLeaves, err := wire.ReadVarInt(buf, 0)
+	if err != nil {
+		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+	}
+
+	// read conflicting nodes
+	var conflictingHash *chainhash.Hash
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
+		conflictingHash, err = chainhash.NewHash(buf.Next(32))
+		if err != nil {
+			return fmt.Errorf("unable to read conflicting node: %v", err)
+		}
+		st.ConflictingNodes[i] = *conflictingHash
+	}
+
+	// calculate rootHash and compare with given rootHash
+	if !bytes.Equal(st.RootHash()[:], rootHash[:]) {
+		return fmt.Errorf("root hash mismatch")
+	}
+
+	// TODO: look up the fee for the last tx and subtract it from the last chainedSubtree and add it to the currentSubtree
 	return nil
 }
 
