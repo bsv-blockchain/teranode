@@ -514,7 +514,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	for i, subtree := range b.SubtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
-			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), uint64(b.CoinbaseTx.Size()), 0)
+			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
 		}
 
 		hashes[i] = *subtree.RootHash()
