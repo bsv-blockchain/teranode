@@ -232,7 +232,8 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 
 func TestCheckDuplicateTransactions(t *testing.T) {
 	leafCount := 4
-	subtree := util.NewTreeByLeafCount(leafCount)
+	subtree, err := util.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
 
 	// create a slice of random hashes
 	hashes := make([]*chainhash.Hash, leafCount)

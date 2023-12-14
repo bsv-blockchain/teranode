@@ -204,12 +204,12 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if !headerValid {
-		//return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
+		return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	if b.Header.Timestamp > uint32(time.Now().Add(2*time.Hour).Unix()) {
-		//return false, fmt.Errorf("block timestamp is more than two hours in the future")
+		return false, fmt.Errorf("block timestamp is more than two hours in the future")
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
@@ -559,7 +559,11 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		calculatedMerkleRootHash = &hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
-		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		if err != nil {
+			return err
+		}
+
 		for _, hash := range hashes {
 			err = st.AddNode(hash, 1, 0)
 			if err != nil {

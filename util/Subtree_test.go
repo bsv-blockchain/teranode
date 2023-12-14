@@ -17,14 +17,18 @@ import (
 )
 
 func TestNewTree(t *testing.T) {
-	st := NewTree(20)
+	st, err := NewTree(20)
+	require.NoError(t, err)
+
 	if st.Size() != 1048576 {
 		t.Errorf("expected size to be 1048576, got %d", st.Size())
 	}
 }
 
 func TestRootHash(t *testing.T) {
-	st := NewTree(2)
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
 	if st.Size() != 4 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -42,7 +46,9 @@ func TestRootHash(t *testing.T) {
 }
 
 func TestRootHashSimon(t *testing.T) {
-	st := NewTree(2)
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
 	if st.Size() != 4 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -61,7 +67,9 @@ func TestRootHashSimon(t *testing.T) {
 }
 
 func TestTwoTransactions(t *testing.T) {
-	st := NewTree(1)
+	st, err := NewTree(1)
+	require.NoError(t, err)
+
 	if st.Size() != 2 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -76,7 +84,9 @@ func TestTwoTransactions(t *testing.T) {
 }
 
 func TestSubtree_GetMerkleProof(t *testing.T) {
-	st := NewTree(3)
+	st, err := NewTree(3)
+	require.NoError(t, err)
+
 	if st.Size() != 8 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -119,7 +129,9 @@ func TestSubtree_GetMerkleProof(t *testing.T) {
 
 func Test_Serialize(t *testing.T) {
 	t.Run("Serialize", func(t *testing.T) {
-		st := NewTree(2)
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
@@ -136,7 +148,9 @@ func Test_Serialize(t *testing.T) {
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		newSubtree := NewTree(2)
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
 		err = newSubtree.Deserialize(serializedBytes)
 		require.NoError(t, err)
 		assert.Equal(t, st.Fees, newSubtree.Fees)
@@ -151,7 +165,9 @@ func Test_Serialize(t *testing.T) {
 	})
 
 	t.Run("Serialize with conflicting", func(t *testing.T) {
-		st := NewTree(2)
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
@@ -172,7 +188,9 @@ func Test_Serialize(t *testing.T) {
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		newSubtree := NewTree(2)
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
 		err = newSubtree.Deserialize(serializedBytes)
 		require.NoError(t, err)
 		assert.Equal(t, st.Fees, newSubtree.Fees)
@@ -196,7 +214,8 @@ func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
 	SkipVeryLongTests(t)
 
 	numberOfItems := 1_024 * 1_024
-	subtree := NewTreeByLeafCount(numberOfItems)
+	subtree, err := NewTreeByLeafCount(numberOfItems)
+	require.NoError(t, err)
 
 	for i := 0; i < numberOfItems; i++ {
 		tx := bt.NewTx()
@@ -239,7 +258,9 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		hashes[6], _ = chainhash.NewHashFromStr("2070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
 		hashes[7], _ = chainhash.NewHashFromStr("c3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
 
-		subtree := NewTreeByLeafCount(8)
+		subtree, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		for _, hash := range hashes {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
@@ -266,7 +287,9 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	})
 
 	t.Run("incomplete tree", func(t *testing.T) {
-		st := NewTreeByLeafCount(8)
+		st, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		txIDS := []string{
 			"4634057867994ae379e82b408cc9eb145a6e921b95ca38f2ced7eb880685a290",
 			"7f87fe1100963977975cef49344e442b4fa3dd9d41de19bc94609c100210ca05",
@@ -315,7 +338,9 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		hashes[3], _ = chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
 		hashes[4], _ = chainhash.NewHashFromStr("87af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 
-		subtree := NewTreeByLeafCount(8)
+		subtree, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		for _, hash := range hashes {
 			_ = subtree.AddNode(*hash, 111, 0)
 		}
@@ -384,8 +409,10 @@ func Test_Deserialize(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	subtree := NewTreeByLeafCount(size)
-	err := subtree.Deserialize(subtreeBytes)
+	subtree, err := NewTreeByLeafCount(size)
+	require.NoError(t, err)
+
+	err = subtree.Deserialize(subtreeBytes)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")
@@ -394,7 +421,8 @@ func Test_Deserialize(t *testing.T) {
 }
 
 func BenchmarkSubtree_AddNode(b *testing.B) {
-	st := NewTree(20)
+	st, err := NewTree(20)
+	require.NoError(b, err)
 
 	// create a slice of random hashes
 	hashes := make([]*chainhash.Hash, b.N)
@@ -413,7 +441,8 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 }
 
 func BenchmarkSubtree_Serialize(b *testing.B) {
-	st := NewIncompleteTreeByLeafCount(b.N)
+	st, err := NewIncompleteTreeByLeafCount(b.N)
+	require.NoError(b, err)
 
 	for i := 0; i < b.N; i++ {
 		// int to bytes
@@ -430,7 +459,8 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 }
 
 func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
-	st := NewIncompleteTreeByLeafCount(size)
+	st, err := NewIncompleteTreeByLeafCount(size)
+	require.NoError(t, err)
 
 	var bb [32]byte
 	for i := 0; i < size; i++ {

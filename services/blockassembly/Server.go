@@ -671,7 +671,10 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	}
 
 	// Create a new subtree with the subtreeHashes of the subtrees
-	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
+	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
+	if err != nil {
+		return nil, fmt.Errorf("[BlockAssembly] failed to create topTree: %w", err)
+	}
 	for _, hash := range subtreeHashes {
 		err = topTree.AddNode(hash, 1, 0)
 		if err != nil {

@@ -15,7 +15,10 @@ func main() {
 	ctx := context.Background()
 	ch := make(chan int)
 
-	subtree := util.NewTreeByLeafCount(1024 * 1024)
+	subtree, err := util.NewTreeByLeafCount(1024 * 1024)
+	if err != nil {
+		panic(err)
+	}
 
 	go func() {
 		for {

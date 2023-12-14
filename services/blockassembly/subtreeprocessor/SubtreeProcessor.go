@@ -66,7 +66,10 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
 
-	firstSubtree := util.NewTreeByLeafCount(initialItemsPerFile)
+	firstSubtree, err := util.NewTreeByLeafCount(initialItemsPerFile)
+	if err != nil {
+		panic(err)
+	}
 	// We add a placeholder for the coinbase tx because we know this is the first subtree in the chain
 	if err := firstSubtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
 		panic(err)
@@ -117,7 +120,12 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 				// incomplete subtrees ?
 				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
-					incompleteSubtree := util.NewTreeByLeafCount(stp.currentItemsPerFile)
+					incompleteSubtree, err := util.NewTreeByLeafCount(stp.currentItemsPerFile)
+					if err != nil {
+						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
+						getSubtreesChan <- nil
+						continue
+					}
 					for _, node := range stp.currentSubtree.Nodes {
 						_ = incompleteSubtree.AddSubtreeNode(node)
 					}
@@ -218,7 +226,10 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		oldSubtree := stp.currentSubtree
 
 		// create a new subtree with the same height as the previous subtree
-		stp.currentSubtree = util.NewTree(stp.currentSubtree.Height)
+		stp.currentSubtree, err = util.NewTree(stp.currentSubtree.Height)
+		if err != nil {
+			return fmt.Errorf("error creating new subtree: %s", err.Error())
+		}
 
 		if !skipNotification {
 			// Send the subtree to the newSubtreeChan
@@ -321,7 +332,7 @@ func (stp *SubtreeProcessor) setTxCount() {
 
 // moveDownBlock adds all transactions that are in the block given to the current subtrees
 // TODO handle conflicting transactions
-func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) error {
+func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) (err error) {
 	if block == nil {
 		return errors.New("you must pass in a block to moveDownBlock")
 	}
@@ -344,7 +355,10 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// TODO add check for the correct parent block
 
 	// reset the subtree processor
-	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	if err != nil {
+		return fmt.Errorf("error creating new subtree: %s", err.Error())
+	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
@@ -518,7 +532,10 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	}
 
 	// reset the current subtree
-	stp.currentSubtree = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	if err != nil {
+		return fmt.Errorf("error creating new subtree: %s", err.Error())
+	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
@@ -555,7 +572,10 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(remainderSubtrees *[]*util.Subtr
 		stp.logger.Infof("processing queue while moveUpBlock: %d", queueLength)
 
 		nrProcessed := int64(0)
-		currentSubtree = util.NewTree(stp.currentSubtree.Height)
+		currentSubtree, err = util.NewTree(stp.currentSubtree.Height)
+		if err != nil {
+			return fmt.Errorf("error creating new subtree: %s", err.Error())
+		}
 		for {
 			item := stp.queue.dequeue()
 			if item == nil {
@@ -570,7 +590,10 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(remainderSubtrees *[]*util.Subtr
 			if currentSubtree.IsComplete() {
 				*remainderSubtrees = append(*remainderSubtrees, currentSubtree)
 				// create a new subtree with the same height as the previous subtree
-				currentSubtree = util.NewTree(currentSubtree.Height)
+				currentSubtree, err = util.NewTree(currentSubtree.Height)
+				if err != nil {
+					return fmt.Errorf("error creating new subtree: %s", err.Error())
+				}
 			}
 
 			nrProcessed++

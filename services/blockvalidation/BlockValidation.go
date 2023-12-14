@@ -523,21 +523,18 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	start = gocore.CurrentTime()
 	// the subtree bytes we got from our competing miner only contain the transaction hashes
 	// it's basically just a list of 32 byte transaction hashes
-	txHashes := make([]chainhash.Hash, len(subtreeBytes)/32)
-	for i := 0; i < len(subtreeBytes); i += 32 {
-		txHashes[i/32] = chainhash.Hash(subtreeBytes[i : i+32])
+	txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+	for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+		txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
 	}
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
-	nrTransactions := len(txHashes)
-	if !util.IsPowerOfTwo(nrTransactions) {
-		//u.logger.Warnf("subtree is not a power of two [%d], mining on incomplete tree", nrTransactions)
-		height := math.Ceil(math.Log2(float64(nrTransactions)))
-		nrTransactions = int(math.Pow(2, height)) // 1024 * 1024
-	}
-
 	// create the empty subtree
-	subtree := util.NewTreeByLeafCount(nrTransactions)
+	height := math.Ceil(math.Log2(float64(len(txHashes))))
+	subtree, err := util.NewTree(int(height))
+	if err != nil {
+		return err
+	}
 
 	start = gocore.CurrentTime()
 	// validate the subtree

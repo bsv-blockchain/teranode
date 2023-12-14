@@ -46,13 +46,14 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 		defer deferFunc()
 
-		subtree := util.NewTreeByLeafCount(4)
+		subtree, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
 		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
 		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
-		_, err := txMetaStore.Create(context.Background(), tx1)
+		_, err = txMetaStore.Create(context.Background(), tx1)
 		require.NoError(t, err)
 
 		_, err = txMetaStore.Create(context.Background(), tx2)
@@ -126,7 +127,8 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	numberOfItems := 1_024 * 1_024
 
-	subtree := util.NewTreeByLeafCount(numberOfItems)
+	subtree, err := util.NewTreeByLeafCount(numberOfItems)
+	require.NoError(t, err)
 
 	for i := 0; i < numberOfItems; i++ {
 		tx := bt.NewTx()

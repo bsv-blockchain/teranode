@@ -334,7 +334,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree := util.NewTree(height)
+		topTree, err := util.NewTree(height)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
+		}
 		for _, subtree := range subtrees {
 			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}

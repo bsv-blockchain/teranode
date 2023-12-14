@@ -174,7 +174,10 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 	}()
 
 	var subtreeBytes []byte
-	subtree := util.NewTreeByLeafCount(subtreeSize)
+	subtree, err := util.NewTreeByLeafCount(subtreeSize)
+	if err != nil {
+		return nil, err
+	}
 	_ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
 
 	var subtreeFile *os.File
@@ -238,7 +241,10 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 			}
 
 			// create new tree
-			subtree = util.NewTreeByLeafCount(subtreeSize)
+			subtree, err = util.NewTreeByLeafCount(subtreeSize)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -281,7 +287,10 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 
 		if i == 0 {
 			// read the first subtree into file, replace the coinbase placeholder with the coinbase txid and calculate the merkle root
-			replacedCoinbaseSubtree := util.NewTreeByLeafCount(subtreeSize)
+			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
+			if err != nil {
+				return nil, err
+			}
 			subtreeFile, err = os.Open(fmt.Sprintf(fileNameTemplate, i))
 			if err != nil {
 				return nil, err
@@ -469,7 +478,10 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		calculatedMerkleRootHash = hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
-		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		if err != nil {
+			return nil, err
+		}
 		for _, hash := range hashes {
 			err := st.AddNode(*hash, 1, 0)
 			if err != nil {
@@ -478,7 +490,6 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		}
 
 		calculatedMerkleRoot := st.RootHash()
-		var err error
 		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
 			return nil, err

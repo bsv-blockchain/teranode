@@ -31,7 +31,7 @@ type Subtree struct {
 }
 
 // NewTree creates a new Subtree with a fixed height
-func NewTree(height int) *Subtree {
+func NewTree(height int) (*Subtree, error) {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &Subtree{
 		Nodes:        make([]SubtreeNode, 0, treeSize),
@@ -40,19 +40,21 @@ func NewTree(height int) *Subtree {
 		treeSize:     treeSize,
 		feeBytes:     make([]byte, 8),
 		feeHashBytes: make([]byte, 40),
-	}
+	}, nil
 }
 
-func NewTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
+func NewTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	if !IsPowerOfTwo(maxNumberOfLeaves) {
 		panic("numberOfLeaves must be a power of two")
 	}
 
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
+
 	return NewTree(int(height))
 }
-func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
+func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
+
 	return NewTree(int(height))
 }
 

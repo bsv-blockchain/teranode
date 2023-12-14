@@ -570,7 +570,8 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	merkleRootFromProofs := util.BuildMerkleRootFromCoinbase(coinbaseHash[:], cmpB)
 	assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeSlice(merkleRootFromProofs))
 
-	topTree := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtrees)))
+	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtrees)))
+	require.NoError(t, err)
 	for idx, subtree := range subtrees {
 		if idx == 0 {
 			subtree.ReplaceRootNode(coinbaseHash, 0, 0)
@@ -803,8 +804,9 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		assert.Equal(t, 3, stp.currentSubtree.Length())
 
 		// create 2 subtrees from the previous block
-		subtree1 := util.NewTreeByLeafCount(4)
-		err := subtree1.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
+		subtree1, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		err = subtree1.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
 		require.NoError(t, err)
 		for i := uint64(1); i < 4; i++ {
 			txHash, err := generateTxHash()
@@ -818,7 +820,8 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
 		require.NoError(t, err)
 
-		subtree2 := util.NewTreeByLeafCount(4)
+		subtree2, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
 		for i := uint64(0); i < 4; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
