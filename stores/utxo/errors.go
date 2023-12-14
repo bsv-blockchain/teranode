@@ -22,22 +22,22 @@ var (
 )
 
 type ErrSpent struct {
-	spendingTxID *chainhash.Hash
+	SpendingTxID *chainhash.Hash
 }
 
 func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
 	e := ubsverrors.Wrap(&ErrSpent{
-		spendingTxID: spendingTxID,
+		SpendingTxID: spendingTxID,
 	}, optionalErrs...)
 
 	return e
 }
 
 func (e *ErrSpent) Error() string {
-	if e.spendingTxID == nil {
+	if e.SpendingTxID == nil {
 		return "utxo already spent (invalid use of ErrSpent as spendingTxID is not set)"
 	}
-	return fmt.Sprintf("utxo already spent by txid %s", e.spendingTxID.String())
+	return fmt.Sprintf("utxo already spent by txid %s", e.SpendingTxID.String())
 }
 
 type ErrLockTime struct {

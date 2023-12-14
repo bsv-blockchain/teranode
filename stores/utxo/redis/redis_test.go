@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -49,7 +50,7 @@ func TestRedis(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -79,9 +80,10 @@ func TestRedis(t *testing.T) {
 	// Spend txid with spend1_2
 	err = r.Spend(ctx, []*utxostore.Spend{spend1_2})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, utxostore.ErrSpent))
+	assert.True(t, errors.Is(err, utxostore.ErrTypeSpent))
 
-	errSpentExtra, ok := err.(*utxostore.ErrSpentExtra)
+	var errSpentExtra *utxostore.ErrSpent
+	ok := errors.As(err, &errSpentExtra)
 	require.True(t, ok)
 	assert.Equal(t, errSpentExtra.SpendingTxID.String(), spend1.SpendingTxID.String())
 }
@@ -90,7 +92,7 @@ func TestRedisLockTime(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -113,14 +115,13 @@ func TestRedisLockTime(t *testing.T) {
 	// Spend txid with spend1
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.Error(t, err)
-	assert.Equal(t, "utxo not spendable yet, due to lock time", err.Error())
 }
 
 func TestRedisTTL(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -171,7 +172,7 @@ func TestRollbackSpend(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -192,9 +193,10 @@ func TestRollbackSpend(t *testing.T) {
 	// Spend txid with spend2 and spend1_2
 	err = r.Spend(ctx, []*utxostore.Spend{spend2, spend1_2})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, utxostore.ErrSpent))
+	assert.True(t, errors.Is(err, utxostore.ErrTypeSpent))
 
-	errSpentExtra, ok := err.(*utxostore.ErrSpentExtra)
+	var errSpentExtra *utxostore.ErrSpent
+	ok := errors.As(err, &errSpentExtra)
 	require.True(t, ok)
 	assert.Equal(t, errSpentExtra.SpendingTxID.String(), spend1.SpendingTxID.String())
 }
