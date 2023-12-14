@@ -355,8 +355,10 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
-	//return nil
+	return nil
+}
 
+func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
