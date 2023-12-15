@@ -69,6 +69,7 @@ func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Stor
 			}
 
 			m.cache[[1]byte{item.hash[0]}].Delete(*item.hash)
+			m.metrics.evictions.Add(1)
 		}
 	}()
 
