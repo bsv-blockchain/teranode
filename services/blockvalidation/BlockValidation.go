@@ -323,20 +323,23 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	g, gCtx = errgroup.WithContext(spanCtx)
 	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2) // mostly IO bound, so double the limit
 	for _, subtreeHash := range missingSubtrees {
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			// get subtree from network over http using the baseUrl
-			txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
-			if err != nil {
-				return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
-			}
+		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
+		if subtreeHash != nil {
+			subtreeHash := subtreeHash
+			g.Go(func() error {
+				// get subtree from network over http using the baseUrl
+				txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
+				if err != nil {
+					return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+				}
 
-			subtreeBytesMapMu.Lock()
-			subtreeBytesMap[*subtreeHash] = txHashes
-			subtreeBytesMapMu.Unlock()
+				subtreeBytesMapMu.Lock()
+				subtreeBytesMap[*subtreeHash] = txHashes
+				subtreeBytesMapMu.Unlock()
 
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 	statGet.AddTime(startGet)
 
