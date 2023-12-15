@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -217,6 +218,9 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, options.ErrNotFound
+		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}
 
