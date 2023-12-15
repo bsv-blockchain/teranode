@@ -32,7 +32,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
-	github.com/ordishs/go-bitcoin v1.0.83
+	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/ordishs/go-utils v1.0.50
 	github.com/ordishs/gocore v1.0.54
 	github.com/prometheus/client_golang v1.16.0
