@@ -8,7 +8,7 @@ import "model/model.proto";
 
 service BlockAssemblyAPI {
   // Health returns the health of the API.
-  rpc Health (EmptyMessage) returns (HealthResponse) {}
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc NewChaintipAndHeight(NewChaintipAndHeightRequest) returns (EmptyMessage) {}
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
   rpc RemoveTx (RemoveTxRequest) returns (EmptyMessage) {}

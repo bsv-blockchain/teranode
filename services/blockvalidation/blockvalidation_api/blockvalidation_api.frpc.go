@@ -515,7 +515,7 @@ func (x *BlockvalidationApiSetTxMetaResponse) decode(d *polyglot.Decoder) error 
 }
 
 type BlockValidationAPI interface {
-	Health(context.Context, *BlockvalidationApiEmptyMessage) (*BlockvalidationApiHealthResponse, error)
+	HealthGRPC(context.Context, *BlockvalidationApiEmptyMessage) (*BlockvalidationApiHealthResponse, error)
 	BlockFound(context.Context, *BlockvalidationApiBlockFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	SubtreeFound(context.Context, *BlockvalidationApiSubtreeFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	Get(context.Context, *BlockvalidationApiGetSubtreeRequest) (*BlockvalidationApiGetSubtreeResponse, error)
@@ -549,7 +549,7 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 			var res *BlockvalidationApiHealthResponse
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = blockValidationAPI.Health(ctx, req)
+			res, err = blockValidationAPI.HealthGRPC(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -819,7 +819,7 @@ func (c *Client) FromConn(conn net.Conn, streamHandler ...frisbee.NewStreamHandl
 	return c.Client.FromConn(conn, func(stream *frisbee.Stream) {})
 }
 
-func (c *subBlockValidationAPIClient) Health(ctx context.Context, req *BlockvalidationApiEmptyMessage) (res *BlockvalidationApiHealthResponse, err error) {
+func (c *subBlockValidationAPIClient) HealthGRPC(ctx context.Context, req *BlockvalidationApiEmptyMessage) (res *BlockvalidationApiHealthResponse, err error) {
 	ch := make(chan *BlockvalidationApiHealthResponse, 1)
 	p := packet.Get()
 	p.Metadata.Operation = 10

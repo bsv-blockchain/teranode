@@ -46,6 +46,10 @@ func New(logger ulogger.Logger) *Server {
 	}
 }
 
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *Server) Init(ctx context.Context) error {
 	s.httpAddr, _ = gocore.Config().Get("status_httpListenAddress")
 	if s.httpAddr == "" {
@@ -143,7 +147,7 @@ func (s *Server) startHTTP(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*status_api.HealthResponse, error) {
+func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*status_api.HealthResponse, error) {
 	return &status_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.Now(),

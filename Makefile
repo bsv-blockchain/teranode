@@ -83,6 +83,9 @@ test:
 longtests:
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
+.PHONY: racetest
+racetest:
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
 
 .PHONY: testall
 testall:
@@ -197,14 +200,6 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
 
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
-	services/p2p/p2p_api/p2p_api.proto
-
 .PHONY: gen-drpc
 gen-drpc:
 	# go install storj.io/drpc/cmd/protoc-gen-go-drpc
@@ -281,7 +276,6 @@ clean_gen:
 	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
-	rm -f ./services/p2p/p2p_api/*.pb.go
 	rm -f ./services/status/status_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go

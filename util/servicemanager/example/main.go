@@ -22,6 +22,10 @@ func NewService(name string) *SampleService {
 	}
 }
 
+func (s *SampleService) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *SampleService) Init(ctx context.Context) error {
 	// if s.name == "SvcB" {
 	// 	for {

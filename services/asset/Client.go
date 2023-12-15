@@ -52,7 +52,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 
 		blobClient = asset_api.NewAssetAPIClient(blobConn)
 
-		_, err = blobClient.Health(ctx, &emptypb.Empty{})
+		_, err = blobClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
 			if retries < maxRetries {
 				retries++
@@ -76,7 +76,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 }
 
 func (c Client) Health(ctx context.Context) (bool, error) {
-	response, err := c.client.Health(ctx, &emptypb.Empty{})
+	response, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
 	if err != nil {
 		return false, err
 	}

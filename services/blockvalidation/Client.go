@@ -113,7 +113,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 }
 
 func (s *Client) Health(ctx context.Context) (bool, error) {
-	_, err := s.apiClient.Health(ctx, &blockvalidation_api.EmptyMessage{})
+	_, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
 	if err != nil {
 		return false, err
 	}

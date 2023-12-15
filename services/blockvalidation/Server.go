@@ -99,6 +99,10 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	return bVal
 }
 
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *Server) Init(ctx context.Context) (err error) {
 	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
 		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
@@ -268,7 +272,7 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *Server) Health(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
+func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
 	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", stats)
 	defer func() {
 		stat.AddTime(start)

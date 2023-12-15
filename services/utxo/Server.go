@@ -47,6 +47,10 @@ func New(logger ulogger.Logger, s utxostore.Interface, opts ...Options) *UTXOSto
 	}
 }
 
+func (u *UTXOStore) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *UTXOStore) Init(_ context.Context) error {
 	return nil
 }
@@ -107,7 +111,7 @@ func (u *UTXOStore) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
+func (u *UTXOStore) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
 	prometheusUtxoGet.Inc()
 
 	return &utxostore_api.HealthResponse{

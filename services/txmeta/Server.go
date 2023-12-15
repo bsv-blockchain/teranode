@@ -34,6 +34,10 @@ func New(logger ulogger.Logger, txMetaStoreURL *url.URL) *Server {
 	}
 }
 
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *Server) Init(_ context.Context) (err error) {
 	u.store, err = store.New(u.logger, u.txMetaStoreURL)
 	if err != nil {
@@ -59,7 +63,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
+func (u *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
 	prometheusTxMetaHealth.Inc()
 
 	return &txmeta_api.HealthResponse{

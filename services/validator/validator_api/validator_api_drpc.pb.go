@@ -38,7 +38,7 @@ func (drpcEncoding_File_services_validator_validator_api_validator_api_proto) JS
 type DRPCValidatorAPIClient interface {
 	DRPCConn() drpc.Conn
 
-	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	ValidateTransaction(ctx context.Context, in *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ctx context.Context) (DRPCValidatorAPI_ValidateTransactionStreamClient, error)
@@ -54,7 +54,7 @@ func NewDRPCValidatorAPIClient(cc drpc.Conn) DRPCValidatorAPIClient {
 
 func (c *drpcValidatorAPIClient) DRPCConn() drpc.Conn { return c.cc }
 
-func (c *drpcValidatorAPIClient) Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
+func (c *drpcValidatorAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, "/validator_api.ValidatorAPI/Health", drpcEncoding_File_services_validator_validator_api_validator_api_proto{}, in, out)
 	if err != nil {
@@ -127,14 +127,14 @@ func (x *drpcValidatorAPI_ValidateTransactionStreamClient) CloseAndRecvMsg(m *Va
 }
 
 type DRPCValidatorAPIServer interface {
-	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ValidateTransaction(context.Context, *ValidateTransactionRequest) (*ValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 }
 
 type DRPCValidatorAPIUnimplementedServer struct{}
 
-func (s *DRPCValidatorAPIUnimplementedServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
+func (s *DRPCValidatorAPIUnimplementedServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -160,11 +160,11 @@ func (DRPCValidatorAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Re
 		return "/validator_api.ValidatorAPI/Health", drpcEncoding_File_services_validator_validator_api_validator_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCValidatorAPIServer).
-					Health(
+					HealthGRPC(
 						ctx,
 						in1.(*EmptyMessage),
 					)
-			}, DRPCValidatorAPIServer.Health, true
+			}, DRPCValidatorAPIServer.HealthGRPC, true
 	case 1:
 		return "/validator_api.ValidatorAPI/ValidateTransaction", drpcEncoding_File_services_validator_validator_api_validator_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {

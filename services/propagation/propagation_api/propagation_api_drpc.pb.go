@@ -38,7 +38,7 @@ func (drpcEncoding_File_services_propagation_propagation_api_propagation_api_pro
 type DRPCPropagationAPIClient interface {
 	DRPCConn() drpc.Conn
 
-	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest) (*EmptyMessage, error)
 	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest) (*EmptyMessage, error)
 }
@@ -53,7 +53,7 @@ func NewDRPCPropagationAPIClient(cc drpc.Conn) DRPCPropagationAPIClient {
 
 func (c *drpcPropagationAPIClient) DRPCConn() drpc.Conn { return c.cc }
 
-func (c *drpcPropagationAPIClient) Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
+func (c *drpcPropagationAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, "/propagation_api.PropagationAPI/Health", drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{}, in, out)
 	if err != nil {
@@ -81,14 +81,14 @@ func (c *drpcPropagationAPIClient) ProcessTransactionDebug(ctx context.Context, 
 }
 
 type DRPCPropagationAPIServer interface {
-	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 }
 
 type DRPCPropagationAPIUnimplementedServer struct{}
 
-func (s *DRPCPropagationAPIUnimplementedServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
+func (s *DRPCPropagationAPIUnimplementedServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -110,11 +110,11 @@ func (DRPCPropagationAPIDescription) Method(n int) (string, drpc.Encoding, drpc.
 		return "/propagation_api.PropagationAPI/Health", drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCPropagationAPIServer).
-					Health(
+					HealthGRPC(
 						ctx,
 						in1.(*EmptyMessage),
 					)
-			}, DRPCPropagationAPIServer.Health, true
+			}, DRPCPropagationAPIServer.HealthGRPC, true
 	case 1:
 		return "/propagation_api.PropagationAPI/ProcessTransaction", drpcEncoding_File_services_propagation_propagation_api_propagation_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {

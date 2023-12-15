@@ -9,7 +9,7 @@ import "google/protobuf/empty.proto";
 
 service AssetAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}

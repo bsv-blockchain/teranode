@@ -20,7 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockchainAPI_Health_FullMethodName             = "/blockchain_api.BlockchainAPI/Health"
+	BlockchainAPI_HealthGRPC_FullMethodName         = "/blockchain_api.BlockchainAPI/HealthGRPC"
 	BlockchainAPI_AddBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/AddBlock"
 	BlockchainAPI_GetBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlock"
 	BlockchainAPI_GetLastNBlocks_FullMethodName     = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
@@ -41,7 +41,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BlockchainAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(ctx context.Context, in *AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
@@ -66,9 +66,9 @@ func NewBlockchainAPIClient(cc grpc.ClientConnInterface) BlockchainAPIClient {
 	return &blockchainAPIClient{cc}
 }
 
-func (c *blockchainAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *blockchainAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func (c *blockchainAPIClient) SetState(ctx context.Context, in *SetStateRequest,
 // for forward compatibility
 type BlockchainAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(context.Context, *AddBlockRequest) (*emptypb.Empty, error)
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
@@ -242,8 +242,8 @@ type BlockchainAPIServer interface {
 type UnimplementedBlockchainAPIServer struct {
 }
 
-func (UnimplementedBlockchainAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedBlockchainAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedBlockchainAPIServer) AddBlock(context.Context, *AddBlockRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddBlock not implemented")
@@ -297,20 +297,20 @@ func RegisterBlockchainAPIServer(s grpc.ServiceRegistrar, srv BlockchainAPIServe
 	s.RegisterService(&BlockchainAPI_ServiceDesc, srv)
 }
 
-func _BlockchainAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _BlockchainAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockchainAPIServer).Health(ctx, in)
+		return srv.(BlockchainAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockchainAPI_Health_FullMethodName,
+		FullMethod: BlockchainAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(BlockchainAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -560,8 +560,8 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*BlockchainAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _BlockchainAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _BlockchainAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "AddBlock",

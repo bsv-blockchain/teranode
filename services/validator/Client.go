@@ -110,7 +110,7 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) Health(ctx context.Context) (int, string, error) {
-	_, err := c.client.Health(ctx, &validator_api.EmptyMessage{})
+	_, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
 	if err != nil {
 		return -1, "Validator", err
 	}

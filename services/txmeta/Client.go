@@ -39,7 +39,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 }
 
 func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*txmeta_api.HealthResponse, error) {
-	resp, err := c.client.Health(ctx, in, opts...)
+	resp, err := c.client.HealthGRPC(ctx, in, opts...)
 	if err != nil {
 		return nil, err
 	}

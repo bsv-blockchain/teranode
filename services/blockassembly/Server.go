@@ -104,6 +104,10 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 	return ba
 }
 
+func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// this is passed into the block assembler and subtree processor where new subtrees are created
 	newSubtreeChan := make(chan *util.Subtree, 100)
@@ -408,7 +412,7 @@ func (ba *BlockAssembly) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ba *BlockAssembly) Health(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
+func (ba *BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
 	// start := gocore.CurrentTime()
 	// defer func() {
 	// 	blockAssemblyStat.NewStat("Health_grpc", true).AddTime(start)

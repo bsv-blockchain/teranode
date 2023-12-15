@@ -59,7 +59,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 
 		baClient = blockchain_api.NewBlockchainAPIClient(baConn)
 
-		_, err = baClient.Health(ctx, &emptypb.Empty{})
+		_, err = baClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
 			if retries < maxRetries {
 				retries++
@@ -99,7 +99,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 }
 
 func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
-	return c.client.Health(ctx, &emptypb.Empty{})
+	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
 }
 
 func (c Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {

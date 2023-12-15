@@ -20,16 +20,16 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BootstrapAPI_Health_FullMethodName   = "/bootstrap_api.BootstrapAPI/Health"
-	BootstrapAPI_Connect_FullMethodName  = "/bootstrap_api.BootstrapAPI/Connect"
-	BootstrapAPI_GetNodes_FullMethodName = "/bootstrap_api.BootstrapAPI/GetNodes"
+	BootstrapAPI_HealthGRPC_FullMethodName = "/bootstrap_api.BootstrapAPI/HealthGRPC"
+	BootstrapAPI_Connect_FullMethodName    = "/bootstrap_api.BootstrapAPI/Connect"
+	BootstrapAPI_GetNodes_FullMethodName   = "/bootstrap_api.BootstrapAPI/GetNodes"
 )
 
 // BootstrapAPIClient is the client API for BootstrapAPI service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BootstrapAPIClient interface {
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	Connect(ctx context.Context, in *Info, opts ...grpc.CallOption) (BootstrapAPI_ConnectClient, error)
 	GetNodes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NodeList, error)
 }
@@ -42,9 +42,9 @@ func NewBootstrapAPIClient(cc grpc.ClientConnInterface) BootstrapAPIClient {
 	return &bootstrapAPIClient{cc}
 }
 
-func (c *bootstrapAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *bootstrapAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, BootstrapAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BootstrapAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (c *bootstrapAPIClient) GetNodes(ctx context.Context, in *emptypb.Empty, op
 // All implementations must embed UnimplementedBootstrapAPIServer
 // for forward compatibility
 type BootstrapAPIServer interface {
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	Connect(*Info, BootstrapAPI_ConnectServer) error
 	GetNodes(context.Context, *emptypb.Empty) (*NodeList, error)
 	mustEmbedUnimplementedBootstrapAPIServer()
@@ -106,8 +106,8 @@ type BootstrapAPIServer interface {
 type UnimplementedBootstrapAPIServer struct {
 }
 
-func (UnimplementedBootstrapAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedBootstrapAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedBootstrapAPIServer) Connect(*Info, BootstrapAPI_ConnectServer) error {
 	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
@@ -128,20 +128,20 @@ func RegisterBootstrapAPIServer(s grpc.ServiceRegistrar, srv BootstrapAPIServer)
 	s.RegisterService(&BootstrapAPI_ServiceDesc, srv)
 }
 
-func _BootstrapAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _BootstrapAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BootstrapAPIServer).Health(ctx, in)
+		return srv.(BootstrapAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BootstrapAPI_Health_FullMethodName,
+		FullMethod: BootstrapAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BootstrapAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(BootstrapAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -193,8 +193,8 @@ var BootstrapAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*BootstrapAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _BootstrapAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _BootstrapAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "GetNodes",

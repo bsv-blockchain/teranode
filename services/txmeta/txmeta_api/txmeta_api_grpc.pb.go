@@ -20,11 +20,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TxMetaAPI_Health_FullMethodName   = "/txmeta_api.TxMetaAPI/Health"
-	TxMetaAPI_Create_FullMethodName   = "/txmeta_api.TxMetaAPI/Create"
-	TxMetaAPI_SetMined_FullMethodName = "/txmeta_api.TxMetaAPI/SetMined"
-	TxMetaAPI_Get_FullMethodName      = "/txmeta_api.TxMetaAPI/Get"
-	TxMetaAPI_Delete_FullMethodName   = "/txmeta_api.TxMetaAPI/Delete"
+	TxMetaAPI_HealthGRPC_FullMethodName = "/txmeta_api.TxMetaAPI/HealthGRPC"
+	TxMetaAPI_Create_FullMethodName     = "/txmeta_api.TxMetaAPI/Create"
+	TxMetaAPI_SetMined_FullMethodName   = "/txmeta_api.TxMetaAPI/SetMined"
+	TxMetaAPI_Get_FullMethodName        = "/txmeta_api.TxMetaAPI/Get"
+	TxMetaAPI_Delete_FullMethodName     = "/txmeta_api.TxMetaAPI/Delete"
 )
 
 // TxMetaAPIClient is the client API for TxMetaAPI service.
@@ -32,7 +32,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type TxMetaAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
 	SetMined(ctx context.Context, in *SetMinedRequest, opts ...grpc.CallOption) (*SetMinedResponse, error)
 	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
@@ -47,9 +47,9 @@ func NewTxMetaAPIClient(cc grpc.ClientConnInterface) TxMetaAPIClient {
 	return &txMetaAPIClient{cc}
 }
 
-func (c *txMetaAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *txMetaAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, TxMetaAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TxMetaAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (c *txMetaAPIClient) Delete(ctx context.Context, in *DeleteRequest, opts ..
 // for forward compatibility
 type TxMetaAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
 	SetMined(context.Context, *SetMinedRequest) (*SetMinedResponse, error)
 	Get(context.Context, *GetRequest) (*GetResponse, error)
@@ -109,8 +109,8 @@ type TxMetaAPIServer interface {
 type UnimplementedTxMetaAPIServer struct {
 }
 
-func (UnimplementedTxMetaAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedTxMetaAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedTxMetaAPIServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
@@ -137,20 +137,20 @@ func RegisterTxMetaAPIServer(s grpc.ServiceRegistrar, srv TxMetaAPIServer) {
 	s.RegisterService(&TxMetaAPI_ServiceDesc, srv)
 }
 
-func _TxMetaAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _TxMetaAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(TxMetaAPIServer).Health(ctx, in)
+		return srv.(TxMetaAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: TxMetaAPI_Health_FullMethodName,
+		FullMethod: TxMetaAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TxMetaAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(TxMetaAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -235,8 +235,8 @@ var TxMetaAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*TxMetaAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _TxMetaAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _TxMetaAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "Create",

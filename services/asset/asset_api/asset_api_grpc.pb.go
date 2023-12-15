@@ -20,7 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	AssetAPI_Health_FullMethodName             = "/asset_api.AssetAPI/Health"
+	AssetAPI_HealthGRPC_FullMethodName         = "/asset_api.AssetAPI/HealthGRPC"
 	AssetAPI_GetBlock_FullMethodName           = "/asset_api.AssetAPI/GetBlock"
 	AssetAPI_GetBlockHeader_FullMethodName     = "/asset_api.AssetAPI/GetBlockHeader"
 	AssetAPI_GetBlockHeaders_FullMethodName    = "/asset_api.AssetAPI/GetBlockHeaders"
@@ -37,7 +37,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AssetAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
@@ -57,9 +57,9 @@ func NewAssetAPIClient(cc grpc.ClientConnInterface) AssetAPIClient {
 	return &assetAPIClient{cc}
 }
 
-func (c *assetAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *assetAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, AssetAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, AssetAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (x *assetAPISubscribeClient) Recv() (*Notification, error) {
 // for forward compatibility
 type AssetAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
@@ -192,8 +192,8 @@ type AssetAPIServer interface {
 type UnimplementedAssetAPIServer struct {
 }
 
-func (UnimplementedAssetAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedAssetAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedAssetAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
@@ -235,20 +235,20 @@ func RegisterAssetAPIServer(s grpc.ServiceRegistrar, srv AssetAPIServer) {
 	s.RegisterService(&AssetAPI_ServiceDesc, srv)
 }
 
-func _AssetAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AssetAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AssetAPIServer).Health(ctx, in)
+		return srv.(AssetAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AssetAPI_Health_FullMethodName,
+		FullMethod: AssetAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AssetAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(AssetAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -426,8 +426,8 @@ var AssetAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*AssetAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _AssetAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _AssetAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "GetBlock",

@@ -51,6 +51,10 @@ func New(logger ulogger.Logger) *Faucet {
 	return f
 }
 
+func (f *Faucet) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (f *Faucet) Init(ctx context.Context) error {
 	var err error
 

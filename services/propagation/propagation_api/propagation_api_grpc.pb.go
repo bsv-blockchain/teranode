@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PropagationAPI_Health_FullMethodName                   = "/propagation_api.PropagationAPI/Health"
+	PropagationAPI_HealthGRPC_FullMethodName               = "/propagation_api.PropagationAPI/HealthGRPC"
 	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
 	PropagationAPI_ProcessTransactionHex_FullMethodName    = "/propagation_api.PropagationAPI/ProcessTransactionHex"
 	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
@@ -31,7 +31,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PropagationAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error)
@@ -46,9 +46,9 @@ func NewPropagationAPIClient(cc grpc.ClientConnInterface) PropagationAPIClient {
 	return &propagationAPIClient{cc}
 }
 
-func (c *propagationAPIClient) Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *propagationAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, PropagationAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, PropagationAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (c *propagationAPIClient) ProcessTransactionDebug(ctx context.Context, in *
 // for forward compatibility
 type PropagationAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error)
 	ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error
@@ -130,8 +130,8 @@ type PropagationAPIServer interface {
 type UnimplementedPropagationAPIServer struct {
 }
 
-func (UnimplementedPropagationAPIServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedPropagationAPIServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransaction not implemented")
@@ -158,20 +158,20 @@ func RegisterPropagationAPIServer(s grpc.ServiceRegistrar, srv PropagationAPISer
 	s.RegisterService(&PropagationAPI_ServiceDesc, srv)
 }
 
-func _PropagationAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PropagationAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PropagationAPIServer).Health(ctx, in)
+		return srv.(PropagationAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PropagationAPI_Health_FullMethodName,
+		FullMethod: PropagationAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PropagationAPIServer).Health(ctx, req.(*EmptyMessage))
+		return srv.(PropagationAPIServer).HealthGRPC(ctx, req.(*EmptyMessage))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -264,8 +264,8 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*PropagationAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _PropagationAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _PropagationAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "ProcessTransaction",

@@ -20,7 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	CoinbaseAPI_Health_FullMethodName                = "/coinbase_api.CoinbaseAPI/Health"
+	CoinbaseAPI_HealthGRPC_FullMethodName            = "/coinbase_api.CoinbaseAPI/HealthGRPC"
 	CoinbaseAPI_RequestFunds_FullMethodName          = "/coinbase_api.CoinbaseAPI/RequestFunds"
 	CoinbaseAPI_DistributeTransaction_FullMethodName = "/coinbase_api.CoinbaseAPI/DistributeTransaction"
 )
@@ -30,7 +30,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type CoinbaseAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	RequestFunds(ctx context.Context, in *RequestFundsRequest, opts ...grpc.CallOption) (*RequestFundsResponse, error)
 	DistributeTransaction(ctx context.Context, in *DistributeTransactionRequest, opts ...grpc.CallOption) (*DistributeTransactionResponse, error)
 }
@@ -43,9 +43,9 @@ func NewCoinbaseAPIClient(cc grpc.ClientConnInterface) CoinbaseAPIClient {
 	return &coinbaseAPIClient{cc}
 }
 
-func (c *coinbaseAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *coinbaseAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, CoinbaseAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, CoinbaseAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (c *coinbaseAPIClient) DistributeTransaction(ctx context.Context, in *Distr
 // for forward compatibility
 type CoinbaseAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error)
 	DistributeTransaction(context.Context, *DistributeTransactionRequest) (*DistributeTransactionResponse, error)
 	mustEmbedUnimplementedCoinbaseAPIServer()
@@ -85,8 +85,8 @@ type CoinbaseAPIServer interface {
 type UnimplementedCoinbaseAPIServer struct {
 }
 
-func (UnimplementedCoinbaseAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedCoinbaseAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedCoinbaseAPIServer) RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestFunds not implemented")
@@ -107,20 +107,20 @@ func RegisterCoinbaseAPIServer(s grpc.ServiceRegistrar, srv CoinbaseAPIServer) {
 	s.RegisterService(&CoinbaseAPI_ServiceDesc, srv)
 }
 
-func _CoinbaseAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _CoinbaseAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CoinbaseAPIServer).Health(ctx, in)
+		return srv.(CoinbaseAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CoinbaseAPI_Health_FullMethodName,
+		FullMethod: CoinbaseAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoinbaseAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(CoinbaseAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -169,8 +169,8 @@ var CoinbaseAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*CoinbaseAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _CoinbaseAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _CoinbaseAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "RequestFunds",

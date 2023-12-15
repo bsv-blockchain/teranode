@@ -48,6 +48,10 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	}
 }
 
+func (m *Miner) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (m *Miner) Init(_ context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)

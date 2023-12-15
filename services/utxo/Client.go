@@ -36,7 +36,7 @@ func (s *Store) GetBlockHeight() (uint32, error) {
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
-	resp, err := s.db.Health(ctx, &emptypb.Empty{})
+	resp, err := s.db.HealthGRPC(ctx, &emptypb.Empty{})
 	if err != nil {
 		return -1, resp.Details, err
 	}

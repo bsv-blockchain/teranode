@@ -6,7 +6,7 @@ package validator_api;
 
 service ValidatorAPI {
   // Health returns the health of the API.
-  rpc Health (EmptyMessage) returns (HealthResponse) {}
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}

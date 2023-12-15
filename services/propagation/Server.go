@@ -73,6 +73,10 @@ func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.In
 	}
 }
 
+func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (ps *PropagationServer) Init(_ context.Context) (err error) {
 	ps.status.Store(1)
 	return nil
@@ -457,7 +461,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 	return 0, sb.String(), nil
 }
 
-func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health", true).AddTime(start)

@@ -79,6 +79,10 @@ func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore
 	}
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore, v.blockValidationClient)
 	if err != nil {
@@ -218,7 +222,7 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		prometheusHealth.Inc()

@@ -10,7 +10,7 @@ import "model/model.proto";
 
 service BlockchainAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
 
   // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}

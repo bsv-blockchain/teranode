@@ -16,7 +16,7 @@ type fRPC_BlockValidation struct {
 	logger          ulogger.Logger
 }
 
-func (f *fRPC_BlockValidation) Health(ctx context.Context, message *blockvalidation_api.BlockvalidationApiEmptyMessage) (*blockvalidation_api.BlockvalidationApiHealthResponse, error) {
+func (f *fRPC_BlockValidation) HealthGRPC(ctx context.Context, message *blockvalidation_api.BlockvalidationApiEmptyMessage) (*blockvalidation_api.BlockvalidationApiHealthResponse, error) {
 	return &blockvalidation_api.BlockvalidationApiHealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),

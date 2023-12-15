@@ -79,6 +79,10 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 	}, nil
 }
 
+func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (b *Blockchain) Init(ctx context.Context) error {
 	return nil
 }
@@ -135,7 +139,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
-func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health", true).AddTime(start)

@@ -39,9 +39,10 @@ func (drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_a
 type DRPCBlockAssemblyAPIClient interface {
 	DRPCConn() drpc.Conn
 
-	Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest) (*AddTxResponse, error)
+	RemoveTx(ctx context.Context, in *RemoveTxRequest) (*EmptyMessage, error)
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -57,9 +58,9 @@ func NewDRPCBlockAssemblyAPIClient(cc drpc.Conn) DRPCBlockAssemblyAPIClient {
 
 func (c *drpcBlockAssemblyAPIClient) DRPCConn() drpc.Conn { return c.cc }
 
-func (c *drpcBlockAssemblyAPIClient) Health(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
+func (c *drpcBlockAssemblyAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/Health", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
+	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/HealthGRPC", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +79,15 @@ func (c *drpcBlockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, i
 func (c *drpcBlockAssemblyAPIClient) AddTx(ctx context.Context, in *AddTxRequest) (*AddTxResponse, error) {
 	out := new(AddTxResponse)
 	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/AddTx", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *drpcBlockAssemblyAPIClient) RemoveTx(ctx context.Context, in *RemoveTxRequest) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, "/blockassembly_api.BlockAssemblyAPI/RemoveTx", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}, in, out)
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +122,10 @@ func (c *drpcBlockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, i
 }
 
 type DRPCBlockAssemblyAPIServer interface {
-	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
+	RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error)
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
@@ -122,7 +133,7 @@ type DRPCBlockAssemblyAPIServer interface {
 
 type DRPCBlockAssemblyAPIUnimplementedServer struct{}
 
-func (s *DRPCBlockAssemblyAPIUnimplementedServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -131,6 +142,10 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) NewChaintipAndHeight(context.C
 }
 
 func (s *DRPCBlockAssemblyAPIUnimplementedServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
+	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
+}
+
+func (s *DRPCBlockAssemblyAPIUnimplementedServer) RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error) {
 	return nil, drpcerr.WithCode(errors.New("Unimplemented"), drpcerr.Unimplemented)
 }
 
@@ -148,19 +163,19 @@ func (s *DRPCBlockAssemblyAPIUnimplementedServer) SubmitMiningSolution(context.C
 
 type DRPCBlockAssemblyAPIDescription struct{}
 
-func (DRPCBlockAssemblyAPIDescription) NumMethods() int { return 6 }
+func (DRPCBlockAssemblyAPIDescription) NumMethods() int { return 7 }
 
 func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drpc.Receiver, interface{}, bool) {
 	switch n {
 	case 0:
-		return "/blockassembly_api.BlockAssemblyAPI/Health", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
+		return "/blockassembly_api.BlockAssemblyAPI/HealthGRPC", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
-					Health(
+					HealthGRPC(
 						ctx,
 						in1.(*EmptyMessage),
 					)
-			}, DRPCBlockAssemblyAPIServer.Health, true
+			}, DRPCBlockAssemblyAPIServer.HealthGRPC, true
 	case 1:
 		return "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
@@ -180,6 +195,15 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 					)
 			}, DRPCBlockAssemblyAPIServer.AddTx, true
 	case 3:
+		return "/blockassembly_api.BlockAssemblyAPI/RemoveTx", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
+			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
+				return srv.(DRPCBlockAssemblyAPIServer).
+					RemoveTx(
+						ctx,
+						in1.(*RemoveTxRequest),
+					)
+			}, DRPCBlockAssemblyAPIServer.RemoveTx, true
+	case 4:
 		return "/blockassembly_api.BlockAssemblyAPI/AddTxBatch", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
@@ -188,7 +212,7 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 						in1.(*AddTxBatchRequest),
 					)
 			}, DRPCBlockAssemblyAPIServer.AddTxBatch, true
-	case 4:
+	case 5:
 		return "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
@@ -197,7 +221,7 @@ func (DRPCBlockAssemblyAPIDescription) Method(n int) (string, drpc.Encoding, drp
 						in1.(*EmptyMessage),
 					)
 			}, DRPCBlockAssemblyAPIServer.GetMiningCandidate, true
-	case 5:
+	case 6:
 		return "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution", drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{},
 			func(srv interface{}, ctx context.Context, in1, in2 interface{}) (drpc.Message, error) {
 				return srv.(DRPCBlockAssemblyAPIServer).
@@ -215,16 +239,16 @@ func DRPCRegisterBlockAssemblyAPI(mux drpc.Mux, impl DRPCBlockAssemblyAPIServer)
 	return mux.Register(impl, DRPCBlockAssemblyAPIDescription{})
 }
 
-type DRPCBlockAssemblyAPI_HealthStream interface {
+type DRPCBlockAssemblyAPI_HealthGRPCStream interface {
 	drpc.Stream
 	SendAndClose(*HealthResponse) error
 }
 
-type drpcBlockAssemblyAPI_HealthStream struct {
+type drpcBlockAssemblyAPI_HealthGRPCStream struct {
 	drpc.Stream
 }
 
-func (x *drpcBlockAssemblyAPI_HealthStream) SendAndClose(m *HealthResponse) error {
+func (x *drpcBlockAssemblyAPI_HealthGRPCStream) SendAndClose(m *HealthResponse) error {
 	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
 		return err
 	}
@@ -257,6 +281,22 @@ type drpcBlockAssemblyAPI_AddTxStream struct {
 }
 
 func (x *drpcBlockAssemblyAPI_AddTxStream) SendAndClose(m *AddTxResponse) error {
+	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
+		return err
+	}
+	return x.CloseSend()
+}
+
+type DRPCBlockAssemblyAPI_RemoveTxStream interface {
+	drpc.Stream
+	SendAndClose(*EmptyMessage) error
+}
+
+type drpcBlockAssemblyAPI_RemoveTxStream struct {
+	drpc.Stream
+}
+
+func (x *drpcBlockAssemblyAPI_RemoveTxStream) SendAndClose(m *EmptyMessage) error {
 	if err := x.MsgSend(m, drpcEncoding_File_services_blockassembly_blockassembly_api_blockassembly_api_proto{}); err != nil {
 		return err
 	}

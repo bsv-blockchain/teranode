@@ -46,6 +46,10 @@ func NewDumbPropagationServer() *DumbPropagationServer {
 	}
 }
 
+func (ps *DumbPropagationServer) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 	return nil
 }
@@ -161,7 +165,7 @@ func (ps *DumbPropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ps *DumbPropagationServer) Health(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	prometheusHealth.Inc()
 	return &propagation_api.HealthResponse{
 		Ok:        true,

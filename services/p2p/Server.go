@@ -15,10 +15,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -26,9 +24,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	crypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -52,8 +47,6 @@ var (
 )
 
 type Server struct {
-	p2p_api.UnimplementedP2PAPIServer
-
 	host              host.Host
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
@@ -172,6 +165,10 @@ func NewServer(logger ulogger.Logger) *Server {
 	}
 }
 
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("P2P service initialising")
 
@@ -226,14 +223,6 @@ func (s *Server) Start(ctx context.Context) error {
 		err := s.StartHttp(ctx)
 		if err != nil {
 			s.logger.Errorf("error starting http server: %s", err)
-			return
-		}
-	}()
-
-	go func() {
-		err := s.StartGRPC(ctx)
-		if err != nil {
-			s.logger.Errorf("error starting grpc server: %s", err)
 			return
 		}
 	}()
@@ -826,22 +815,4 @@ func (s *Server) handleMiningOnTopic(ctx context.Context) {
 			}
 		}
 	}
-}
-
-func (s *Server) Health(ctx context.Context, _ *emptypb.Empty) (*p2p_api.HealthResponse, error) {
-	return &p2p_api.HealthResponse{
-		Ok:        true,
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-func (s *Server) StartGRPC(ctx context.Context) (err error) {
-	// this will block
-	if err = util.StartGRPCServer(ctx, s.logger, "p2p", func(server *grpc.Server) {
-		p2p_api.RegisterP2PAPIServer(server, s)
-	}); err != nil {
-		return err
-	}
-
-	return nil
 }
