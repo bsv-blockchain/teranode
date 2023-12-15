@@ -315,16 +315,43 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		return err
 	}
 
+	startGet := gocore.CurrentTime()
+	statGet := stat.NewStat("1b. GetSubtrees")
+
+	subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
+	subtreeBytesMapMu := sync.Mutex{}
+	g, gCtx = errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2) // mostly IO bound, so double the limit
+	for _, subtreeHash := range missingSubtrees {
+		subtreeHash := subtreeHash
+		g.Go(func() error {
+			// get subtree from network over http using the baseUrl
+			txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
+			if err != nil {
+				return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+			}
+
+			subtreeBytesMapMu.Lock()
+			subtreeBytesMap[*subtreeHash] = txHashes
+			subtreeBytesMapMu.Unlock()
+
+			return nil
+		})
+	}
+	statGet.AddTime(startGet)
+
+	if err = g.Wait(); err != nil {
+		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees from network", block.Hash().String())
+	}
+
 	start2 := gocore.CurrentTime()
 	stat2 := stat.NewStat("2. validateSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
-	// TODO this is a massive slowdown in processing a block with a lot of missing subtrees
-	//      can we at least get the subtrees in parallel?!
 	for _, subtreeHash := range missingSubtrees {
 		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
-			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl); err != nil {
+			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl, &subtreeBytesMap); err != nil {
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
@@ -483,7 +510,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	return txMeta, nil
 }
 
-func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlob")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
@@ -496,41 +523,30 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	u.logger.Infof("[validateSubtree][%s] called", subtreeHash.String())
 
 	start := gocore.CurrentTime()
-	// get subtree from store
-	subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
-	stat.NewStat("1. subtreeExists").AddTime(start)
-	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
-	}
-	if subtreeExists {
-		// subtree already exists in store, which means it's valid
-		// TODO is this true?
-		return nil
-	}
+	var txHashes []chainhash.Hash
 
-	// get subtree from network over http using the baseUrl
-	if baseUrl == "" {
-		return fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
-	}
+	// check whether we have the subtree in the subtreeHashesMap and can skip getting it here
+	if len(subtreeHashesMap) > 0 && len(*subtreeHashesMap[0]) > 0 && len((*subtreeHashesMap[0])[*subtreeHash]) > 0 {
+		txHashes = (*subtreeHashesMap[0])[*subtreeHash]
+	} else {
+		// get subtree from store
+		subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
+		stat.NewStat("1. subtreeExists").AddTime(start)
+		if err != nil {
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
+		}
+		if subtreeExists {
+			// subtree already exists in store, which means it's valid
+			// TODO is this true?
+			return nil
+		}
 
-	start = gocore.CurrentTime()
-	// do http request to baseUrl + subtreeHash.String()
-	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
-	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
-	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
-	stat.NewStat("2. http fetch subtree").AddTime(start)
-	if err != nil {
-		return errors.Join(fmt.Errorf("failed to do http request"), err)
+		// get subtree from network over http using the baseUrl
+		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, subtreeHash, baseUrl)
+		if err != nil {
+			return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+		}
 	}
-
-	start = gocore.CurrentTime()
-	// the subtree bytes we got from our competing miner only contain the transaction hashes
-	// it's basically just a list of 32 byte transaction hashes
-	txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
-	for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
-		txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
-	}
-	stat.NewStat("3. createTxHashes").AddTime(start)
 
 	// create the empty subtree
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
@@ -691,6 +707,33 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	prometheusBlockValidationValidateSubtreeDuration.Observe(util.TimeSince(startTotal))
 
 	return nil
+}
+
+func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
+	if baseUrl == "" {
+		return nil, fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
+	}
+
+	start := gocore.CurrentTime()
+	// do http request to baseUrl + subtreeHash.String()
+	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
+	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
+	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
+	stat.NewStat("2. http fetch subtree").AddTime(start)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
+	}
+
+	start = gocore.CurrentTime()
+	// the subtree bytes we got from our competing miner only contain the transaction hashes
+	// it's basically just a list of 32 byte transaction hashes
+	txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+	for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+		txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+	}
+	stat.NewStat("3. createTxHashes").AddTime(start)
+
+	return txHashes, nil
 }
 
 func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
