@@ -41,7 +41,7 @@ func TestDequeue(t *testing.T) {
 	require.Equal(t, int64(12), q.length(), "queue should have 12 items")
 
 	require.NotNil(t, q.dequeue(notExpired), "should have dequeued an item as the queue exceeds max length")
-	require.NotNil(t, q.dequeue(notExpired), "should have dequeued an item as the queue exceeds max length")
+	require.NotNil(t, q.dequeue(expired), "should have dequeued an item as the queue exceeds max length and it has expired")
 	require.Nil(t, q.dequeue(notExpired), "should NOT have dequeued an item as the queue is no longer full")
 
 }
