@@ -11,13 +11,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Client struct {
-	apiClient  blockvalidation_api.BlockValidationAPIClient
-	frpcClient *blockvalidation_api.Client
-	logger     ulogger.Logger
+	apiClient   blockvalidation_api.BlockValidationAPIClient
+	frpcClient  *blockvalidation_api.Client
+	httpAddress string
+	logger      ulogger.Logger
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -37,6 +39,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	client := &Client{
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
 		logger:    logger,
+	}
+
+	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
+	if ok {
+		client.httpAddress = httpAddress
 	}
 
 	go client.connectFRPC(ctx)
@@ -143,6 +150,16 @@ func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, 
 }
 
 func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
+	if s.httpAddress != "" {
+		// try the http endpoint first, if that fails we can try the grpc endpoint
+		subtreeBytes, err := util.DoHTTPRequest(ctx, s.httpAddress+"/subtree/"+utils.ReverseAndHexEncodeSlice(subtreeHash), nil)
+		if err != nil {
+			s.logger.Warnf("error getting subtree %x from blockvalidation http endpoint: %s", subtreeHash, err)
+		} else if subtreeBytes != nil {
+			return subtreeBytes, nil
+		}
+	}
+
 	req := &blockvalidation_api.GetSubtreeRequest{
 		Hash: subtreeHash,
 	}
