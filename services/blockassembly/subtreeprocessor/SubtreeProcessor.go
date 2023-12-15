@@ -700,6 +700,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	startTime := time.Now()
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
+	// TODO this bit is slow !
 	stp.logger.Infof("createTransactionMap with %d subtrees", len(blockSubtreesMap))
 
 	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block

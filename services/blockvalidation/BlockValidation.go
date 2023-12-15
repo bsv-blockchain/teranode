@@ -283,6 +283,10 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		stat.AddTime(start)
 	}()
 
+	// TODO This can be very slow, but mostly isn't :-S, example:
+	// 14:05:29 | INFO  | BlockValidation.go:94 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees
+	// 14:10:01 | INFO  | BlockValidation.go:99 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees DONE
+
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
@@ -344,7 +348,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	statGet.AddTime(startGet)
 
 	if err = g.Wait(); err != nil {
-		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees from network", block.Hash().String())
+		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees from network: %v", block.Hash().String(), err)
 	}
 
 	start2 := gocore.CurrentTime()
