@@ -38,19 +38,27 @@ type TxMetaCache struct {
 	logger        ulogger.Logger
 }
 
-func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Store {
+func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
 	initPrometheusMetrics()
 
 	cacheMaxSize, _ := gocore.Config().GetInt("txMetaCacheMaxSize", 1_000_000_000)
-	cacheTTL, _ := gocore.Config().GetInt("txMetaCacheTTL", 15)
-	if cacheTTL <= 0 {
-		cacheTTL = 5
+	ttl, _ := gocore.Config().GetInt("txMetaCacheTTL", 15)
+	if ttl <= 0 {
+		ttl = 5
+	}
+	cacheTtl := time.Duration(ttl) * time.Minute
+	if len(options) > 0 {
+		cacheMaxSize = options[0]
+	}
+	if len(options) > 1 {
+		ttl = options[1]
+		cacheTtl = time.Duration(ttl) * time.Second
 	}
 
 	m := &TxMetaCache{
 		txMetaStore:   txMetaStore,
 		cache:         make(map[[1]byte]*util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]),
-		cacheTTL:      time.Duration(cacheTTL) * time.Minute,
+		cacheTTL:      cacheTtl,
 		cacheTTLQueue: NewLockFreeTTLQueue(int64(cacheMaxSize)),
 		metrics:       metrics{},
 		logger:        logger,
@@ -68,7 +76,9 @@ func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store) txmeta.Stor
 				continue
 			}
 
-			m.cache[[1]byte{item.hash[0]}].Delete(*item.hash)
+			go func() {
+				m.cache[[1]byte{item.hash[0]}].Delete(*item.hash)
+			}()
 			m.metrics.evictions.Add(1)
 		}
 	}()
