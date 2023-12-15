@@ -318,7 +318,10 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	start2 := gocore.CurrentTime()
 	stat2 := stat.NewStat("2. validateSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
+	// TODO this is a massive slowdown in processing a block with a lot of missing subtrees
+	//      can we at least get the subtrees in parallel?!
 	for _, subtreeHash := range missingSubtrees {
+		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
 			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl); err != nil {

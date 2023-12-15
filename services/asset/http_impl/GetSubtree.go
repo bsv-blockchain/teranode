@@ -45,6 +45,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
 
 		if mode == JSON {
+			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
 			return c.JSONPretty(200, subtree, "  ")
 		}
 
@@ -57,9 +58,11 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		switch mode {
 		case BINARY_STREAM:
+			h.logger.Infof("[GetSubtree][%s] sending to client in binary (%d bytes)", hash.String(), len(b))
 			return c.Blob(200, echo.MIMEOctetStream, b)
 
 		case HEX:
+			h.logger.Infof("[GetSubtree][%s] sending to client in hex (%d bytes)", hash.String(), len(b))
 			return c.String(200, hex.EncodeToString(b))
 
 		default:

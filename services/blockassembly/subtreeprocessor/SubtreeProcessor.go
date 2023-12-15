@@ -300,6 +300,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		return errors.New("you must pass in blocks to move up the chain")
 	}
 
+	stp.logger.Infof("reorgBlocks with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
+
 	for _, block := range moveDownBlocks {
 		err := stp.moveDownBlock(ctx, block)
 		if err != nil {
@@ -367,6 +369,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// get all the subtrees in parallel
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
 	subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
 	for idx, subtreeHash := range block.Subtrees {
 		idx := idx
@@ -393,7 +396,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("error getting subtrees: %s", err.Error())
 	}
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: get subtrees DONE", block.String(), len(block.Subtrees))
 
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: create new subtrees", block.String(), len(block.Subtrees))
 	// run through the nodes of the subtrees in order and add to the new subtrees
 	for idx, subtreeNode := range subtreesNodes {
 		if idx == 0 {
@@ -412,7 +417,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 			}
 		}
 	}
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: create new subtrees DONE", block.String(), len(block.Subtrees))
 
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: add previous nodes to subtrees", block.String(), len(block.Subtrees))
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
@@ -426,6 +433,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	for _, node := range lastIncompleteSubtree.Nodes {
 		_ = stp.addNode(node, true)
 	}
+	stp.logger.Warnf("moveDownBlock %s with %d subtrees: add previous nodes to subtrees DONE", block.String(), len(block.Subtrees))
 
 	// we must set the current block header
 	stp.currentBlockHeader = block.Header
