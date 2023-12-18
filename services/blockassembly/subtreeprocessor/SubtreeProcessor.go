@@ -376,13 +376,13 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		idx := idx
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			subtreeBytes, err := stp.subtreeStore.Get(gCtx, subtreeHash[:])
+			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 			if err != nil {
 				return fmt.Errorf("error getting subtree %s: %s", subtreeHash.String(), err.Error())
 			}
 
 			subtree := &util.Subtree{}
-			err = subtree.Deserialize(subtreeBytes)
+			err = subtree.DeserializeFromReader(subtreeReader)
 			if err != nil {
 				return fmt.Errorf("error deserializing subtree: %s", err.Error())
 			}

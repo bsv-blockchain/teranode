@@ -481,19 +481,19 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			subtreeBytes, err := subtreeStore.Get(gCtx, subtreeHash[:])
+			subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 			}
 
 			subtree := &util.Subtree{}
-			err = subtree.Deserialize(subtreeBytes)
+			err = subtree.DeserializeFromReader(subtreeReader)
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
 			}
@@ -526,8 +526,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	}
 
 	b.TransactionCount = txCount.Load()
-	// header + transaction count + size in bytes
-	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount)
+	// header + transaction count + size in bytes + coinbase tx size
+	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size())
 
 	// TODO something with conflicts
 
