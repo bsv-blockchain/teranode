@@ -943,7 +943,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 	})
 
 	t.Run("large", func(t *testing.T) {
-		//util.SkipVeryLongTests(t)
+		util.SkipVeryLongTests(t)
 
 		newSubtreeChan := make(chan *util.Subtree)
 		subtreeStore := blob_memory.New()
