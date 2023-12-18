@@ -305,7 +305,15 @@ func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration) err
 }
 
 func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("failed to read data from file: no such file or directory")
+	path := filepath.Join("testdata", "testSubtreeHex.bin")
+
+	// read the file
+	subtreeReader, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %s", err)
+	}
+
+	return subtreeReader, nil
 }
 
 func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
