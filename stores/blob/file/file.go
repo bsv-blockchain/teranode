@@ -18,7 +18,7 @@ import (
 )
 
 type File struct {
-	path        string
+	paths       []string
 	logger      ulogger.Logger
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
@@ -26,16 +26,27 @@ type File struct {
 	// mu     sync.RWMutex
 }
 
-func New(logger ulogger.Logger, dir string) (*File, error) {
+func New(logger ulogger.Logger, dir string, multiDirs ...[]string) (*File, error) {
 	logger = logger.New("file")
 
-	// create directory if not exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
+	paths := []string{dir}
+	if len(multiDirs) > 0 {
+		paths = multiDirs[0]
+		// create the directories if they don't exist
+		for _, d := range multiDirs[0] {
+			if err := os.MkdirAll(d, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create directory: %w", err)
+			}
+		}
+	} else {
+		// create directory if not exists
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create directory: %w", err)
+		}
 	}
 
 	fileStore := &File{
-		path:        dir,
+		paths:       paths,
 		logger:      logger,
 		fileTTLs:    make(map[string]time.Time),
 		fileTTLsCtx: context.Background(),
@@ -55,34 +66,36 @@ func (s *File) loadTTLs() error {
 	s.fileTTLsMu.Lock()
 	defer s.fileTTLsMu.Unlock()
 
-	s.logger.Infof("Loading file TTLs: %s", s.path)
+	for _, path := range s.paths {
+		s.logger.Infof("Loading file TTLs: %s", path)
 
-	// get all files in the directory that end with .ttl
-	files, err := findFilesByExtension(s.path, ".ttl")
-	if err != nil {
-		return fmt.Errorf("failed to find ttl files: %w", err)
-	}
-
-	var ttlBytes []byte
-	var ttl time.Time
-	for _, fileName := range files {
-		if fileName[len(fileName)-4:] != ".ttl" {
-			continue
-		}
-
-		// read the ttl
-		ttlBytes, err = os.ReadFile(fileName)
+		// get all files in the directory that end with .ttl
+		files, err := findFilesByExtension(path, ".ttl")
 		if err != nil {
-			return fmt.Errorf("failed to read ttl file: %w", err)
+			return fmt.Errorf("failed to find ttl files: %w", err)
 		}
 
-		ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
-		if err != nil {
-			s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
-			continue
-		}
+		var ttlBytes []byte
+		var ttl time.Time
+		for _, fileName := range files {
+			if fileName[len(fileName)-4:] != ".ttl" {
+				continue
+			}
 
-		s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+			// read the ttl
+			ttlBytes, err = os.ReadFile(fileName)
+			if err != nil {
+				return fmt.Errorf("failed to read ttl file: %w", err)
+			}
+
+			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
+			if err != nil {
+				s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+				continue
+			}
+
+			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+		}
 	}
 
 	return nil
@@ -96,7 +109,7 @@ func (s *File) ttlCleaner(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			s.logger.Debugf("Cleaning file TTLs: %s", s.path)
+			s.logger.Debugf("Cleaning file TTLs")
 
 			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			s.fileTTLsMu.Lock()
@@ -246,13 +259,15 @@ func (s *File) Del(_ context.Context, hash []byte) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
-	// remove ttl file
+	// remove ttl file, if exists
 	_ = os.Remove(fileName + ".ttl")
 	return os.Remove(fileName)
 }
 
 func (s *File) filename(hash []byte) string {
-	return fmt.Sprintf("%s/%x", s.path, bt.ReverseBytes(hash))
+	// determine path to use, based on the first byte of the hash and the number of paths
+	path := s.paths[hash[0]%byte(len(s.paths))]
+	return fmt.Sprintf("%s/%x", path, bt.ReverseBytes(hash))
 }
 
 func findFilesByExtension(root, ext string) ([]string, error) {

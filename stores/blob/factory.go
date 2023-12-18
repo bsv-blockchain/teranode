@@ -111,15 +111,23 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 			localTTLStorePath = "/tmp/localTTL"
 		}
 
+		localTTLStorePaths := strings.Split(localTTLStorePath, "|")
+		for i, item := range localTTLStorePaths {
+			localTTLStorePaths[i] = strings.TrimSpace(item)
+		}
+
 		var ttlStore Store
 		if ttlStoreType == "badger" {
+			if len(localTTLStorePaths) > 1 {
+				return nil, errors.New("badger store only supports one path")
+			}
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create badger store"), err)
 			}
 		} else {
 			// default is file store
-			ttlStore, err = file.New(logger, localTTLStorePath)
+			ttlStore, err = file.New(logger, localTTLStorePath, localTTLStorePaths)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create file store"), err)
 			}

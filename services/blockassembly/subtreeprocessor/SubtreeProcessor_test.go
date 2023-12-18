@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -660,10 +661,23 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 
 		transactionMap := util.NewSplitSwissMap(4)
 
-		remainder, err := subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		var err error
+		subtreeProcessor.currentSubtree, err = util.NewTree(4)
 		require.NoError(t, err)
-		assert.Equal(t, 17, len(*remainder))
-		for idx, txHash := range *remainder {
+		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
+		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
+		require.NoError(t, err)
+
+		remainder := make([]util.SubtreeNode, 0)
+		for _, subtree := range subtreeProcessor.chainedSubtrees {
+			remainder = append(remainder, subtree.Nodes...)
+		}
+		remainder = append(remainder, subtreeProcessor.currentSubtree.Nodes...)
+
+		assert.Equal(t, 17, len(remainder))
+		for idx, txHash := range remainder {
 			if idx == 0 {
 				continue
 			}
@@ -694,11 +708,22 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			//"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
 		}
 
-		remainder, err = subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		subtreeProcessor.currentSubtree, err = util.NewTree(4)
+		require.NoError(t, err)
+		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
+		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
 		require.NoError(t, err)
 
-		assert.Equal(t, 13, len(*remainder)) // 3 removed
-		for idx, txHash := range *remainder {
+		remainder = make([]util.SubtreeNode, 0)
+		for _, subtree := range subtreeProcessor.chainedSubtrees {
+			remainder = append(remainder, subtree.Nodes...)
+		}
+		remainder = append(remainder, subtreeProcessor.currentSubtree.Nodes...)
+
+		assert.Equal(t, 13, len(remainder)) // 3 removed
+		for idx, txHash := range remainder {
 			if idx == 0 {
 				continue
 			}
@@ -770,7 +795,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 			}
 
 			txHashes[i] = txHash
-			fmt.Printf("created txHash: %s\n", txHash.String())
+			//fmt.Printf("created txHash: %s\n", txHash.String())
 		}
 
 		newSubtreeChan := make(chan *util.Subtree)
@@ -804,31 +829,13 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		assert.Equal(t, 3, stp.currentSubtree.Length())
 
 		// create 2 subtrees from the previous block
-		subtree1, err := util.NewTreeByLeafCount(4)
-		require.NoError(t, err)
-		err = subtree1.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
-		require.NoError(t, err)
-		for i := uint64(1); i < 4; i++ {
-			txHash, err := generateTxHash()
-			require.NoError(t, err)
-			err = subtree1.AddNode(txHash, i, i)
-			require.NoError(t, err)
-			fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
-		}
+		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
 		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
 		require.NoError(t, err)
 
-		subtree2, err := util.NewTreeByLeafCount(4)
-		require.NoError(t, err)
-		for i := uint64(0); i < 4; i++ {
-			txHash, err := generateTxHash()
-			require.NoError(t, err)
-			err = subtree2.AddNode(txHash, i, i)
-			require.NoError(t, err)
-			fmt.Printf("created subtree2 txHash: %s\n", txHash.String())
-		}
+		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
 		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
@@ -859,13 +866,136 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 
 		// check that the remaining nodes are the same as the original nodes
 		for idx, txHash := range txHashes {
-			fmt.Printf("idx: %d, txHash: %s\n", idx, txHash.String())
 			shouldBeInSubtree := 2 + idx/4
 			shouldBeInNode := idx % 4
 			if shouldBeInSubtree > len(stp.chainedSubtrees)-1 {
 				assert.Equal(t, txHash, stp.currentSubtree.Nodes[shouldBeInNode].Hash)
 			} else {
 				assert.Equal(t, txHash, stp.chainedSubtrees[shouldBeInSubtree].Nodes[shouldBeInNode].Hash)
+			}
+		}
+	})
+}
+
+func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
+	subtree, err := util.NewTreeByLeafCount(int(length))
+	require.NoError(t, err)
+	start := uint64(0)
+	if createCoinbase {
+		err = subtree.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
+		require.NoError(t, err)
+		start = 1
+	}
+	for i := start; i < length; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		err = subtree.AddNode(txHash, i, i)
+		require.NoError(t, err)
+		//fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
+	}
+
+	return subtree
+}
+
+func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
+	t.Run("small", func(t *testing.T) {
+		newSubtreeChan := make(chan *util.Subtree)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(true)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+
+		subtree1 := createSubtree(t, 4, true)
+		subtreeBytes, err := subtree1.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree2 := createSubtree(t, 4, false)
+		subtreeBytes, err = subtree2.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: prevBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+				subtree2.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx,
+		}
+		blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
+		for idx, subtree := range block.Subtrees {
+			blockSubtreesMap[*subtree] = idx
+		}
+		_ = blockSubtreesMap
+
+		transactionMap, err := stp.createTransactionMap(context.Background(), blockSubtreesMap)
+		require.NoError(t, err)
+
+		assert.Equal(t, 8, transactionMap.Length())
+		for i := 0; i < 4; i++ {
+			assert.True(t, transactionMap.Exists(subtree1.Nodes[i].Hash))
+		}
+		for i := 0; i < 4; i++ {
+			assert.True(t, transactionMap.Exists(subtree2.Nodes[i].Hash))
+		}
+	})
+
+	t.Run("large", func(t *testing.T) {
+		//util.SkipVeryLongTests(t)
+
+		newSubtreeChan := make(chan *util.Subtree)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(true)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+
+		subtreeSize := uint64(1024 * 1024)
+		nrSubtrees := 10
+
+		subtrees := make([]*util.Subtree, nrSubtrees)
+
+		block := &model.Block{
+			Header:     prevBlockHeader,
+			Subtrees:   []*chainhash.Hash{},
+			CoinbaseTx: coinbaseTx,
+		}
+		for i := 0; i < nrSubtrees; i++ {
+			subtree := createSubtree(t, subtreeSize, i == 0)
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+			require.NoError(t, err)
+			block.Subtrees = append(block.Subtrees, subtree.RootHash())
+			subtrees[i] = subtree
+		}
+
+		blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
+		for idx, subtree := range block.Subtrees {
+			blockSubtreesMap[*subtree] = idx
+		}
+		_ = blockSubtreesMap
+
+		f, _ := os.Create("cpu.prof")
+		defer f.Close()
+
+		_ = pprof.StartCPUProfile(f)
+		start := time.Now()
+
+		transactionMap, err := stp.createTransactionMap(context.Background(), blockSubtreesMap)
+		require.NoError(t, err)
+
+		pprof.StopCPUProfile()
+		t.Logf("Time taken: %s\n", time.Since(start))
+
+		f, _ = os.Create("mem.prof")
+		defer f.Close()
+		_ = pprof.WriteHeapProfile(f)
+
+		assert.Equal(t, int(subtreeSize)*nrSubtrees, transactionMap.Length())
+		for _, subtree := range subtrees {
+			for i := 0; i < int(subtreeSize); i++ {
+				assert.True(t, transactionMap.Exists(subtree.Nodes[i].Hash))
 			}
 		}
 	})
