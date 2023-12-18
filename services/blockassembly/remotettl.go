@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -40,8 +41,13 @@ func NewRemoteTTLWrapper(logger ulogger.Logger, store blob.Store, AssetClient, b
 
 	localTTLCacheDir, ok := gocore.Config().Get("blockassembly_localTTLCache", "")
 	if ok {
+		localTTLCacheDirs := strings.Split(localTTLCacheDir, "|")
+		for i, item := range localTTLCacheDirs {
+			localTTLCacheDirs[i] = strings.TrimSpace(item)
+		}
+
 		var err error
-		if w.localTTLCache, err = file.New(logger, localTTLCacheDir); err != nil {
+		if w.localTTLCache, err = file.New(logger, localTTLCacheDir, localTTLCacheDirs); err != nil {
 			return nil, fmt.Errorf("failed to create local ttl store: %w", err)
 		}
 		// TODO make configurable
