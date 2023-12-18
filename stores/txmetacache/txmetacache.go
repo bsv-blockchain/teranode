@@ -69,11 +69,12 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	}
 
 	go func() {
+		size := 1000
 		batches := make(map[[1]byte][]chainhash.Hash)
 		lengths := make(map[[1]byte]int)
 
 		for i := 0; i < 256; i++ {
-			batches[[1]byte{byte(i)}] = make([]chainhash.Hash, 1000)
+			batches[[1]byte{byte(i)}] = make([]chainhash.Hash, size)
 		}
 
 		for {
@@ -83,13 +84,15 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 			default:
 
 				item := m.cacheTTLQueue.dequeue(time.Now().Add(-m.cacheTTL).UnixMilli())
-				if item == nil || lengths[[1]byte{item.hash[0]}] == 1000 {
+				if item == nil || lengths[[1]byte{item.hash[0]}] == size {
 
 					// process batch for each shard
 					for shard, hashes := range batches {
 						index := lengths[shard]
 						if index > 0 {
-							m.cache[shard].DeleteBatch(hashes[:index])
+							go func() {
+								m.cache[shard].DeleteBatch(hashes[:index])
+							}()
 							m.metrics.evictions.Add(uint64(index))
 
 							// reset length
