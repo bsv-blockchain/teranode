@@ -727,13 +727,13 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
-	defer func() {
-		_ = body.Close()
-	}()
-	stat.NewStat("2. http fetch subtree").AddTime(start)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
+	stat.NewStat("2. http fetch subtree").AddTime(start)
+	defer func() {
+		_ = body.Close()
+	}()
 
 	start = gocore.CurrentTime()
 	txHashes := make([]chainhash.Hash, 0, 1024*1024)
