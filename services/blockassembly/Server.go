@@ -107,9 +107,12 @@ func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
 
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// this is passed into the block assembler and subtree processor where new subtrees are created
-	newSubtreeChan := make(chan *util.Subtree, 100)
+	newSubtreeChanBuffer, _ := gocore.Config().GetInt("blockassembly_newSubtreeChanBuffer", 1_000)
+	newSubtreeChan := make(chan *util.Subtree, newSubtreeChanBuffer)
+
 	// retry channel for subtrees that failed to be stored
-	subtreeRetryChan := make(chan *subtreeRetrySend, 100)
+	subtreeRetryChanBuffer, _ := gocore.Config().GetInt("blockassembly_subtreeRetryChanBuffer", 1_000)
+	subtreeRetryChan := make(chan *subtreeRetrySend, subtreeRetryChanBuffer)
 
 	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
 	if remoteTTLStores {
@@ -122,13 +125,12 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// init the block assembler for this server
 	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
-	// start the new subtree listener in the background
+	// start the new subtree retry processor in the background
 	go func() {
-		var subtreeBytes []byte
 		for {
 			select {
 			case <-ctx.Done():
-				ba.logger.Infof("Stopping subtree listener")
+				ba.logger.Infof("Stopping subtree retry processor")
 				return
 			case subtreeRetry := <-subtreeRetryChan:
 				if err = ba.subtreeStore.Set(ctx,
@@ -167,6 +169,18 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				}); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeRetry.subtreeHash.String(), err)
 				}
+			}
+		}
+	}()
+
+	// start the new subtree listener in the background
+	go func() {
+		var subtreeBytes []byte
+		for {
+			select {
+			case <-ctx.Done():
+				ba.logger.Infof("Stopping subtree listener")
+				return
 
 			case subtree := <-newSubtreeChan:
 				// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
