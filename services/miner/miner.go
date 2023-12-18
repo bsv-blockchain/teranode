@@ -94,11 +94,12 @@ func (m *Miner) Start(ctx context.Context) error {
 			return nil
 
 		case blocks := <-m.MineBlocksNImmediatelyChan:
-			m.logger.Infof("[Miner] Mining %d blocks immediately", blocks)
+			m.logger.Infof("[Miner] Mining %d blocks immediately - START", blocks)
 			err := m.mineBlocks(ctx, blocks)
 			if err != nil {
 				m.logger.Errorf("[Miner] %v", err)
 			}
+			m.logger.Infof("[Miner] Mining %d blocks immediately - DONE", blocks)
 
 		case <-m.candidateTimer.C:
 			m.candidateTimer.Reset(candidateRequestInterval * time.Second)
@@ -229,6 +230,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 	var previousHash *chainhash.Hash
 
 	for i := 0; i < blocks; i++ {
+		m.logger.Infof("[Miner] Mining block %d of %d", i+1, blocks)
 
 		candidate, err := m.miningCandidate(ctx, blocks, previousHash)
 		if err != nil {
@@ -269,7 +271,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 			return nil, fmt.Errorf("canceled mining on job %s", candidate.Id)
 
 		case <-m.MineBlocksNImmediatelyCancelChan:
-			m.logger.Infof("[Miner] Canceling mining %d blocks immediately", blocks)
+			m.logger.Infof("[Miner] Cancelled mining %d blocks immediately", blocks)
 			return nil, fmt.Errorf("aborting mining on job %s", candidate.Id)
 
 		default:
