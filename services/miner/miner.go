@@ -267,29 +267,36 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 	maxBackoff := 10 * time.Second
 	currentBackoff := minBackoff
 
+	maxRetries := 5
+	retryCount := 0
+
 	for {
 		select {
 
 		case <-ctx.Done():
-			return nil, fmt.Errorf("canceled mining on job %s", candidate.Id)
+			return nil, fmt.Errorf("[Miner] canceled mining on job %s", candidate.Id)
 
 		case <-m.MineBlocksNImmediatelyCancelChan:
 			m.logger.Infof("[Miner] Cancelled mining %d blocks immediately", blocks)
-			return nil, fmt.Errorf("aborting mining on job %s", candidate.Id)
+			if candidate == nil {
+				return nil, fmt.Errorf("[Miner] aborting mining on job %s", "unknown")
+			}
+			return nil, fmt.Errorf("[Miner] aborting mining on job %s", candidate.Id)
 
 		default:
 
 			candidate, err = m.blockAssemblyClient.GetMiningCandidate(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("error getting mining candidate: %v", err)
+				return nil, fmt.Errorf("[Miner] error getting mining candidate: %v", err)
 			}
 			if candidate == nil {
-				return nil, fmt.Errorf("no mining candidate found")
+				return nil, fmt.Errorf("[Miner] no mining candidate found")
 			}
 			if previousHash == nil || !bytes.Equal(previousHash[:], candidate.PreviousHash) {
 				return candidate, nil
 			}
 			// If the previous hash is the same, apply exponential backoff
+			m.logger.Infof("[Miner] Got same previous hash %s, waiting %s before retrying", previousHash.String(), currentBackoff.String())
 			time.Sleep(currentBackoff)
 			// Double the backoff time for the next iteration, but don't exceed maxBackoff
 			currentBackoff = time.Duration(float64(currentBackoff) * 2)
@@ -299,6 +306,10 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 			// Add some jitter to prevent synchronized retries
 			currentBackoff += time.Duration(rand.Int63n(int64(currentBackoff / 10)))
 
+			retryCount++
+			if retryCount > maxRetries {
+				return nil, fmt.Errorf("[Miner] max retries exceeded")
+			}
 		}
 	}
 }
