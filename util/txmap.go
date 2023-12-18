@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/dolthub/swiss"
@@ -121,121 +122,83 @@ func (s *SwissMapUint64) Length() int {
 }
 
 type SplitSwissMap struct {
-	m map[[1]byte]*SwissMap
-	// length int
+	m           map[uint16]*SwissMap
+	nrOfBuckets uint16
 }
 
 func NewSplitSwissMap(length int) *SplitSwissMap {
 	m := &SplitSwissMap{
-		m: make(map[[1]byte]*SwissMap, 256),
+		m:           make(map[uint16]*SwissMap, 1024),
+		nrOfBuckets: 1024,
 	}
 
-	for i := 0; i <= 255; i++ {
-		m.m[[1]byte{uint8(i)}] = NewSwissMap(length / 256)
+	for i := uint16(0); i <= m.nrOfBuckets; i++ {
+		m.m[i] = NewSwissMap(int(math.Ceil(float64(length) / float64(m.nrOfBuckets))))
 	}
 
 	return m
 }
 
 func (g *SplitSwissMap) Exists(hash [32]byte) bool {
-	return g.m[[1]byte{hash[0]}].Exists(hash)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
 func (g *SplitSwissMap) Get(hash [32]byte) (uint64, bool) {
-	return g.m[[1]byte{hash[0]}].Get(hash)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
 }
 
 func (g *SplitSwissMap) Put(hash [32]byte, n uint64) error {
-	return g.m[[1]byte{hash[0]}].Put(hash)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash)
 }
 
 func (g *SplitSwissMap) Length() int {
 	length := 0
-	for i := 0; i <= 255; i++ {
-		length += g.m[[1]byte{uint8(i)}].length
+	for i := uint16(0); i <= g.nrOfBuckets; i++ {
+		length += g.m[i].Length()
 	}
 
 	return length
 }
 
 type SplitSwissMapUint64 struct {
-	m          map[[1]byte]*SwissMapUint64
-	splitIndex int
-	// length int
+	m           map[uint16]*SwissMapUint64
+	nrOfBuckets uint16
 }
 
-func NewSplitSwissMapUint64(length int, splitIndex ...int) *SplitSwissMapUint64 {
+func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
 	m := &SplitSwissMapUint64{
-		m:          make(map[[1]byte]*SwissMapUint64, 256),
-		splitIndex: 0,
+		m:           make(map[uint16]*SwissMapUint64, 256),
+		nrOfBuckets: 1024,
 	}
 
-	if len(splitIndex) > 0 {
-		m.splitIndex = splitIndex[0]
-	}
-
-	for i := 0; i <= 255; i++ {
-		m.m[[1]byte{uint8(i)}] = NewSwissMapUint64(length / 256)
+	for i := uint16(0); i <= m.nrOfBuckets; i++ {
+		m.m[i] = NewSwissMapUint64(length / int(m.nrOfBuckets))
 	}
 
 	return m
 }
 
 func (g *SplitSwissMapUint64) Exists(hash [32]byte) bool {
-	return g.m[[1]byte{hash[g.splitIndex]}].Exists(hash)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
 func (g *SplitSwissMapUint64) Put(hash [32]byte, n uint64) error {
-	return g.m[[1]byte{hash[g.splitIndex]}].Put(hash, n)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash, n)
 }
 
 func (g *SplitSwissMapUint64) Get(hash [32]byte) (uint64, bool) {
-	return g.m[[1]byte{hash[g.splitIndex]}].Get(hash)
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
 }
 
 func (g *SplitSwissMapUint64) Length() int {
 	length := 0
-	for i := 0; i <= 255; i++ {
-		length += g.m[[1]byte{uint8(i)}].length
+	for i := uint16(0); i <= g.nrOfBuckets; i++ {
+		length += g.m[i].length
 	}
 
 	return length
 }
 
-type Split2SwissMapUint64 struct {
-	m map[[1]byte]*SplitSwissMapUint64
-	// length int
-}
-
-func NewSplit2SwissMapUint64(length int) *Split2SwissMapUint64 {
-	m := &Split2SwissMapUint64{
-		m: make(map[[1]byte]*SplitSwissMapUint64, 256),
-	}
-
-	for i := 0; i <= 255; i++ {
-		m.m[[1]byte{uint8(i)}] = NewSplitSwissMapUint64(length/256, 1)
-	}
-
-	return m
-}
-
-func (g *Split2SwissMapUint64) Exists(hash [32]byte) bool {
-	return g.m[[1]byte{hash[0]}].Exists(hash)
-}
-
-func (g *Split2SwissMapUint64) Put(hash [32]byte, n uint64) error {
-	return g.m[[1]byte{hash[0]}].Put(hash, n)
-}
-
-func (g *Split2SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
-	return g.m[[1]byte{hash[0]}].Get(hash)
-}
-
-func (g *Split2SwissMapUint64) Length() int {
-	length := 0
-	for i := 0; i <= 255; i++ {
-		length += g.m[[1]byte{uint8(i)}].Length()
-	}
-
-	return length
+func Bytes2Uint16Buckets(b [32]byte, mod uint16) uint16 {
+	return (uint16(b[0])<<8 | uint16(b[1])) % mod
 }
