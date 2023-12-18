@@ -660,10 +660,27 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 
 		transactionMap := util.NewSplitSwissMap(4)
 
-		remainder, err := subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		var err error
+		subtreeProcessor.currentSubtree, err = util.NewTree(4)
 		require.NoError(t, err)
-		assert.Equal(t, 17, len(*remainder))
-		for idx, txHash := range *remainder {
+		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
+		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
+		require.NoError(t, err)
+
+		remainder := make([]util.SubtreeNode, 0)
+		for _, subtree := range subtreeProcessor.chainedSubtrees {
+			for _, node := range subtree.Nodes {
+				remainder = append(remainder, node)
+			}
+		}
+		for _, node := range subtreeProcessor.currentSubtree.Nodes {
+			remainder = append(remainder, node)
+		}
+
+		assert.Equal(t, 17, len(remainder))
+		for idx, txHash := range remainder {
 			if idx == 0 {
 				continue
 			}
@@ -694,11 +711,26 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			//"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
 		}
 
-		remainder, err = subtreeProcessor.getRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap)
+		subtreeProcessor.currentSubtree, err = util.NewTree(4)
+		require.NoError(t, err)
+		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
+		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
 		require.NoError(t, err)
 
-		assert.Equal(t, 13, len(*remainder)) // 3 removed
-		for idx, txHash := range *remainder {
+		remainder = make([]util.SubtreeNode, 0)
+		for _, subtree := range subtreeProcessor.chainedSubtrees {
+			for _, node := range subtree.Nodes {
+				remainder = append(remainder, node)
+			}
+		}
+		for _, node := range subtreeProcessor.currentSubtree.Nodes {
+			remainder = append(remainder, node)
+		}
+
+		assert.Equal(t, 13, len(remainder)) // 3 removed
+		for idx, txHash := range remainder {
 			if idx == 0 {
 				continue
 			}
