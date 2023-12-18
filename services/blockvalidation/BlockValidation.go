@@ -727,7 +727,9 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
-	defer body.Close()
+	defer func() {
+		_ = body.Close()
+	}()
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
@@ -748,7 +750,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 			if err == io.EOF {
 				break
 			}
-			if err == io.ErrUnexpectedEOF {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil, fmt.Errorf("unexpected EOF: partial hash read")
 			}
 			return nil, fmt.Errorf("error reading stream: %v", err)

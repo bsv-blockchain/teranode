@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -66,7 +67,55 @@ func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
 }
 
 func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
-	return r.store.GetIoReader(ctx, key)
+	// first get from local ttl cache
+	if r.localTTLCache != nil {
+		subtreeReader, err := r.localTTLCache.GetIoReader(ctx, key)
+		if err != nil {
+			if !errors.Is(err, options.ErrNotFound) {
+				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+			}
+		}
+
+		if err == nil && subtreeReader != nil {
+			prometheusBlockAssemblyLocalTTLCacheHit.Inc()
+			return subtreeReader, nil
+		}
+	}
+
+	// try block validation service
+	subtreeBytes, err := r.blockValidationClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Warnf("using block validation service in block assembly for subtree %x error: %v", key, err)
+	}
+	if subtreeBytes != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		return io.NopCloser(bytes.NewReader(subtreeBytes)), nil
+	}
+
+	// try asset client
+	r.logger.Warnf("using block validation service in block assembly for subtree %x failed", key)
+	subtreeBytes, err = r.AssetClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Errorf("using asset client in block assembly for subtree %x error: %v", key, err)
+	}
+	if subtreeBytes != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		return io.NopCloser(bytes.NewReader(subtreeBytes)), nil
+	}
+
+	// try store
+	r.logger.Warnf("using asset client in block assembly for subtree %x failed", key)
+	subtreeBytes, err = r.store.Get(ctx, key)
+
+	// set in local ttl cache
+	if subtreeBytes != nil && r.localTTLCache != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		if err = r.localTTLCache.Set(ctx, key, subtreeBytes, options.WithTTL(r.localTTL)); err != nil {
+			r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+		}
+	}
+
+	return io.NopCloser(bytes.NewReader(subtreeBytes)), err
 }
 
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
