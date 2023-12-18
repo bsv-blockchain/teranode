@@ -1,6 +1,7 @@
 package blockvalidation
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -725,19 +726,41 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
-	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
+	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
+	defer body.Close()
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
 	}
 
 	start = gocore.CurrentTime()
-	// the subtree bytes we got from our competing miner only contain the transaction hashes
-	// it's basically just a list of 32 byte transaction hashes
-	txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
-	for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
-		txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+	txHashes := make([]chainhash.Hash, 0, 1024*1024)
+	buffer := make([]byte, chainhash.HashSize)
+	bufferedReader := bufio.NewReader(body)
+
+	for {
+		n, err := io.ReadFull(bufferedReader, buffer)
+		if n > 0 {
+			txHashes = append(txHashes, chainhash.Hash(buffer))
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			if err == io.ErrUnexpectedEOF {
+				return nil, fmt.Errorf("unexpected EOF: partial hash read")
+			}
+			return nil, fmt.Errorf("error reading stream: %v", err)
+		}
 	}
+
+	// // the subtree bytes we got from our competing miner only contain the transaction hashes
+	// // it's basically just a list of 32 byte transaction hashes
+	// txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+	// for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+	// 	txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+	// }
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
 	return txHashes, nil
