@@ -1,9 +1,11 @@
 package util
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -406,6 +408,79 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	//if !rootHash.IsEqual(st.RootHash()) {
 	//	return fmt.Errorf("root hash mismatch")
 	//}
+
+	return nil
+}
+
+func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered in DeserializeFromReader: %v", r)
+		}
+	}()
+
+	buf := bufio.NewReader(reader)
+
+	// read root hash
+	st.rootHash = new(chainhash.Hash)
+	if _, err = io.ReadFull(buf, st.rootHash[:]); err != nil {
+		return fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	bytes8 := make([]byte, 8)
+
+	// read fees
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read fees: %v", err)
+	}
+	st.Fees = binary.LittleEndian.Uint64(bytes8)
+
+	// read sizeInBytes
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+	}
+	st.SizeInBytes = binary.LittleEndian.Uint64(bytes8)
+
+	// read number of leaves
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read number of leaves: %v", err)
+	}
+	numLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	st.treeSize = int(numLeaves)
+	// the height of a subtree is always a power of two
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	// read leaves
+	st.Nodes = make([]SubtreeNode, numLeaves)
+	for i := uint64(0); i < numLeaves; i++ {
+		if _, err = io.ReadFull(buf, st.Nodes[i].Hash[:]); err != nil {
+			return fmt.Errorf("unable to read node: %v", err)
+		}
+
+		if _, err = io.ReadFull(buf, bytes8); err != nil {
+			return fmt.Errorf("unable to read fees: %v", err)
+		}
+		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes8)
+		if _, err = io.ReadFull(buf, bytes8); err != nil {
+			return fmt.Errorf("unable to read SizeInBytes: %v", err)
+		}
+		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(bytes8)
+	}
+
+	// read number of conflicting nodes
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+	}
+	numConflictingLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	// read conflicting nodes
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
+		if _, err = io.ReadFull(buf, st.ConflictingNodes[i][:]); err != nil {
+			return fmt.Errorf("unable to read conflicting node: %v", err)
+		}
+	}
 
 	return nil
 }

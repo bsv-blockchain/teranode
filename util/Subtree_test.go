@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -195,6 +196,44 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, hash2.String(), txHashes[1].String())
 		assert.Equal(t, hash3.String(), txHashes[2].String())
 		assert.Equal(t, hash4.String(), txHashes[3].String())
+	})
+
+	t.Run("Deserialize with reader", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
+
+		serializedBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(serializedBytes)
+
+		err = newSubtree.DeserializeFromReader(r)
+		require.NoError(t, err)
+		assert.Equal(t, st.Fees, newSubtree.Fees)
+		assert.Equal(t, st.Size(), newSubtree.Size())
+		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
+
+		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+		for i := 0; i < len(st.Nodes); i++ {
+			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
+			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
+		}
 	})
 
 	t.Run("Serialize with conflicting", func(t *testing.T) {
@@ -446,6 +485,31 @@ func Test_Deserialize(t *testing.T) {
 	require.NoError(t, err)
 
 	err = subtree.Deserialize(subtreeBytes)
+	require.NoError(t, err)
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
+func Test_DeserializeFromReader(t *testing.T) {
+	//SkipLongTests(t)
+	runtime.SetCPUProfileRate(1000)
+
+	size := 1024 * 1024
+	subtreeBytes := generateLargeSubtreeBytes(t, size)
+	r := bytes.NewReader(subtreeBytes)
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	subtree, err := NewTreeByLeafCount(size)
+	require.NoError(t, err)
+
+	err = subtree.DeserializeFromReader(r)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")

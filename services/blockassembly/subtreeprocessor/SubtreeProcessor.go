@@ -686,15 +686,16 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 		st := subtreeHash
 		g.Go(func() error {
 			stp.logger.Debugf("getting subtree: %s", st.String())
-			subtreeBytes, err := stp.subtreeStore.Get(ctx, st[:])
 			var subtree *util.Subtree
+
+			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:])
 			if err != nil {
 				return errors.Join(fmt.Errorf("error getting subtree: %s", st.String()), err)
 			}
 
 			subtree = &util.Subtree{}
 			// TODO deserialize only the hashes, we don't need any of the rest
-			err = subtree.Deserialize(subtreeBytes)
+			err = subtree.DeserializeFromReader(subtreeReader)
 			if err != nil {
 				return errors.Join(fmt.Errorf("error deserializing subtree: %s", st.String()), err)
 			}
