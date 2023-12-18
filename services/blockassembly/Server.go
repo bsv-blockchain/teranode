@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"net"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -30,8 +29,6 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -253,15 +250,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		ba.startKafkaListener(ctx, kafkaBrokersURL)
 	}
 
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("blockassembly_drpcListenAddress")
-	if ok {
-		err = ba.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			ba.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("blockassembly_frpcListenAddress")
 	if ok {
@@ -277,37 +265,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ba *BlockAssembly) drpcServer(ctx context.Context, drpcAddress string) error {
-	ba.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-	// register the proto-specific methods on the mux
-	err := blockassembly_api.DRPCRegisterBlockAssemblyAPI(m, ba)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			ba.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
 
 	return nil
 }

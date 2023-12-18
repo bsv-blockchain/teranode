@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"time"
 
@@ -15,18 +14,12 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 // DumbPropagationServer type carries the logger within it
 type DumbPropagationServer struct {
 	propagation_api.UnimplementedPropagationAPIServer
 	logger ulogger.Logger
-}
-
-type DumbPropagationServerDrpc struct {
-	propagation_api.DRPCPropagationAPIServer
 }
 
 type DumbPropagationServerFrpc struct {
@@ -64,15 +57,6 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("propagation_drpcListenAddress")
-	if ok {
-		err = ps.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
 	if ok {
@@ -88,40 +72,6 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *DumbPropagationServer) drpcServer(ctx context.Context, drpcAddress string) error {
-	ps.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-
-	dps := &DumbPropagationServerDrpc{}
-
-	// register the proto-specific methods on the mux
-	err := propagation_api.DRPCRegisterPropagationAPI(m, dps)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			ps.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -174,20 +124,6 @@ func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_ap
 }
 
 func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	prometheusProcessedTransactions.Inc()
-
-	return &propagation_api.EmptyMessage{}, nil
-}
-
-func (ps *DumbPropagationServerDrpc) Health(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	prometheusHealth.Inc()
-	return &propagation_api.HealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
-}
-
-func (ps *DumbPropagationServerDrpc) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	prometheusProcessedTransactions.Inc()
 
 	return &propagation_api.EmptyMessage{}, nil

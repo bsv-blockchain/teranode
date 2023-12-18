@@ -36,8 +36,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -105,15 +103,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("propagation_drpcListenAddress")
-	if ok {
-		err = ps.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
 	if ok {
@@ -158,38 +147,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *PropagationServer) drpcServer(ctx context.Context, drpcAddress string) error {
-	ps.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-
-	// register the proto-specific methods on the mux
-	err := propagation_api.DRPCRegisterPropagationAPI(m, ps)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			ps.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
 
 	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
@@ -23,7 +22,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
 var (
@@ -33,7 +31,6 @@ var (
 	prometheusBlockAssemblerAddTx prometheus.Counter
 	workerCount                   int
 	grpcClient                    blockassembly_api.BlockAssemblyAPIClient
-	drpcClient                    blockassembly_api.DRPCBlockAssemblyAPIClient
 	frpcClient                    *blockassembly_api.Client
 	broadcastProtocol             string
 	batchSize                     int
@@ -83,7 +80,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|http)")
 	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
@@ -106,18 +103,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = blockassembly_api.NewBlockAssemblyAPIClient(conn)
-
-	case "drpc":
-		if blockassemblyDrpcAddress, ok := gocore.Config().Get("blockassembly_drpcAddress"); ok {
-			rawConn, err := net.Dial("tcp", blockassemblyDrpcAddress)
-			if err != nil {
-				panic(err)
-			}
-			conn := drpcconn.New(rawConn)
-			drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
-		} else {
-			panic(fmt.Errorf("must have valid blockassembly_drpcAddress"))
-		}
 
 	case "frpc":
 		if blockassemblyFrpcAddress, ok := gocore.Config().Get("blockassembly_frpcAddress"); ok {
@@ -154,8 +139,6 @@ func Start() {
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
 	case "grpc":
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	case "drpc":
-		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
 	case "frpc":
 		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
@@ -226,10 +209,6 @@ func sendToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *
 		_, err := grpcClient.AddTx(ctx, req)
 		return err
 
-	case "drpc":
-		_, err := drpcClient.AddTx(ctx, req)
-		return err
-
 	case "frpc":
 		_, err := frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
 			Txid:     req.Txid,
@@ -251,10 +230,6 @@ func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, 
 
 	case "grpc":
 		_, err := grpcClient.AddTxBatch(ctx, req)
-		return err
-
-	case "drpc":
-		_, err := drpcClient.AddTxBatch(ctx, req)
 		return err
 
 	case "frpc":
