@@ -38,7 +38,7 @@ type TxMetaCache struct {
 	logger        ulogger.Logger
 }
 
-func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
+func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
 	initPrometheusMetrics()
 
 	cacheMaxSize, _ := gocore.Config().GetInt("txMetaCacheMaxSize", 1_000_000_000)
@@ -69,32 +69,64 @@ func NewTxMetaCache(logger ulogger.Logger, txMetaStore txmeta.Store, options ...
 	}
 
 	go func() {
-		for {
-			item := m.cacheTTLQueue.dequeue(time.Now().Add(-m.cacheTTL).UnixMilli())
-			if item == nil {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
+		batches := make(map[[1]byte][]chainhash.Hash)
+		lengths := make(map[[1]byte]int)
 
-			go func() {
-				m.cache[[1]byte{item.hash[0]}].Delete(*item.hash)
-			}()
-			m.metrics.evictions.Add(1)
+		for i := 0; i < 256; i++ {
+			batches[[1]byte{byte(i)}] = make([]chainhash.Hash, 1000)
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+
+				item := m.cacheTTLQueue.dequeue(time.Now().Add(-m.cacheTTL).UnixMilli())
+				if item == nil || lengths[[1]byte{item.hash[0]}] == 1000 {
+
+					// process batch for each shard
+					for shard, hashes := range batches {
+						index := lengths[shard]
+						if index > 0 {
+							m.cache[shard].DeleteBatch(hashes[:index])
+							m.metrics.evictions.Add(uint64(index))
+
+							// reset length
+							lengths[shard] = 0
+						}
+					}
+
+					if item == nil {
+						time.Sleep(100 * time.Millisecond)
+					}
+				} else {
+					shard := [1]byte{item.hash[0]}
+					hashes := batches[shard]
+					length := lengths[shard]
+					hashes[length] = *item.hash
+					lengths[shard]++
+				}
+			}
 		}
 	}()
 
-	// TODO
 	go func() {
 		for {
-			if prometheusBlockValidationTxMetaCacheSize != nil {
-				prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cacheTTLQueue.length()))
-				prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
-				prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
-				prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
-				prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
-			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				if prometheusBlockValidationTxMetaCacheSize != nil {
+					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cacheTTLQueue.length()))
+					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
+					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
+					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
+					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
+				}
 
-			time.Sleep(5 * time.Second)
+				time.Sleep(5 * time.Second)
+			}
 		}
 	}()
 

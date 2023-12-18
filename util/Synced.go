@@ -72,3 +72,15 @@ func (m *SyncedSwissMap[K, V]) Delete(key K) bool {
 
 	return m.swissMap.Delete(key)
 }
+func (m *SyncedSwissMap[K, V]) DeleteBatch(keys []K) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ok := false
+
+	for _, key := range keys {
+		ok = m.swissMap.Delete(key)
+	}
+
+	return ok
+}

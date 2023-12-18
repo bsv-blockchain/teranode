@@ -3,6 +3,7 @@ package txmetacache
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -21,7 +22,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -29,7 +30,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		meta, err := c.Create(ctx, coinbaseTx)
 		require.NoError(t, err)
@@ -43,7 +44,8 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 }
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
-	c := NewTxMetaCache(ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+	ctx := context.Background()
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	cache := c.(*TxMetaCache)
 
 	hashes := make([]chainhash.Hash, b.N)
@@ -63,4 +65,23 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 
 	err := g.Wait()
 	require.NoError(b, err)
+}
+
+func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
+	ctx := context.Background()
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 1000, 1)
+	cache := c.(*TxMetaCache)
+
+	for i := 0; i < 1000; i++ {
+		hash := chainhash.HashH([]byte(string(rune(i))))
+		_ = cache.SetCache(&hash, &txmeta.Data{})
+	}
+
+	for i := 0; i < 1000; i++ {
+	}
+	require.Equal(t, int64(1000), cache.cacheTTLQueue.length(), "queue should be full")
+
+	time.Sleep(2 * time.Second)
+
+	require.Equal(t, int64(0), cache.cacheTTLQueue.length(), "queue should be empty")
 }

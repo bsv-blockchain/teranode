@@ -49,7 +49,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(ulogger.TestLogger{}, txMetaStore)
+	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 
 	err = loadTxMetaIntoMemory(cachedTxMetaStore)
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func Test_loadTxMetaIntoMemory(t *testing.T) {
 	util.SkipVeryLongTests(t)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(ulogger.TestLogger{}, txMetaStore)
+	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()
