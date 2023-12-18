@@ -111,7 +111,7 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 }
 
 func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
-	value, err := l.ttlStore.GetIoReader(ctx, key)
+	ioReader, err := l.ttlStore.GetIoReader(ctx, key)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
 		hash, _ := chainhash.NewHash(key)
@@ -119,7 +119,7 @@ func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, 
 		return l.blobStore.GetIoReader(ctx, key)
 	}
 
-	return value, nil
+	return ioReader, nil
 }
 
 func (l *LocalTTL) Get(ctx context.Context, key []byte) ([]byte, error) {
