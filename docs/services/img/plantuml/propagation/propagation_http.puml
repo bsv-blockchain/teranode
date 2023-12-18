@@ -1,0 +1,38 @@
+@startuml
+
+participant "HTTP Client" as Client
+participant "HTTP Server" as HTTP
+participant "Propagation Server" as Server
+participant "Tx Store" as TxStore
+participant "Validator Service" as ValidationService
+
+activate Server
+
+
+Server -> HTTP: StartHTTPServer(ctx, serverURL)
+activate HTTP
+HTTP --> Server: HTTP Server started
+deactivate Server
+
+loop HTTP Request Handling
+    Client -> HTTP: Send request (/tx)
+    activate Client
+    HTTP -> Server: ProcessTransaction(ctx, Request)
+    activate Server
+    Server -> TxStore: storeTransaction(ctx, tx)
+    activate TxStore
+    TxStore --> Server: txId
+    deactivate TxStore
+    Server -> ValidationService: Validate(ctx, tx)
+    activate ValidationService
+    ValidationService --> Server: ValidationResult
+    deactivate ValidationService
+    Server --> HTTP: Transaction processed
+    deactivate Server
+    HTTP -> Client: Response
+    deactivate Client
+end
+
+deactivate HTTP
+
+@enduml
