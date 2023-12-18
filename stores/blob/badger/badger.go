@@ -174,7 +174,7 @@ func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 		return nil, err
 	}
 
-	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {

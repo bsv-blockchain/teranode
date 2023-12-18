@@ -149,7 +149,7 @@ func (s *SeaweedFS) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser,
 		return nil, err
 	}
 
-	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {

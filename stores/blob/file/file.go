@@ -219,6 +219,9 @@ func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error
 	fileName := s.filename(hash)
 	file, err := os.Open(fileName)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, options.ErrNotFound
+		}
 		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 	}
 
