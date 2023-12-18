@@ -246,6 +246,9 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 		if err != nil {
 			return fmt.Errorf("error mining block on %s: %v", candidateId, err)
 		}
+		if solution == nil {
+			return fmt.Errorf("no solution found for %s", candidateId)
+		}
 
 		err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 		if err != nil {
