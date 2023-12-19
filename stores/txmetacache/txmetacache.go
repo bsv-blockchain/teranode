@@ -90,9 +90,12 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					for shard, hashes := range batches {
 						index := lengths[shard]
 						if index > 0 {
-							go func() {
-								m.cache[shard].DeleteBatch(hashes[:index])
-							}()
+							// Make a copy of hashes to avoid data race
+							hashesCopy := make([]chainhash.Hash, index)
+							copy(hashesCopy, hashes[:index])
+							go func(sm *util.SyncedSwissMap[chainhash.Hash, *txmeta.Data]) {
+								sm.DeleteBatch(hashesCopy)
+							}(m.cache[shard])
 							m.metrics.evictions.Add(uint64(index))
 
 							// reset length
