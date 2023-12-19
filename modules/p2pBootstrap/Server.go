@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	libp2p "github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	crypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -19,14 +18,7 @@ const (
 	bootstrapPrivKeyFilename = "bootstrap_private_key_"
 )
 
-var logger ulogger.Logger
-
 func main() {
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger = ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
-
-	logger.Infof("Starting P2P Bootstrap")
 
 	dhtProtocolIdStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
 	if !ok {
@@ -92,9 +84,9 @@ func main() {
 		panic(err)
 	}
 
-	logger.Infof("Bootstrap node is running on:")
+	fmt.Printf("Bootstrap node is running on:")
 	for _, addr := range host.Addrs() {
-		logger.Infof("*  %s/p2p/%s\n", addr, host.ID().Pretty())
+		fmt.Printf("*  %s/p2p/%s\n", addr, host.ID().String())
 	}
 
 	select {}
