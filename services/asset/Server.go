@@ -129,7 +129,11 @@ func (v *Server) Start(ctx context.Context) error {
 
 	if v.grpcServer != nil {
 		g.Go(func() error {
-			return v.grpcServer.Start(ctx, v.grpcAddr)
+			err := v.grpcServer.Start(ctx, v.grpcAddr)
+			if err != nil {
+				v.logger.Errorf("[Asset] error in grpc server: %w", err)
+			}
+			return err
 		})
 
 		// We need to react to new nodes connecting to the network and we do this by subscribing to
@@ -221,13 +225,17 @@ func (v *Server) Start(ctx context.Context) error {
 		v.grpcServer.AddHttpSubscriber(v.notificationCh)
 
 		g.Go(func() error {
-			return v.httpServer.Start(ctx, v.httpAddr)
+			err := v.httpServer.Start(ctx, v.httpAddr)
+			if err != nil {
+				v.logger.Errorf("[Asset] error in http server: %w", err)
+			}
+			return err
 		})
 
 	}
 
 	if err := g.Wait(); err != nil {
-		return err
+		return fmt.Errorf("The main server has ended with error: %w", err)
 	}
 
 	return nil
