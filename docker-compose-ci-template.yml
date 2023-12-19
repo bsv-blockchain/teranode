@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=really_strong_password_change_me
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data:/app/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Define a common base configuration for ubsv nodes
+  x-ubsv-base:
+    &ubsv-base
+    image: taal/ubsv:latest
+    depends_on:
+      - postgres
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+    networks:
+      - ubsv-network
+    volumes:
+      - ./data:/app/data
+    expose:
+      - 8081-8093
+
+  # Define node-specific configurations as extensions
+  ubsv-1:
+    <<: *ubsv-base
+    environment:
+      SETTINGS_CONTEXT: "docker.ci"
+      asset_httpAddress: "http://ubsv-1:8090"
+      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
+      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "false"
+      txstore: badger:///data/ubsv1/txstore
+      subtreestore: badger:///data/ubsv1/subtreestore
+      mine_initial_blocks: true
+    ports:
+      - "18081-18089:8081-8089"
+      - "18090-18093:8090-8093"
+
+  ubsv-2:
+    <<: *ubsv-base
+    environment:
+      SETTINGS_CONTEXT: "docker.ci"
+      asset_httpAddress: "http://ubsv-2:8090"
+      utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
+      txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "false"
+      txstore: badger:///data/ubsv2/txstore
+      subtreestore: badger:///data/ubsv2/subtreestore
+    ports:
+      - "28081-28089:8081-8089"
+      - "28090-28093:8090-8093"
+
+# Add more ubsv nodes as needed
+
+networks:
+  ubsv-network:
+    name: my-ubsv-network
