@@ -1,11 +1,13 @@
 package distributor
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +18,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
-	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 type Distributor struct {
@@ -27,7 +29,7 @@ type Distributor struct {
 	failureTolerance   int
 	useQuic            bool
 	quicAddresses      []string
-	quicStreams        []quic.Stream
+	httpClient         *http.Client
 	waitMsBetweenTxs   int
 }
 
@@ -99,41 +101,26 @@ func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, e
 func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
 
 	var quicAddresses []string
-	var quicStream quic.Stream
 
 	quicAddresses, _ = gocore.Config().GetMulti("propagation_quicAddresses", "|")
 	if len(quicAddresses) == 0 {
 		return nil, fmt.Errorf("propagation_quicAddresses not set in config")
 	}
-	logger.Infof("Using QUIC with address %s", quicAddresses)
 
 	waitMsBetweenTxs, _ := gocore.Config().GetInt("distributer_wait_time", 0)
-	logger.Infof("wait time between txs: %d", waitMsBetweenTxs)
+	logger.Infof("wait time between txs: %d ms\n", waitMsBetweenTxs)
 
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"txblaster2"},
 	}
-	quicStreams := make([]quic.Stream, len(quicAddresses))
-	ctx := context.Background()
-	var err error
-	var session quic.Connection
-	config := &quic.Config{
-		MaxIdleTimeout: 5 * time.Minute,
-		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
+
+	client := &http.Client{
+		Transport: &http3.RoundTripper{
+			TLSClientConfig: tlsConf,
+		},
 	}
-	// defer session.CloseWithError(0, "closing")
-	for i, quicAddress := range quicAddresses {
-		session, err = quic.DialAddr(ctx, quicAddress, tlsConf, config)
-		if err != nil {
-			return nil, err
-		}
-		quicStream, err = session.OpenStreamSync(ctx)
-		if err != nil {
-			return nil, err
-		}
-		quicStreams[i] = quicStream
-	}
+	defer client.CloseIdleConnections()
 
 	d := &Distributor{
 		logger:             logger,
@@ -142,8 +129,8 @@ func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, er
 		failureTolerance:   50,
 		useQuic:            true,
 		quicAddresses:      quicAddresses,
-		quicStreams:        quicStreams,
 		waitMsBetweenTxs:   waitMsBetweenTxs,
+		httpClient:         client,
 	}
 
 	for _, opt := range opts {
@@ -175,8 +162,8 @@ func (d *Distributor) Clone() (*Distributor, error) {
 		failureTolerance:   d.failureTolerance,
 		useQuic:            d.useQuic,
 		quicAddresses:      d.quicAddresses,
-		quicStreams:        d.quicStreams,
 		waitMsBetweenTxs:   d.waitMsBetweenTxs,
+		httpClient:         d.httpClient,
 	}
 
 	return newDist, nil
@@ -202,19 +189,27 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		var err error
 
 		txBytes := tx.ExtendedBytes()
-		// Send the length of the transaction first
+		// Write the length of the transaction to buffer
 		txLength := uint32(len(txBytes))
-		for _, qs := range d.quicStreams {
-			err = binary.Write(qs, binary.BigEndian, txLength)
-			if err != nil {
-				d.logger.Errorf("Error writing transaction length: %v", err)
-				return nil, err
-			}
+		var buf bytes.Buffer
+		err = binary.Write(&buf, binary.BigEndian, txLength)
+		if err != nil {
+			d.logger.Errorf("Error writing transaction length: %v", err)
+			return nil, err
+		}
 
-			// Send the raw transaction
-			_, err = qs.Write(txBytes)
+		// Write raw transaction to buffer
+		_, err = buf.Write(txBytes)
+		if err != nil {
+			d.logger.Errorf("Failed to write transaction data: %v", err)
+			return nil, err
+		}
+		for _, qa := range d.quicAddresses {
+			qa = fmt.Sprintf("%s/tx", qa)
+			// send data
+			_, err := d.httpClient.Post(qa, "application/octet-stream", bytes.NewReader(buf.Bytes()))
 			if err != nil {
-				d.logger.Errorf("Error writing raw transaction to stream: %v", err)
+				d.logger.Errorf("Failed to post data: %v", err)
 				return nil, err
 			}
 		}
