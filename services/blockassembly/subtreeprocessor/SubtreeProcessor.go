@@ -1,10 +1,14 @@
 package subtreeprocessor
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -686,22 +690,18 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 		st := subtreeHash
 		g.Go(func() error {
 			stp.logger.Debugf("getting subtree: %s", st.String())
-			var subtree *util.Subtree
-
 			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:])
 			if err != nil {
 				return errors.Join(fmt.Errorf("error getting subtree: %s", st.String()), err)
 			}
 
-			subtree = &util.Subtree{}
-			// TODO deserialize only the hashes, we don't need any of the rest
-			err = subtree.DeserializeFromReader(subtreeReader)
+			txHashBuckets, err := DeserializeHashesFromReaderIntoBuckets(subtreeReader, transactionMap.Buckets())
 			if err != nil {
 				return errors.Join(fmt.Errorf("error deserializing subtree: %s", st.String()), err)
 			}
 
-			for _, node := range subtree.Nodes {
-				_ = transactionMap.Put(node.Hash, 0)
+			for bucket, hashes := range txHashBuckets {
+				_ = transactionMap.PutMulti(bucket, hashes)
 			}
 
 			return nil
@@ -717,4 +717,47 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(time.Since(startTime).Seconds())
 
 	return transactionMap, nil
+}
+
+func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][][32]byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered in DeserializeHashesFromReaderIntoBuckets: %v", r)
+		}
+	}()
+
+	buf := bufio.NewReader(reader)
+	if _, err = buf.Discard(48); err != nil { // skip headers
+		return nil, fmt.Errorf("unable to read header: %v", err)
+	}
+
+	// read number of leaves
+	bytes8 := make([]byte, 8)
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return nil, fmt.Errorf("unable to read number of leaves: %v", err)
+	}
+	numLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	// read leaves
+	hashes = make(map[uint16][][32]byte, nBuckets)
+	for i := uint16(0); i < nBuckets; i++ {
+		hashes[i] = make([][32]byte, 0, int(math.Ceil(float64(numLeaves/uint64(nBuckets))*1.1)))
+	}
+
+	hash := chainhash.Hash{}
+	var bucket uint16
+	for i := uint64(0); i < numLeaves; i++ {
+		if _, err = io.ReadFull(buf, hash[:]); err != nil {
+			return nil, fmt.Errorf("unable to read node: %v", err)
+		}
+		bucket = util.Bytes2Uint16Buckets(hash, nBuckets)
+		hashes[bucket] = append(hashes[bucket], hash)
+
+		// read rest of the bytes
+		if _, err = buf.Discard(16); err != nil { // skip headers
+			return nil, fmt.Errorf("unable to read fees and size: %v", err)
+		}
+	}
+
+	return hashes, nil
 }

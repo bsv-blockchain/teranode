@@ -16,7 +16,7 @@ type TxMap interface {
 }
 
 type SwissMap struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	m      *swiss.Map[[32]byte, struct{}]
 	length int
 }
@@ -28,16 +28,16 @@ func NewSwissMap(length int) *SwissMap {
 }
 
 func (s *SwissMap) Exists(hash [32]byte) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	_, ok := s.m.Get(hash)
 	return ok
 }
 
 func (s *SwissMap) Get(hash [32]byte) (uint64, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	_, ok := s.m.Get(hash)
 
@@ -51,6 +51,17 @@ func (s *SwissMap) Put(hash [32]byte) error {
 	s.length++
 
 	s.m.Put(hash, struct{}{})
+	return nil
+}
+
+func (s *SwissMap) PutMulti(hashes [][32]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, hash := range hashes {
+		s.m.Put(hash, struct{}{})
+		s.length++
+	}
 	return nil
 }
 
@@ -139,6 +150,10 @@ func NewSplitSwissMap(length int) *SplitSwissMap {
 	return m
 }
 
+func (g *SplitSwissMap) Buckets() uint16 {
+	return g.nrOfBuckets
+}
+
 func (g *SplitSwissMap) Exists(hash [32]byte) bool {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
@@ -149,6 +164,9 @@ func (g *SplitSwissMap) Get(hash [32]byte) (uint64, bool) {
 
 func (g *SplitSwissMap) Put(hash [32]byte, n uint64) error {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash)
+}
+func (g *SplitSwissMap) PutMulti(bucket uint16, hashes [][32]byte) error {
+	return g.m[bucket].PutMulti(hashes)
 }
 
 func (g *SplitSwissMap) Length() int {

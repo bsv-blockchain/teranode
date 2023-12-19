@@ -993,10 +993,19 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		_ = pprof.WriteHeapProfile(f)
 
 		assert.Equal(t, int(subtreeSize)*nrSubtrees, transactionMap.Length())
+
+		start = time.Now()
+		var wg sync.WaitGroup
 		for _, subtree := range subtrees {
-			for i := 0; i < int(subtreeSize); i++ {
-				assert.True(t, transactionMap.Exists(subtree.Nodes[i].Hash))
-			}
+			wg.Add(1)
+			go func(subtree *util.Subtree) {
+				defer wg.Done()
+				for i := 0; i < int(subtreeSize); i++ {
+					assert.True(t, transactionMap.Exists(subtree.Nodes[i].Hash))
+				}
+			}(subtree)
 		}
+		wg.Wait()
+		t.Logf("Time taken to read: %s\n", time.Since(start))
 	})
 }
