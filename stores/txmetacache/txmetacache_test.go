@@ -2,8 +2,10 @@ package txmetacache
 
 import (
 	"context"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -53,6 +55,13 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
 
+	runtime.SetCPUProfileRate(500)
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
 	b.ResetTimer()
 
 	g := errgroup.Group{}
@@ -65,23 +74,44 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 
 	err := g.Wait()
 	require.NoError(b, err)
+
+	// f, _ = os.Create("mem.prof")
+	// defer f.Close()
+	// _ = pprof.WriteHeapProfile(f)
+
 }
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 1000, 1)
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 10, 3)
 	cache := c.(*TxMetaCache)
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 30; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
 		_ = cache.SetCache(&hash, &txmeta.Data{})
 	}
 
-	for i := 0; i < 1000; i++ {
+	require.Equal(t, 30, cache.Length(), "map should be full")
+
+	hash := chainhash.HashH([]byte(string(rune(-1))))
+	_ = cache.SetCache(&hash, &txmeta.Data{})
+
+	require.Equal(t, 21, cache.Length(), "map should have expired 9 items")
+}
+
+func Benchmark_txtMetaCache_Expiry(b *testing.B) {
+	ctx := context.Background()
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), b.N, 5)
+	cache := c.(*TxMetaCache)
+
+	hashes := make([]chainhash.Hash, b.N)
+	for i := 0; i < b.N; i++ {
+		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
-	require.Equal(t, int64(1000), cache.cacheTTLQueue.length(), "queue should be full")
 
-	time.Sleep(2 * time.Second)
+	b.ResetTimer()
 
-	require.Equal(t, int64(0), cache.cacheTTLQueue.length(), "queue should be empty")
+	for i := 0; i < b.N; i++ {
+		_ = cache.SetCache(&hashes[i], &txmeta.Data{})
+	}
 }
