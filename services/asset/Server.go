@@ -235,7 +235,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("The main server has ended with error: %w", err)
+		return fmt.Errorf("the main server has ended with error: %w", err)
 	}
 
 	return nil
@@ -248,14 +248,14 @@ func (v *Server) Stop(ctx context.Context) error {
 	if v.grpcServer != nil {
 		v.logger.Infof("[Asset] Stopping grpc server")
 		if err := v.grpcServer.Stop(ctx); err != nil {
-			v.logger.Errorf("[Asset] error stopping grpc server", "error", err)
+			v.logger.Errorf("[Asset] error stopping grpc server: %v", err)
 		}
 	}
 
 	if v.httpServer != nil {
 		v.logger.Infof("[Asset] Stopping http server")
 		if err := v.httpServer.Stop(ctx); err != nil {
-			v.logger.Errorf("[Asset] error stopping http server", "error", err)
+			v.logger.Errorf("[Asset] error stopping http server: %v", err)
 		}
 	}
 
