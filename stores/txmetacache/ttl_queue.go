@@ -1,4 +1,4 @@
-package blockvalidation
+package txmetacache
 
 import (
 	"sync/atomic"
@@ -18,23 +18,23 @@ type ttlQueueItem struct {
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
 type LockFreeTTLQueue struct {
-	head         atomic.Pointer[ttlQueueItem]
-	tail         *ttlQueueItem
-	previousTail *ttlQueueItem
-	queueLength  atomic.Int64
+	head           atomic.Pointer[ttlQueueItem]
+	tail           *ttlQueueItem
+	previousTail   *ttlQueueItem
+	queueLength    atomic.Int64
+	maxQueueLength int64
 }
 
-// NewLockFreeTTLQueue creates and initializes a LockFreeQueue
-func NewLockFreeTTLQueue() *LockFreeTTLQueue {
+func NewLockFreeTTLQueue(maxLength int64) *LockFreeTTLQueue {
 	firstTail := &ttlQueueItem{}
 	lf := &LockFreeTTLQueue{
-		head:         atomic.Pointer[ttlQueueItem]{},
-		tail:         firstTail,
-		previousTail: firstTail,
-		queueLength:  atomic.Int64{},
+		head:           atomic.Pointer[ttlQueueItem]{},
+		tail:           firstTail,
+		previousTail:   firstTail,
+		queueLength:    atomic.Int64{},
+		maxQueueLength: maxLength,
 	}
-
-	lf.head.Store(nil)
+	lf.head.Store(firstTail)
 
 	return lf
 }
@@ -49,10 +49,13 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 	v.time = time.Now().UnixMilli()
 	prev := q.head.Swap(v)
 	if prev == nil {
-		q.tail.next.Store(v)
-		return
+		// Queue was empty, update both head and tail to the new item.
+		q.tail = v
+		q.previousTail = v
+	} else {
+		prev.next.Store(v)
 	}
-	prev.next.Store(v)
+
 	q.queueLength.Add(1)
 }
 
@@ -60,7 +63,10 @@ func (q *LockFreeTTLQueue) enqueue(v *ttlQueueItem) {
 // dequeue is not thread safe, it should only be called from a single thread !!!
 func (q *LockFreeTTLQueue) dequeue(upTill int64) *ttlQueueItem {
 	next := q.tail.next.Load()
-	if next == nil || next == q.previousTail || (upTill > 0 && next.time > upTill) {
+	if next == nil || next == q.previousTail {
+		return nil
+	}
+	if q.queueLength.Load() <= q.maxQueueLength && upTill > 0 && next.time > upTill {
 		return nil
 	}
 

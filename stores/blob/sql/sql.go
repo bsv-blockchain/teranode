@@ -16,6 +16,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/labstack/gommon/random"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -25,12 +26,12 @@ import (
 
 type SQL struct {
 	url    *url.URL
-	db     *sql.DB
+	db     *usql.DB
 	logger ulogger.Logger
 }
 
 func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
-	var db *sql.DB
+	var db *usql.DB
 	var err error
 	var q string
 
@@ -49,7 +50,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 
 		dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable host=%s port=%d", dbUser, dbPassword, dbName, dbHost, dbPort)
 
-		db, err = sql.Open(storeUrl.Scheme, dbInfo)
+		db, err = usql.Open(storeUrl.Scheme, dbInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open postgres DB: %+v", err)
 		}
@@ -81,7 +82,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 			filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=10000&_pragma=journal_mode=WAL", filename)
 		}
 
-		db, err = sql.Open("sqlite", filename)
+		db, err = usql.Open("sqlite", filename)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open sqlite DB: %+v", err)
 		}
@@ -153,7 +154,7 @@ func (m *SQL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error
 		return nil, err
 	}
 
-	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (m *SQL) Get(_ context.Context, hash []byte) ([]byte, error) {

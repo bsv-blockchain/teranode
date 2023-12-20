@@ -1,14 +1,20 @@
 package blockassembly
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type WrapperInterface interface {
@@ -20,17 +26,36 @@ type WrapperInterface interface {
 type Wrapper struct {
 	logger                ulogger.Logger
 	store                 blob.Store
+	localTTLCache         blob.Store
+	localTTL              time.Duration
 	AssetClient           WrapperInterface
 	blockValidationClient WrapperInterface
 }
 
 func NewRemoteTTLWrapper(logger ulogger.Logger, store blob.Store, AssetClient, blockValidationClient WrapperInterface) (*Wrapper, error) {
-	return &Wrapper{
+	w := &Wrapper{
 		logger:                logger,
 		store:                 store,
 		AssetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
-	}, nil
+	}
+
+	localTTLCacheDir, ok := gocore.Config().Get("blockassembly_localTTLCache", "")
+	if ok {
+		localTTLCacheDirs := strings.Split(localTTLCacheDir, "|")
+		for i, item := range localTTLCacheDirs {
+			localTTLCacheDirs[i] = strings.TrimSpace(item)
+		}
+
+		var err error
+		if w.localTTLCache, err = file.New(logger, localTTLCacheDir, localTTLCacheDirs); err != nil {
+			return nil, fmt.Errorf("failed to create local ttl store: %w", err)
+		}
+		// TODO make configurable
+		w.localTTL = 120 * time.Minute
+	}
+
+	return w, nil
 }
 
 func (r Wrapper) Health(ctx context.Context) (int, string, error) {
@@ -42,21 +67,100 @@ func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
 }
 
 func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
-	return r.store.GetIoReader(ctx, key)
-}
+	// first get from local ttl cache
+	if r.localTTLCache != nil {
+		subtreeReader, err := r.localTTLCache.GetIoReader(ctx, key)
+		if err != nil {
+			if !errors.Is(err, options.ErrNotFound) {
+				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+			}
+		}
 
-func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
-	subtreeBytes, _ := r.blockValidationClient.Get(ctx, key)
-	if subtreeBytes == nil {
-		subtreeBytes, _ = r.AssetClient.Get(ctx, key)
-		if subtreeBytes == nil {
-			return r.store.Get(ctx, key)
-		} else {
-			r.logger.Warnf("Using asset service in block assembly for subtree %x", key)
+		if err == nil && subtreeReader != nil {
+			prometheusBlockAssemblyLocalTTLCacheHit.Inc()
+			return subtreeReader, nil
 		}
 	}
 
-	return subtreeBytes, nil
+	// try block validation service
+	subtreeBytes, err := r.blockValidationClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Warnf("using block validation service in block assembly for subtree %x error: %v", key, err)
+	}
+	if subtreeBytes != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		return io.NopCloser(bytes.NewReader(subtreeBytes)), nil
+	}
+
+	// try asset client
+	r.logger.Warnf("using block validation service in block assembly for subtree %x failed", key)
+	subtreeBytes, err = r.AssetClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Errorf("using asset client in block assembly for subtree %x error: %v", key, err)
+	}
+	if subtreeBytes != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		return io.NopCloser(bytes.NewReader(subtreeBytes)), nil
+	}
+
+	// try store
+	r.logger.Warnf("using asset client in block assembly for subtree %x failed", key)
+	subtreeBytes, err = r.store.Get(ctx, key)
+
+	// set in local ttl cache
+	if subtreeBytes != nil && r.localTTLCache != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		if err = r.localTTLCache.Set(ctx, key, subtreeBytes, options.WithTTL(r.localTTL)); err != nil {
+			r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+		}
+	}
+
+	return io.NopCloser(bytes.NewReader(subtreeBytes)), err
+}
+
+func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
+	// first get from local ttl cache
+	if r.localTTLCache != nil {
+		subtreeBytes, err := r.localTTLCache.Get(ctx, key)
+		if err != nil {
+			if !errors.Is(err, options.ErrNotFound) {
+				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+			}
+		}
+
+		if subtreeBytes != nil {
+			prometheusBlockAssemblyLocalTTLCacheHit.Inc()
+			return subtreeBytes, nil
+		}
+	}
+
+	subtreeBytes, err := r.blockValidationClient.Get(ctx, key)
+	if err != nil {
+		r.logger.Warnf("using block validation service in block assembly for subtree %x error: %v", key, err)
+	}
+
+	if subtreeBytes == nil {
+		r.logger.Warnf("using block validation service in block assembly for subtree %x failed", key)
+		subtreeBytes, err = r.AssetClient.Get(ctx, key)
+		if err != nil {
+			r.logger.Errorf("using asset client in block assembly for subtree %x error: %v", key, err)
+		}
+
+		if subtreeBytes == nil {
+			r.logger.Warnf("using asset client in block assembly for subtree %x failed", key)
+			subtreeBytes, err = r.store.Get(ctx, key)
+		}
+	}
+
+	// set in local ttl cache
+	if subtreeBytes != nil && r.localTTLCache != nil {
+		prometheusBlockAssemblyLocalTTLCacheMiss.Inc()
+		if err = r.localTTLCache.Set(ctx, key, subtreeBytes, options.WithTTL(r.localTTL)); err != nil {
+			r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+		}
+	}
+
+	return subtreeBytes, err
 }
 
 func (r Wrapper) SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error {
@@ -69,6 +173,13 @@ func (r Wrapper) SetFromReader(ctx context.Context, key []byte, value io.ReadClo
 }
 
 func (r Wrapper) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+	// first set in local ttl cache
+	if r.localTTLCache != nil {
+		if err := r.localTTLCache.Set(ctx, key, value, options.WithTTL(r.localTTL)); err != nil {
+			r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
+		}
+	}
+
 	return r.AssetClient.Set(ctx, key, value, opts...)
 }
 

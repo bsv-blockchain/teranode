@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
@@ -28,7 +27,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
 var (
@@ -42,7 +40,6 @@ var (
 	workerCount                     int
 	grpcClient                      propagation_api.PropagationAPIClient
 	// streamClient                    *propagation.StreamingClient
-	drpcClient        propagation_api.DRPCPropagationAPIClient
 	frpcClient        *propagation_api.Client
 	broadcastProtocol string
 	httpUrl           *url.URL
@@ -95,7 +92,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|drpc|frpc)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|frpc)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
@@ -123,16 +120,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
-
-	case "drpc":
-		if propagationDrpcAddress, ok := gocore.Config().Get("propagation_drpcAddress"); ok {
-			rawConn, err := net.Dial("tcp", propagationDrpcAddress)
-			if err != nil {
-				panic(err)
-			}
-			conn := drpcconn.New(rawConn)
-			drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
-		}
 
 	case "frpc":
 		if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
@@ -177,8 +164,6 @@ func Start() {
 		log.Printf("Starting %d stream worker(s)", workerCount)
 	case "http":
 		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
-	case "drpc":
-		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
 	case "frpc":
 		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
@@ -268,14 +253,6 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 	case "grpc":
 
 		_, err := grpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
-			Tx: txExtendedBytes,
-		})
-
-		return err
-
-	case "drpc":
-
-		_, err := drpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
 

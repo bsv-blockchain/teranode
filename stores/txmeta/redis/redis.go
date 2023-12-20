@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"strings"
@@ -186,9 +187,9 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (r *Redis) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (r *Redis) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = r.SetMined(ctx, hash, blockHash); err != nil {
+		if err = r.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -196,9 +197,12 @@ func (r *Redis) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	return nil
 }
 
-// SetMined uses a lua script to update the block hash of a transaction
-func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockHash.CloneBytes()).Result()
+// SetMined uses a lua script to update the block id (bytes) of a transaction
+func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
+	var blockBytes [4]byte
+	binary.LittleEndian.PutUint32(blockBytes[:], blockID)
+
+	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockBytes[:]).Result()
 	if err != nil {
 		return err
 	}

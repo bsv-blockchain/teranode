@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockValidationAPI_Health_FullMethodName       = "/blockvalidation_api.BlockValidationAPI/Health"
+	BlockValidationAPI_HealthGRPC_FullMethodName   = "/blockvalidation_api.BlockValidationAPI/HealthGRPC"
 	BlockValidationAPI_BlockFound_FullMethodName   = "/blockvalidation_api.BlockValidationAPI/BlockFound"
 	BlockValidationAPI_SubtreeFound_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SubtreeFound"
 	BlockValidationAPI_Get_FullMethodName          = "/blockvalidation_api.BlockValidationAPI/Get"
@@ -31,7 +31,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BlockValidationAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
@@ -46,9 +46,9 @@ func NewBlockValidationAPIClient(cc grpc.ClientConnInterface) BlockValidationAPI
 	return &blockValidationAPIClient{cc}
 }
 
-func (c *blockValidationAPIClient) Health(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *blockValidationAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (c *blockValidationAPIClient) SetTxMeta(ctx context.Context, in *SetTxMetaR
 // for forward compatibility
 type BlockValidationAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *EmptyMessage) (*HealthResponse, error)
+	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	BlockFound(context.Context, *BlockFoundRequest) (*EmptyMessage, error)
 	SubtreeFound(context.Context, *SubtreeFoundRequest) (*EmptyMessage, error)
 	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
@@ -108,8 +108,8 @@ type BlockValidationAPIServer interface {
 type UnimplementedBlockValidationAPIServer struct {
 }
 
-func (UnimplementedBlockValidationAPIServer) Health(context.Context, *EmptyMessage) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedBlockValidationAPIServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) BlockFound(context.Context, *BlockFoundRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BlockFound not implemented")
@@ -136,20 +136,20 @@ func RegisterBlockValidationAPIServer(s grpc.ServiceRegistrar, srv BlockValidati
 	s.RegisterService(&BlockValidationAPI_ServiceDesc, srv)
 }
 
-func _BlockValidationAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _BlockValidationAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).Health(ctx, in)
+		return srv.(BlockValidationAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockValidationAPI_Health_FullMethodName,
+		FullMethod: BlockValidationAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).Health(ctx, req.(*EmptyMessage))
+		return srv.(BlockValidationAPIServer).HealthGRPC(ctx, req.(*EmptyMessage))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -234,8 +234,8 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*BlockValidationAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _BlockValidationAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _BlockValidationAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "BlockFound",

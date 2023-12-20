@@ -40,6 +40,7 @@ type BlockAssembler struct {
 	bestBlockHeight          uint32
 	currentChain             []*model.BlockHeader
 	currentChainMap          map[chainhash.Hash]uint32
+	currentChainMapIDs       map[uint32]struct{}
 	currentChainMapMu        sync.RWMutex
 	blockchainSubscriptionCh chan *model.Notification
 	maxBlockReorgRollback    int
@@ -60,6 +61,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
 		miningCandidateCh:     make(chan chan *miningCandidateResponse),
 		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
+		currentChainMapIDs:    make(map[uint32]struct{}, maxBlockReorgCatchup),
 		maxBlockReorgRollback: maxBlockReorgRollback,
 		maxBlockReorgCatchup:  maxBlockReorgCatchup,
 	}
@@ -251,11 +253,23 @@ func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
 		return fmt.Errorf("error getting block headers from blockchain: %v", err)
 	}
 
+	ids, err := b.blockchainClient.GetBlockHeaderIDs(ctx, b.bestBlockHeader.Hash(), uint64(b.maxBlockReorgCatchup))
+	if err != nil {
+		return fmt.Errorf("error getting block headers from blockchain: %v", err)
+	}
+
 	b.currentChainMapMu.Lock()
+
 	b.currentChainMap = make(map[chainhash.Hash]uint32, len(b.currentChain))
 	for _, blockHeader := range b.currentChain {
 		b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
 	}
+
+	b.currentChainMapIDs = make(map[uint32]struct{}, len(ids))
+	for _, id := range ids {
+		b.currentChainMapIDs[id] = struct{}{}
+	}
+
 	b.currentChainMapMu.Unlock()
 
 	return nil
@@ -268,6 +282,13 @@ func (b *BlockAssembler) GetCurrentChainMap() map[chainhash.Hash]uint32 {
 	return b.currentChainMap
 }
 
+func (b *BlockAssembler) GetCurrentChainMapIDs() map[uint32]struct{} {
+	b.currentChainMapMu.RLock()
+	defer b.currentChainMapMu.RUnlock()
+
+	return b.currentChainMapIDs
+}
+
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
@@ -275,6 +296,10 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
 	b.subtreeProcessor.Add(node)
 	return nil
+}
+
+func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
+	return b.subtreeProcessor.Remove(hash)
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
@@ -309,7 +334,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree := util.NewTree(height)
+		topTree, err := util.NewTree(height)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
+		}
 		for _, subtree := range subtrees {
 			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}

@@ -80,6 +80,10 @@ func NewServer(logger ulogger.Logger) *Server {
 	}
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (v *Server) Init(ctx context.Context) error {
 	utxostoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
@@ -114,7 +118,7 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (v *Server) Health(_ context.Context, _ *emptypb.Empty) (*seeder_api.HealthResponse, error) {
+func (v *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*seeder_api.HealthResponse, error) {
 	return &seeder_api.HealthResponse{
 		Ok:        true,
 		Timestamp: timestamppb.New(time.Now()),

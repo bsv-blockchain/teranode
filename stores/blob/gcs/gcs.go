@@ -115,7 +115,7 @@ func (g *GCS) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error
 		return nil, err
 	}
 
-	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {

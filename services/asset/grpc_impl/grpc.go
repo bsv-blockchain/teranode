@@ -214,6 +214,14 @@ func (g *GRPC) Health(_ context.Context, _ *emptypb.Empty) (*asset_api.HealthRes
 	}, nil
 }
 
+func (g *GRPC) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*asset_api.HealthResponse, error) {
+	return &asset_api.HealthResponse{
+		Ok:        true,
+		Timestamp: timestamppb.New(time.Now()),
+	}, nil
+
+}
+
 func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest) (*asset_api.GetBlockResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {

@@ -50,7 +50,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 }
 
 func (c Client) Health(ctx context.Context) (*status_api.HealthResponse, error) {
-	return c.client.Health(ctx, &emptypb.Empty{})
+	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
 }
 
 func (c Client) AnnounceStatus(ctx context.Context, status *model.AnnounceStatusRequest) {

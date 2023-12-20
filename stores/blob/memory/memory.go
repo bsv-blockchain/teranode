@@ -67,7 +67,7 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 		return nil, err
 	}
 
-	return options.ReaderWrapper{Reader: bytes.NewBuffer(b), Closer: options.ReaderCloser{}}, nil
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {

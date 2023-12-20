@@ -132,7 +132,7 @@ func NewWorker(
 	rateLimit float64,
 	iterations int,
 	coinbaseClient *coinbase.Client,
-	distributor *distributor.Distributor,
+	txDistributor *distributor.Distributor,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -168,12 +168,18 @@ func NewWorker(
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
+	// clone the distributor so we create new connections for each worker
+	//txDistributor, err = txDistributor.Clone()
+	//if err != nil {
+	//	logger.Fatalf("error creating tx distributor: %v", err)
+	//}
+
 	return &Worker{
 		logger:            logger,
 		rateLimiter:       rateLimiter,
 		iterations:        iterations,
 		coinbaseClient:    coinbaseClient,
-		distributor:       distributor,
+		distributor:       txDistributor,
 		kafkaProducer:     kafkaProducer,
 		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,

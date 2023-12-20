@@ -9,7 +9,7 @@ import "google/protobuf/empty.proto";
 
 service UtxoStoreAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Store (StoreRequest) returns (google.protobuf.Empty) {}
   rpc Spend (Request) returns (google.protobuf.Empty) {}
   rpc Reset (Request) returns (google.protobuf.Empty) {}

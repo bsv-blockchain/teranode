@@ -83,7 +83,7 @@ The following datastores are supported (either in development / experimental or 
 4. **Redis**.
 
 5. **SQL**:
-    - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+    - SQL-based relational database implementations. At this point, only PostgreSQL is implemented.
 
 Notice how some of the databases are in-memory, while others are persistent (and shared with other services).
 
@@ -288,17 +288,14 @@ The following datastores are supported (either in development / experimental or 
     - https://redis.com.
 
 5. **SQL**:
-    - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+    - SQL-based relational database implementations like PostgreSQL.
     - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
       - https://www.postgresql.org.
-    - SQLite: A lightweight, file-based database, useful for smaller workloads.
-      - https://www.sqlite.org/index.html.
-    - SQLite in-memory: Offers faster data access since the database resides entirely in memory, similar to the Memory store but with SQL capabilities.
 
 - The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
 - Memory-based stores (like in-memory and Redis) are typically faster but may require additional persistence mechanisms.
 - Databases like Aerospike, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
-- Nullstore and SQLite (especially in-memory) are more appropriate for testing, development, or lightweight applications.
+- Nullstore is more appropriate for testing, development, or lightweight applications.
 
 - Aerospike or Redis are strongly recommended for Production usage.
 
@@ -389,9 +386,5 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 `utxostore.dev.[YOUR_USERNAME]=redis://localhost:${REDIS_PORT}`
 
 - **sql**: SQL-based implementation for the UTXO store.
-
-`utxostore.dev.[YOUR_USERNAME]=sqlite:///utxostore`
-
-or
 
 `utxostore.dev.[YOUR_USERNAME]=postgres://ubsv:ubsv@localhost:5432/ubsv`

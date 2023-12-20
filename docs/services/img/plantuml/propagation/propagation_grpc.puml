@@ -1,0 +1,36 @@
+@startuml
+
+participant "gRPC Client" as Client
+participant "gRPC Server" as Server
+participant "PropagationServer" as PropagationServer
+participant "Tx Store" as TxStore
+participant "Validation Service" as Validator
+
+Client -> Server: Send gRPC request (ProcessTransaction)
+activate Server
+
+Server -> PropagationServer: Invoke ProcessTransaction
+activate PropagationServer
+
+
+alt if transaction is valid
+    PropagationServer -> TxStore: storeTransaction(ctx, tx)
+    activate TxStore
+    TxStore --> PropagationServer: Storage confirmation
+    deactivate TxStore
+    PropagationServer --> Server: Send success response
+else if transaction is invalid
+    PropagationServer --> Server: Send error response
+end
+
+
+PropagationServer -> Validator: Validate(ctx, tx)
+activate Validator
+Validator --> PropagationServer: Validation response
+deactivate Validator
+
+deactivate PropagationServer
+Server -> Client: Return response
+deactivate Server
+
+@enduml

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/tests"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +18,7 @@ var (
 
 func TestRedis(t *testing.T) {
 	t.Run("Redis set", func(t *testing.T) {
-		db, err := NewRedisClient(redisUrl)
+		db, err := NewRedisClient(ulogger.TestLogger{}, redisUrl)
 		require.NoError(t, err)
 		err = db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
 		require.NoError(t, err)
@@ -27,13 +28,13 @@ func TestRedis(t *testing.T) {
 }
 
 func TestRedisSanity(t *testing.T) {
-	db, err := NewRedisClient(redisUrl)
+	db, err := NewRedisClient(ulogger.TestLogger{}, redisUrl)
 	require.NoError(t, err)
 	tests.Sanity(t, db)
 }
 
 func BenchmarkRedis(b *testing.B) {
-	db, err := NewRedisClient(redisUrl)
+	db, err := NewRedisClient(ulogger.TestLogger{}, redisUrl)
 	require.NoError(b, err)
 	tests.Benchmark(b, db)
 }

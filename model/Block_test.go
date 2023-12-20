@@ -2,9 +2,19 @@ package model
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -98,4 +108,230 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, uint64(1), block.TransactionCount)
 		assert.Equal(t, uint64(215), block.SizeInBytes)
 	})
+}
+
+func TestMedianTimestamp(t *testing.T) {
+
+	timestamps := make([]time.Time, 11)
+	for i := range timestamps {
+		timestamps[i] = time.Unix(int64(i), 0)
+	}
+
+	t.Run("test for correct median time", func(t *testing.T) {
+		expected := timestamps[5]
+		median, err := medianTimestamp(timestamps)
+
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+
+	t.Run("test for correct median time unsorted", func(t *testing.T) {
+		expected := timestamps[6]
+		// add a new high timestamp out of sequence
+		timestamps[5] = time.Unix(int64(20), 0)
+		median, err := medianTimestamp(timestamps)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+	t.Run("test for correct median time unsorted 2", func(t *testing.T) {
+		expected := timestamps[4]
+		// add a new low timestamp out of sequence
+		timestamps[5] = time.Unix(int64(1), 0)
+		median, err := medianTimestamp(timestamps)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+	t.Run("test for less than 11 timestamps", func(t *testing.T) {
+		expected := timestamps[5]
+		median, err := medianTimestamp(timestamps[:10])
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if !median.Equal(expected) {
+			t.Errorf("Expected median %v, got %v", expected, *median)
+		}
+	})
+}
+
+func TestBlock_Valid(t *testing.T) {
+
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		SizeInBytes:      123,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	subtreeStore, _ := null.New(ulogger.TestLogger{})
+	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+
+	currentChain := make([]*BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			// set the last 11 block header timestamps to be less than the current timestamps
+			Timestamp: 1231469665 - uint32(i),
+		}
+		currentChainIDs[i] = uint32(i)
+	}
+	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain, currentChainIDs)
+	require.NoError(t, err)
+	require.True(t, v)
+
+}
+
+func TestGetAndValidateSubtrees(t *testing.T) {
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
+
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		SizeInBytes:      123,
+		Subtrees: []*chainhash.Hash{
+			subtreeHash,
+		},
+	}
+
+	mockBlobStore, _ := New(ulogger.TestLogger{})
+	err = b.GetAndValidateSubtrees(context.Background(), mockBlobStore)
+	require.NoError(t, err)
+}
+
+func TestCheckDuplicateTransactions(t *testing.T) {
+	leafCount := 4
+	subtree, err := util.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+
+	// create a slice of random hashes
+	hashes := make([]*chainhash.Hash, leafCount)
+	for i := 0; i < leafCount; i++ {
+		// create random 32 bytes
+		bytes := make([]byte, 32)
+		_, _ = rand.Read(bytes)
+		hashes[i], _ = chainhash.NewHash(bytes)
+	}
+
+	for i := 0; i < leafCount-1; i++ {
+		_ = subtree.AddNode(*hashes[i], 111, 0)
+	}
+	// add the same hash twice
+	_ = subtree.AddNode(*hashes[0], 111, 0)
+
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		SizeInBytes:      123,
+		Subtrees: []*chainhash.Hash{
+			subtree.RootHash(),
+		},
+		SubtreeSlices: []*util.Subtree{subtree},
+	}
+	err = b.checkDuplicateTransactions(context.Background())
+	require.Error(t, err)
+}
+
+type BlobStoreStub struct {
+	logger ulogger.Logger
+}
+
+func New(logger ulogger.Logger) (*BlobStoreStub, error) {
+	logger = logger.New("null")
+
+	return &BlobStoreStub{
+		logger: logger,
+	}, nil
+}
+
+func (n *BlobStoreStub) Health(_ context.Context) (int, string, error) {
+	return 0, "BlobStoreStub Store", nil
+}
+
+func (n *BlobStoreStub) Close(_ context.Context) error {
+	return nil
+}
+
+func (n *BlobStoreStub) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.Options) error {
+	return nil
+}
+
+func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) error {
+	return nil
+}
+
+func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+	return nil
+}
+
+func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+	path := filepath.Join("testdata", "testSubtreeHex.bin")
+
+	// read the file
+	subtreeReader, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %s", err)
+	}
+
+	return subtreeReader, nil
+}
+
+func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
+	path := filepath.Join("testdata", "testSubtreeHex.bin")
+
+	// read the file
+	subtreeBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %s", err)
+	}
+
+	return subtreeBytes, nil
+}
+
+func (n *BlobStoreStub) Exists(_ context.Context, _ []byte) (bool, error) {
+	return false, nil
+}
+
+func (n *BlobStoreStub) Del(_ context.Context, _ []byte) error {
+	return nil
 }

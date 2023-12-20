@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,7 +91,7 @@ type Block struct {
 	hash            *chainhash.Hash
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           *util.SplitSwissMapUint64
+	txMap           util.TxMap
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
@@ -191,7 +193,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, currentChain []*BlockHeader) (bool, error) {
+func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, currentChain []*BlockHeader, currentChainIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -205,19 +207,40 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		return false, fmt.Errorf("invalid block header: %s - %v", b.Header.Hash().String(), err)
 	}
 
-	// empty blocks are valid
-	//if len(b.Subtrees) == 0 {
-	//	return false, fmt.Errorf("block has no subtrees")
-	//}
-
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	if b.Header.Timestamp > uint32(time.Now().Add(2*time.Hour).Unix()) {
 		return false, fmt.Errorf("block timestamp is more than two hours in the future")
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	// TODO
+	// if we don't have 11 blocks then use what we have
+	pruneLength := 11
+	currentChainLength := len(currentChain)
+	// if the current chain length is 0 skip this test
+	if currentChainLength > 0 {
+		if currentChainLength < pruneLength {
+			pruneLength = currentChainLength
+		}
 
+		// prune the last few timestamps from the current chain
+		lastTimeStamps := currentChain[currentChainLength-pruneLength:]
+		prevTimeStamps := make([]time.Time, pruneLength)
+		for i, bh := range lastTimeStamps {
+			prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+		}
+
+		// TODO fix this for test mode when generating lots of blocks quickly
+		// calculate the median timestamp
+		//ts, err := medianTimestamp(prevTimeStamps)
+		//if err != nil {
+		//	return false, err
+		//}
+
+		// validate that the block's timestamp is after the median timestamp
+		//if b.Header.Timestamp <= uint32(ts.Unix()) {
+		//return false, fmt.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, ts.Unix())
+		//}
+	}
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
 		return false, fmt.Errorf("block has no coinbase tx")
@@ -269,14 +292,14 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 		}
 	}
 
-	// // 12. Check that all transactions are in the valid order and blessed
-	// //     Can only be done with a valid texMetaStore passed in
-	// if txMetaStore != nil {
-	// 	err = b.validOrderAndBlessed(spanCtx, txMetaStore, currentChain)
-	// 	if err != nil {
-	// 		return false, err
-	// 	}
-	// }
+	// 12. Check that all transactions are in the valid order and blessed
+	//     Can only be done with a valid texMetaStore passed in
+	if txMetaStore != nil {
+		err = b.validOrderAndBlessed(spanCtx, txMetaStore, currentChainIDs)
+		if err != nil {
+			return false, err
+		}
+	}
 
 	return true, nil
 }
@@ -305,77 +328,123 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	span, _ := opentracing.StartSpanFromContext(ctx, "Block:checkDuplicateTransactions")
 	defer span.Finish()
 
+	g := errgroup.Group{}
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
+	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
 	for subIdx, subtree := range b.SubtreeSlices {
-		size := len(subtree.Nodes)
-		for txIdx, subtreeNode := range subtree.Nodes {
-			if b.txMap.Exists(subtreeNode.Hash) {
-				return fmt.Errorf("duplicate transaction %s", subtreeNode.Hash.String())
+		subIdx := subIdx
+		subtree := subtree
+		g.Go(func() (err error) {
+			for txIdx, subtreeNode := range subtree.Nodes {
+				// in a tx map, Put is mutually exclusive, can only be called once per key
+				err = b.txMap.Put(subtreeNode.Hash, uint64((subIdx*len(subtree.Nodes))+txIdx))
+				if err != nil {
+					return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
+				}
 			}
-			err := b.txMap.Put(subtreeNode.Hash, uint64((subIdx*size)+txIdx))
-			if err != nil {
-				return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
-			}
-		}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("error checking for duplicate transactions: %v", err)
 	}
 
 	return nil
 }
 
-// TODO this needs to be checked !!!
-// func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChain []*BlockHeader) error {
-// 	if b.txMap == nil {
-// 		return fmt.Errorf("txMap is nil, cannot check transaction order")
-// 	}
+func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
+	return nil
+}
 
-// 	for _, subtree := range b.subtreeSlices {
-// 		for _, subtreeNode := range subtree.Nodes {
-// 			if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
-// 				continue
-// 			}
+func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
+	if b.txMap == nil {
+		return fmt.Errorf("txMap is nil, cannot check transaction order")
+	}
 
-// 			txMeta, err := txMetaStore.Get(ctx, subtreeNode.Hash)
-// 			if err != nil {
-// 				return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
-// 			}
+	currentChainIDsMap := make(map[uint32]struct{}, len(currentChainIDs))
+	for _, id := range currentChainIDs {
+		currentChainIDsMap[id] = struct{}{}
+	}
 
-// 			if txMeta == nil {
-// 				return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
-// 			}
+	g, gCtx := errgroup.WithContext(ctx)
 
-// 			if len(txMeta.BlockHashes) > 0 {
-// 				// TODO check whether this tx is on our chain, it should NOT be
-// 				return fmt.Errorf("transaction %s is blessed by block(s) %s, not by block %s", subtreeNode.Hash.String(), txMeta.BlockHashes, b.Hash().String())
-// 			}
+	for sIdx, subtree := range b.SubtreeSlices {
+		sIdx := sIdx
+		subtree := subtree
+		g.Go(func() error {
+			for snIdx, subtreeNode := range subtree.Nodes {
+				if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
+					continue
+				}
 
-// 			txIdx, ok := b.txMap.Get(*subtreeNode.Hash)
-// 			if !ok {
-// 				return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
-// 			}
+				// ignore the very first transaction, is coinbase
+				if sIdx == 0 && snIdx == 0 {
+					continue
+				}
 
-// 			for _, parentTxHash := range txMeta.ParentTxHashes {
-// 				parentTxIdx, ok := b.txMap.Get(*parentTxHash)
-// 				if !ok {
-// 					// check whether the parent is in a block on our chain
-// 					parentTxMeta, err := txMetaStore.Get(ctx, parentTxHash)
-// 					if err != nil {
-// 						return errors.Join(err, fmt.Errorf("error getting parent transaction %s from txMetaStore", parentTxHash.String()))
-// 					}
-// 					if len(parentTxMeta.BlockHashes) > 0 {
-// 						// TODO check whether this block is on our chain, it should be
-// 						return nil
-// 					}
-// 				}
+				txIdx, ok := b.txMap.Get(subtreeNode.Hash)
+				if !ok {
+					return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
+				}
 
-// 				if parentTxIdx > txIdx {
-// 					return fmt.Errorf("transaction %s is before parent transaction %s", subtreeNode.Hash.String(), parentTxHash.String())
-// 				}
-// 			}
-// 		}
-// 	}
+				txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
+				if err != nil {
+					return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
+				}
 
-// 	return nil
-// }
+				if txMeta == nil {
+					return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
+				}
+
+				// check whether the transaction has already been mined in a block on our chain
+				if len(txMeta.BlockIDs) > 0 {
+					for _, blockID := range txMeta.BlockIDs {
+						if _, ok := currentChainIDsMap[blockID]; ok {
+							return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+						}
+					}
+				}
+
+				for _, parentTxHash := range txMeta.ParentTxHashes {
+					parentTxIdx, ok := b.txMap.Get(*parentTxHash)
+					if ok {
+						// parent tx was found in the same block as our tx, check idx
+						if parentTxIdx > txIdx {
+							return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+						}
+					} else {
+						// check whether the parent is in a block on our chain
+						parentTxMeta, err := txMetaStore.Get(gCtx, parentTxHash)
+						if err != nil && !errors.Is(err, txmetastore.ErrNotFound) {
+							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						}
+						if parentTxMeta != nil {
+							if len(parentTxMeta.BlockIDs) == 0 {
+								return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
+							} else {
+								for _, blockID := range parentTxMeta.BlockIDs {
+									if _, ok := currentChainIDsMap[blockID]; !ok {
+										return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("error validating transaction order: %v", err)
+	}
+
+	return nil
+}
 
 func (b *Block) GetSubtrees(subtreeStore blob.Store) ([]*util.Subtree, error) {
 	startTime := time.Now()
@@ -412,18 +481,19 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2)
+	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			subtreeBytes, err := subtreeStore.Get(gCtx, subtreeHash[:])
+			subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 			}
 
 			subtree := &util.Subtree{}
-			err = subtree.Deserialize(subtreeBytes)
+			err = subtree.DeserializeFromReader(subtreeReader)
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
 			}
@@ -456,8 +526,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	}
 
 	b.TransactionCount = txCount.Load()
-	// header + transaction count + size in bytes
-	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount)
+	// header + transaction count + size in bytes + coinbase tx size
+	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size())
 
 	// TODO something with conflicts
 
@@ -480,7 +550,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	for i, subtree := range b.SubtreeSlices {
 		if i == 0 {
 			// We need to inject the coinbase txid into the first position of the first subtree
-			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), uint64(b.CoinbaseTx.Size()), 0)
+			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
 		}
 
 		hashes[i] = *subtree.RootHash()
@@ -491,7 +561,11 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		calculatedMerkleRootHash = &hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
-		st := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		if err != nil {
+			return err
+		}
+
 		for _, hash := range hashes {
 			err = st.AddNode(hash, 1, 0)
 			if err != nil {
@@ -611,4 +685,31 @@ func (b *Block) Bytes() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
+	n := len(timestamps)
+
+	if n == 0 {
+		return nil, errors.New("no timestamps provided")
+	}
+
+	sort.Slice(timestamps, func(i, j int) bool {
+		return timestamps[i].Before(timestamps[j])
+	})
+
+	mid := n / 2
+	// NOTE: The consensus rules incorrectly calculate the median for even
+	// numbers of blocks.  A true median averages the middle two elements
+	// for a set with an even number of elements in it.   Since the constant
+	// for the previous number of blocks to be used is odd, this is only an
+	// issue for a few blocks near the beginning of the chain.  I suspect
+	// this is an optimization even though the result is slightly wrong for
+	// a few of the first blocks since after the first few blocks, there
+	// will always be an odd number of blocks in the set per the constant.
+	//
+	// This code follows suit to ensure the same rules are used, however, be
+	// aware that should the medianTimeBlocks constant ever be changed to an
+	// even number, this code will be wrong.
+	return &timestamps[mid], nil
 }

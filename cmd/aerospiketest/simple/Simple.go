@@ -8,13 +8,14 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Simple struct {
 	logger    ulogger.Logger
-	client    *aerospike.Client
+	client    *uaerospike.Client
 	namespace string
 	timeout   time.Duration
 }
@@ -29,7 +30,7 @@ func New(logger ulogger.Logger, timeoutStr string, addr string, port int, namesp
 
 	hosts = append(hosts, host)
 
-	client, err := aerospike.NewClientWithPolicyAndHost(nil, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHost(nil, hosts...)
 	if err != nil {
 		panic(err)
 	}

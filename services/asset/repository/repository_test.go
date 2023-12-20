@@ -69,7 +69,8 @@ func TestTransaction(t *testing.T) {
 func TestSubtree(t *testing.T) {
 	itemsPerSubtree := 2
 
-	subtree := util.NewTreeByLeafCount(itemsPerSubtree)
+	subtree, err := util.NewTreeByLeafCount(itemsPerSubtree)
+	require.NoError(t, err)
 
 	txns := make([]chainhash.Hash, itemsPerSubtree)
 
@@ -123,7 +124,8 @@ func TestSubtree(t *testing.T) {
 		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
 	}
 
-	subtree2 := util.NewTreeByLeafCount(len(b) / 32)
+	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
+	require.NoError(t, err)
 	for _, hash := range subtreeNodes {
 		err = subtree2.AddNode(hash, 0, 0)
 		require.NoError(t, err)

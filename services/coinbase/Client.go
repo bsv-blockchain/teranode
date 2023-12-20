@@ -59,7 +59,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 }
 
 func (c *Client) Health(ctx context.Context) (*coinbase_api.HealthResponse, error) {
-	return c.client.Health(ctx, &emptypb.Empty{})
+	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
 }
 
 // RequestFunds implements ClientI.

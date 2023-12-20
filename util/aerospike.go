@@ -10,12 +10,13 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 
 	"github.com/ordishs/gocore"
 )
 
 var aerospikeConnectionMutex sync.Mutex
-var aerospikeConnections map[string]*aerospike.Client
+var aerospikeConnections map[string]*uaerospike.Client
 
 var readMaxRetries int
 var readTimeout time.Duration
@@ -34,12 +35,13 @@ var writeExitFastOnExhaustedConnectionPool bool
 
 var batchTotalTimeout time.Duration
 var batchAllowInlineSSD bool
+var concurrentNodes int
 
 func init() {
-	aerospikeConnections = make(map[string]*aerospike.Client)
+	aerospikeConnections = make(map[string]*uaerospike.Client)
 }
 
-func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client, error) {
+func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client, error) {
 	logger = logger.New("uaero")
 
 	aerospikeConnectionMutex.Lock()
@@ -61,7 +63,7 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 	return client, nil
 }
 
-func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client, error) {
+func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client, error) {
 	if len(url.Path) < 1 {
 		return nil, fmt.Errorf("aerospike namespace not found")
 	}
@@ -113,6 +115,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 
 	batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 	batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
+	concurrentNodes = getQueryInt(batchPolicyUrl, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
 
 	policy := aerospike.NewClientPolicy()
 
@@ -131,7 +134,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 	policy.OpeningConnectionThreshold = getQueryInt(url, "OpeningConnectionThreshold", policy.OpeningConnectionThreshold, logger)
 
 	if url.User != nil {
-		policy.AuthMode = 2
+		policy.AuthMode = aerospike.AuthModeInternal
 
 		policy.User = url.User.Username()
 		var ok bool
@@ -169,7 +172,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*aerospike.Client,
 	logger.Debugf("url %s policy %#v\n", url, policy)
 
 	// policy = aerospike.NewClientPolicy()
-	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		return nil, err
 	}
@@ -338,6 +341,7 @@ func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 	batchPolicy := aerospike.NewBatchPolicy()
 	batchPolicy.TotalTimeout = batchTotalTimeout
 	batchPolicy.AllowInlineSSD = batchAllowInlineSSD
+	batchPolicy.ConcurrentNodes = concurrentNodes
 
 	return batchPolicy
 }

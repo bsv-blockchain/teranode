@@ -230,11 +230,15 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
+		g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(hash))
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
 	objectKey := g.getObjectKey(hash)
+
+	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
+	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)

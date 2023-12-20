@@ -39,7 +39,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 }
 
 func (c *Client) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*txmeta_api.HealthResponse, error) {
-	resp, err := c.client.Health(ctx, in, opts...)
+	resp, err := c.client.HealthGRPC(ctx, in, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,16 +65,10 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 		return nil, err
 	}
 
-	var blockHashes []*chainhash.Hash
-	blockHashes, err = getChainHashesFromBytes(resp.BlockHashes)
-	if err != nil {
-		return nil, err
-	}
-
 	return &txmeta.Data{
 		Fee:            resp.Fee,
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
+		BlockIDs:       resp.BlockIDs,
 	}, nil
 }
 
@@ -102,10 +96,10 @@ func (c *Client) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return txMeta, nil
 }
 
-func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
 	_, err := c.client.SetMined(ctx, &txmeta_api.SetMinedRequest{
-		Hash:      hash[:],
-		BlockHash: blockHash[:],
+		Hash:    hash[:],
+		BlockId: blockID,
 	})
 	if err != nil {
 		return err
@@ -114,9 +108,9 @@ func (c *Client) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *
 	return nil
 }
 
-func (c *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) error {
+func (c *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	for _, hash := range hashes {
-		if err := c.SetMined(ctx, hash, blockHash); err != nil {
+		if err := c.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}

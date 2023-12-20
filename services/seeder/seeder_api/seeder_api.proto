@@ -9,7 +9,7 @@ import "google/protobuf/empty.proto";
 
 service SeederAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc CreateSpendableTransactions(CreateSpendableTransactionsRequest) returns (google.protobuf.Empty) {}
   rpc NextSpendableTransaction(NextSpendableTransactionRequest) returns (NextSpendableTransactionResponse) {}
   rpc ShowAllSpendableTransactions(google.protobuf.Empty) returns (stream NextSpendableTransactionResponse) {}

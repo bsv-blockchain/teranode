@@ -2,7 +2,6 @@ package blockassembly
 
 import (
 	"context"
-	"net"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -12,12 +11,10 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
-	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
 	client     blockassembly_api.BlockAssemblyAPIClient
-	drpcClient blockassembly_api.DRPCBlockAssemblyAPIClient
 	frpcClient *blockassembly_api.Client
 	logger     ulogger.Logger
 	batchSize  int
@@ -66,9 +63,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 		batcher:   batcherInstance,
 	}
 
-	// Connect to experimental DRPC server if configured
-	go client.connectDRPC()
-
 	// Connect to experimental fRPC server if configured
 	// fRPC has only been implemented for AddTx / Store
 	client.connectFRPC()
@@ -99,28 +93,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
-func (s *Client) connectDRPC() {
-	func() {
-		err := recover()
-		if err != nil {
-			s.logger.Errorf("Error connecting to blockassembly DRPC: %s", err)
-		}
-	}()
-
-	blockAssemblyDrpcAddress, ok := gocore.Config().Get("blockassembly_drpcAddress")
-	if ok {
-		s.logger.Infof("Using DRPC connection to blockassembly")
-		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
-		rawConn, err := net.Dial("tcp", blockAssemblyDrpcAddress)
-		if err != nil {
-			s.logger.Errorf("Error connecting to blockassembly: %s", err)
-		}
-		conn := drpcconn.New(rawConn)
-		s.drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
-		s.logger.Infof("Connected to blockassembly DRPC server")
-	}
-}
-
 func (s *Client) connectFRPC() {
 	func() {
 		err := recover()
@@ -131,7 +103,7 @@ func (s *Client) connectFRPC() {
 
 	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -144,7 +116,7 @@ func (s *Client) connectFRPC() {
 
 			err = client.Connect(blockAssemblyFRPCAddress)
 			if err != nil {
-				s.logger.Warnf("Error connecting to fRPC server in blockassembly: %s", err)
+				s.logger.Infof("Error connecting to fRPC server in blockassembly: %s", err)
 				if i+1 == maxRetries {
 					break
 				}
@@ -189,12 +161,6 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 				return false, err
 			}
 
-		} else if s.drpcClient != nil {
-
-			if _, err := s.drpcClient.AddTx(ctx, req); err != nil {
-				return false, err
-			}
-
 		} else {
 
 			if _, err := s.client.AddTx(ctx, req); err != nil {
@@ -212,17 +178,18 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	return true, nil
 }
 
+func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	_, err := s.client.RemoveTx(ctx, &blockassembly_api.RemoveTxRequest{
+		Txid: hash[:],
+	})
+
+	return err
+}
+
 func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
 	req := &blockassembly_api.EmptyMessage{}
 
-	var err error
-	var res *model.MiningCandidate
-
-	if s.drpcClient != nil {
-		res, err = s.drpcClient.GetMiningCandidate(ctx, req)
-	} else {
-		res, err = s.client.GetMiningCandidate(ctx, req)
-	}
+	res, err := s.client.GetMiningCandidate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -231,24 +198,13 @@ func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate
 }
 
 func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
-	var err error
-	if s.drpcClient != nil {
-		_, err = s.drpcClient.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
-			Id:         solution.Id,
-			Nonce:      solution.Nonce,
-			CoinbaseTx: solution.Coinbase,
-			Time:       solution.Time,
-			Version:    solution.Version,
-		})
-	} else {
-		_, err = s.client.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
-			Id:         solution.Id,
-			Nonce:      solution.Nonce,
-			CoinbaseTx: solution.Coinbase,
-			Time:       solution.Time,
-			Version:    solution.Version,
-		})
-	}
+	_, err := s.client.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
+		Id:         solution.Id,
+		Nonce:      solution.Nonce,
+		CoinbaseTx: solution.Coinbase,
+		Time:       solution.Time,
+		Version:    solution.Version,
+	})
 	if err != nil {
 		return err
 	}
@@ -280,20 +236,6 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*blockass
 			TxRequests: fBatch,
 		}
 		resp, err := s.frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, txBatch)
-		if err != nil {
-			s.logger.Errorf("%v", err)
-			return
-		}
-		if len(resp.TxIdErrors) > 0 {
-			s.logger.Errorf("batch send to blockassembly returned %d failed transactions from %d batch", len(resp.TxIdErrors), len(batch))
-		}
-
-	} else if s.drpcClient != nil {
-
-		txBatch := &blockassembly_api.AddTxBatchRequest{
-			TxRequests: batch,
-		}
-		resp, err := s.drpcClient.AddTxBatch(ctx, txBatch)
 		if err != nil {
 			s.logger.Errorf("%v", err)
 			return

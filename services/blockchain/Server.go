@@ -79,6 +79,10 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 	}, nil
 }
 
+func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (b *Blockchain) Init(ctx context.Context) error {
 	return nil
 }
@@ -135,7 +139,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
-func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health", true).AddTime(start)
@@ -185,7 +189,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx1, block)
+	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
 	if err != nil {
 		return nil, err
 	}
@@ -414,6 +418,43 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	prometheusBlockchainSetState.Inc()
 
 	err := b.store.SetState(ctx1, req.Key, req.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
+	startHash, err := chainhash.NewHash(request.StartHash)
+	if err != nil {
+		return nil, err
+	}
+
+	ids, err := b.store.GetBlockHeaderIDs(ctx, startHash, request.NumberOfHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetBlockHeaderIDsResponse{
+		Ids: ids,
+	}, nil
+}
+
+func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "InvalidateBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainSetState.Inc()
+
+	blockHash, err := chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.store.InvalidateBlock(ctx1, blockHash)
 	if err != nil {
 		return nil, err
 	}

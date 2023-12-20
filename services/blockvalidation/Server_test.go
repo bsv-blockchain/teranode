@@ -33,11 +33,13 @@ var (
 )
 
 func TestOneTransaction(t *testing.T) {
+	var err error
 	subtrees := make([]*util.Subtree, 1)
 
-	subtrees[0] = util.NewTree(1)
+	subtrees[0], err = util.NewTree(1)
+	require.NoError(t, err)
 
-	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
+	err = subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
 	require.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
@@ -87,11 +89,13 @@ func TestTwoTransactions(t *testing.T) {
 
 	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
+	var err error
 	subtrees := make([]*util.Subtree, 1)
-	subtrees[0] = util.NewTree(1)
+	subtrees[0], err = util.NewTree(1)
+	require.NoError(t, err)
 
 	empty := &chainhash.Hash{}
-	err := subtrees[0].AddNode(*empty, 0, 0)
+	err = subtrees[0].AddNode(*empty, 0, 0)
 	require.NoError(t, err)
 
 	err = subtrees[0].AddNode(*txid1, 0, 0)
@@ -137,12 +141,15 @@ func TestTwoTransactions(t *testing.T) {
 }
 
 func TestMerkleRoot(t *testing.T) {
+	var err error
 	subtrees := make([]*util.Subtree, 2)
 
-	subtrees[0] = util.NewTreeByLeafCount(2) // height = 1
-	subtrees[1] = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1
+	require.NoError(t, err)
+	subtrees[1], err = util.NewTreeByLeafCount(2) // height = 1
+	require.NoError(t, err)
 
-	err := subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
+	err = subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
 	require.NoError(t, err)
 
 	hash1, err := chainhash.NewHashFromStr(txIds[1])

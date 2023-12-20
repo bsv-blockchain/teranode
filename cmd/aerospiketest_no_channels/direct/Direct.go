@@ -10,12 +10,13 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Direct struct {
 	logger    ulogger.Logger
-	client    *aerospike.Client
+	client    *uaerospike.Client
 	namespace string
 	timeout   time.Duration
 }
@@ -38,7 +39,7 @@ func New(logger ulogger.Logger, timeoutStr string, addr string, port int) *Direc
 
 	hosts = append(hosts, host)
 
-	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHost(policy, hosts...)
 	if err != nil {
 		panic(err)
 	}

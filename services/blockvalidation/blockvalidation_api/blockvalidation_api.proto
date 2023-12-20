@@ -6,7 +6,7 @@ package blockvalidation_api;
 
 service BlockValidationAPI {
   // Health returns the health of the API.
-  rpc Health (EmptyMessage) returns (HealthResponse) {}
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}

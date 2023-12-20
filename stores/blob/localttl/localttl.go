@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type LocalTTL struct {
@@ -110,19 +111,23 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 }
 
 func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
-	value, err := l.ttlStore.GetIoReader(ctx, key)
+	ioReader, err := l.ttlStore.GetIoReader(ctx, key)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
+		hash, _ := chainhash.NewHash(key)
+		l.logger.Warnf("LocalTTL.GetIoReader miss for %s", hash.String())
 		return l.blobStore.GetIoReader(ctx, key)
 	}
 
-	return value, nil
+	return ioReader, nil
 }
 
 func (l *LocalTTL) Get(ctx context.Context, key []byte) ([]byte, error) {
 	value, err := l.ttlStore.Get(ctx, key)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
+		hash, _ := chainhash.NewHash(key)
+		l.logger.Warnf("LocalTTL.Get miss for %s", hash.String())
 		return l.blobStore.Get(ctx, key)
 	}
 
@@ -133,6 +138,8 @@ func (l *LocalTTL) Exists(ctx context.Context, key []byte) (bool, error) {
 	found, err := l.ttlStore.Exists(ctx, key)
 	if err != nil || !found {
 		// couldn't find it in the ttl store, try the blob store
+		// hash, _ := chainhash.NewHash(key)
+		// l.logger.Warnf("LocalTTL.Exists miss for %s", hash.String())
 		return l.blobStore.Exists(ctx, key)
 	}
 

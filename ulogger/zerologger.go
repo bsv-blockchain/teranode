@@ -31,7 +31,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 		o(opts)
 	}
 
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+	if sentryDsn, ok := gocore.Config().Get("sentry_dsn"); ok {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
 		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
@@ -40,7 +40,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 		}
 
 		if err = sentry.Init(sentry.ClientOptions{
-			Dsn:        sentryDns,
+			Dsn:        sentryDsn,
 			ServerName: serviceName,
 
 			TracesSampleRate: tracesSampleRate,
@@ -64,7 +64,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	}
 
 	z.SetLogLevel(opts.logLevel)
-	z.Logger.Info().Msgf("Zerolog logger initialized with level %s", opts.logLevel)
+	z.Logger.Debug().Msgf("Zerolog logger initialized with level %s", opts.logLevel)
 
 	return z
 }

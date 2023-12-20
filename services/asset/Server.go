@@ -63,6 +63,10 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Sto
 	return s
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (v *Server) Init(ctx context.Context) (err error) {
 	var grpcOk, httpOk bool
 	v.grpcAddr, grpcOk = gocore.Config().Get("asset_grpcListenAddress")

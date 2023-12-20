@@ -21,7 +21,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	StatusAPI_Health_FullMethodName         = "/status_api.StatusAPI/Health"
+	StatusAPI_HealthGRPC_FullMethodName     = "/status_api.StatusAPI/HealthGRPC"
 	StatusAPI_AnnounceStatus_FullMethodName = "/status_api.StatusAPI/AnnounceStatus"
 )
 
@@ -30,7 +30,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StatusAPIClient interface {
 	// Health returns the health of the API.
-	Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
+	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	AnnounceStatus(ctx context.Context, in *model.AnnounceStatusRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
@@ -42,9 +42,9 @@ func NewStatusAPIClient(cc grpc.ClientConnInterface) StatusAPIClient {
 	return &statusAPIClient{cc}
 }
 
-func (c *statusAPIClient) Health(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *statusAPIClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
-	err := c.cc.Invoke(ctx, StatusAPI_Health_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, StatusAPI_HealthGRPC_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (c *statusAPIClient) AnnounceStatus(ctx context.Context, in *model.Announce
 // for forward compatibility
 type StatusAPIServer interface {
 	// Health returns the health of the API.
-	Health(context.Context, *emptypb.Empty) (*HealthResponse, error)
+	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	AnnounceStatus(context.Context, *model.AnnounceStatusRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedStatusAPIServer()
 }
@@ -74,8 +74,8 @@ type StatusAPIServer interface {
 type UnimplementedStatusAPIServer struct {
 }
 
-func (UnimplementedStatusAPIServer) Health(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
+func (UnimplementedStatusAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedStatusAPIServer) AnnounceStatus(context.Context, *model.AnnounceStatusRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AnnounceStatus not implemented")
@@ -93,20 +93,20 @@ func RegisterStatusAPIServer(s grpc.ServiceRegistrar, srv StatusAPIServer) {
 	s.RegisterService(&StatusAPI_ServiceDesc, srv)
 }
 
-func _StatusAPI_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StatusAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StatusAPIServer).Health(ctx, in)
+		return srv.(StatusAPIServer).HealthGRPC(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StatusAPI_Health_FullMethodName,
+		FullMethod: StatusAPI_HealthGRPC_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StatusAPIServer).Health(ctx, req.(*emptypb.Empty))
+		return srv.(StatusAPIServer).HealthGRPC(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -137,8 +137,8 @@ var StatusAPI_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*StatusAPIServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Health",
-			Handler:    _StatusAPI_Health_Handler,
+			MethodName: "HealthGRPC",
+			Handler:    _StatusAPI_HealthGRPC_Handler,
 		},
 		{
 			MethodName: "AnnounceStatus",

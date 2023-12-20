@@ -16,7 +16,7 @@ type fRPC_Validator struct {
 	v *Server
 }
 
-func (f *fRPC_Validator) Health(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiHealthResponse, error) {
+func (f *fRPC_Validator) HealthGRPC(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiHealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health_frpc").AddTime(start)

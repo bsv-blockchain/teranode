@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
@@ -45,13 +46,14 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 		defer deferFunc()
 
-		subtree := util.NewTreeByLeafCount(4)
+		subtree, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
 		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
 		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
-		_, err := txMetaStore.Create(context.Background(), tx1)
+		_, err = txMetaStore.Create(context.Background(), tx1)
 		require.NoError(t, err)
 
 		_, err = txMetaStore.Create(context.Background(), tx2)
@@ -121,11 +123,12 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.txMetaStore = newTxMetaCache(txMetaStore)
+	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 
 	numberOfItems := 1_024 * 1_024
 
-	subtree := util.NewTreeByLeafCount(numberOfItems)
+	subtree, err := util.NewTreeByLeafCount(numberOfItems)
+	require.NoError(t, err)
 
 	for i := 0; i < numberOfItems; i++ {
 		tx := bt.NewTx()

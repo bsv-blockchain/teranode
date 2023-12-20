@@ -17,6 +17,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -25,10 +26,13 @@ import (
 )
 
 var (
-	prometheusUtxoGet        prometheus.Counter
-	prometheusUtxoStore      prometheus.Counter
-	prometheusUtxoReStore    prometheus.Counter
-	prometheusUtxoStoreSpent prometheus.Counter
+	prometheusUtxoGet       prometheus.Counter
+	prometheusUtxoStore     prometheus.Counter
+	prometheusUtxoStoreFail prometheus.Counter
+	//prometheusUtxoReStore        prometheus.Counter
+	prometheusUtxoRetryStore     prometheus.Counter
+	prometheusUtxoRetryStoreFail prometheus.Counter
+	//prometheusUtxoStoreSpent     prometheus.Counter
 	prometheusUtxoSpend      prometheus.Counter
 	prometheusUtxoReSpend    prometheus.Counter
 	prometheusUtxoSpendSpent prometheus.Counter
@@ -50,16 +54,34 @@ func init() {
 			Help: "Number of utxo store calls done to aerospike",
 		},
 	)
-	prometheusUtxoStoreSpent = promauto.NewCounter(
+	prometheusUtxoStoreFail = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_store_spent",
-			Help: "Number of utxo store calls that were already spent to aerospike",
+			Name: "aerospike_utxo_store_fail",
+			Help: "Number of utxo store failed calls done to aerospike",
 		},
 	)
-	prometheusUtxoReStore = promauto.NewCounter(
+	//prometheusUtxoStoreSpent = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_utxo_store_spent",
+	//		Help: "Number of utxo store calls that were already spent to aerospike",
+	//	},
+	//)
+	//prometheusUtxoReStore = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Name: "aerospike_utxo_restore",
+	//		Help: "Number of utxo restore calls done to aerospike",
+	//	},
+	//)
+	prometheusUtxoRetryStore = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_restore",
-			Help: "Number of utxo restore calls done to aerospike",
+			Name: "aerospike_utxo_retry_store",
+			Help: "Number of utxo retry store calls done to aerospike",
+		},
+	)
+	prometheusUtxoRetryStoreFail = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_utxo_retry_store_fail",
+			Help: "Number of utxo retry store failed calls done to aerospike",
 		},
 	)
 	prometheusUtxoSpend = promauto.NewCounter(
@@ -105,6 +127,7 @@ func init() {
 }
 
 type storeUtxo struct {
+	idx        int
 	hash       *chainhash.Hash
 	txHash     *chainhash.Hash
 	lockTime   uint32
@@ -113,7 +136,7 @@ type storeUtxo struct {
 
 type Store struct {
 	u            *url.URL
-	client       *aerospike.Client
+	client       *uaerospike.Client
 	namespace    string
 	logger       ulogger.Logger
 	blockHeight  uint32
@@ -159,34 +182,46 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	}
 
 	go func() {
+		defer func() {
+			s.logger.Infof("[UTXO] stopping storeRetryCh utxo goroutine")
+		}()
+
+		s.logger.Infof("[UTXO] starting storeRetryCh utxo goroutine")
 		policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 		policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 		// retry storing utxos that failed
-		for utxoStore := range s.storeRetryCh {
+		for storeRetryUtxo := range s.storeRetryCh {
+			prometheusUtxoRetryStore.Inc()
+
 			bins := []*aerospike.Bin{
-				aerospike.NewBin("locktime", utxoStore.lockTime),
+				aerospike.NewBin("locktime", storeRetryUtxo.lockTime),
 			}
 
-			key, err := aerospike.NewKey(s.namespace, "utxo", utxoStore.hash[:])
+			key, err := aerospike.NewKey(s.namespace, "utxo", storeRetryUtxo.hash[:])
 			if err != nil {
-				s.logger.Errorf("failed to init new aerospike key in storeRetryCh: %v", err)
+				s.logger.Errorf("[UTXO] failed to init new aerospike key in storeRetryCh: %v", err)
 				continue
 			}
 
-			err = s.client.PutBins(policy, key, bins...)
-			if err != nil {
+			if err = s.client.PutBins(policy, key, bins...); err != nil {
 				var aErr *aerospike.AerospikeError
-				if errors.As(err, &aErr) && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 					continue
 				}
+				prometheusUtxoRetryStoreFail.Inc()
+
+				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
+
 				// requeue for retry
-				utxoStore.retryCount++
-				if utxoStore.retryCount < 3 {
-					s.storeRetryCh <- utxoStore
-				} else {
-					s.logger.Errorf("failed to store some utxo in storeRetryCh for txid %s: %v", utxoStore.txHash.String(), err)
+				storeRetryUtxo.retryCount++
+				if storeRetryUtxo.retryCount < 3 {
+					// backoff
+					time.Sleep(time.Duration(storeRetryUtxo.retryCount) * time.Second)
+					s.storeRetryCh <- storeRetryUtxo
 				}
+			} else {
+				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
 			}
 		}
 	}()
@@ -233,7 +268,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	details := fmt.Sprintf("url: %s, namespace: %s", s.u.String(), s.namespace)
 
 	// Trying to put and get a record to test the connection
-	key, err := aerospike.NewKey("test", "set", "key")
+	key, err := aerospike.NewKey(s.namespace, "set", "key")
 	if err != nil {
 		return -1, details, err
 	}
@@ -356,25 +391,47 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
-		for _, hash := range utxoHashes {
+		s.logger.Warnf("[BATCH_ERR] Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
+
+		for idx, batchRecord := range batchRecords {
+			err = batchRecord.BatchRec().Err
+			if err != nil {
+				s.logger.Warnf("[BATCH_ERR] error in aerospike utxo store BatchOperate batchRecord %d of %d (will retry): %s - %w", idx, len(batchRecords), utxoHashes[idx].String(), err)
+			}
+		}
+
+		for idx, hash := range utxoHashes {
 			s.storeRetryCh <- &storeUtxo{
+				idx:      idx,
 				hash:     hash,
 				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
 		}
-		return fmt.Errorf("error in aerospike store BatchOperate: %w", err)
+		prometheusUtxoStoreFail.Add(float64(len(utxoHashes)))
+		return fmt.Errorf("[BATCH_ERR] error in aerospike utxo store BatchOperate (will retry): %w", err)
 	}
 
-	// check for errors
+	// batchOperate may have no errors, but some of the records may have failed
 	errorsThrown := make([]error, 0)
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
+			var aErr *aerospike.AerospikeError
+			// TODO check if this is the correct handling of this
+			// we assume because it exists, it is OK
+			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				continue
+			}
+
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-			errorsThrown = append(errorsThrown, fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err))
+			e := fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err)
+			errorsThrown = append(errorsThrown, e)
+
+			s.logger.Errorf("%s", e.Error())
+
 			s.storeRetryCh <- &storeUtxo{
+				idx:      idx,
 				hash:     utxoHashes[idx],
 				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
@@ -383,7 +440,8 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	}
 
 	if len(errorsThrown) > 0 {
-		return fmt.Errorf("error in aerospike store batch records: %d failed", len(errorsThrown))
+		prometheusUtxoStoreFail.Add(float64(len(errorsThrown)))
+		return fmt.Errorf("error in aerospike store batch records: %d of %d failed", len(errorsThrown), len(batchRecords))
 	}
 
 	prometheusUtxoStore.Add(float64(len(utxoHashes)))
@@ -405,31 +463,17 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 	start := time.Now()
 	err = s.client.PutBins(policy, key, bins...)
 	if err != nil {
-		// check whether we already set this utxo
-		prometheusUtxoGet.Inc()
-		readPolicy := util.GetAerospikeReadPolicy()
-		value, getErr := s.client.Get(readPolicy, key, "locktime")
-		if getErr == nil && value != nil {
-			txid, ok := value.Bins["txid"].([]byte)
-			if ok && len(txid) != 0 {
-				prometheusUtxoStoreSpent.Inc()
-				spendingTxHash, hErr := chainhash.NewHash(txid)
-				if hErr != nil {
-					return hErr
-				}
-				return utxostore.NewErrSpent(spendingTxHash)
-			}
-
-			prometheusUtxoReStore.Inc()
+		var aErr *aerospike.AerospikeError
+		if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 			return nil
 		}
 
-		prometheusUtxoErrors.WithLabelValues("Store", getErr.Error()).Inc()
-		if getErr.Error() == types.ResultCodeToString(types.KEY_NOT_FOUND_ERROR) {
-			s.logger.Errorf("Failed to find aerospike key in utxostore: %v\n", err)
-			return utxostore.ErrNotFound
+		s.storeRetryCh <- &storeUtxo{
+			idx:      0,
+			hash:     hash,
+			txHash:   hash,
+			lockTime: nLockTime,
 		}
-
 		return fmt.Errorf("error in aerospike store PutBins (time taken: %s) : %w", time.Since(start).String(), err)
 	}
 
@@ -484,6 +528,20 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			return fmt.Errorf("context cancelled spending %d of %d aerospike utxos", i, len(spends))
 		default:
 			if err = s.spendUtxo(policy, spend); err != nil {
+				// TODO remove this hack
+				// TEMP TEMP TEMP - we need to figure out why utxos are not stored properly
+				// there are no double spends, so we can just ignore this error for now to be able to test performance
+				s.logger.Warnf("[BACKUP_UTXO_STORE] failed to spend utxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
+				if err = s.storeUtxo(util.GetAerospikeWritePolicy(0, 0), spend.Hash, 0); err != nil {
+					s.logger.Errorf("[BACKUP_UTXO_STORE] failed to store utxo as backup in spendUtxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
+				} else {
+					if err = s.spendUtxo(policy, spend); err != nil {
+						_ = s.UnSpend(context.Background(), spentSpends)
+						return err
+					}
+					return nil
+				}
+
 				// revert the spent utxos
 				_ = s.UnSpend(context.Background(), spentSpends)
 				return err

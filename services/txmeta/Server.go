@@ -34,6 +34,10 @@ func New(logger ulogger.Logger, txMetaStoreURL *url.URL) *Server {
 	}
 }
 
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *Server) Init(_ context.Context) (err error) {
 	u.store, err = store.New(u.logger, u.txMetaStoreURL)
 	if err != nil {
@@ -59,7 +63,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
+func (u *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
 	prometheusTxMetaHealth.Inc()
 
 	return &txmeta_api.HealthResponse{
@@ -105,12 +109,7 @@ func (u *Server) SetMined(ctx context.Context, request *txmeta_api.SetMinedReque
 		return nil, err
 	}
 
-	blockHash, err := chainhash.NewHash(request.BlockHash)
-	if err != nil {
-		return nil, err
-	}
-
-	err = u.store.SetMined(ctx, hash, blockHash)
+	err = u.store.SetMined(ctx, hash, request.BlockId)
 	if err != nil {
 		return nil, err
 	}
@@ -138,15 +137,10 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		parentTxHashes[index] = parentTxHash.CloneBytes()
 	}
 
-	blockHashes := make([][]byte, len(tx.BlockHashes))
-	for index, blockHash := range tx.BlockHashes {
-		blockHashes[index] = blockHash.CloneBytes()
-	}
-
 	return &txmeta_api.GetResponse{
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
+		BlockIDs:       tx.BlockIDs,
 	}, nil
 }
 

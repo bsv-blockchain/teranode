@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -28,8 +27,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var stats = gocore.NewStat("validator")
@@ -77,6 +74,10 @@ func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore
 		subscriptionCtx:       subscriptionCtx,
 		cancelSubscriptions:   cancelSubscriptions,
 	}
+}
+
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
@@ -164,15 +165,6 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("validator_drpcListenAddress")
-	if ok {
-		err := v.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
 	if ok {
@@ -218,7 +210,7 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		prometheusHealth.Inc()
@@ -374,37 +366,6 @@ func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage
 	return &validator_api.GetBlockHeightResponse{
 		Height: blockHeight,
 	}, nil
-}
-
-func (v *Server) drpcServer(ctx context.Context, drpcAddress string) error {
-	v.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-	// register the proto-specific methods on the mux
-	err := validator_api.DRPCRegisterValidatorAPI(m, v)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			v.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
-
-	return nil
 }
 
 func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {

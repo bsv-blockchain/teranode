@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
@@ -18,7 +19,7 @@ import (
 )
 
 type SQL struct {
-	db     *sql.DB
+	db     *usql.DB
 	engine util.SQLEngine
 	logger ulogger.Logger
 }
@@ -57,7 +58,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	}
 
 	s := &SQL{
-		db:     db,
+		db:     &usql.DB{DB: db},
 		engine: util.SQLEngine(storeUrl.Scheme),
 		logger: logger,
 	}
@@ -71,7 +72,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 }
 
 func (s *SQL) GetDB() *sql.DB {
-	return s.db
+	return s.db.DB
 }
 
 func (s *SQL) GetDBEngine() util.SQLEngine {
@@ -113,6 +114,8 @@ func createPostgresSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
         ,subtrees       BYTEA NOT NULL
         ,coinbase_tx    BYTEA NOT NULL
+		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
+        ,peer_id	    VARCHAR(64) NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -131,6 +134,11 @@ func createPostgresSchema(db *sql.DB) error {
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
 	}
@@ -197,6 +205,8 @@ func createSqliteSchema(db *sql.DB) error {
 		,subtree_count  BIGINT NOT NULL
 		,subtrees       BLOB NOT NULL
         ,coinbase_tx    BLOB NOT NULL
+		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
+		,peer_id	    VARCHAR(64) NOT NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -215,6 +225,11 @@ func createSqliteSchema(db *sql.DB) error {
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
 	}
@@ -257,7 +272,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
 
-		_, err = s.StoreBlock(context.Background(), genesisBlock)
+		_, err = s.StoreBlock(context.Background(), genesisBlock, "")
 		if err != nil {
 			return fmt.Errorf("failed to insert genesis block: %+v", err)
 		}

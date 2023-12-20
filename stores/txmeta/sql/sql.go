@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -57,7 +59,7 @@ func init() {
 
 type Store struct {
 	logger    ulogger.Logger
-	db        *sql.DB
+	db        *usql.DB
 	engine    string
 	dbTimeout time.Duration
 }
@@ -89,7 +91,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 
 	s := &Store{
 		logger:    logger,
-		db:        db,
+		db:        &usql.DB{DB: db},
 		engine:    storeUrl.Scheme,
 		dbTimeout: time.Duration(dbTimeout) * time.Millisecond,
 	}
@@ -146,13 +148,10 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		parentTxHashes = append(parentTxHashes, h)
 	}
 
-	blockHashes := make([]*chainhash.Hash, 0, len(blocks)/chainhash.HashSize)
-	for i := 0; i < len(blocks); i += chainhash.HashSize {
-		h, err = chainhash.NewHash(blocks[i : i+chainhash.HashSize])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse block hash: %+v", err)
-		}
-		blockHashes = append(blockHashes, h)
+	var blockIDs []uint32
+	for i := 0; i < len(blocks); i += 4 {
+		blockID := binary.LittleEndian.Uint32(blocks[i : i+4])
+		blockIDs = append(blockIDs, blockID)
 	}
 
 	prometheusTxMetaGet.Inc()
@@ -162,7 +161,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		Fee:            fee,
 		SizeInBytes:    sizeInBytes,
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
+		BlockIDs:       blockIDs,
 	}, nil
 }
 
@@ -202,9 +201,9 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+		if err = s.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -212,9 +211,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	return nil
 }
 
-func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockID uint32) error {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
 	defer cancelTimeout()
+
+	blockIDBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockIDBytes, blockID)
 
 	// add block hash to blocks array
 	var q string
@@ -229,7 +231,7 @@ func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockHash 
 		SET blocks = ifnull(blocks, "") || $2
 		WHERE hash = $1`
 	}
-	_, err := s.db.ExecContext(ctx, q, hash[:], blockHash[:])
+	_, err := s.db.ExecContext(ctx, q, hash[:], blockIDBytes)
 	if err != nil {
 		return fmt.Errorf("failed to update txmeta: %+v", err)
 	}
@@ -285,15 +287,15 @@ func createPostgresSchema(db *sql.DB) error {
 func createSqliteSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS txmeta (
-		 id            INTEGER PRIMARY KEY AUTOINCREMENT
+		id             INTEGER PRIMARY KEY AUTOINCREMENT
 		,txBytes       BLOB NULL
-	  ,hash          BLOB NOT NULL
-    ,fee    		   BIGINT NOT NULL
+		,hash          BLOB NOT NULL
+		,fee    	   BIGINT NOT NULL
 		,size_in_bytes BIGINT NOT NULL
-	  ,parents       BLOB NULL
-	  ,blocks        BLOB NULL
-    ,lock_time	   BIGINT NOT NULL
-    ,inserted_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		,parents       BLOB NULL
+		,blocks        BLOB NULL
+		,lock_time	   BIGINT NOT NULL
+		,inserted_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()

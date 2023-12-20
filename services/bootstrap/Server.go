@@ -48,6 +48,10 @@ func NewServer(logger ulogger.Logger) *Server {
 	}
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *Server) Init(_ context.Context) (err error) {
 	// Create a discovery channel
 
@@ -206,7 +210,7 @@ func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.HealthResponse, error) {
+func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.HealthResponse, error) {
 	prometheusHealth.Inc()
 	return &bootstrap_api.HealthResponse{
 		Ok:        true,

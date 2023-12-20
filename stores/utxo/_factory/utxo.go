@@ -76,9 +76,10 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 						if notification.Type == model.NotificationType_Block {
 							_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 							if err != nil {
-								logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+								logger.Warnf("[UTXOStore] could not get best block header for %s: %v", source, err)
 								continue
 							}
+							// TODO change this back to Debug
 							logger.Warnf("[UTXOStore] setting block height to %d", meta.Height)
 							_ = utxoStore.SetBlockHeight(meta.Height)
 						}

@@ -51,6 +51,10 @@ func New(logger ulogger.Logger) *Server {
 	}
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *Server) Init(ctx context.Context) error {
 	coinbaseStoreURL, err, found := gocore.Config().GetURL("coinbase_store")
 	if err != nil {
@@ -95,7 +99,7 @@ func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
+func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health_grpc").AddTime(start)

@@ -68,9 +68,9 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return s, nil
 }
 
-func (m *Memory) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (m *Memory) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = m.SetMined(ctx, hash, blockHash); err != nil {
+		if err = m.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -78,7 +78,7 @@ func (m *Memory) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, bl
 	return nil
 }
 
-func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -89,18 +89,18 @@ func (m *Memory) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *ch
 
 	if m.checkDuplicates {
 		// check whether the has is already in the block hashes
-		for _, b := range s.BlockHashes {
-			if b.IsEqual(blockHash) {
-				return fmt.Errorf("block hash %s already exists for tx %s", blockHash.String(), hash.String())
+		for _, b := range s.BlockIDs {
+			if b == blockID {
+				return fmt.Errorf("block %d already exists for tx %s", blockID, hash.String())
 			}
 		}
 	}
 
-	if s.BlockHashes == nil {
-		s.BlockHashes = make([]*chainhash.Hash, 0)
+	if s.BlockIDs == nil {
+		s.BlockIDs = make([]uint32, 0)
 	}
 
-	s.BlockHashes = append(s.BlockHashes, blockHash)
+	s.BlockIDs = append(s.BlockIDs, blockID)
 
 	m.txStatus[*hash] = s
 

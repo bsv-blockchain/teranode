@@ -11,13 +11,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Client struct {
-	apiClient  blockvalidation_api.BlockValidationAPIClient
-	frpcClient *blockvalidation_api.Client
-	logger     ulogger.Logger
+	apiClient   blockvalidation_api.BlockValidationAPIClient
+	frpcClient  *blockvalidation_api.Client
+	httpAddress string
+	logger      ulogger.Logger
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -39,6 +41,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 		logger:    logger,
 	}
 
+	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
+	if ok {
+		client.httpAddress = httpAddress
+	}
+
 	go client.connectFRPC(ctx)
 
 	return client
@@ -58,7 +65,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 
 	blockvalidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -71,7 +78,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 
 			err = client.Connect(blockvalidationFRPCAddress)
 			if err != nil {
-				s.logger.Warnf("error connecting to fRPC server in blockvalidation: %s", err)
+				s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
 				if i+1 == maxRetries {
 					break
 				}
@@ -106,7 +113,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 }
 
 func (s *Client) Health(ctx context.Context) (bool, error) {
-	_, err := s.apiClient.Health(ctx, &blockvalidation_api.EmptyMessage{})
+	_, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
 	if err != nil {
 		return false, err
 	}
@@ -143,6 +150,16 @@ func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, 
 }
 
 func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
+	if s.httpAddress != "" {
+		// try the http endpoint first, if that fails we can try the grpc endpoint
+		subtreeBytes, err := util.DoHTTPRequest(ctx, s.httpAddress+"/subtree/"+utils.ReverseAndHexEncodeSlice(subtreeHash), nil)
+		if err != nil {
+			s.logger.Warnf("error getting subtree %x from blockvalidation http endpoint: %s", subtreeHash, err)
+		} else if subtreeBytes != nil {
+			return subtreeBytes, nil
+		}
+	}
+
 	req := &blockvalidation_api.GetSubtreeRequest{
 		Hash: subtreeHash,
 	}

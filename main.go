@@ -183,7 +183,17 @@ func main() {
 
 	var blockchainService *blockchain.Blockchain
 
-	// blockchain service needs to start first !
+	// status server
+	if startStatus {
+		if err := sm.AddService("Status", status.New(
+			logger.New("Status"),
+		)); err != nil {
+			panic(err)
+		}
+		time.Sleep(1 * time.Second) // wait for grpc server to start
+	}
+
+	// blockchain service
 	if startBlockchain {
 		var err error
 		blockchainService, err = blockchain.New(logger.New("bchn"))
@@ -267,10 +277,10 @@ func main() {
 				panic(err)
 			}
 
-			statusClient, err := status.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("could not create status client [%v]", err)
-			}
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
@@ -281,7 +291,7 @@ func main() {
 				blockchainClient,
 				assetClient,
 				blockValidationClient,
-				statusClient,
+				nil,
 			)); err != nil {
 				panic(err)
 			}
@@ -302,10 +312,10 @@ func main() {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
 
-			statusClient, err := status.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("could not create status client [%v]", err)
-			}
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
@@ -314,7 +324,7 @@ func main() {
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
-				statusClient,
+				nil,
 			)); err != nil {
 				panic(err)
 			}
@@ -371,15 +381,6 @@ func main() {
 	if startP2P {
 		if err = sm.AddService("P2P", p2p.NewServer(
 			logger.New("P2P"),
-		)); err != nil {
-			panic(err)
-		}
-	}
-
-	// status server
-	if startStatus {
-		if err = sm.AddService("Status", status.New(
-			logger.New("Status"),
 		)); err != nil {
 			panic(err)
 		}

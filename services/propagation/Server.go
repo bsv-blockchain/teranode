@@ -17,7 +17,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -33,11 +32,9 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/quic-go/quic-go"
+	http3 "github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -73,6 +70,10 @@ func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.In
 	}
 }
 
+func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (ps *PropagationServer) Init(_ context.Context) (err error) {
 	ps.status.Store(1)
 	return nil
@@ -85,28 +86,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)
 		if err != nil {
 			return fmt.Errorf("error starting ipv6 listeners: %v", err)
-		}
-	}
-
-	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
-	if ok {
-		var serverURL *url.URL
-		serverURL, err = url.Parse(httpAddress)
-		if err != nil {
-			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
-		}
-		err = ps.StartHTTPServer(ctx, serverURL)
-		if err != nil {
-			return fmt.Errorf("HTTP server failed [%w]", err)
-		}
-	}
-
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("propagation_drpcListenAddress")
-	if ok {
-		err = ps.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start DRPC server: %v", err)
 		}
 	}
 
@@ -154,38 +133,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *PropagationServer) drpcServer(ctx context.Context, drpcAddress string) error {
-	ps.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-
-	// register the proto-specific methods on the mux
-	err := propagation_api.DRPCRegisterPropagationAPI(m, ps)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			ps.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -307,105 +254,63 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
-	config := &quic.Config{
-		MaxIncomingStreams:         1000,          // for example
-		MaxStreamReceiveWindow:     8 * (1 << 20), // 4 MB for example
-		MaxIncomingUniStreams:      1000,
-		MaxConnectionReceiveWindow: 8 * (1 << 20),
-		KeepAlivePeriod:            30 * time.Second,
-		MaxIdleTimeout:             5 * time.Minute,
-		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
+
+	server := http3.Server{
+		Addr:      quicAddresses,
+		TLSConfig: ps.generateTLSConfig(), // Assume generateTLSConfig() sets up your TLS
 	}
-	listener, err := quic.ListenAddr(quicAddresses, ps.generateTLSConfig(), config)
+
+	http.Handle("/tx", http.HandlerFunc(ps.handleStream))
+
+	err := server.ListenAndServe() // Empty because certs are in TLSConfig
 	if err != nil {
-		ps.logger.Fatalf("error starting QUIC listener: %v", err)
+		ps.logger.Errorf("error starting HTTP server: %v", err)
+		return err
 	}
 
-	for {
-		sess, err := listener.Accept(ctx)
-		if err != nil {
-			ps.logger.Errorf("error accepting new QUIC connection: %v", err)
-			return err
-		}
-		go func() {
-			defer func() {
-				_ = sess.CloseWithError(0, "closing QUIC session")
-			}()
-
-			stream, err := sess.AcceptStream(ctx)
-			if err != nil {
-				return
-			}
-			ps.handleStream(ctx, stream)
-			ps.logger.Infof("closing QUIC stream %s", stream.StreamID().StreamNum())
-		}()
-	}
-
-	// return nil
-
+	return nil
 }
 
-func (ps *PropagationServer) handleStream(ctx context.Context, stream quic.Stream) {
+func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var txLength uint32
 	var err error
-	var buf []byte
+	var txData []byte
 	for {
 		// Read the size of the incoming transaction first
-		err = binary.Read(stream, binary.BigEndian, &txLength)
+		err = binary.Read(r.Body, binary.BigEndian, &txLength)
 		if err != nil {
 			if err != io.EOF {
-				ps.logger.Errorf("error reading transaction length: %v\n", err)
+				ps.logger.Errorf("Error reading transaction length: %v\n", err)
 			}
-			return
+			break
 		}
 
 		if txLength == 0 {
 			return
 		}
-		// Now read the transaction data
-		buf = make([]byte, txLength)
-		_, err = io.ReadFull(stream, buf)
+
+		// Read the transaction data
+		txData = make([]byte, txLength)
+		_, err := io.ReadFull(r.Body, txData)
 		if err != nil {
-			ps.logger.Errorf("error reading transaction data: %v\n", err)
-			return
+			ps.logger.Errorf("Error reading transaction data: %v\n", err)
+			break
 		}
 
 		// Process the received bytes
+		ctx := context.Background()
 		go func(txb []byte) {
 			if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 				Tx: txb,
 			}); err != nil {
 				ps.logger.Errorf("error processing transaction: %v", err)
 			}
-		}(buf)
+		}(txData)
 	}
-}
-
-func (ps *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
-	// start a simple http listener that handles incoming transaction requests
-	http.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-		if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-			Tx: body,
-		}); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-	})
-
-	go func() {
-		if err := http.ListenAndServe(serverURL.Host, nil); err != nil {
-			ps.logger.Errorf("HTTP server failed [%s]", err)
-		}
-	}()
-
-	return nil
 }
 
 func (ps *PropagationServer) Stop(_ context.Context) error {
@@ -457,7 +362,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 	return 0, sb.String(), nil
 }
 
-func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health", true).AddTime(start)

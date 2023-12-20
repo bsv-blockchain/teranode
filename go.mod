@@ -34,7 +34,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.83
 	github.com/ordishs/go-utils v1.0.50
-	github.com/ordishs/gocore v1.0.53
+	github.com/ordishs/gocore v1.0.54
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
 	github.com/quic-go/quic-go v0.38.1
@@ -59,7 +59,6 @@ require (
 	k8s.io/apimachinery v0.28.2
 	k8s.io/client-go v0.28.2
 	modernc.org/sqlite v1.25.0
-	storj.io/drpc v0.0.33
 )
 
 require (
@@ -214,7 +213,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
-	github.com/zeebo/errs v1.2.2 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/otel/metric v1.18.0 // indirect
 	go.uber.org/dig v1.17.0 // indirect
