@@ -726,7 +726,7 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 		}
 	}()
 
-	buf := bufio.NewReader(reader)
+	buf := bufio.NewReaderSize(reader, 1024*1024*4)
 	if _, err = buf.Discard(48); err != nil { // skip headers
 		return nil, fmt.Errorf("unable to read header: %v", err)
 	}

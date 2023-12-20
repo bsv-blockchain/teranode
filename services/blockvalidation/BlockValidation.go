@@ -738,7 +738,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	start = gocore.CurrentTime()
 	txHashes := make([]chainhash.Hash, 0, 1024*1024)
 	buffer := make([]byte, chainhash.HashSize)
-	bufferedReader := bufio.NewReader(body)
+	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4)
 
 	for {
 		n, err := io.ReadFull(bufferedReader, buffer)
