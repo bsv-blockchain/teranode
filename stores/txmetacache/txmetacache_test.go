@@ -2,9 +2,6 @@ package txmetacache
 
 import (
 	"context"
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -24,7 +21,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -32,7 +29,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
 
 		meta, err := c.Create(ctx, coinbaseTx)
 		require.NoError(t, err)
@@ -43,11 +40,32 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 		require.Equal(t, meta, metaGet)
 	})
+
+	t.Run("test set cache", func(t *testing.T) {
+		ctx := context.Background()
+
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
+
+		meta := &txmeta.Data{
+			Fee:         100,
+			SizeInBytes: 111,
+		}
+
+		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
+
+		err = c.(*TxMetaCache).SetCache(hash, meta)
+		require.NoError(t, err)
+
+		metaGet, err := c.GetMeta(ctx, hash)
+		require.NoError(t, err)
+
+		require.Equal(t, meta, metaGet)
+	})
 }
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 1000)
 	cache := c.(*TxMetaCache)
 
 	hashes := make([]chainhash.Hash, b.N)
@@ -55,12 +73,12 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
 
-	runtime.SetCPUProfileRate(500)
-	f, _ := os.Create("cpu.prof")
-	defer f.Close()
+	// runtime.SetCPUProfileRate(500)
+	// f, _ := os.Create("cpu.prof")
+	// defer f.Close()
 
-	_ = pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
+	// _ = pprof.StartCPUProfile(f)
+	// defer pprof.StopCPUProfile()
 
 	b.ResetTimer()
 
@@ -92,6 +110,10 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	}
 
 	require.Equal(t, 30, cache.Length(), "map should be full")
+
+	require.Equal(t, 10, cache.cache.maps[0].Length(), "map should be full")
+	require.Equal(t, 10, cache.cache.maps[1].Length(), "map should be full")
+	require.Equal(t, 10, cache.cache.maps[2].Length(), "map should be full")
 
 	hash := chainhash.HashH([]byte(string(rune(-1))))
 	_ = cache.SetCache(&hash, &txmeta.Data{})

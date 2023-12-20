@@ -31,7 +31,7 @@ type CachedData struct {
 
 type TxMetaCache struct {
 	txMetaStore txmeta.Store
-	cache       *ExpiringMap[*txmeta.Data]
+	cache       *ExpiringMap
 	metrics     metrics
 	logger      ulogger.Logger
 }
@@ -52,7 +52,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewExpiringMap[*txmeta.Data](bucketSize, bucketCount),
+		cache:       NewExpiringMap(bucketSize, bucketCount),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -81,7 +81,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	t.cache.Put(*hash, txMeta)
+	t.cache.Put(*hash, *txMeta)
 
 	t.metrics.insertions.Add(1)
 
@@ -102,7 +102,7 @@ func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	cached, ok := t.cache.Get(*hash)
 	if ok {
 		t.metrics.hits.Add(1)
-		return cached, ok
+		return &cached, ok
 	}
 
 	t.metrics.misses.Add(1)
@@ -194,7 +194,7 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	var txMeta *txmeta.Data
 	cached, ok := t.cache.Get(*hash)
 	if ok {
-		txMeta = cached
+		txMeta = &cached
 		if txMeta.BlockIDs == nil {
 			txMeta.BlockIDs = []uint32{
 				blockID,
