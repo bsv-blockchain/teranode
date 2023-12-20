@@ -553,7 +553,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
 	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
 	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
+	start, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree")
+
 	u.subtreeDeDuplicator.mu.Lock()
+
+	start = stat.NewStat("1. Get Lock").AddTime(start)
 
 	// Check if resource is in cache and not expired
 	if entry, found := u.subtreeDeDuplicator.cache[*subtreeHash]; found {
@@ -562,6 +566,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		}
 
 		u.subtreeDeDuplicator.mu.Unlock()
+
+		stat.NewStat("2a. Received broadcast").AddTime(start)
+
 		return entry.err
 	}
 
@@ -588,11 +595,13 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 
 	u.subtreeDeDuplicator.mu.Unlock()
 
+	stat.NewStat("2b. Sent broadcast").AddTime(start)
+
 	return err
 }
 
 func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlob")
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
