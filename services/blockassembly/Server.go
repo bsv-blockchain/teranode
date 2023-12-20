@@ -124,7 +124,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	}
 
 	auxiliarySubtreeStoreDir, ok := gocore.Config().Get("blockassembly_auxiliarySubtreeStore", "")
-	if ok {
+	if ok && auxiliarySubtreeStoreDir != "" {
 		auxiliarySubtreeStore, err := file.New(ba.logger, auxiliarySubtreeStoreDir)
 		if err != nil {
 			return fmt.Errorf("failed to init auxiliary subtree store: %s", err)
