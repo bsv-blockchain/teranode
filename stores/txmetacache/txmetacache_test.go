@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -21,7 +22,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -29,7 +30,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		meta, err := c.Create(ctx, coinbaseTx)
 		require.NoError(t, err)
@@ -44,11 +45,12 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test set cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 100)
+		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		meta := &txmeta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
+			Fee:            100,
+			SizeInBytes:    111,
+			ParentTxHashes: []*chainhash.Hash{},
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -65,7 +67,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 1000)
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	cache := c.(*TxMetaCache)
 
 	hashes := make([]chainhash.Hash, b.N)
@@ -101,39 +103,22 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 10, 3)
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 32)
 	cache := c.(*TxMetaCache)
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 6000000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
 		_ = cache.SetCache(&hash, &txmeta.Data{})
 	}
 
-	require.Equal(t, 30, cache.Length(), "map should be full")
+	assert.Equal(t, 32*1024*1024, cache.BytesSize(), "map should not have exceeded max size")
 
-	require.Equal(t, 10, cache.cache.maps[0].Length(), "map should be full")
-	require.Equal(t, 10, cache.cache.maps[1].Length(), "map should be full")
-	require.Equal(t, 10, cache.cache.maps[2].Length(), "map should be full")
-
-	hash := chainhash.HashH([]byte(string(rune(-1))))
+	//make sure newly added items are not expired
+	hash := chainhash.HashH([]byte(string(rune(999_999_999))))
 	_ = cache.SetCache(&hash, &txmeta.Data{})
 
-	require.Equal(t, 21, cache.Length(), "map should have expired 9 items")
-}
+	txmetaLatest, err := cache.Get(ctx, &hash)
+	assert.NoError(t, err)
+	assert.NotNil(t, txmetaLatest)
 
-func Benchmark_txtMetaCache_Expiry(b *testing.B) {
-	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), b.N, 5)
-	cache := c.(*TxMetaCache)
-
-	hashes := make([]chainhash.Hash, b.N)
-	for i := 0; i < b.N; i++ {
-		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
-	}
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_ = cache.SetCache(&hashes[i], &txmeta.Data{})
-	}
 }

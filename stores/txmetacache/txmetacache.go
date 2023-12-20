@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/VictoriaMetrics/fastcache"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
@@ -31,7 +32,7 @@ type CachedData struct {
 
 type TxMetaCache struct {
 	txMetaStore txmeta.Store
-	cache       *ExpiringMap
+	cache       *fastcache.Cache
 	metrics     metrics
 	logger      ulogger.Logger
 }
@@ -39,20 +40,14 @@ type TxMetaCache struct {
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
 	initPrometheusMetrics()
 
-	bucketSize, _ := gocore.Config().GetInt("txMetaCacheBucketSize", 500_000_000)
-	bucketCount, _ := gocore.Config().GetInt("txMetaCacheBucketCount", 3)
-
+	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 32)
 	if len(options) > 0 {
-		bucketSize = options[0]
-	}
-
-	if len(options) > 1 {
-		bucketCount = options[1]
+		maxMB = options[0]
 	}
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewExpiringMap(bucketSize, bucketCount),
+		cache:       fastcache.New(maxMB * 1024 * 1024),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -64,7 +59,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 				return
 			default:
 				if prometheusBlockValidationTxMetaCacheSize != nil {
-					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.cache.Length()))
+					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
@@ -81,7 +76,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	t.cache.Put(*hash, *txMeta)
+	t.cache.Set(hash[:], txMeta.MetaBytes())
 
 	t.metrics.insertions.Add(1)
 
@@ -91,7 +86,7 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) error {
 	for hash, txMeta := range hashes {
 		txMeta.Tx = nil
-		t.cache.Put(hash, *txMeta)
+		t.cache.Set(hash[:], txMeta.MetaBytes())
 	}
 
 	t.metrics.insertions.Add(uint64(len(hashes)))
@@ -99,10 +94,16 @@ func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) erro
 }
 
 func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
-	cached, ok := t.cache.Get(*hash)
-	if ok {
+	// cachedBytes := make([]byte, 0, 20480)
+	cachedBytes := t.cache.Get(nil, hash[:])
+	if cachedBytes != nil && len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
-		return &cached, ok
+		txmetaData, err := txmeta.NewMetaDataFromBytes(cachedBytes)
+		if err != nil {
+			t.logger.Errorf("error getting txMeta from cache: %s", err.Error())
+			return nil, false
+		}
+		return txmetaData, true
 	}
 
 	t.metrics.misses.Add(1)
@@ -192,9 +193,9 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockI
 
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *txmeta.Data
-	cached, ok := t.cache.Get(*hash)
-	if ok {
-		txMeta = &cached
+	cached, err := t.Get(ctx, hash)
+	if err != nil {
+		txMeta = cached
 		if txMeta.BlockIDs == nil {
 			txMeta.BlockIDs = []uint32{
 				blockID,
@@ -220,5 +221,13 @@ func (t *TxMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
 }
 
 func (t *TxMetaCache) Length() int {
-	return t.cache.Length()
+	s := &fastcache.Stats{}
+	t.cache.UpdateStats(s)
+	return int(s.EntriesCount)
+}
+
+func (t *TxMetaCache) BytesSize() int {
+	s := &fastcache.Stats{}
+	t.cache.UpdateStats(s)
+	return int(s.BytesSize)
 }
