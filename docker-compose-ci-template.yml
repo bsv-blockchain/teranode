@@ -1,5 +1,21 @@
 version: '3.8'
 
+# Define a common base configuration for ubsv nodes
+x-ubsv-base:
+  &ubsv-base
+  image: taal/ubsv:latest
+  depends_on:
+    - postgres
+  build:
+    context: .
+    dockerfile: local.Dockerfile
+  networks:
+    - ubsv-network
+  volumes:
+    - ./data:/app/data
+  expose:
+    - 8081-8093
+
 services:
   postgres:
     container_name: postgres
@@ -7,9 +23,9 @@ services:
     networks:
       - ubsv-network
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=really_strong_password_change_me
-      - POSTGRES_DB=postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
     ports:
       - 5432:5432
     volumes:
@@ -20,22 +36,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # Define a common base configuration for ubsv nodes
-  x-ubsv-base:
-    &ubsv-base
-    image: taal/ubsv:latest
-    depends_on:
-      - postgres
-    build:
-      context: .
-      dockerfile: local.Dockerfile
-    networks:
-      - ubsv-network
-    volumes:
-      - ./data:/app/data
-    expose:
-      - 8081-8093
 
   # Define node-specific configurations as extensions
   ubsv-1:
@@ -51,6 +51,7 @@ services:
       txstore: badger:///data/ubsv1/txstore
       subtreestore: badger:///data/ubsv1/subtreestore
       mine_initial_blocks: true
+      coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
     ports:
       - "18081-18089:8081-8089"
       - "18090-18093:8090-8093"
@@ -67,9 +68,27 @@ services:
       startTxMetaStore: "false"
       txstore: badger:///data/ubsv2/txstore
       subtreestore: badger:///data/ubsv2/subtreestore
+      coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
     ports:
       - "28081-28089:8081-8089"
       - "28090-28093:8090-8093"
+
+  ubsv-3:
+    <<: *ubsv-base
+    environment:
+      SETTINGS_CONTEXT: "docker.ci"
+      asset_httpAddress: "http://ubsv-3:8090"
+      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "false"
+      txstore: badger:///data/ubsv3/txstore
+      subtreestore: badger:///data/ubsv3/subtreestore
+      coinbase_wallet_private_key: L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL
+    ports:
+      - "38081-38089:8081-8089"
+      - "38090-38093:8090-8093"
 
 # Add more ubsv nodes as needed
 

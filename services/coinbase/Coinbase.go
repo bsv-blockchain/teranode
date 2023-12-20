@@ -167,6 +167,24 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 
 	// get the best block header on startup and process
 	go func() {
+		//Wait until min_height is reached
+		coinbase_should_wait := gocore.Config().GetBool("coinbase_should_wait", false)
+		coinbase_wait_until_block, _ := gocore.Config().GetInt("coinbase_wait_until_block", 0)
+		if coinbase_should_wait {
+			c.logger.Infof("Waiting until block %d to start coinbase", coinbase_wait_until_block)
+			for {
+				_, bestBlockHeader, err := c.AssetClient.GetBestBlockHeader(ctx)
+				if err != nil {
+					c.logger.Errorf("could not get best block header from blob server [%v]", err)
+					return
+				}
+				if bestBlockHeader >= uint32(coinbase_wait_until_block) {
+					break
+				}
+				c.logger.Infof("Waiting until block %d to start coinbase, currently at %d", coinbase_wait_until_block, bestBlockHeader)
+				time.Sleep(1 * time.Second)
+			}
+		}
 		blockHeader, _, err := c.AssetClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			c.logger.Errorf("could not get best block header from blob server [%v]", err)
