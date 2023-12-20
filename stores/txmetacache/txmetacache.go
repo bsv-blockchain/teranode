@@ -91,7 +91,7 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) error {
 	for hash, txMeta := range hashes {
 		txMeta.Tx = nil
-		t.cache.Put(hash, txMeta)
+		t.cache.Put(hash, *txMeta)
 	}
 
 	t.metrics.insertions.Add(uint64(len(hashes)))

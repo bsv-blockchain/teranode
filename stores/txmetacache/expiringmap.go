@@ -37,7 +37,7 @@ func (m *ExpiringMap) Put(key chainhash.Hash, value txmeta.Data) {
 		m.resizeMaps()
 		current = m.current.Load()
 	}
-	_ = currentMap.Put(key, value)
+	_ = current.Put(key, value)
 }
 
 func (m *ExpiringMap) resizeMaps() {
