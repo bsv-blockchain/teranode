@@ -53,7 +53,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 
-		err = c.(*TxMetaCache).SetCache(hash, meta)
+		err := c.(*TxMetaCache).SetCache(hash, meta)
 		require.NoError(t, err)
 
 		metaGet, err := c.GetMeta(ctx, hash)
