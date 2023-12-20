@@ -502,7 +502,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	}
 
 	// clear the transaction ids from all the subtrees of the block that are left over
-	var transactionMap *util.SplitSwissMap
+	var transactionMap util.TxMap
 	if len(blockSubtreesMap) > 0 {
 		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
 			// TODO revert the created utxos
@@ -571,7 +571,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	return nil
 }
 
-func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap *util.SplitSwissMap) (err error) {
+func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		stp.logger.Infof("processing queue while moveUpBlock: %d", queueLength)
@@ -623,7 +623,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	return nil
 }
 
-func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree, transactionMap *util.SplitSwissMap, skipNotification bool) error {
+func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree, transactionMap util.TxMap, skipNotification bool) error {
 	var hashCount atomic.Int64
 
 	stp.logger.Infof("processRemainderTxHashes with %d subtrees", len(chainedSubtrees))
@@ -672,7 +672,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	return nil
 }
 
-func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (*util.SplitSwissMap, error) {
+func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (util.TxMap, error) {
 	startTime := time.Now()
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
