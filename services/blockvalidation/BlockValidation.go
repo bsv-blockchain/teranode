@@ -21,25 +21,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/deduplicator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
-
-type subtreeEntry struct {
-	err    error
-	cond   *sync.Cond
-	ready  bool
-	expiry time.Time
-}
-
-type SubtreeDeDuplicator struct {
-	mu             sync.Mutex
-	expiryDuration time.Duration
-	cache          map[chainhash.Hash]*subtreeEntry
-}
 
 type BlockValidation struct {
 	logger              ulogger.Logger
@@ -49,7 +37,7 @@ type BlockValidation struct {
 	txStore             blob.Store
 	txMetaStore         txmeta.Store
 	validatorClient     validator.Interface
-	subtreeDeDuplicator SubtreeDeDuplicator
+	subtreeDeDuplicator *deduplicator.DeDuplicator
 }
 
 type missingTx struct {
@@ -68,17 +56,14 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	bv := &BlockValidation{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		subtreeTTL:       subtreeTTL,
-		txStore:          txStore,
-		txMetaStore:      txMetaStore,
-		validatorClient:  validatorClient,
-		subtreeDeDuplicator: SubtreeDeDuplicator{
-			cache:          make(map[chainhash.Hash]*subtreeEntry),
-			expiryDuration: subtreeTTL,
-		},
+		logger:              logger,
+		blockchainClient:    blockchainClient,
+		subtreeStore:        subtreeStore,
+		subtreeTTL:          subtreeTTL,
+		txStore:             txStore,
+		txMetaStore:         txMetaStore,
+		validatorClient:     validatorClient,
+		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 	}
 
 	return bv
@@ -553,51 +538,10 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
 	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
 	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
-	start, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree")
 
-	u.subtreeDeDuplicator.mu.Lock()
-
-	start = stat.NewStat("1. Get Lock").AddTime(start)
-
-	// Check if resource is in cache and not expired
-	if entry, found := u.subtreeDeDuplicator.cache[*subtreeHash]; found {
-		for !entry.ready {
-			entry.cond.Wait()
-		}
-
-		u.subtreeDeDuplicator.mu.Unlock()
-
-		stat.NewStat("2a. Received broadcast").AddTime(start)
-
-		return entry.err
-	}
-
-	// Create a new cache entry
-	cond := sync.NewCond(&u.subtreeDeDuplicator.mu)
-
-	u.subtreeDeDuplicator.cache[*subtreeHash] = &subtreeEntry{
-		cond:   cond,
-		expiry: time.Now().Add(u.subtreeDeDuplicator.expiryDuration),
-	}
-
-	u.subtreeDeDuplicator.mu.Unlock()
-
-	// Build the resource
-	err := u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeHashesMap...)
-
-	u.subtreeDeDuplicator.mu.Lock()
-
-	// Update the cache entry
-	u.subtreeDeDuplicator.cache[*subtreeHash].err = err
-	u.subtreeDeDuplicator.cache[*subtreeHash].ready = true
-
-	cond.Broadcast()
-
-	u.subtreeDeDuplicator.mu.Unlock()
-
-	stat.NewStat("2b. Sent broadcast").AddTime(start)
-
-	return err
+	return u.subtreeDeDuplicator.DeDuplicate(ctx, *subtreeHash, func() error {
+		return u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeHashesMap...)
+	})
 }
 
 func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
