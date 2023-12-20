@@ -88,6 +88,16 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 	return nil
 }
 
+func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) error {
+	for hash, txMeta := range hashes {
+		txMeta.Tx = nil
+		t.cache.Put(hash, txMeta)
+	}
+
+	t.metrics.insertions.Add(uint64(len(hashes)))
+	return nil
+}
+
 func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	cached, ok := t.cache.Get(*hash)
 	if ok {

@@ -35,7 +35,7 @@ func (m *ExpiringMap[V]) Put(key chainhash.Hash, value V) {
 		m.resizeMaps()
 		currentMap = m.maps[m.maxMaps-1]
 	}
-	currentMap.Put(key, value)
+	_ = currentMap.Put(key, value)
 }
 
 func (m *ExpiringMap[V]) resizeMaps() {

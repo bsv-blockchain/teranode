@@ -79,6 +79,19 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 	return nil
 }
 
+func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, hashes map[chainhash.Hash]*txmeta.Data) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.SetCacheMulti(hashes)
+	}
+
+	return nil
+}
+
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
 	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
