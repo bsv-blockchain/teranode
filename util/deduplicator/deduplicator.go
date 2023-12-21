@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 type entry struct {
@@ -33,7 +33,8 @@ func New(expiryDuration time.Duration) *DeDuplicator {
 // DeDuplicate will execute the function fn if the key is not in the cache. If the key is in the cache, it will wait
 // for the function to be executed and return the result.
 func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn func() error) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "DeDuplicator.deDup")
+	start := gocore.CurrentTime()
+	stat := gocore.NewStat("DeDuplicator.DeDuplicate")
 
 	u.mu.Lock()
 
