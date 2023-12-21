@@ -194,7 +194,7 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockI
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *txmeta.Data
 	cached, err := t.Get(ctx, hash)
-	if err != nil {
+	if err == nil {
 		txMeta = cached
 		if txMeta.BlockIDs == nil {
 			txMeta.BlockIDs = []uint32{
