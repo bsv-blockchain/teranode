@@ -10,11 +10,12 @@ import (
 	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -102,15 +103,15 @@ func init() {
 }
 
 type Store struct {
-	logger      utils.Logger
-	db          *sql.DB
+	logger      ulogger.Logger
+	db          *usql.DB
 	engine      string
 	blockHeight uint32
 	dbTimeout   time.Duration
 }
 
-func New(storeUrl *url.URL) (*Store, error) {
-	logger := gocore.Log("uxsql")
+func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+	logger = logger.New("uxsql")
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
@@ -132,11 +133,11 @@ func New(storeUrl *url.URL) (*Store, error) {
 		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
 	}
 
-	dbTimeoutMillis, _ := gocore.Config().GetInt("utxoStore_dbTimeoutMillis", 5000)
+	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
 		logger:    logger,
-		db:        db,
+		db:        &usql.DB{DB: db},
 		engine:    storeUrl.Scheme,
 		dbTimeout: time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
@@ -147,6 +148,10 @@ func New(storeUrl *url.URL) (*Store, error) {
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.blockHeight = blockHeight
 	return nil
+}
+
+func (s *Store) GetBlockHeight() (uint32, error) {
+	return s.blockHeight, nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -198,7 +203,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}
@@ -274,7 +279,10 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return fmt.Errorf("[sql.go.Store] context timeout, managed to get through %d of %d", i, len(utxoHashes))
+				}
+				return fmt.Errorf("[sql.go.Store] context cancelled, managed to get through %d of %d", i, len(utxoHashes))
 			default:
 				_, err = s.db.ExecContext(ctx, q, valuesArgs...)
 				if err != nil {
@@ -292,7 +300,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 }
 
 func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	defer func() {
@@ -330,10 +338,10 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
 					return nil
 				} else {
-					return utxostore.ErrSpent
+					return utxostore.NewErrSpent(utxo.SpendingTxID)
 				}
 			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
-				return utxostore.NewErrLockTimeExtra(utxo.LockTime, s.blockHeight)
+				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight)
 			}
 		}
 
@@ -344,12 +352,15 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 }
 
 func (s *Store) UnSpend(cntxt context.Context, spends []*utxostore.Spend) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("[sql.go.UnSpend] context cancelled")
+			}
 			return fmt.Errorf("[sql.go.UnSpend] context cancelled")
 		default:
 			if err := s.unSpend(ctx, spend); err != nil {
@@ -377,7 +388,7 @@ func (s *Store) unSpend(ctx context.Context, spend *utxostore.Spend) error {
 }
 
 func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 	for vOut, output := range tx.Outputs {
 		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(vOut))

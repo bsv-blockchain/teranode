@@ -1,0 +1,62 @@
+@startuml
+entity "Server" as Server
+entity "Validator" as Validator
+entity "DefaultValidator" as DefaultValidator
+database "TX Meta Store" as TXMetaStore
+database "UTXO Store" as UTXOStore
+participant "Block Assembly Service" as BlockAssembly
+participant P2P
+
+Server -> Server: ValidateTransaction()
+Server -> Validator: Validate()
+activate Validator
+Validator -> DefaultValidator: ValidateTransaction()
+
+DefaultValidator -> DefaultValidator: Validate the extended TX
+
+deactivate Validator
+
+alt if TX is valid
+    Validator -> Validator: spendUtxos()
+    activate Validator
+    Validator -> UTXOStore: utxoStore.Spend() # Mark TX input UTXOs as spent
+
+    UTXOStore -> Validator: OK
+    deactivate Validator
+
+    Validator -> Validator: registerTxInMetaStore()
+    activate Validator
+    Validator -> TXMetaStore: txMetaStore.Create() # Persist new TX in TX Meta Store
+    TXMetaStore -> Validator: OK
+
+    deactivate Validator
+
+    Validator -> Validator: sendToBlockAssembler()
+    activate Validator
+    Validator -> BlockAssembly: Notify Tx
+
+    BlockAssembly -> Validator: Transaction added to Block Assembly
+    deactivate Validator
+
+    Validator -> Validator: storeUtxos()
+    activate Validator
+
+    Validator -> UTXOStore: utxoStore.Store() # Persist new UTXOs from TX
+    UTXOStore -> Validator
+
+    deactivate Validator
+
+    Validator -> Server: Return validation success
+
+
+else if TX is invalid
+    Validator -> Server: Return validation failure
+
+    Server -> Server: sendInvalidTxNotification()
+    activate Server
+    loop For each P2P Service subscriber
+        Server -> P2P: Notify invalid TX
+    end
+    deactivate Server
+end
+@enduml

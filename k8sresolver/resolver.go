@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/resolver"
 	"k8s.io/apimachinery/pkg/watch"
@@ -44,7 +44,7 @@ type k8sResolver struct {
 	// will warns lookup (READ the lookup function pointers) inside watcher() goroutine
 	// has data race with replaceNetFunc (WRITE the lookup function pointers).
 	wg     sync.WaitGroup
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 // ResolveNow invoke an immediate resolution of the target that this k8sResolver watches.

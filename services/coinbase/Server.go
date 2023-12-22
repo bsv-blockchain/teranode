@@ -7,9 +7,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -35,7 +35,7 @@ var stats = gocore.NewStat("coinbase")
 type Server struct {
 	coinbase_api.UnimplementedCoinbaseAPIServer
 	coinbase *Coinbase
-	logger   utils.Logger
+	logger   ulogger.Logger
 }
 
 func Enabled() bool {
@@ -44,11 +44,15 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) *Server {
+func New(logger ulogger.Logger) *Server {
 	initPrometheusMetrics()
 	return &Server{
 		logger: logger,
 	}
+}
+
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
 }
 
 func (s *Server) Init(ctx context.Context) error {
@@ -95,7 +99,7 @@ func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (s *Server) Health(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
+func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health_grpc").AddTime(start)

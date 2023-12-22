@@ -2,36 +2,33 @@ package validator
 
 import (
 	"context"
-	"net"
 	"strings"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
 type Client struct {
 	client       validator_api.ValidatorAPIClient
-	drpcClient   validator_api.DRPCValidatorAPIClient
 	frpcClient   *validator_api.Client
 	running      bool
 	conn         *grpc.ClientConn
-	logger       utils.Logger
+	logger       ulogger.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
 	batchSize    int
 	batchTimeout int
 }
 
-func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {
@@ -72,9 +69,6 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		batchTimeout: sendBatchTimeout,
 	}
 
-	// Connect to experimental DRPC server if configured
-	client.connectDRPC()
-
 	// Connect to experimental fRPC server if configured
 	// fRPC has only been implemented for AddTx / Store
 	client.connectFRPC()
@@ -89,13 +83,15 @@ func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
 		/* listen for close channel and reconnect */
 		client.logger.Infof("Listening for close channel on fRPC client")
 		go func() {
-			select {
-			case <-ctx.Done():
-				client.logger.Infof("fRPC client context done, closing channel")
-				return
-			case <-client.frpcClient.CloseChannel():
-				client.logger.Infof("fRPC client close channel received, reconnecting...")
-				client.connectFRPC()
+			for {
+				select {
+				case <-ctx.Done():
+					client.logger.Infof("fRPC client context done, closing channel")
+					return
+				case <-client.frpcClient.CloseChannel():
+					client.logger.Infof("fRPC client close channel received, reconnecting...")
+					client.connectFRPC()
+				}
 			}
 		}()
 	}
@@ -108,7 +104,7 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) Health(ctx context.Context) (int, string, error) {
-	_, err := c.client.Health(ctx, &validator_api.EmptyMessage{})
+	_, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
 	if err != nil {
 		return -1, "Validator", err
 	}
@@ -116,19 +112,20 @@ func (c *Client) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator", nil
 }
 
+func (c *Client) GetBlockHeight() (uint32, error) {
+	resp, err := c.client.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
+	if err != nil {
+		return 0, err
+	}
+
+	return resp.Height, nil
+}
+
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize == 0 {
 		if c.frpcClient != nil {
 
 			if _, err := c.frpcClient.ValidatorAPI.ValidateTransaction(ctx, &validator_api.ValidatorApiValidateTransactionRequest{
-				TransactionData: tx.ExtendedBytes(),
-			}); err != nil {
-				return err
-			}
-
-		} else if c.drpcClient != nil {
-
-			if _, err := c.drpcClient.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 				TransactionData: tx.ExtendedBytes(),
 			}); err != nil {
 				return err
@@ -199,21 +196,6 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_ap
 			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
 		}
 
-	} else if c.drpcClient != nil {
-
-		txBatch := &validator_api.ValidateTransactionBatchRequest{
-			Transactions: batch,
-		}
-
-		resp, err := c.drpcClient.ValidateTransactionBatch(ctx, txBatch)
-		if err != nil {
-			c.logger.Errorf("%v", err)
-			return
-		}
-		if len(resp.Reasons) > 0 {
-			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
-		}
-
 	} else {
 
 		txBatch := &validator_api.ValidateTransactionBatchRequest{
@@ -231,28 +213,6 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_ap
 	}
 }
 
-func (c *Client) connectDRPC() {
-	func() {
-		err := recover()
-		if err != nil {
-			c.logger.Errorf("Error connecting to validator DRPC: %s", err)
-		}
-	}()
-
-	validatorDrpcAddress, ok := gocore.Config().Get("validator_drpcAddress")
-	if ok {
-		c.logger.Infof("Using DRPC connection to validator")
-		time.Sleep(5 * time.Second) // allow everything to come up and find a better way to do this
-		rawConn, err := net.Dial("tcp", validatorDrpcAddress)
-		if err != nil {
-			c.logger.Errorf("Error connecting to validator: %s", err)
-		}
-		conn := drpcconn.New(rawConn)
-		c.drpcClient = validator_api.NewDRPCValidatorAPIClient(conn)
-		c.logger.Infof("Connected to validator DRPC server")
-	}
-}
-
 func (c *Client) connectFRPC() {
 	func() {
 		err := recover()
@@ -263,7 +223,7 @@ func (c *Client) connectFRPC() {
 
 	validatorFRPCAddress, ok := gocore.Config().Get("validator_frpcAddress")
 	if ok {
-		maxRetries := 3
+		maxRetries := 5
 		retryInterval := 5 * time.Second
 
 		for i := 0; i < maxRetries; i++ {
@@ -276,7 +236,10 @@ func (c *Client) connectFRPC() {
 
 			err = client.Connect(validatorFRPCAddress)
 			if err != nil {
-				c.logger.Warnf("Error connecting to fRPC server in validator: %s", err)
+				c.logger.Infof("Error connecting to fRPC server in validator: %s", err)
+				if i+1 == maxRetries {
+					break
+				}
 				time.Sleep(retryInterval)
 				retryInterval *= 2
 			} else {
@@ -293,16 +256,16 @@ func (c *Client) connectFRPC() {
 	}
 }
 
-func (c Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
+func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
 	ch := make(chan *model.RejectedTxNotification)
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[BlobServer] context done, closing subscription: %s", source)
+		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
 		c.running = false
 		err := c.conn.Close()
 		if err != nil {
-			c.logger.Errorf("[BlobServer] failed to close connection", err)
+			c.logger.Errorf("[Asset] failed to close connection", err)
 		}
 	}()
 

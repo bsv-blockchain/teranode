@@ -1,25 +1,26 @@
 syntax = "proto3";
 
-option go_package = ".;blockassembly_api";
+option go_package = ".;blockvalidation_api";
 
 package blockvalidation_api;
 
-import "google/protobuf/timestamp.proto";
-import "google/protobuf/empty.proto";
-
 service BlockValidationAPI {
   // Health returns the health of the API.
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
-  rpc BlockFound (BlockFoundRequest) returns (google.protobuf.Empty) {}
-  rpc SubtreeFound (SubtreeFoundRequest) returns (google.protobuf.Empty) {}
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+  rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
+  rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
+  rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
 }
+
+// swagger:model EmptyMessage
+message EmptyMessage {}
 
 // swagger:model HealthResponse
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  uint32 timestamp = 3;
 }
 
 // swagger:model BlockFoundRequest
@@ -42,4 +43,14 @@ message GetSubtreeRequest {
 // swagger:model GetSubtreeResponse
 message GetSubtreeResponse {
   bytes subtree = 1;
+}
+
+// swagger:model SetTxMetaRequest
+message SetTxMetaRequest {
+  repeated bytes data = 1;
+}
+
+// swagger:model SetTxMetaResponse
+message SetTxMetaResponse {
+  bool ok = 1;
 }

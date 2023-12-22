@@ -54,4 +54,4 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:base-build-${{ steps.vars.outputs.sha_short }}
-          platforms: linux/amd64 #, linux/arm64   Disabled multi-arch builds for now
+          platforms: linux/amd64,linux/arm64

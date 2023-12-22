@@ -1,63 +1,65 @@
 package utxo
 
 import (
-	"errors"
 	"fmt"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-var (
-	ErrNotFound      = errors.New("utxo not found")
-	ErrAlreadyExists = errors.New("utxo already exists")
-	ErrSpent         = errors.New("utxo already spent")
-	ErrLockTime      = errors.New("utxo not spendable yet, due to lock time")
-	ErrChainHash     = errors.New("utxo chain hash could not be calculated")
-	ErrStore         = errors.New("utxo store error")
+const (
+	isoFormat = "2006-01-02T15:04:05Z"
 )
 
-type ErrSpentExtra struct {
-	Err          error
+var (
+	ErrNotFound      = ubsverrors.New("utxo not found")
+	ErrAlreadyExists = ubsverrors.New("utxo already exists")
+	ErrTypeSpent     = &ErrSpent{}
+	ErrTypeLockTime  = &ErrLockTime{}
+	ErrChainHash     = ubsverrors.New("utxo chain hash could not be calculated")
+	ErrStore         = ubsverrors.New("utxo store error")
+)
+
+type ErrSpent struct {
 	SpendingTxID *chainhash.Hash
 }
 
-func NewErrSpentExtra(spendingTxID *chainhash.Hash) *ErrSpentExtra {
-	return &ErrSpentExtra{
-		Err:          ErrSpent,
+func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
+	e := ubsverrors.Wrap(&ErrSpent{
 		SpendingTxID: spendingTxID,
-	}
+	}, optionalErrs...)
+
+	return e
 }
-func (e *ErrSpentExtra) Error() string {
+
+func (e *ErrSpent) Error() string {
 	if e.SpendingTxID == nil {
-		return e.Err.Error()
+		return "utxo already spent (invalid use of ErrSpent as spendingTxID is not set)"
 	}
-	return fmt.Sprintf("%s: %s", e.Err, e.SpendingTxID.String())
+	return fmt.Sprintf("utxo already spent by txid %s", e.SpendingTxID.String())
 }
 
-func (e *ErrSpentExtra) Unwrap() error {
-	return e.Err
+type ErrLockTime struct {
+	lockTime    uint32
+	blockHeight uint32
 }
 
-type ErrLockTimeExtra struct {
-	Err         error
-	LockTime    uint32
-	BlockHeight uint32
+func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
+	return ubsverrors.Wrap(&ErrLockTime{
+		lockTime:    lockTime,
+		blockHeight: blockHeight,
+	}, optionalErrs...)
 }
-
-func NewErrLockTimeExtra(lockTime uint32, blockHeight uint32) *ErrLockTimeExtra {
-	return &ErrLockTimeExtra{
-		Err:         ErrLockTime,
-		LockTime:    lockTime,
-		BlockHeight: blockHeight,
+func (e *ErrLockTime) Error() string {
+	if e.lockTime == 0 {
+		return "utxo is locked (invalid use of ErrLockTime as locktime is zero)"
 	}
-}
-func (e *ErrLockTimeExtra) Error() string {
-	if e.LockTime == 0 {
-		return e.Err.Error()
-	}
-	return fmt.Sprintf("%s : locktime %d (height check: %d)", e.Err, e.LockTime, e.BlockHeight)
-}
 
-func (e *ErrLockTimeExtra) Unwrap() error {
-	return e.Err
+	if e.lockTime >= 500000000 {
+		// This is a timestamp based locktime
+		spendableAt := time.Unix(int64(e.lockTime), 0)
+		return fmt.Sprintf("utxo is locked until %s", spendableAt.UTC().Format(isoFormat))
+	}
+	return fmt.Sprintf("utxo is locked until block %d (height check: %d)", e.lockTime, e.blockHeight)
 }

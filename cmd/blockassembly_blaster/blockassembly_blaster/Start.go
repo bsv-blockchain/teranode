@@ -2,29 +2,26 @@ package blockassembly_blaster
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
-	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"crypto/rand"
-	"net/http"
-	_ "net/http/pprof"
-
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
 var (
@@ -34,7 +31,6 @@ var (
 	prometheusBlockAssemblerAddTx prometheus.Counter
 	workerCount                   int
 	grpcClient                    blockassembly_api.BlockAssemblyAPIClient
-	drpcClient                    blockassembly_api.DRPCBlockAssemblyAPIClient
 	frpcClient                    *blockassembly_api.Client
 	broadcastProtocol             string
 	batchSize                     int
@@ -84,11 +80,11 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|drpc|http)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|http)")
 	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
 	flag.Parse()
 
-	logger := gocore.Log("block_assembly_blaster")
+	logger := ulogger.New("block_assembly_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -107,18 +103,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = blockassembly_api.NewBlockAssemblyAPIClient(conn)
-
-	case "drpc":
-		if blockassemblyDrpcAddress, ok := gocore.Config().Get("blockassembly_drpcAddress"); ok {
-			rawConn, err := net.Dial("tcp", blockassemblyDrpcAddress)
-			if err != nil {
-				panic(err)
-			}
-			conn := drpcconn.New(rawConn)
-			drpcClient = blockassembly_api.NewDRPCBlockAssemblyAPIClient(conn)
-		} else {
-			panic(fmt.Errorf("must have valid blockassembly_drpcAddress"))
-		}
 
 	case "frpc":
 		if blockassemblyFrpcAddress, ok := gocore.Config().Get("blockassembly_frpcAddress"); ok {
@@ -155,8 +139,6 @@ func Start() {
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
 	case "grpc":
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	case "drpc":
-		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
 	case "frpc":
 		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
@@ -170,7 +152,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	var batchCounter = 0
 	txRequests := make([]*blockassembly_api.AddTxRequest, batchSize)
 
@@ -217,7 +199,7 @@ func worker(logger utils.Logger) {
 	}
 }
 
-func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxRequest) error {
+func sendToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxRequest) error {
 	switch broadcastProtocol {
 
 	case "disabled":
@@ -225,10 +207,6 @@ func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *bl
 
 	case "grpc":
 		_, err := grpcClient.AddTx(ctx, req)
-		return err
-
-	case "drpc":
-		_, err := drpcClient.AddTx(ctx, req)
 		return err
 
 	case "frpc":
@@ -247,15 +225,11 @@ func sendToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *bl
 	return nil
 }
 
-func sendBatchToBlockAssemblyServer(ctx context.Context, logger utils.Logger, req *blockassembly_api.AddTxBatchRequest) error {
+func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxBatchRequest) error {
 	switch broadcastProtocol {
 
 	case "grpc":
 		_, err := grpcClient.AddTxBatch(ctx, req)
-		return err
-
-	case "drpc":
-		_, err := drpcClient.AddTxBatch(ctx, req)
 		return err
 
 	case "frpc":

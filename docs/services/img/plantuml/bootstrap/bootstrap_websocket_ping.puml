@@ -1,0 +1,27 @@
+@startuml
+participant "Server" as S
+database "WebSocket Clients" as WS
+participant "WebSocket Client" as WC
+
+== Ping WebSocket Clients ==
+S -> S : Every 10 seconds
+
+S -> WS : Iterate over WebSocket Clients
+activate WS
+loop Each WebSocket Client
+    S -> WC : Send Ping
+    activate WC
+    alt If Client Responds
+        WC --> S : Acknowledge Ping
+    else If Client Does Not Respond
+        S -> WS : Mark Client for Disconnection
+    end
+    deactivate WC
+end
+deactivate WS
+S -> WS : Disconnect Unresponsive Clients
+deactivate S
+@enduml
+
+
+@enduml

@@ -12,6 +12,7 @@ import (
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -20,9 +21,9 @@ import (
 )
 
 const (
-	aerospikeHost      = "aero.ubsv-store0.eu-north-1.ubsv.dev" // "localhost"
-	aerospikePort      = 3000                                   // 3800
-	aerospikeNamespace = "utxostore"                            // test
+	aerospikeHost      = "localhost" // "localhost"
+	aerospikePort      = 3800        // 3800
+	aerospikeNamespace = "test"      // test
 )
 
 var (
@@ -60,7 +61,7 @@ func TestAerospike(t *testing.T) {
 
 	// ubsv db client
 	var db *Store
-	db, err = New(aeroURL)
+	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -121,12 +122,29 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(1), value.Generation)
 
 		err = db.Store(context.Background(), tx)
-		require.NoError(t, err)
+		require.Error(t, err)
 
 		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		err = db.Store(context.Background(), tx)
+		require.Error(t, err)
+	})
+
+	t.Run("aerospike store multi", func(t *testing.T) {
+		txM := tx.Clone()
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+		_ = txM.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
+
+		cleanDB(t, client, txM)
+		err = db.Store(context.Background(), txM)
+		require.NoError(t, err)
+
+		err = db.Store(context.Background(), txM)
+		require.Error(t, err)
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {
@@ -149,7 +167,7 @@ func TestAerospike(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
-		require.Error(t, err, utxostore.ErrSpent)
+		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
 	})
 
 	t.Run("aerospike spend with expiry", func(t *testing.T) {
@@ -174,7 +192,7 @@ func TestAerospike(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
-		require.Error(t, err, utxostore.ErrSpent)
+		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
 
 		time.Sleep(2 * time.Second)
 
@@ -242,7 +260,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(1), value.Generation)
 
 		err = db.Spend(context.Background(), spends)
-		require.Error(t, err, utxostore.ErrLockTime)
+		require.ErrorIs(t, err, utxostore.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -283,7 +301,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(1), value.Generation)
 
 		err = db.Spend(context.Background(), spends)
-		require.Error(t, err, utxostore.ErrLockTime)
+		require.ErrorIs(t, err, utxostore.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -300,10 +318,19 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, hash[:], value.Bins["txid"].([]byte))
 		require.Equal(t, uint32(2), value.Generation)
 	})
+
+	t.Run("aerospike store error", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		err = db.Store(context.Background(), tx)
+		require.NoError(t, err)
+
+		err = db.Store(context.Background(), tx)
+		require.Error(t, err)
+	})
 }
 
 func cleanDB(t *testing.T, client *aero.Client, tx *bt.Tx) {
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(context.Background(), tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	require.NoError(t, err)
 
 	for _, utxoHash := range utxoHashes {

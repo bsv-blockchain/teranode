@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -31,7 +32,6 @@ import (
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -50,16 +50,16 @@ type Server struct {
 	host              host.Host
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
-	logger            utils.Logger
+	logger            ulogger.Logger
 	bitcoinProtocolId string
 
 	blockchainClient      blockchain.ClientI
 	blockValidationClient *blockvalidation.Client
 	validatorClient       *validator.Client
 
-	blobServerHttpAddressURL string
-	e                        *echo.Echo
-	notificationCh           chan *notificationMsg
+	AssetHttpAddressURL string
+	e                   *echo.Echo
+	notificationCh      chan *notificationMsg
 }
 
 type BestBlockMessage struct {
@@ -94,7 +94,7 @@ type RejectedTxMessage struct {
 	PeerId string
 }
 
-func NewServer(logger utils.Logger) *Server {
+func NewServer(logger ulogger.Logger) *Server {
 	logger.Debugf("Creating P2P service")
 	var pk *crypto.PrivKey
 	var err error
@@ -138,7 +138,7 @@ func NewServer(logger utils.Logger) *Server {
 	}
 	rtn, ok := gocore.Config().Get("p2p_rejected_tx_topic")
 	if !ok {
-		panic("p2p_mining_on_topic not set in config")
+		panic("p2p_rejected_tx_topic not set in config")
 	}
 
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
@@ -165,27 +165,31 @@ func NewServer(logger utils.Logger) *Server {
 	}
 }
 
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("P2P service initialising")
 
-	s.blockchainClient, err = blockchain.NewClient(ctx)
+	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
 	if err != nil {
 		return fmt.Errorf("could not create blockchain client [%w]", err)
 	}
 
-	blobServerHttpAddressURL, _, _ := gocore.Config().GetURL("blobserver_httpAddress")
+	AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
-	if blobServerHttpAddressURL.Scheme == "http" && securityLevel == 1 {
-		blobServerHttpAddressURL.Scheme = "https"
-		s.logger.Warnf("blobserver_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-	} else if blobServerHttpAddressURL.Scheme == "https" && securityLevel == 0 {
-		blobServerHttpAddressURL.Scheme = "http"
-		s.logger.Warnf("blobserver_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+	if AssetHttpAddressURL.Scheme == "http" && securityLevel == 1 {
+		AssetHttpAddressURL.Scheme = "https"
+		s.logger.Warnf("asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+	} else if AssetHttpAddressURL.Scheme == "https" && securityLevel == 0 {
+		AssetHttpAddressURL.Scheme = "http"
+		s.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 	}
-	s.blobServerHttpAddressURL = blobServerHttpAddressURL.String()
+	s.AssetHttpAddressURL = AssetHttpAddressURL.String()
 
-	s.blockValidationClient = blockvalidation.NewClient(ctx)
+	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
 
 	s.validatorClient, err = validator.NewClient(ctx, s.logger)
 	if err != nil {
@@ -214,6 +218,7 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 
 	e.GET("/ws", s.HandleWebSocket(s.notificationCh))
+
 	go func() {
 		err := s.StartHttp(ctx)
 		if err != nil {
@@ -221,6 +226,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return
 		}
 	}()
+
 	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName, miningOnTopicName, rejectedTxTopicName}
 	go s.discoverPeers(ctx, topicNames)
 
@@ -259,8 +265,11 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.handleSubtreeTopic(ctx)
 	go s.handleMiningOnTopic(ctx)
 	go s.blockchainSubscriptionListener(ctx)
+	go s.validatorSubscriptionListener(ctx)
 
 	s.sendBestBlockMessage(ctx)
+
+	<-ctx.Done()
 
 	return nil
 }
@@ -286,51 +295,12 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 	// define vars here to prevent too many allocs
 	var notification *model.Notification
-	var rejectedTxNotification *model.RejectedTxNotification
 	var blockMessage BlockMessage
 	var miningOnMessage MiningOnMessage
 	var subtreeMessage SubtreeMessage
-	var rejectedTxMessage RejectedTxMessage
 	var header *model.BlockHeader
 	var meta *model.BlockHeaderMeta
 	var msgBytes []byte
-
-	// Subscribe to the validator service
-	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
-	if err != nil {
-		s.logger.Errorf("error subscribing to validator service: ", err)
-		return
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				s.logger.Infof("P2P service shutting down")
-				return
-			case rejectedTxNotification = <-validatorSubscription:
-				if rejectedTxNotification == nil {
-					continue
-				}
-				// received a message
-				s.logger.Debugf("P2P Received %s rejected tx notification: %s", rejectedTxNotification.TxId, rejectedTxNotification.Reason)
-
-				rejectedTxMessage = RejectedTxMessage{
-					TxId:   rejectedTxNotification.TxId,
-					Reason: rejectedTxNotification.Reason,
-					PeerId: s.host.ID().String(),
-				}
-				msgBytes, err = json.Marshal(rejectedTxMessage)
-				if err != nil {
-					s.logger.Errorf("json marshal error: ", err)
-					continue
-				}
-				if err = s.topics[rejectedTxTopicName].Publish(ctx, msgBytes); err != nil {
-					s.logger.Errorf("publish error:", err)
-				}
-			}
-		}
-
-	}()
 
 	for {
 		select {
@@ -348,7 +318,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// if it's a block notification send it on the block channel.
 				blockMessage = BlockMessage{
 					Hash:       notification.Hash.String(),
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.host.ID().String(),
 				}
 
@@ -371,7 +341,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				miningOnMessage = MiningOnMessage{
 					Hash:         header.Hash().String(),
 					PreviousHash: header.HashPrevBlock.String(),
-					DataHubUrl:   s.blobServerHttpAddressURL,
+					DataHubUrl:   s.AssetHttpAddressURL,
 					PeerId:       s.host.ID().String(),
 					Height:       meta.Height,
 					Miner:        meta.Miner,
@@ -391,7 +361,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = SubtreeMessage{
 					Hash:       notification.Hash.String(),
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.host.ID().String(),
 				}
 				msgBytes, err = json.Marshal(subtreeMessage)
@@ -405,6 +375,51 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (s *Server) validatorSubscriptionListener(ctx context.Context) {
+	s.logger.Debugf("validatorSubscriptionListener\n")
+	// Subscribe to the validator service
+	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
+	if err != nil {
+		s.logger.Errorf("error subscribing to validator service: ", err)
+		return
+	}
+	// define vars here to prevent too many allocs
+	var rejectedTxNotification *model.RejectedTxNotification
+	var rejectedTxMessage RejectedTxMessage
+	var msgBytes []byte
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("P2P service shutting down")
+			return
+		case rejectedTxNotification = <-validatorSubscription:
+			if rejectedTxNotification == nil {
+				s.logger.Debugf("P2P Received nil rejected tx notification")
+				continue
+			}
+			// received a message
+			s.logger.Debugf("P2P Received %s rejected tx notification: %s", rejectedTxNotification.TxId, rejectedTxNotification.Reason)
+
+			rejectedTxMessage = RejectedTxMessage{
+				TxId:   rejectedTxNotification.TxId,
+				Reason: rejectedTxNotification.Reason,
+				PeerId: s.host.ID().String(),
+			}
+			msgBytes, err = json.Marshal(rejectedTxMessage)
+			if err != nil {
+				s.logger.Errorf("json marshal error: ", err)
+				continue
+			}
+			s.logger.Debugf("P2P publishing rejectedTxMessage")
+			if err = s.topics[rejectedTxTopicName].Publish(ctx, msgBytes); err != nil {
+				s.logger.Errorf("publish error:", err)
+			}
+		}
+	}
+
 }
 
 func (s *Server) StartHttp(ctx context.Context) error {
@@ -499,7 +514,7 @@ func readPrivateKey() (*crypto.PrivKey, error) {
 }
 
 func (s *Server) discoverPeers(ctx context.Context, tn []string) {
-	kademliaDHT := initDHT(ctx, s.host)
+	kademliaDHT := InitDHT(ctx, s.host)
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
 	for _, topicName := range tn {
 		dutil.Advertise(ctx, routingDiscovery, topicName)
@@ -521,7 +536,7 @@ ConnectLoop:
 
 					peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
-						panic(err)
+						s.logger.Errorf("error finding peers: %+v", err)
 					}
 
 					for p := range peerChan {
@@ -610,7 +625,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context) {
 				blockMessage = BlockMessage{
 					Hash:       bh.Hash().String(),
 					Height:     bhMeta.Height,
-					DataHubUrl: s.blobServerHttpAddressURL,
+					DataHubUrl: s.AssetHttpAddressURL,
 				}
 
 				msgBytes, err = json.Marshal(blockMessage)
@@ -688,7 +703,7 @@ func (s *Server) handleBlockTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Timestamp: time.Now().UTC(),
+				Timestamp: time.Now().UTC().Format(isoFormat),
 				Type:      "block",
 				Hash:      blockMessage.Hash,
 				BaseURL:   blockMessage.DataHubUrl,
@@ -738,10 +753,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Type:    "subtree",
-				Hash:    subtreeMessage.Hash,
-				BaseURL: subtreeMessage.DataHubUrl,
-				PeerId:  subtreeMessage.PeerId,
+				Timestamp: time.Now().UTC().Format(isoFormat),
+				Type:      "subtree",
+				Hash:      subtreeMessage.Hash,
+				BaseURL:   subtreeMessage.DataHubUrl,
+				PeerId:    subtreeMessage.PeerId,
 			}
 
 			if pubSubMessage.ReceivedFrom != s.host.ID() {
@@ -786,7 +802,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context) {
 			}
 
 			s.notificationCh <- &notificationMsg{
-				Timestamp:    time.Now().UTC(),
+				Timestamp:    time.Now().UTC().Format(isoFormat),
 				Type:         "mining_on",
 				Hash:         miningOnMessage.Hash,
 				BaseURL:      miningOnMessage.DataHubUrl,

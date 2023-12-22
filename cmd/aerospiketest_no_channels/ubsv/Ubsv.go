@@ -9,22 +9,22 @@ import (
 	// "github.com/aerospike/aerospike-client-go/v6"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 )
 
 type Ubsv struct {
-	logger utils.Logger
+	logger ulogger.Logger
 	store  utxostore.Interface
 }
 
-func New(logger utils.Logger, timeout string, addr string, port int) *Ubsv {
+func New(logger ulogger.Logger, timeout string, addr string, port int) *Ubsv {
 	urlStr := fmt.Sprintf("aerospike://%s:%d/utxostore", addr, port)
 	if timeout != "" {
 		urlStr += "?timeout=" + timeout
 	}
 	storeUrl, _ := url.Parse(urlStr)
-	store, err := aerospike.New(storeUrl)
+	store, err := aerospike.New(logger, storeUrl)
 	if err != nil {
 		panic(err)
 	}

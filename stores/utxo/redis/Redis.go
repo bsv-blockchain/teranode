@@ -12,6 +12,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,15 +23,16 @@ import (
 
 type Redis struct {
 	url                *url.URL
+	logger             ulogger.Logger
 	rdb                redis.Cmdable
 	mode               string
 	heightMutex        sync.RWMutex
 	currentBlockHeight uint32
-	spentUtxoTtl       time.Duration
+	spentUtxoTtl       uint32
 	timeout            time.Duration
 }
 
-func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	o := &redis.Options{
 		Addr:        u.Host,
 		PoolTimeout: time.Duration(10) * time.Second,
@@ -53,14 +55,15 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "client",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
 
-func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make([]string, 0)
@@ -88,14 +91,15 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "cluster",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
 
-func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make(map[string]string)
@@ -125,9 +129,10 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:          u,
+		logger:       logger,
 		mode:         "ring",
 		rdb:          rdb,
-		spentUtxoTtl: time.Duration(spentUtxoTtl) * time.Second,
+		spentUtxoTtl: uint32(spentUtxoTtl),
 		timeout:      time.Duration(timeout) * time.Millisecond,
 	}, nil
 }
@@ -138,6 +143,10 @@ func (r *Redis) SetBlockHeight(height uint32) error {
 
 	r.currentBlockHeight = height
 	return nil
+}
+
+func (r *Redis) GetBlockHeight() (uint32, error) {
+	return r.currentBlockHeight, nil
 }
 
 func (r *Redis) getBlockHeight() uint32 {
@@ -263,15 +272,13 @@ func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 		case <-ctx.Done():
 			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
 		default:
-			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight()); err != nil {
-
+			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight(), r.spentUtxoTtl); err != nil {
 				// revert the spent utxos
 				_ = r.UnSpend(ctx, spentSpends)
 				return err
 			} else {
 				spentSpends = append(spentSpends, spend)
 			}
-			r.rdb.Expire(ctx, spend.Hash.String(), r.spentUtxoTtl)
 		}
 	}
 

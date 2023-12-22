@@ -1,8 +1,6 @@
 package util
 
 import (
-	"time"
-
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -28,7 +26,6 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 		Tx:             tx,
 		Fee:            fee,
 		SizeInBytes:    uint64(tx.Size()),
-		FirstSeen:      uint32(time.Now().Unix()),
 		ParentTxHashes: parentTxHashes,
 	}
 

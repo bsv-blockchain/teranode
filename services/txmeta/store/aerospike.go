@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package store
 
@@ -7,10 +7,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/aerospike"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(url *url.URL) (txmeta.Store, error) {
-		return aerospike.New(url)
+	availableDatabases["aerospike"] = func(logger ulogger.Logger, url *url.URL) (txmeta.Store, error) {
+		return aerospike.New(logger, url)
 	}
 }

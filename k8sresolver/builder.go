@@ -5,8 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -17,7 +16,8 @@ const (
 )
 
 var (
-	logger = gocore.Log("k8sres")
+	// TODO this logger does not go to sentry
+	logger = ulogger.New("k8sres")
 )
 
 func init() {
@@ -26,14 +26,14 @@ func init() {
 }
 
 // NewBuilder creates a k8sBuilder which is used to factory K8S service resolvers.
-func NewBuilder(l utils.Logger) resolver.Builder {
+func NewBuilder(l ulogger.Logger) resolver.Builder {
 	return &k8sBuilder{
 		logger: l,
 	}
 }
 
 type k8sBuilder struct {
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {

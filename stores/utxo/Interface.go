@@ -33,4 +33,5 @@ type Interface interface {
 	Delete(ctx context.Context, tx *bt.Tx) error
 	DeleteSpends(deleteSpends bool)
 	SetBlockHeight(height uint32) error
+	GetBlockHeight() (uint32, error)
 }

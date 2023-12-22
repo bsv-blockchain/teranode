@@ -1,10 +1,10 @@
 import { writable, get } from 'svelte/store'
-import { blobServerHTTPAddress } from '@stores/nodeStore.js'
+import { assetHTTPAddress } from '@stores/nodeStore.js'
 
 export const blocks = writable([])
 
 export async function loadLastBlocks() {
-  const url = `${get(blobServerHTTPAddress)}/lastblocks?n=10&includeOrphans=true`
+  const url = `${get(assetHTTPAddress)}/lastblocks?n=10&includeOrphans=true`
 
   try {
     const res = await fetch(url)
@@ -37,7 +37,7 @@ export async function onMessage(data) {
   let b = [...get(blocks)]
 
   // Now fetch the block header
-  const url = get(blobServerHTTPAddress) + '/header/' + data.hash + '/json'
+  const url = get(assetHTTPAddress) + '/header/' + data.hash + '/json'
 
   try {
     const res = await fetch(url)

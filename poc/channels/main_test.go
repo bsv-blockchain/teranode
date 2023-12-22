@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_atomic_pointer(t *testing.T) {
@@ -55,7 +56,8 @@ func Test_main(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan int, 1000)
 
-	subtree := util.NewTreeByLeafCount(1024 * 1024)
+	subtree, err := util.NewTreeByLeafCount(1024 * 1024)
+	require.NoError(t, err)
 
 	go func() {
 		for {
@@ -66,7 +68,7 @@ func Test_main(t *testing.T) {
 				b := make([]byte, 32)
 				binary.LittleEndian.PutUint64(b, uint64(n))
 				hash := chainhash.Hash(b)
-				_ = subtree.AddNode(&hash, uint64(n), uint64(n))
+				_ = subtree.AddNode(hash, uint64(n), uint64(n))
 			}
 		}
 	}()
@@ -90,7 +92,8 @@ func Test_main_batched(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan []int, 1000)
 
-	subtree := util.NewTreeByLeafCount(1024 * 1024)
+	subtree, err := util.NewTreeByLeafCount(1024 * 1024)
+	require.NoError(t, err)
 
 	go func() {
 		for {
@@ -102,7 +105,7 @@ func Test_main_batched(t *testing.T) {
 					b := make([]byte, 32)
 					binary.LittleEndian.PutUint64(b, uint64(n))
 					hash := chainhash.Hash(b)
-					_ = subtree.AddNode(&hash, uint64(n), uint64(n))
+					_ = subtree.AddNode(hash, uint64(n), uint64(n))
 				}
 			}
 		}

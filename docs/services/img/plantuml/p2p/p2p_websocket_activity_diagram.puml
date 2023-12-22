@@ -1,0 +1,47 @@
+@startuml
+
+start
+:Create clientChannels map;
+:Create newClientCh channel;
+:Create deadClientCh channel;
+:Start pingTimer;
+
+fork
+    :Listen for events;
+    repeat
+        fork
+            :New client connects;
+            ->Add client to clientChannels;
+        fork again
+            :Client disconnects;
+            ->Remove client from clientChannels;
+        fork again
+            :Ping timer ticks;
+            if (Are there connected clients?) then (yes)
+                :Marshal ping message;
+                ->Send ping to all clients;
+            else (no)
+            endif
+        fork again
+            :Notification received;
+            if (Are there connected clients?) then (yes)
+                :Marshal notification;
+                ->Send notification to all clients;
+            else (no)
+            endif
+        end fork
+    repeat while (Server is running)
+end fork
+
+:Handle WebSocket request;
+->Upgrade HTTP to WebSocket;
+:Send data over WebSocket;
+if (Error sending data) then (yes)
+    ->Add channel to deadClientCh;
+    stop
+else (no)
+endif
+
+stop
+
+@enduml

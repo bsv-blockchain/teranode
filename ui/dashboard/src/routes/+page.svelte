@@ -1,6 +1,6 @@
 <script>
   import BlocksTable from '@components/BlocksTable.svelte'
-  import { blobServerHTTPAddress } from '@stores/nodeStore.js'
+  import { assetHTTPAddress } from '@stores/nodeStore.js'
 
   let blocks = []
   let error = ''
@@ -9,7 +9,7 @@
   const numberOfBlocks = 100
 
   // Fetch data when the selected node changes
-  $: $blobServerHTTPAddress && fetchData()
+  $: $assetHTTPAddress && fetchData()
 
   function getHumanReadableTime(diff) {
     const days = Math.floor(diff / (1000 * 60 * 60 * 24))
@@ -30,31 +30,33 @@
   }
 
   const getTps = (transactionCount, diff) => {
-
     const timeDiff = diff / 1000 // The time diff between blocks (in seconds)
 
     if (timeDiff === 0) {
-        return '';
+      return ''
     } else {
-        const tps =  transactionCount / timeDiff;
+      const tps = transactionCount / timeDiff
 
-        if(tps < 1) {
-            return '<1';
-        } else {
-            return tps.toLocaleString(undefined, {maximumFractionDigits: 0, minimumFractionDigits: 0 });
-        }
+      if (tps < 1) {
+        return '<1'
+      } else {
+        return tps.toLocaleString(undefined, {
+          maximumFractionDigits: 0,
+          minimumFractionDigits: 0,
+        })
+      }
     }
   }
 
   async function fetchData() {
     try {
-      if (!$blobServerHTTPAddress) {
+      if (!$assetHTTPAddress) {
         return
       }
 
       error = ''
 
-      url = `${$blobServerHTTPAddress}/lastblocks?n=${numberOfBlocks + 1}` // Get 1 more block than we need to calculate the delta time
+      url = `${$assetHTTPAddress}/lastblocks?n=${numberOfBlocks + 1}` // Get 1 more block than we need to calculate the delta time
 
       const res = await fetch(url)
 
@@ -75,7 +77,7 @@
         const blockTime = new Date(block.timestamp)
         const diff = blockTime - prevBlockTime
 
-        block.tps = getTps(block.transactionCount, diff);
+        block.tps = getTps(block.transactionCount, diff)
 
         block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
       })

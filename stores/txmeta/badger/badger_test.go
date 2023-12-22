@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/tests"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +18,7 @@ func TestMemory(t *testing.T) {
 
 		_ = os.RemoveAll("./test")
 
-		db, err := New("./test")
+		db, err := New(ulogger.TestLogger{}, "./test")
 		require.NoError(t, err)
 
 		err = db.Delete(context.Background(), tests.Tx1.TxIDChainHash())
@@ -34,13 +35,13 @@ func TestMemorySanity(t *testing.T) {
 
 	_ = os.RemoveAll("./test")
 
-	db, err := New("./test")
+	db, err := New(ulogger.TestLogger{}, "./test")
 	require.NoError(t, err)
 	tests.Sanity(t, db)
 }
 
 func BenchmarkMemory(b *testing.B) {
-	db, err := New("./test")
+	db, err := New(ulogger.TestLogger{}, "./test")
 	require.NoError(b, err)
 	tests.Benchmark(b, db)
 }

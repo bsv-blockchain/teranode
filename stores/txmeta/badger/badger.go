@@ -8,33 +8,33 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type loggerWrapper struct {
-	*gocore.Logger
+	ulogger.Logger
 }
 
 type Badger struct {
 	mu     sync.Mutex
 	store  *badger.DB
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
 func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
 }
 
-func New(dir string) (*Badger, error) {
-	logger := loggerWrapper{gocore.Log("bdgr")}
+func New(logger ulogger.Logger, dir string) (*Badger, error) {
+	bLogger := loggerWrapper{logger.New("bdgr")}
 
 	opts := badger.DefaultOptions(dir).
-		WithLogger(logger).
+		WithLogger(bLogger).
 		WithLoggingLevel(badger.ERROR).WithNumMemtables(32).
 		WithMetricsEnabled(true)
 	s, err := badger.Open(opts)
@@ -136,7 +136,17 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (b *Badger) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	for _, hash := range hashes {
+		if err = b.SetMined(ctx, hash, blockID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -145,12 +155,12 @@ func (b *Badger) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *
 		return err
 	}
 
-	if data.BlockHashes == nil {
-		data.BlockHashes = []*chainhash.Hash{
-			blockHash,
+	if data.BlockIDs == nil {
+		data.BlockIDs = []uint32{
+			blockID,
 		}
 	} else {
-		data.BlockHashes = append(data.BlockHashes, blockHash)
+		data.BlockIDs = append(data.BlockIDs, blockID)
 	}
 
 	if err = b.store.Update(func(badgerTx *badger.Txn) error {

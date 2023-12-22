@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +15,7 @@ func TestSQL_GetState(t *testing.T) {
 		storeUrl, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
 		_, err = s.GetState(context.Background(), "test")

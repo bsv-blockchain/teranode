@@ -58,7 +58,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Propagation     | `-Propagation=1`    | Begin the Propagation process.                       |
 | Seeder          | `-Seeder=1`         | Activate the Seeder component.                       |
 | Miner           | `-Miner=1`          | Start the Miner component.                           |
-| Blob Server     | `-BlobServer=1`     | Initiate the Blob Server.                            |
+| Asset Service   | `-Asset=1`          | Initiate the Asset Service.                          |
 | Coinbase        | `-Coinbase=1`       | Activate the Coinbase component.                     |
 | Bootstrap       | `-Bootstrap=1`      | Start the Bootstrap process.                         |
 | P2P             | `-P2P=1`            | Begin the P2P communication process.                 |

@@ -1,10 +1,11 @@
 package util
 
 import (
+	"bufio"
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,8 +23,8 @@ type Subtree struct {
 	Fees             uint64
 	SizeInBytes      uint64
 	FeeHash          chainhash.Hash
-	Nodes            []*SubtreeNode
-	ConflictingNodes []*chainhash.Hash // conflicting nodes need to be checked when doing block assembly
+	Nodes            []SubtreeNode
+	ConflictingNodes []chainhash.Hash // conflicting nodes need to be checked when doing block assembly
 
 	// temporary (calculated) variables
 	rootHash     *chainhash.Hash
@@ -33,32 +34,40 @@ type Subtree struct {
 }
 
 // NewTree creates a new Subtree with a fixed height
-func NewTree(height int) *Subtree {
+func NewTree(height int) (*Subtree, error) {
 	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
 	return &Subtree{
-		Nodes:        make([]*SubtreeNode, 0, treeSize),
+		Nodes:        make([]SubtreeNode, 0, treeSize),
 		Height:       height,
 		FeeHash:      chainhash.Hash{},
 		treeSize:     treeSize,
 		feeBytes:     make([]byte, 8),
 		feeHashBytes: make([]byte, 40),
-	}
+	}, nil
 }
 
-func NewTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
+func NewTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	if !IsPowerOfTwo(maxNumberOfLeaves) {
 		panic("numberOfLeaves must be a power of two")
 	}
 
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
+
 	return NewTree(int(height))
 }
-func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) *Subtree {
+func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
+
 	return NewTree(int(height))
 }
 
 func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Recovered in NewSubtreeFromBytes: %v\n", r)
+		}
+	}()
+
 	subtree := &Subtree{}
 	err := subtree.Deserialize(b)
 	if err != nil {
@@ -74,8 +83,8 @@ func (st *Subtree) Duplicate() *Subtree {
 		Fees:             st.Fees,
 		SizeInBytes:      st.SizeInBytes,
 		FeeHash:          st.FeeHash,
-		Nodes:            make([]*SubtreeNode, len(st.Nodes)),
-		ConflictingNodes: make([]*chainhash.Hash, len(st.ConflictingNodes)),
+		Nodes:            make([]SubtreeNode, len(st.Nodes)),
+		ConflictingNodes: make([]chainhash.Hash, len(st.ConflictingNodes)),
 		rootHash:         st.rootHash,
 		treeSize:         st.treeSize,
 		feeBytes:         make([]byte, 8),
@@ -102,13 +111,13 @@ func (st *Subtree) IsComplete() bool {
 
 func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
 	if len(st.Nodes) < 1 {
-		st.Nodes = append(st.Nodes, &SubtreeNode{
+		st.Nodes = append(st.Nodes, SubtreeNode{
 			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
 		})
 	} else {
-		st.Nodes[0] = &SubtreeNode{
+		st.Nodes[0] = SubtreeNode{
 			Hash:        *node,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
@@ -121,7 +130,7 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes
 	return st.RootHash()
 }
 
-func (st *Subtree) AddSubtreeNode(node *SubtreeNode) error {
+func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
 	}
@@ -143,7 +152,7 @@ func (st *Subtree) AddSubtreeNode(node *SubtreeNode) error {
 	return nil
 }
 
-func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) error {
+func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return fmt.Errorf("subtree is full")
 	}
@@ -157,8 +166,8 @@ func (st *Subtree) AddNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64)
 	//	st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
 	//}
 
-	st.Nodes = append(st.Nodes, &SubtreeNode{
-		Hash:        *node,
+	st.Nodes = append(st.Nodes, SubtreeNode{
+		Hash:        node,
 		Fee:         fee,
 		SizeInBytes: sizeInBytes,
 	})
@@ -174,8 +183,12 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 		return st.rootHash
 	}
 
+	if st.Length() == 0 {
+		return nil
+	}
+
 	// calculate rootHash
-	store, err := st.BuildMerkleTreeStoreFromBytes()
+	store, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
 	if err != nil {
 		return nil
 	}
@@ -185,9 +198,9 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
-func (st *Subtree) Difference(ids TxMap) ([]*SubtreeNode, error) {
+func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
-	diff := make([]*SubtreeNode, 0, 1_000)
+	diff := make([]SubtreeNode, 0, 1_000)
 	for _, node := range st.Nodes {
 		if !ids.Exists(node.Hash) {
 			diff = append(diff, node)
@@ -213,7 +226,7 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 		return nil, fmt.Errorf("index out of range")
 	}
 
-	merkleTree, err := st.BuildMerkleTreeStoreFromBytes()
+	merkleTree, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -254,74 +267,9 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 	return nodes, nil
 }
 
-func (st *Subtree) BuildMerkleTreeStoreFromBytes() (*[]chainhash.Hash, error) {
-	if len(st.Nodes) == 0 {
-		return &[]chainhash.Hash{}, nil
-	}
-
-	// Calculate how many entries are in an array of that size.
-	nextPoT := NextPowerOfTwo(len(st.Nodes))
-	arraySize := nextPoT*2 - 1
-	// we do not include the original nodes in the merkle tree
-	merkles := make([]chainhash.Hash, nextPoT-1)
-
-	if arraySize == 1 {
-		// Handle this Bitcoin exception that the merkle root is the same as the transaction hash if there
-		// is only one transaction.
-		return &[]chainhash.Hash{st.Nodes[0].Hash}, nil
-	}
-
-	// Start the array offset after the last transaction and adjusted to the
-	// next power of two.
-	offset := 0
-	var hash [32]byte
-	var currentMerkle chainhash.Hash
-	var currentMerkle1 chainhash.Hash
-	for i := 0; i < arraySize-1; i += 2 {
-		if i < nextPoT {
-			if i >= len(st.Nodes) {
-				currentMerkle = chainhash.Hash{}
-			} else {
-				currentMerkle = st.Nodes[i].Hash
-			}
-
-			if i+1 >= len(st.Nodes) {
-				currentMerkle1 = chainhash.Hash{}
-			} else {
-				currentMerkle1 = st.Nodes[i+1].Hash
-			}
-		} else {
-			currentMerkle = merkles[i-nextPoT]
-			currentMerkle1 = merkles[i-nextPoT+1]
-		}
-
-		switch {
-		// When there is no left child node, the parent is nil ("") too.
-		case currentMerkle.Equal(chainhash.Hash{}):
-			merkles[offset] = chainhash.Hash{}
-
-		// When there is no right child, the parent is generated by
-		// hashing the concatenation of the left child with itself.
-		case currentMerkle1.Equal(chainhash.Hash{}):
-			hash = sha256.Sum256(append(currentMerkle[:], currentMerkle[:]...))
-			hash = sha256.Sum256(hash[:])
-			merkles[offset] = chainhash.Hash(hash[:])
-
-		// The normal case sets the parent node to the double sha256
-		// of the concatenation of the left and right children.
-		default:
-			hash = sha256.Sum256(append(currentMerkle[:], currentMerkle1[:]...))
-			hash = sha256.Sum256(hash[:])
-			merkles[offset] = chainhash.Hash(hash[:])
-		}
-		offset++
-	}
-
-	return &merkles, nil
-}
-
 func (st *Subtree) Serialize() ([]byte, error) {
-	buf := bytes.NewBuffer([]byte{})
+	bufBytes := make([]byte, 0, 32+8+8+8+(len(st.Nodes)*32)+8+(len(st.ConflictingNodes)*32))
+	buf := bytes.NewBuffer(bufBytes)
 
 	// write root hash - this is only for checking the correctness of the data
 	_, err := buf.Write(st.RootHash()[:])
@@ -329,25 +277,31 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		return nil, fmt.Errorf("unable to write root hash: %v", err)
 	}
 
+	var b [8]byte
+
 	// write fees
-	if err = wire.WriteVarInt(buf, 0, st.Fees); err != nil {
+	binary.LittleEndian.PutUint64(b[:], st.Fees)
+	if _, err = buf.Write(b[:]); err != nil {
 		return nil, fmt.Errorf("unable to write fees: %v", err)
 	}
 
 	// write size
-	if err = wire.WriteVarInt(buf, 0, st.SizeInBytes); err != nil {
+	binary.LittleEndian.PutUint64(b[:], st.SizeInBytes)
+	if _, err = buf.Write(b[:]); err != nil {
 		return nil, fmt.Errorf("unable to write sizeInBytes: %v", err)
 	}
 
 	// write number of nodes
-	if err = wire.WriteVarInt(buf, 0, uint64(len(st.Nodes))); err != nil {
+	binary.LittleEndian.PutUint64(b[:], uint64(len(st.Nodes)))
+	if _, err = buf.Write(b[:]); err != nil {
 		return nil, fmt.Errorf("unable to write number of nodes: %v", err)
 	}
 
 	// write nodes
 	feeBytes := make([]byte, 8)
 	sizeBytes := make([]byte, 8)
-	for _, node := range st.Nodes {
+	var node SubtreeNode
+	for _, node = range st.Nodes {
 		_, err = buf.Write(node.Hash[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to write node: %v", err)
@@ -367,13 +321,15 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	}
 
 	// write number of conflicting nodes
-	if err = wire.WriteVarInt(buf, 0, uint64(len(st.ConflictingNodes))); err != nil {
+	binary.LittleEndian.PutUint64(b[:], uint64(len(st.ConflictingNodes)))
+	if _, err = buf.Write(b[:]); err != nil {
 		return nil, fmt.Errorf("unable to write number of conflicting nodes: %v", err)
 	}
 
 	// write conflicting nodes
-	for _, node := range st.ConflictingNodes {
-		_, err = buf.Write(node[:])
+	var nodeHash chainhash.Hash
+	for _, nodeHash = range st.ConflictingNodes {
+		_, err = buf.Write(nodeHash[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to write conflicting node: %v", err)
 		}
@@ -384,12 +340,14 @@ func (st *Subtree) Serialize() ([]byte, error) {
 
 // SerializeNodes serializes only the nodes (list of transaction ids), not the root hash, fees, etc.
 func (st *Subtree) SerializeNodes() ([]byte, error) {
-	buf := bytes.NewBuffer([]byte{})
+	b := make([]byte, 0, len(st.Nodes)*32)
+	buf := bytes.NewBuffer(b)
 
 	var err error
 
 	// write nodes
-	for _, node := range st.Nodes {
+	var node SubtreeNode
+	for _, node = range st.Nodes {
 		_, err = buf.Write(node.Hash[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to write node: %v", err)
@@ -400,6 +358,134 @@ func (st *Subtree) SerializeNodes() ([]byte, error) {
 }
 
 func (st *Subtree) Deserialize(b []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered in Deserialize: %v", r)
+		}
+	}()
+
+	buf := bytes.NewBuffer(b)
+
+	// read root hash
+	st.rootHash, err = chainhash.NewHash(buf.Next(32))
+	if err != nil {
+		return fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	// read fees
+	st.Fees = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read sizeInBytes
+	st.SizeInBytes = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read number of leaves
+	numLeaves := binary.LittleEndian.Uint64(buf.Next(8))
+
+	st.treeSize = int(numLeaves)
+	// the height of a subtree is always a power of two
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	// read leaves
+	st.Nodes = make([]SubtreeNode, numLeaves)
+	for i := uint64(0); i < numLeaves; i++ {
+		st.Nodes[i].Hash = chainhash.Hash(buf.Next(32))
+		st.Nodes[i].Fee = binary.LittleEndian.Uint64(buf.Next(8))
+		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(buf.Next(8))
+	}
+
+	// read number of conflicting nodes
+	numConflictingLeaves := binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read conflicting nodes
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
+		st.ConflictingNodes[i] = chainhash.Hash(buf.Next(32))
+	}
+
+	// calculate rootHash and compare with given rootHash
+	// we don't have to do this, because we already verified the root hash when we created the subtree
+	// this Deserialize function is only used for internally saved subtrees
+	//if !rootHash.IsEqual(st.RootHash()) {
+	//	return fmt.Errorf("root hash mismatch")
+	//}
+
+	return nil
+}
+
+func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered in DeserializeFromReader: %v", r)
+		}
+	}()
+
+	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+
+	// read root hash
+	st.rootHash = new(chainhash.Hash)
+	if _, err = io.ReadFull(buf, st.rootHash[:]); err != nil {
+		return fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	bytes8 := make([]byte, 8)
+
+	// read fees
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read fees: %v", err)
+	}
+	st.Fees = binary.LittleEndian.Uint64(bytes8)
+
+	// read sizeInBytes
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+	}
+	st.SizeInBytes = binary.LittleEndian.Uint64(bytes8)
+
+	// read number of leaves
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read number of leaves: %v", err)
+	}
+	numLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	st.treeSize = int(numLeaves)
+	// the height of a subtree is always a power of two
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	// read leaves
+	st.Nodes = make([]SubtreeNode, numLeaves)
+	for i := uint64(0); i < numLeaves; i++ {
+		if _, err = io.ReadFull(buf, st.Nodes[i].Hash[:]); err != nil {
+			return fmt.Errorf("unable to read node: %v", err)
+		}
+
+		if _, err = io.ReadFull(buf, bytes8); err != nil {
+			return fmt.Errorf("unable to read fees: %v", err)
+		}
+		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes8)
+		if _, err = io.ReadFull(buf, bytes8); err != nil {
+			return fmt.Errorf("unable to read SizeInBytes: %v", err)
+		}
+		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(bytes8)
+	}
+
+	// read number of conflicting nodes
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+	}
+	numConflictingLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	// read conflicting nodes
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
+		if _, err = io.ReadFull(buf, st.ConflictingNodes[i][:]); err != nil {
+			return fmt.Errorf("unable to read conflicting node: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	buf := bytes.NewBuffer(b)
 
 	// read root hash
@@ -437,7 +523,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
 
 	// read leaves
-	st.Nodes = make([]*SubtreeNode, numLeaves)
+	st.Nodes = make([]SubtreeNode, numLeaves)
 	var hash *chainhash.Hash
 	for i := uint64(0); i < numLeaves; i++ {
 		hash, err = chainhash.NewHash(buf.Next(32))
@@ -451,7 +537,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 		sizeBytes := buf.Next(8)
 		sizeInBytes := binary.LittleEndian.Uint64(sizeBytes)
 
-		st.Nodes[i] = &SubtreeNode{
+		st.Nodes[i] = SubtreeNode{
 			Hash:        *hash,
 			Fee:         fee,
 			SizeInBytes: sizeInBytes,
@@ -465,12 +551,14 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	}
 
 	// read conflicting nodes
-	st.ConflictingNodes = make([]*chainhash.Hash, numConflictingLeaves)
+	var conflictingHash *chainhash.Hash
+	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
 	for i := uint64(0); i < numConflictingLeaves; i++ {
-		st.ConflictingNodes[i], err = chainhash.NewHash(buf.Next(32))
+		conflictingHash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return fmt.Errorf("unable to read conflicting node: %v", err)
 		}
+		st.ConflictingNodes[i] = *conflictingHash
 	}
 
 	// calculate rootHash and compare with given rootHash
@@ -480,4 +568,60 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 
 	// TODO: look up the fee for the last tx and subtract it from the last chainedSubtree and add it to the currentSubtree
 	return nil
+}
+
+func (st *Subtree) DeserializeChan(b []byte) (nodeChan chan SubtreeNode, errChan chan error, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered in DeserializeChan: %v", r)
+		}
+	}()
+
+	nodeChan = make(chan SubtreeNode)
+	errChan = make(chan error, 1)
+	buf := bytes.NewBuffer(b)
+
+	// read root hash
+	_ = chainhash.Hash(buf.Next(32))
+
+	// read fees
+	st.Fees = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read sizeInBytes
+	st.SizeInBytes = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read number of leaves
+	numLeaves := binary.LittleEndian.Uint64(buf.Next(8))
+
+	st.treeSize = int(numLeaves)
+	st.Height = int(math.Ceil(math.Log2(float64(numLeaves))))
+
+	go func() {
+		defer close(nodeChan)
+		defer close(errChan)
+
+		for i := uint64(0); i < numLeaves; i++ {
+			nodeChan <- SubtreeNode{
+				Hash:        chainhash.Hash(buf.Next(32)),
+				Fee:         binary.LittleEndian.Uint64(buf.Next(8)),
+				SizeInBytes: binary.LittleEndian.Uint64(buf.Next(8)),
+			}
+		}
+	}()
+
+	return nodeChan, errChan, nil
+}
+
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func Max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

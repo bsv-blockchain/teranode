@@ -49,6 +49,10 @@ func (m *XsyncMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *XsyncMap) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *XsyncMap) Health(_ context.Context) (int, string, error) {
 	return 0, "XsyncMap Store", nil
 }
@@ -83,7 +87,7 @@ func (m *XsyncMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 		defer cancel()
 	}
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}
@@ -100,7 +104,7 @@ func (m *XsyncMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 		default:
 			if utxo, ok := m.m.Load(*hash); ok {
 				if utxo.Hash != nil {
-					return utxostore.ErrSpent
+					return utxostore.NewErrSpent(utxo.Hash)
 				} else {
 					return utxostore.ErrAlreadyExists
 				}
@@ -144,12 +148,12 @@ func (m *XsyncMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 				return nil
 			}
 
-			return utxostore.ErrLockTime
+			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 		} else {
 			if utxo.Hash.IsEqual(txID) {
 				return nil
 			} else {
-				return utxostore.ErrSpent
+				return utxostore.NewErrSpent(utxo.Hash)
 			}
 		}
 	}

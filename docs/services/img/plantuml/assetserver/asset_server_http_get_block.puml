@@ -1,0 +1,25 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "BlockchainClient" as Blockchain
+
+' Specific block by hash request
+Client -> HTTPServer : GET /block/:hash (BINARY_STREAM, HEX, JSON)
+activate HTTPServer
+HTTPServer -> Blockchain : GetBlock(ctx, hash)
+activate Blockchain
+Blockchain --> HTTPServer : Specific block data
+deactivate Blockchain
+HTTPServer --> Client : Response (Specific block data)
+deactivate HTTPServer
+
+' Last N blocks request
+Client -> HTTPServer : GET /lastblocks (n, includeOrphans, fromHeight)
+activate HTTPServer
+HTTPServer -> Blockchain : GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
+activate Blockchain
+Blockchain --> HTTPServer : Last N blocks data
+deactivate Blockchain
+HTTPServer --> Client : Response (Last N blocks data)
+deactivate HTTPServer
+@enduml

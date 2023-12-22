@@ -1,0 +1,32 @@
+@startuml
+
+skinparam ParticipantPadding 60
+
+actor Client
+participant "Transaction Validator\n(Server.go)" as ValidatorServer
+participant "TxMetaStore" as TxMetaStore
+
+Client -> ValidatorServer: Initiate Validation (gRPC)
+activate ValidatorServer
+
+ValidatorServer -> ValidatorServer: Validate(ctx, btTx)
+
+
+ValidatorServer -> TxMetaStore: Create(ctx, tx)
+activate TxMetaStore
+TxMetaStore --> ValidatorServer: Transaction Registered
+deactivate TxMetaStore
+
+alt error sending tx to block assembler
+    ValidatorServer -> TxMetaStore: Delete(ctx, txHash)
+    activate TxMetaStore
+    TxMetaStore --> ValidatorServer: Transaction Deleted
+    deactivate TxMetaStore
+end
+
+
+ValidatorServer --> Client: Response to Client
+
+deactivate ValidatorServer
+
+@enduml

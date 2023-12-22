@@ -1,24 +1,35 @@
 package util
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"testing"
+	"time"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewTree(t *testing.T) {
-	st := NewTree(20)
+	st, err := NewTree(20)
+	require.NoError(t, err)
+
 	if st.Size() != 1048576 {
 		t.Errorf("expected size to be 1048576, got %d", st.Size())
 	}
 }
 
 func TestRootHash(t *testing.T) {
-	st := NewTree(2)
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
 	if st.Size() != 4 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -26,17 +37,19 @@ func TestRootHash(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
 	hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
 	hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
-	_ = st.AddNode(hash3, 111, 0)
-	_ = st.AddNode(hash4, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
+	_ = st.AddNode(*hash3, 111, 0)
+	_ = st.AddNode(*hash4, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
 }
 
 func TestRootHashSimon(t *testing.T) {
-	st := NewTree(2)
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
 	if st.Size() != 4 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -45,32 +58,36 @@ func TestRootHashSimon(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
-	_ = st.AddNode(hash3, 111, 0)
-	_ = st.AddNode(hash4, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
+	_ = st.AddNode(*hash3, 111, 0)
+	_ = st.AddNode(*hash4, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", rootHash.String())
 }
 
 func TestTwoTransactions(t *testing.T) {
-	st := NewTree(1)
+	st, err := NewTree(1)
+	require.NoError(t, err)
+
 	if st.Size() != 2 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
 
 	hash1, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
 	hash2, _ := chainhash.NewHashFromStr("89878bfd69fba52876e5217faec126fc6a20b1845865d4038c12f03200793f48")
-	_ = st.AddNode(hash1, 111, 0)
-	_ = st.AddNode(hash2, 111, 0)
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
 
 	rootHash := st.RootHash()
 	assert.Equal(t, "7a059188283323a2ef0e02dd9f8ba1ac550f94646290d0a52a586e5426c956c5", rootHash.String())
 }
 
 func TestSubtree_GetMerkleProof(t *testing.T) {
-	st := NewTree(3)
+	st, err := NewTree(3)
+	require.NoError(t, err)
+
 	if st.Size() != 8 {
 		t.Errorf("expected size to be 4, got %d", st.Size())
 	}
@@ -87,7 +104,7 @@ func TestSubtree_GetMerkleProof(t *testing.T) {
 	var txHash *chainhash.Hash
 	for _, txID := range txIDS {
 		txHash, _ = chainhash.NewHashFromStr(txID)
-		_ = st.AddNode(txHash, 101, 0)
+		_ = st.AddNode(*txHash, 101, 0)
 	}
 
 	proof, err := st.GetMerkleProof(1)
@@ -113,7 +130,9 @@ func TestSubtree_GetMerkleProof(t *testing.T) {
 
 func Test_Serialize(t *testing.T) {
 	t.Run("Serialize", func(t *testing.T) {
-		st := NewTree(2)
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
@@ -122,15 +141,17 @@ func Test_Serialize(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-		_ = st.AddNode(hash1, 111, 0)
-		_ = st.AddNode(hash2, 111, 0)
-		_ = st.AddNode(hash3, 111, 0)
-		_ = st.AddNode(hash4, 111, 0)
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
 
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		newSubtree := NewTree(2)
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
 		err = newSubtree.Deserialize(serializedBytes)
 		require.NoError(t, err)
 		assert.Equal(t, st.Fees, newSubtree.Fees)
@@ -144,8 +165,10 @@ func Test_Serialize(t *testing.T) {
 		}
 	})
 
-	t.Run("Serialize with conflicting", func(t *testing.T) {
-		st := NewTree(2)
+	t.Run("Serialize nodes", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
@@ -154,19 +177,92 @@ func Test_Serialize(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
 		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-		_ = st.AddNode(hash1, 111, 0)
-		_ = st.AddNode(hash2, 111, 0)
-		_ = st.AddNode(hash3, 111, 0)
-		_ = st.AddNode(hash4, 111, 0)
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
 
-		st.ConflictingNodes = []*chainhash.Hash{
-			hash3,
+		subtreeBytes, err := st.SerializeNodes()
+		require.NoError(t, err)
+
+		require.Equal(t, chainhash.HashSize*4, len(subtreeBytes))
+
+		txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+		for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+			txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+		}
+
+		assert.Equal(t, hash1.String(), txHashes[0].String())
+		assert.Equal(t, hash2.String(), txHashes[1].String())
+		assert.Equal(t, hash3.String(), txHashes[2].String())
+		assert.Equal(t, hash4.String(), txHashes[3].String())
+	})
+
+	t.Run("Deserialize with reader", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
+
+		serializedBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(serializedBytes)
+
+		err = newSubtree.DeserializeFromReader(r)
+		require.NoError(t, err)
+		assert.Equal(t, st.Fees, newSubtree.Fees)
+		assert.Equal(t, st.Size(), newSubtree.Size())
+		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
+
+		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+		for i := 0; i < len(st.Nodes); i++ {
+			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
+			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
+		}
+	})
+
+	t.Run("Serialize with conflicting", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
+
+		st.ConflictingNodes = []chainhash.Hash{
+			*hash3,
 		}
 
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
 
-		newSubtree := NewTree(2)
+		newSubtree, err := NewTree(2)
+		require.NoError(t, err)
+
 		err = newSubtree.Deserialize(serializedBytes)
 		require.NoError(t, err)
 		assert.Equal(t, st.Fees, newSubtree.Fees)
@@ -186,6 +282,42 @@ func Test_Serialize(t *testing.T) {
 	})
 }
 
+func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
+	SkipVeryLongTests(t)
+
+	numberOfItems := 1_024 * 1_024
+	subtree, err := NewTreeByLeafCount(numberOfItems)
+	require.NoError(t, err)
+
+	for i := 0; i < numberOfItems; i++ {
+		tx := bt.NewTx()
+		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
+	}
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	start := time.Now()
+
+	hashes, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	require.NoError(t, err)
+
+	rootHash, err := chainhash.NewHash((*hashes)[len(*hashes)-1][:])
+	require.NoError(t, err)
+
+	assert.Equal(t, "199037f7b64e6dd88701dab414e88e24c328e7f5907640d00631974894dcc698", rootHash.String())
+
+	t.Logf("Time taken: %s\n", time.Since(start))
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
 func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	t.Run("complete tree", func(t *testing.T) {
 		hashes := make([]*chainhash.Hash, 8)
@@ -198,12 +330,14 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		hashes[6], _ = chainhash.NewHashFromStr("2070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
 		hashes[7], _ = chainhash.NewHashFromStr("c3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
 
-		subtree := NewTreeByLeafCount(8)
+		subtree, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		for _, hash := range hashes {
-			_ = subtree.AddNode(hash, 111, 0)
+			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -225,7 +359,9 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	})
 
 	t.Run("incomplete tree", func(t *testing.T) {
-		st := NewTreeByLeafCount(8)
+		st, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		txIDS := []string{
 			"4634057867994ae379e82b408cc9eb145a6e921b95ca38f2ced7eb880685a290",
 			"7f87fe1100963977975cef49344e442b4fa3dd9d41de19bc94609c100210ca05",
@@ -238,10 +374,10 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		var txHash *chainhash.Hash
 		for _, txID := range txIDS {
 			txHash, _ = chainhash.NewHashFromStr(txID)
-			_ = st.AddNode(txHash, 101, 0)
+			_ = st.AddNode(*txHash, 101, 0)
 		}
 
-		merkleStore, err := st.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -274,12 +410,14 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		hashes[3], _ = chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
 		hashes[4], _ = chainhash.NewHashFromStr("87af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 
-		subtree := NewTreeByLeafCount(8)
+		subtree, err := NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
 		for _, hash := range hashes {
-			_ = subtree.AddNode(hash, 111, 0)
+			_ = subtree.AddNode(*hash, 111, 0)
 		}
 
-		merkleStore, err := subtree.BuildMerkleTreeStoreFromBytes()
+		merkleStore, err := BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 		require.NoError(t, err)
 
 		expectedMerkleStore := []string{
@@ -330,8 +468,58 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 //	})
 //}
 
+func Test_Deserialize(t *testing.T) {
+	//SkipLongTests(t)
+	runtime.SetCPUProfileRate(1000)
+
+	size := 1024 * 1024
+	subtreeBytes := generateLargeSubtreeBytes(t, size)
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	subtree, err := NewTreeByLeafCount(size)
+	require.NoError(t, err)
+
+	err = subtree.Deserialize(subtreeBytes)
+	require.NoError(t, err)
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
+func Test_DeserializeFromReader(t *testing.T) {
+	//SkipLongTests(t)
+	runtime.SetCPUProfileRate(1000)
+
+	size := 1024 * 1024
+	subtreeBytes := generateLargeSubtreeBytes(t, size)
+	r := bytes.NewReader(subtreeBytes)
+
+	f, _ := os.Create("cpu.prof")
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+
+	subtree, err := NewTreeByLeafCount(size)
+	require.NoError(t, err)
+
+	err = subtree.DeserializeFromReader(r)
+	require.NoError(t, err)
+
+	f, _ = os.Create("mem.prof")
+	defer f.Close()
+	_ = pprof.WriteHeapProfile(f)
+}
+
 func BenchmarkSubtree_AddNode(b *testing.B) {
-	st := NewTree(20)
+	st, err := NewTree(20)
+	require.NoError(b, err)
 
 	// create a slice of random hashes
 	hashes := make([]*chainhash.Hash, b.N)
@@ -345,18 +533,19 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = st.AddNode(hashes[i], 111, 0)
+		_ = st.AddNode(*hashes[i], 111, 0)
 	}
 }
 
 func BenchmarkSubtree_Serialize(b *testing.B) {
-	st := NewIncompleteTreeByLeafCount(b.N)
+	st, err := NewIncompleteTreeByLeafCount(b.N)
+	require.NoError(b, err)
 
 	for i := 0; i < b.N; i++ {
 		// int to bytes
 		var bb [32]byte
 		binary.LittleEndian.PutUint32(bb[:], uint32(i))
-		_ = st.AddNode((*chainhash.Hash)(&bb), 111, 234)
+		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
 	}
 
 	b.ResetTimer()
@@ -364,4 +553,39 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 	ser, err := st.Serialize()
 	require.NoError(b, err)
 	assert.GreaterOrEqual(b, len(ser), 48*b.N)
+}
+
+func BenchmarkSubtree_SerializeNodes(b *testing.B) {
+	st, err := NewIncompleteTreeByLeafCount(b.N)
+	require.NoError(b, err)
+
+	for i := 0; i < b.N; i++ {
+		// int to bytes
+		var bb [32]byte
+		binary.LittleEndian.PutUint32(bb[:], uint32(i))
+		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
+	}
+
+	b.ResetTimer()
+
+	ser, err := st.SerializeNodes()
+	require.NoError(b, err)
+	assert.GreaterOrEqual(b, len(ser), 32*b.N)
+}
+
+func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
+	st, err := NewIncompleteTreeByLeafCount(size)
+	require.NoError(t, err)
+
+	var bb [32]byte
+	for i := 0; i < size; i++ {
+		// int to bytes
+		binary.LittleEndian.PutUint32(bb[:], uint32(i))
+		_ = st.AddNode(bb, 111, 234)
+	}
+
+	ser, err := st.Serialize()
+	require.NoError(t, err)
+
+	return ser
 }

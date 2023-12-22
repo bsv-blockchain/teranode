@@ -12,6 +12,8 @@ var (
 	prometheusBlockAssemblyHealth                       prometheus.Counter
 	prometheusBlockAssemblyAddTx                        prometheus.Counter
 	prometheusBlockAssemblyAddTxDuration                prometheus.Histogram
+	prometheusBlockAssemblyRemoveTx                     prometheus.Counter
+	prometheusBlockAssemblyRemoveTxDuration             prometheus.Histogram
 	prometheusBlockAssemblyGetMiningCandidate           prometheus.Counter
 	prometheusBlockAssemblyGetMiningCandidateDuration   prometheus.Histogram
 	prometheusBlockAssemblySubmitMiningSolutionCh       prometheus.Gauge
@@ -20,10 +22,16 @@ var (
 	prometheusBlockAssemblyUpdateSubtreesTTL            prometheus.Histogram
 	//prometheusBlockAssemblyUpdateTxMinedStatus          prometheus.Histogram
 
+	// subtree cache
+	prometheusBlockAssemblyLocalTTLCacheHit  prometheus.Counter
+	prometheusBlockAssemblyLocalTTLCacheMiss prometheus.Counter
+
 	// in BlockAssembler
 	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
 	prometheusBlockAssemblerTransactions       prometheus.Gauge
+	prometheusBlockAssemblerQueuedTransactions prometheus.Gauge
+	prometheusBlockAssemblerSubtrees           prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
 	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
 	prometheusBlockAssemblerReorg         prometheus.Counter
@@ -58,6 +66,23 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "add_tx_duration_v2",
 			Help:      "Duration of AddTx in the blockassembly service",
+			Buckets:   util.MetricsBuckets,
+		},
+	)
+
+	prometheusBlockAssemblyRemoveTx = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockassembly",
+			Name:      "remove_tx",
+			Help:      "Number of txs removed to the blockassembly service",
+		},
+	)
+
+	prometheusBlockAssemblyRemoveTxDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockassembly",
+			Name:      "remove_tx_duration",
+			Help:      "Duration of RemoveTx in the blockassembly service",
 			Buckets:   util.MetricsBuckets,
 		},
 	)
@@ -113,6 +138,22 @@ func initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblyLocalTTLCacheHit = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockassembly",
+			Name:      "local_ttl_cache_hit",
+			Help:      "Number of hits to the local ttl cache in the blockassembly service",
+		},
+	)
+
+	prometheusBlockAssemblyLocalTTLCacheMiss = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockassembly",
+			Name:      "local_ttl_cache_miss",
+			Help:      "Number of misses to the local ttl cache in the blockassembly service",
+		},
+	)
+
 	//prometheusBlockAssemblyUpdateTxMinedStatus = promauto.NewHistogram(
 	//	prometheus.HistogramOpts{
 	//		Namespace: "blockassembly",
@@ -143,6 +184,22 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "transactions",
 			Help:      "Number of transactions currently in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerQueuedTransactions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "queued_transactions",
+			Help:      "Number of transactions currently queued in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerSubtrees = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "subtrees",
+			Help:      "Number of subtrees currently in the block assembler subtree processor",
 		},
 	)
 

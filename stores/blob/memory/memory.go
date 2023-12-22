@@ -1,9 +1,11 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -31,6 +33,17 @@ func (m *Memory) Close(_ context.Context) error {
 	return nil
 }
 
+func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return m.Set(ctx, key, b, opts...)
+}
+
 func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
@@ -46,6 +59,15 @@ func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 	// not supported in memory store yet
 	return errors.New("TTL is not supported in a memory store")
+}
+
+func (m *Memory) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {

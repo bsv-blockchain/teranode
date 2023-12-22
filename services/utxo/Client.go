@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -12,13 +13,15 @@ import (
 
 type Store struct {
 	db               utxostore_api.UtxoStoreAPIClient
+	logger           ulogger.Logger
 	BlockHeight      uint32
 	DeleteSpentUtxos bool
 }
 
-func NewClient(db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
+func NewClient(logger ulogger.Logger, db utxostore_api.UtxoStoreAPIClient) (*Store, error) {
 	return &Store{
 		db:          db,
+		logger:      logger,
 		BlockHeight: 0,
 	}, nil
 }
@@ -28,8 +31,12 @@ func (s *Store) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (s *Store) GetBlockHeight() (uint32, error) {
+	return s.BlockHeight, nil
+}
+
 func (s *Store) Health(ctx context.Context) (int, string, error) {
-	resp, err := s.db.Health(ctx, &emptypb.Empty{})
+	resp, err := s.db.HealthGRPC(ctx, &emptypb.Empty{})
 	if err != nil {
 		return -1, resp.Details, err
 	}

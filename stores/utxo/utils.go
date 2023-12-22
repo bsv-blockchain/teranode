@@ -3,12 +3,14 @@ package utxo
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/sync/errgroup"
 )
 
 func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) utxostore_api.Status {
@@ -27,7 +29,13 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 	return status
 }
 
+// GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
+// It will return an error if the context is cancelled.
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
+	if !tx.IsExtended() {
+		return 0, nil, fmt.Errorf("tx is not extended")
+	}
+
 	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 
@@ -54,4 +62,37 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 	}
 
 	return fees, utxoHashes, nil
+}
+
+// GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
+func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
+	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
+	utxoHashesMu := sync.Mutex{}
+
+	g := errgroup.Group{}
+
+	for i, output := range tx.Outputs {
+		if output.Satoshis > 0 {
+			i := i
+			output := output
+			g.Go(func() error {
+				utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+				if utxoErr != nil {
+					return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+				}
+
+				utxoHashesMu.Lock()
+				utxoHashes = append(utxoHashes, utxoHash)
+				utxoHashesMu.Unlock()
+
+				return nil
+			})
+		}
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return utxoHashes, nil
 }

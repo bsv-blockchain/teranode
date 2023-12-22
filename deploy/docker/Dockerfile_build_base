@@ -3,25 +3,11 @@
 # To use: enable the 'build base container image' Workflow (usually disabled), then push a commit to master/staging branch.
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-# Set the base image
-# Pass in the platform/arch to build on. E.g. "docker build --build-args PLATFORM_ARCH=linux/amd64,linux/arm64"
-# Defaults to linux/amd64 (X86_64)
-
-#ARG PLATFORM_ARCH=linux/amd64
-#FROM --platform=${PLATFORM_ARCH} golang:1.21.0-bullseye as linux-amd64
-#FROM --platform=linux/amd64 golang:1.21.0-bullseye as linux-amd64
-#RUN apt-get update && apt-get install -y gcc-aarch64-linux-gnu
-
-#ARG PLATFORM_ARCH=linux/arm64
-#FROM --platform=${PLATFORM_ARCH} golang:1.21.0-bullseye as linux-arm64
-#FROM --platform=linux/arm64 golang:1.21.0-bullseye as linux-arm64
-#RUN apt-get update && apt-get install -y gcc-x86-64-linux-gnu
 
 FROM golang:1.21.0-bullseye
 
 ARG TARGETOS
 ARG TARGETARCH
-#FROM ${TARGETOS}-${TARGETARCH}
 
 ARG GITHUB_SHA
 
@@ -38,6 +24,13 @@ RUN apt-get update && \
     apt-get install -y ca-certificates gnupg nodejs build-essential libsecp256k1-dev gcc-aarch64-linux-gnu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Add Debian ARM64 architecture
+RUN dpkg --add-architecture arm64
+
+# Add cross-compilation packages
+RUN apt-get update && \
+    apt-get install -y libsecp256k1-dev:arm64 libc6-dev-arm64-cross
 
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
 WORKDIR /app/ui/dashboard

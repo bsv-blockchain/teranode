@@ -11,8 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -30,18 +29,22 @@ var (
 type ServiceManager struct {
 	services           []serviceWrapper
 	dependencyChannels []chan bool
-	logger             utils.Logger
+	logger             ulogger.Logger
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
 	g                  *errgroup.Group
+	// statusClient       status.ClientI
 }
 
-func NewServiceManager() (*ServiceManager, context.Context) {
+func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	logger := gocore.Log("sm")
+	// statusClient, err := status.NewClient(context.Background(), logger)
+	// if err != nil {
+	// 	logger.Fatalf("Failed to create status client: %v", err)
+	// }
 
 	sm := &ServiceManager{
 		services:   make([]serviceWrapper, 0),
@@ -49,6 +52,7 @@ func NewServiceManager() (*ServiceManager, context.Context) {
 		ctx:        ctx,
 		cancelFunc: cancelFunc,
 		g:          g,
+		// statusClient: statusClient,
 	}
 
 	go func() {
@@ -111,7 +115,17 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		sm.waitForPreviousServiceToStart(sw)
 		close(sm.dependencyChannels[sw.index])
 
-		return service.Start(sm.ctx)
+		if err := service.Start(sm.ctx); err != nil {
+			return err
+		}
+
+		// sm.statusClient.AnnounceStatus(sm.ctx, &model.AnnounceStatusRequest{
+		// 	Timestamp: timestamppb.Now(),
+		// 	Type:      name,
+		// 	Subtype:   "STARTED",
+		// 	json.Valid(data []byte)
+		// })
+		return nil
 	})
 
 	return nil

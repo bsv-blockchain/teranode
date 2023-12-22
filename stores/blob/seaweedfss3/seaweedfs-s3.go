@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -24,11 +25,11 @@ import (
 type SeaweedFS struct {
 	s3Client   *s3.S3
 	bucketName string
-	logger     utils.Logger
+	logger     ulogger.Logger
 }
 
-func New(s3GatewayURL *url.URL) (*SeaweedFS, error) {
-	logger := gocore.Log("seaweed")
+func New(logger ulogger.Logger, s3GatewayURL *url.URL) (*SeaweedFS, error) {
+	logger = logger.New("seaweed")
 
 	scheme := getQueryParamString(s3GatewayURL, "scheme", "http")
 	s3ForcePathStyle := getQueryParamBool(s3GatewayURL, "S3ForcePathStyle", "false")
@@ -87,6 +88,17 @@ func (s *SeaweedFS) generateKey(key []byte) string {
 	return utils.ReverseAndHexEncodeSlice(key)
 }
 
+func (s *SeaweedFS) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return s.Set(ctx, key, b, opts...)
+}
+
 func (s *SeaweedFS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	// start := gocore.CurrentTime()
 	// defer func() {
@@ -129,6 +141,15 @@ func (s *SeaweedFS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 
 	// TODO implement
 	return nil
+}
+
+func (s *SeaweedFS) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := s.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (s *SeaweedFS) Get(ctx context.Context, hash []byte) ([]byte, error) {

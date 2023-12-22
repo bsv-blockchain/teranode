@@ -4,7 +4,7 @@ actor BlockValidation
 participant blockValidation
 actor Blockchain
 database blockchainStore
-actor BlobServer
+actor Asset
 participant block
 database subtreeStore
 participant blockassembly
@@ -22,8 +22,8 @@ group processBlockFound(hash)
 BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(hash)
 Blockchain -[#red]-> blockchainStore : GetBlockExists(hash)
 group getBlock(hash)
-BlockValidation -[#green]--> BlobServer : http:GetBlock(/block/<hash>))
-BlobServer -[#blue]> Blockchain : grpc:getBlock(hash)
+BlockValidation -[#green]--> Asset : http:GetBlock(/block/<hash>))
+Asset -[#blue]> Blockchain : grpc:getBlock(hash)
 Blockchain -[#red]-> blockchainStore : GetBlock(hash)
 end
 BlockValidation -[#blue]> Blockchain : grpc:GetBlockExists(previous hash)
@@ -32,14 +32,14 @@ BlockValidation -> blockValidation : ValidateBlock(block)
 
 loop each subtree
 blockValidation -[#red]-> subtreeStore : Exists(subtree hash)
-blockValidation -[#green]--> BlobServer : http:GetSubtree(/subtree/<hash>)
-BlobServer -[#red]-> subtreeStore : GetSubtree(hash)
+blockValidation -[#green]--> Asset : http:GetSubtree(/subtree/<hash>)
+Asset -[#red]-> subtreeStore : GetSubtree(hash)
 loop each tx
 blockValidation -[#red]-> txmetaStore : Get(tx hash)
 group blessMissingTransaction
 blockValidation -[#red]-> txStore: Get(tx hash)
 group if not found
-blockValidation -[#green]--> BlobServer : http:GetTransaction(/tx/<hash>)
+blockValidation -[#green]--> Asset : http:GetTransaction(/tx/<hash>)
 blockValidation -[#red]-> txStore : Set(tx)
 end
 blockValidation -[#blue]> Validator : grpc:Validate(tx)

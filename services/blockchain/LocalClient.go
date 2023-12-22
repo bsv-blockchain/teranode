@@ -6,17 +6,17 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 )
 
 // LocalClient is an abstraction for a client that has a stored embedded directly
 type LocalClient struct {
 	store  blockchain.Store
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func NewLocalClient(logger utils.Logger, store blockchain.Store) (ClientI, error) {
+func NewLocalClient(logger ulogger.Logger, store blockchain.Store) (ClientI, error) {
 	return &LocalClient{
 		logger: logger,
 		store:  store,
@@ -29,8 +29,8 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 	}, nil
 }
 
-func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, external bool) error {
-	_, err := c.store.StoreBlock(ctx, block)
+func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	_, err := c.store.StoreBlock(ctx, block, peerID)
 	return err
 }
 
@@ -43,8 +43,8 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
-func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
-	return c.store.GetLastNBlocks(ctx, n, includeOrphans)
+func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
+	return c.store.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
 }
 
 func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
@@ -66,6 +66,14 @@ func (c LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Ha
 
 func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
+}
+
+func (c LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.InvalidateBlock(ctx, blockHash)
+}
+
+func (c LocalClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	return c.store.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }
 
 func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {

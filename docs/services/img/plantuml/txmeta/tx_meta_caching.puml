@@ -1,0 +1,35 @@
+@startuml
+
+skinparam ParticipantPadding 90
+
+participant "Block Validation\nService" as BlockValidation
+participant "TX Meta Cache\n(txmetacache.go)" as TxMetaCache
+participant "TX Meta Store" as TxMetaStore
+
+note right of TxMetaCache: Cache with 15 minutes TTL
+
+BlockValidation -> TxMetaCache: Get(hash)
+activate TxMetaCache
+
+alt Cache Miss
+    TxMetaCache -> TxMetaStore: Get(hash)
+    activate TxMetaStore
+    TxMetaStore --> TxMetaCache: TX Meta Data
+    deactivate TxMetaStore
+
+    TxMetaCache -> TxMetaCache: Cache TX Meta Data
+end
+
+alt Cache Hit
+    TxMetaCache --> BlockValidation: Return TX Meta Data
+    deactivate TxMetaCache
+else Cached Data is Mined
+    TxMetaCache -> TxMetaCache: setMinedInCache()
+    TxMetaCache -> TxMetaStore: Get(hash)
+    activate TxMetaStore
+    TxMetaStore --> TxMetaCache: TX Meta Data
+    deactivate TxMetaStore
+    TxMetaCache --> BlockValidation: Return Updated TX Meta Data
+    deactivate TxMetaCache
+end
+@enduml

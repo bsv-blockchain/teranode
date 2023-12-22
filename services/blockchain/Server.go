@@ -8,10 +8,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -31,7 +31,7 @@ type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan        chan *blockchain_api.AddBlockRequest
 	store               blockchain_store.Store
-	logger              utils.Logger
+	logger              ulogger.Logger
 	newSubscriptions    chan subscriber
 	deadSubscriptions   chan subscriber
 	subscribers         map[subscriber]bool
@@ -47,7 +47,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger) (*Blockchain, error) {
+func New(logger ulogger.Logger) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
@@ -77,6 +77,10 @@ func New(logger utils.Logger) (*Blockchain, error) {
 		subscriptionCtx:     subscriptionCtx,
 		cancelSubscriptions: cancelSubscriptions,
 	}, nil
+}
+
+func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
 }
 
 func (b *Blockchain) Init(ctx context.Context) error {
@@ -135,7 +139,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
-func (b *Blockchain) Health(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		stats.NewStat("Health", true).AddTime(start)
@@ -185,7 +189,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx1, block)
+	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +250,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 
 	prometheusBlockchainGetLastNBlocks.Inc()
 
-	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans)
+	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -414,6 +418,43 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	prometheusBlockchainSetState.Inc()
 
 	err := b.store.SetState(ctx1, req.Key, req.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
+	startHash, err := chainhash.NewHash(request.StartHash)
+	if err != nil {
+		return nil, err
+	}
+
+	ids, err := b.store.GetBlockHeaderIDs(ctx, startHash, request.NumberOfHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetBlockHeaderIDsResponse{
+		Ids: ids,
+	}, nil
+}
+
+func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "InvalidateBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainSetState.Inc()
+
+	blockHash, err := chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.store.InvalidateBlock(ctx1, blockHash)
 	if err != nil {
 		return nil, err
 	}

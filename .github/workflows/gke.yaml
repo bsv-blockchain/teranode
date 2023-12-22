@@ -1,145 +1,75 @@
-name: deploy-to-eks
+name: test-build-deploy
 on:
   push:
+    tags:
+      - 'v*'
+      - 'scaling-v*'
     branches:
       - jeff-multiarch
       # - master
       # - staging
 
 env:
+  # These variables aren't used for called reusable workflows, so we have to also define 'with' variables below
   REPO: ubsv
   ECR_REGION: eu-north-1
 
 jobs:
-  go-lint-and-test:
-    name: Go Lint and Test
-    runs-on: ubsv-runner
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
+  # Get version tag
+  get_tag:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting
-          fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@v4 # v4 has caching enabled by default
-        with:
-          go-version: '1.21.0'
-
-#      - name: Install deps and lint deps
-#        run: make install-lint
-#
-#      - name: Run golangci-lint
-#        run: make lint
-
-      - name: Run Go tests
-        run: make longtests
-
-      - uses: twingate/github-action@v1
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
-
-      # - name: SonarQube Scan
-      #   uses: sonarsource/sonarqube-scan-action@master
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: https://sonarqube.ubsv.dev
-
-  build-docker:
-    name: Build Docker image
-    needs: go-lint-and-test
-    runs-on: ubsv-runner
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
-    steps:
-      - uses: actions/checkout@v3
-
-      # Setup QEMU for multi-arch builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      # Setup Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-flags: --debug # Debug logs
-
-      # Set up AWS CLI
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.ECR_REGION }}
-
-      # Authenticate Docker to AWS ECR
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: true
-
-      # Get current cluster ID for base image
-      - name: Get Cluster Base ID
-        id: base
-        run: echo "id=$(cat ./deploy/docker/CLUSTER_BASE_ID)" >> $GITHUB_OUTPUT
-
-      # Get current cluster ID for run image
-      - name: Get Cluster Run ID
-        id: run
-        run: echo "id=$(cat ./deploy/docker/CLUSTER_RUN_ID)" >> $GITHUB_OUTPUT
-
-      # Build and push Docker image to AWS ECR
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          file: ./Dockerfile
-          push: true
-          # tags: ubsv:${{ github.sha }}
-          platforms: linux/amd64 #,linux/arm64   Multiarch disabled for now
-          build-args: |
-            GITHUB_SHA=${{github.sha}}
-            DEBUG=true
-            GITHUB_REF=${{github.ref_name}}
-            BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:base-build-${{ steps.base.outputs.id }}
-            RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:base-run-${{ steps.run.outputs.id }}
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:${{ github.sha }}
-
-      #- name: Push image to configured registry
-      #  run: |
-      #    docker tag ubsv:${{ github.sha }} ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
-      #    docker push ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
-
-  #eks-deploy-scaling:
-  #  uses: ./.github/workflows/deploy-to-region.yaml
-  #  needs: [build-docker, go-lint-and-test]
-  #  secrets: inherit
-  #  with:
-  #    region: eu-north-1
-
-  #eks-deploy-eu:
-  #  uses: ./.github/workflows/deploy-to-region.yaml
-  #  needs: [build-docker, go-lint-and-test]
-  #  secrets: inherit
-  #  with:
-  #    region: eu-west-1
-
-  #eks-deploy-asia:
-  #  uses: ./.github/workflows/deploy-to-region.yaml
-  #  needs: [build-docker, go-lint-and-test]
-  #  secrets: inherit
-  #  with:
-  #    region: ap-northeast-1
-
-  #eks-deploy-us:
-  #  uses: ./.github/workflows/deploy-to-region.yaml
-  #  needs: [build-docker, go-lint-and-test]
-  #  secrets: inherit
-  #  with:
-  #    region: us-east-1
+      - name: Determine deployment tag
+        id: deployment_tag
+        run: |
+          if [[ '${{ github.ref_type }}' == 'tag' ]]; then
+            export tag=${{ github.ref_name }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          else
+            export tag=${{ github.sha }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          fi
+    outputs:
+      deployment_tag: ${{ steps.deployment_tag.outputs.id }}
+  # Tests and code lint
+  test_and_lint:
+    uses: ./.github/workflows/gke_tests.yaml
+    secrets: inherit
+  # Build for X86 (AMD64)
+  build_amd64:
+    needs: [test_and_lint, get_tag]
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    with:
+      arch: amd64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+  # Build for ARM64 (Graviton and Darwin)
+  build_arm64:
+    needs: [test_and_lint, get_tag]
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    with:
+      arch: arm64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+  # Create docker manifest for multiple architecture tags
+  create_manifest:
+    needs: [build_amd64, build_arm64, get_tag]
+    uses: ./.github/workflows/gke_manifest.yaml
+    secrets: inherit
+    with:
+      region: eu-north-1
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+  deploy:
+    needs: [create_manifest, get_tag]
+    uses: ./.github/workflows/gke_deploy.yaml
+    secrets: inherit
+    with:
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}

@@ -16,14 +16,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/scylla"
-
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -94,10 +92,10 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|scylla|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|null)")
 	flag.Parse()
 
-	logger := gocore.Log("utxostore_blaster")
+	logger := ulogger.New("utxostore_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -108,19 +106,19 @@ func Start() {
 	case "redis":
 		storeFn = func() (utxo.Interface, error) {
 			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisClient(u, password)
+			return redis.NewRedisClient(logger, u, password)
 		}
 		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
 	case "redis-ring":
 		storeFn = func() (utxo.Interface, error) {
 			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisRing(u)
+			return redis.NewRedisRing(logger, u)
 		}
 		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
 	case "redis-cluster":
 		storeFn = func() (utxo.Interface, error) {
 			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisCluster(u)
+			return redis.NewRedisCluster(logger, u)
 		}
 		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
 	case "memory":
@@ -136,15 +134,9 @@ func Start() {
 	case "aerospike":
 		storeFn = func() (utxo.Interface, error) {
 			u, _, _ := gocore.Config().GetURL("utxostore")
-			return aerospike.New(u)
+			return aerospike.New(logger, u)
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
-	case "scylla":
-		u, _, _ := gocore.Config().GetURL("utxostore")
-		storeFn = func() (utxo.Interface, error) {
-			return scylla.NewScylla(u)
-		}
-		log.Printf("Starting scylla utxostore-blaster url %v with %d worker(s)", u, workerCount)
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
 	}
@@ -167,7 +159,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	utxostore, err := storeFn()
 	if err != nil {
 		panic(err)

@@ -38,12 +38,12 @@ export const selectedNode = writable('', (set) => {
   return set
 })
 
-export function connectToBootstrap(blobServerHTTPAddress) {
+export function connectToBootstrap(assetHTTPAddress) {
   if (typeof WebSocket === 'undefined') {
     return
   }
 
-  if (!blobServerHTTPAddress) {
+  if (!assetHTTPAddress) {
     return
   }
 
@@ -52,7 +52,7 @@ export function connectToBootstrap(blobServerHTTPAddress) {
     cancelFunction = null
   }
 
-  const url = new URL(blobServerHTTPAddress)
+  const url = new URL(assetHTTPAddress)
 
   // In a url x.scaling.ubsv.dev, replace x with bootstrap
   let host = url.hostname
@@ -76,13 +76,13 @@ export function connectToBootstrap(blobServerHTTPAddress) {
       const json = JSON.parse(data)
 
       if (json.type === 'ADD') {
-        const header = await getNodeHeader(json.blobServerHTTPAddress)
+        const header = await getNodeHeader(json.assetHTTPAddress)
         json.header = header
 
         let nodesData = get(nodes)
         if (!nodesData.find((node) => {
-          const a = node.name || node.blobServerHTTPAddress || node.ip
-          const b = json.name || json.blobServerHTTPAddress || json.ip
+          const a = node.name || node.assetHTTPAddress || node.ip
+          const b = json.name || json.assetHTTPAddress || json.ip
 
           return a === b
           })) {
@@ -115,7 +115,7 @@ export function connectToBootstrap(blobServerHTTPAddress) {
     // Reconnect logic can be added here if needed
 
     setTimeout(() => {
-      connectToBootstrap(blobServerHTTPAddress)
+      connectToBootstrap(assetHTTPAddress)
     }, 5000) // Adjust the delay as necessary
   }
 

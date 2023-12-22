@@ -30,7 +30,7 @@ message MiningSolution {
 
 // swagger:enum NotificationType
 enum NotificationType {
-  Ping = 0;
+  PING = 0;
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
@@ -46,4 +46,14 @@ message BlockInfo {
   uint64 coinbase_value = 6;
   uint64 transaction_count = 7;
   uint64 size = 8;
+}
+
+// swagger:model AnnounceStatusRequest
+message AnnounceStatusRequest {
+  google.protobuf.Timestamp timestamp = 1;
+  string cluster_name = 2;
+  string type = 3;
+  string subtype = 4;
+  string value = 5;
+  google.protobuf.Timestamp expires_at = 6;
 }

@@ -1,0 +1,33 @@
+@startuml
+participant "Block Assembly" as BlockAssembly
+participant "UTXO Store" as UTXOStore
+database "Datastore Implementation" as Datastore
+
+== Create Coinbase TX ==
+
+BlockAssembly -> UTXOStore: Store(Coinbase UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Store UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> BlockAssembly: Confirmation
+deactivate UTXOStore
+
+
+== Delete Coinbase TX ==
+
+BlockAssembly -> UTXOStore: Delete(Coinbase UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Delete UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> BlockAssembly: Confirmation
+deactivate UTXOStore
+
+@enduml

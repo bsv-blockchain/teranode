@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -9,12 +10,16 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
@@ -101,7 +106,7 @@ type Ipv6MulticastMsg struct {
 }
 
 type Worker struct {
-	logger            utils.Logger
+	logger            ulogger.Logger
 	rateLimiter       *rate.Limiter
 	coinbaseClient    *coinbase.Client
 	distributor       *distributor.Distributor
@@ -117,13 +122,15 @@ type Worker struct {
 	startTime         time.Time
 	unlocker          bt.UnlockerGetter
 	address           *bscript.Address
+	topic             *pubsub.Topic
+	sentTxCache       *RollingCache
 }
 
 func NewWorker(
-	logger utils.Logger,
+	logger ulogger.Logger,
 	rateLimit float64,
 	coinbaseClient *coinbase.Client,
-	distributor *distributor.Distributor,
+	txDistributor *distributor.Distributor,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -132,6 +139,7 @@ func NewWorker(
 	logIdsCh chan string,
 	totalTransactions *atomic.Uint64,
 	globalStartTime *time.Time,
+	topic *pubsub.Topic,
 ) (*Worker, error) {
 
 	// Generate a random private key
@@ -158,11 +166,17 @@ func NewWorker(
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
+	// clone the distributor so we create new connections for each worker
+	//txDistributor, err = txDistributor.Clone()
+	//if err != nil {
+	//	logger.Fatalf("error creating tx distributor: %v", err)
+	//}
+
 	return &Worker{
 		logger:            logger,
 		rateLimiter:       rateLimiter,
 		coinbaseClient:    coinbaseClient,
-		distributor:       distributor,
+		distributor:       txDistributor,
 		kafkaProducer:     kafkaProducer,
 		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,
@@ -174,26 +188,24 @@ func NewWorker(
 		globalStartTime:   globalStartTime,
 		address:           address,
 		utxoChan:          make(chan *bt.UTXO, 10000),
+		topic:             topic,
+		sentTxCache:       NewRollingCache(1000),
 	}, nil
 }
 
-func (w *Worker) Init(ctx context.Context) error {
-	var err error
-
-	prometheusWorkers.Inc()
-	defer func() {
-		prometheusWorkers.Dec()
-		if err != nil {
-			prometheusWorkerErrors.WithLabelValues("Start", err.Error()).Inc()
-		}
-	}()
-
+func (w *Worker) Init(ctx context.Context) (err error) {
 	timeStart := time.Now()
 	w.startTime = timeStart
 
-	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString)
+	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString, true)
 	if err != nil {
-		return fmt.Errorf("error getting utxo from coinbaseTracker: %v", err)
+		return fmt.Errorf("error getting utxo from coinbaseTracker %s: %v", w.address.AddressString, err)
+	}
+
+	w.sentTxCache.Add(tx.TxIDChainHash().String())
+	_, err = w.distributor.SendTransaction(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s with %d outputs", tx.TxIDChainHash().String(), len(tx.Outputs))
@@ -214,6 +226,14 @@ func (w *Worker) Init(ctx context.Context) error {
 func (w *Worker) Start(ctx context.Context) (err error) {
 	start := time.Now()
 
+	prometheusWorkers.Inc()
+	defer func() {
+		prometheusWorkers.Dec()
+		if err != nil {
+			prometheusWorkerErrors.WithLabelValues("Start", err.Error()).Inc()
+		}
+	}()
+
 	var utxo *bt.UTXO
 	var tx *bt.Tx
 	var previousUtxo *bt.UTXO
@@ -221,7 +241,39 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 	var counterLoad uint64
 	var txPs float64
 	var ts float64
+	if w.topic != nil {
+		sub, err := w.topic.Subscribe()
+		if err != nil {
+			panic(err)
+		}
 
+		go func() {
+			defer sub.Cancel()
+			var rejectedTxMsg p2p.RejectedTxMessage
+			// Continuously check messages
+			for {
+				msg, err := sub.Next(ctx)
+				w.logger.Errorf("Error reading next rejected tx message: %+v", err)
+				if err != nil {
+
+					return
+				}
+				rejectedTxMsg = p2p.RejectedTxMessage{}
+				err = json.Unmarshal(msg.Data, &rejectedTxMsg)
+				if err != nil {
+					w.logger.Errorf("json unmarshal error: ", err)
+					continue
+				}
+				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
+				if w.sentTxCache.Contains(rejectedTxMsg.TxId) {
+					w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
+					// use error channel to kill worker
+					return
+				}
+			}
+		}()
+
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -315,8 +367,11 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 		return tx, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
+	w.sentTxCache.Add(tx.TxIDChainHash().String())
 	if _, err = w.distributor.SendTransaction(ctx, tx); err != nil {
-		return tx, fmt.Errorf("error sending transaction: %v", err)
+		// return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
+		utxoHash, _ := util.UTXOHashFromInput(tx.Inputs[0])
+		w.logger.Fatalf("error sending transaction: #%d txId: %s parentTxId: %s vout: %s hash: %s", counter.Load(), tx.TxIDChainHash().String(), utxo.TxIDHash.String(), utxo.Vout, utxoHash.String())
 	}
 
 	return tx, nil

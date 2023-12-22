@@ -12,7 +12,7 @@ type fRPC_Propagation struct {
 	ps *PropagationServer
 }
 
-func (f *fRPC_Propagation) Health(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
+func (f *fRPC_Propagation) HealthGRPC(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health_frpc").AddTime(start)

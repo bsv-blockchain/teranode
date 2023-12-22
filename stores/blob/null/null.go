@@ -3,31 +3,35 @@ package null
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type Null struct {
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func New() (*Null, error) {
-	logger := gocore.Log("null")
+func New(logger ulogger.Logger) (*Null, error) {
+	logger = logger.New("null")
 
 	return &Null{
 		logger: logger,
 	}, nil
 }
 
-func (n *Null) Health(ctx context.Context) (int, string, error) {
+func (n *Null) Health(_ context.Context) (int, string, error) {
 	return 0, "Null Store", nil
 }
 
 func (n *Null) Close(_ context.Context) error {
+	return nil
+}
+
+func (n *Null) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.Options) error {
 	return nil
 }
 
@@ -37,6 +41,10 @@ func (n *Null) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) 
 
 func (n *Null) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
 	return nil
+}
+
+func (n *Null) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("failed to read data from file: no such file or directory")
 }
 
 func (n *Null) Get(_ context.Context, hash []byte) ([]byte, error) {

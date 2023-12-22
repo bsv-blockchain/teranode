@@ -32,14 +32,12 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-# build-status build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
-	GOOS=linux GOARCH=arm64 CC=/usr/bin/aarch64-linux-gnu-gcc go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -I/usr/include/aarch64-linux-gnu -L/usr/lib/aarch64-linux-gnu" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.arm64.run .
-
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
@@ -65,9 +63,9 @@ build-s3-blaster: set_debug_flags
 build-blockassembly-blaster: set_debug_flags
 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
 
-.PHONY: build-status
-build-status:
-	go build -o status.run ./cmd/status/
+.PHONY: build-blockchainstatus
+build-blockchainstatus:
+	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
 .PHONY: build-aerospiketest
 build-aerospiketest:
@@ -85,6 +83,9 @@ test:
 longtests:
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
+.PHONY: racetest
+racetest:
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
 
 .PHONY: testall
 testall:
@@ -173,7 +174,15 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/blobserver/blobserver_api/blobserver_api.proto
+	services/asset/asset_api/asset_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/status/status_api/status_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -191,33 +200,6 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
 
-.PHONY: gen-drpc
-gen-drpc:
-	# go install storj.io/drpc/cmd/protoc-gen-go-drpc
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-drpc_out=. \
-	--go-drpc_opt=paths=source_relative \
-	services/blockassembly/blockassembly_api/blockassembly_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-drpc_out=. \
-	--go-drpc_opt=paths=source_relative \
-	services/propagation/propagation_api/propagation_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-drpc_out=. \
-	--go-drpc_opt=paths=source_relative \
-	services/validator/validator_api/validator_api.proto
-
 .PHONY: gen-frpc
 gen-frpc:
 	# go install github.com/loopholelabs/frpc-go/protoc-gen-go-frpc@2efa3315a5871a40672a95c6a143b789a2249512
@@ -229,6 +211,14 @@ gen-frpc:
 	--go-frpc_out=. \
 	--go-frpc_opt=paths=source_relative \
 	services/blockassembly/blockassembly_api/blockassembly_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-frpc_out=. \
+	--go-frpc_opt=paths=source_relative \
+	services/blockvalidation/blockvalidation_api/blockvalidation_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -256,9 +246,10 @@ clean_gen:
 	rm -f ./services/propagation/propagation_api/*.pb.go
 	rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
-	rm -f ./services/blobserver/blobserver_api/*.pb.go
+	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
+	rm -f ./services/status/status_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go
 
@@ -266,7 +257,7 @@ clean_gen:
 clean:
 	rm -f ./ubsv_*.tar.gz
 	rm -f blaster.run
-	rm -f status.run
+	rm -f blockchainstatus.run
 	rm -rf build/
 	rm -f coverage.out
 

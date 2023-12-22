@@ -1,0 +1,35 @@
+@startuml
+actor "Caller" as caller
+participant "NewServer(logger)" as NewServer
+participant "Init(ctx)" as Init
+participant "Start(ctx)" as Start
+queue "LibP2P Host" as LibP2P
+database "Blockchain Client" as BlockchainClient
+database "Block Validation Client" as BlockValidationClient
+database "Validator Client" as ValidatorClient
+database "HTTP Server" as HTTPServer
+queue "PubSub System" as PubSub
+
+caller -> NewServer: Calls NewServer
+activate NewServer
+NewServer -> LibP2P: Create Host
+NewServer -> NewServer: Set Topics & Notification Channel
+deactivate NewServer
+
+caller -> Init: Calls Init
+activate Init
+Init -> BlockchainClient: Create Client
+Init -> BlockValidationClient: Create Client
+Init -> ValidatorClient: Create Client
+Init -> Init: Set HTTP Address
+deactivate Init
+
+caller -> Start: Calls Start
+activate Start
+Start -> HTTPServer: Setup Echo Server
+Start -> PubSub: Initialize PubSub
+Start -> PubSub: Join & Subscribe to Topics
+Start -> LibP2P: Set Stream Handler
+Start -> Start: Start Goroutines
+deactivate Start
+@enduml

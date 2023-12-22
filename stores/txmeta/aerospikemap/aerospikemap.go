@@ -1,16 +1,17 @@
-// //go:build aerospike
+//go:build aerospike
 
 package aerospikemap
 
 import (
 	"context"
 	"net/url"
-	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,35 +55,25 @@ func init() {
 }
 
 type Store struct {
-	client    *aerospike.Client
-	timeout   time.Duration
+	client    *uaerospike.Client
 	namespace string
 }
 
-func New(u *url.URL) (*Store, error) {
+func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	asl.Logger.SetLevel(asl.DEBUG)
+
+	logger = logger.New("aero_map_store")
 
 	namespace := u.Path[1:]
 
-	client, err := util.GetAerospikeClient(u)
+	client, err := util.GetAerospikeClient(logger, u)
 	if err != nil {
 		return nil, err
-	}
-
-	var timeout time.Duration
-
-	timeoutValue := u.Query().Get("timeout")
-	if timeoutValue != "" {
-		var err error
-		if timeout, err = time.ParseDuration(timeoutValue); err != nil {
-			timeout = 0
-		}
 	}
 
 	return &Store{
 		client:    client,
 		namespace: namespace,
-		timeout:   timeout,
 	}, nil
 }
 
@@ -101,13 +92,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 
 	var value *aerospike.Record
 
-	options := make([]util.AerospikeReadPolicyOptions, 0)
-
-	if s.timeout > 0 {
-		options = append(options, util.WithTotalTimeout(s.timeout))
-	}
-
-	readPolicy := util.GetAerospikeReadPolicy(options...)
+	readPolicy := util.GetAerospikeReadPolicy()
 	value, aeroErr = s.client.Get(readPolicy, key)
 	if aeroErr != nil {
 		return nil, aeroErr
@@ -170,10 +155,19 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return s.Get(ctx, tx.TxIDChainHash())
 }
 
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+	for _, hash := range hashes {
+		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
 
 	key, err := aerospike.NewKey(s.namespace, setName, hash[:])

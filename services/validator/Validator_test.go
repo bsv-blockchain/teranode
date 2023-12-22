@@ -8,14 +8,18 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-p2p"
 )
 
 type NullStore struct{}
 
 func (ns *NullStore) SetBlockHeight(height uint32) error {
 	return nil
+}
+
+func (ns *NullStore) GetBlockHeight() (uint32, error) {
+	return 0, nil
 }
 
 func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
@@ -59,7 +63,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(context.Background(), p2p.TestLogger{}, ns, memory.New())
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}), nil)
 	if err != nil {
 		panic(err)
 	}

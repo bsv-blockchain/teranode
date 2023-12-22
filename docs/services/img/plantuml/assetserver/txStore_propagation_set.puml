@@ -1,0 +1,19 @@
+@startuml
+participant "Propagation Service" as Propagation
+database "Tx Store" as TxStore
+
+Propagation -> Propagation : ProcessTransaction(req)
+activate Propagation
+
+Propagation -> Propagation : storeTransaction(btTx)
+activate Propagation
+
+Propagation -> TxStore : Set(txHash, txExtendedBytes)
+activate TxStore
+
+TxStore --> Propagation : Acknowledge Set
+deactivate TxStore
+
+deactivate Propagation
+deactivate Propagation
+@enduml

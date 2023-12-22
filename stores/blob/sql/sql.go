@@ -1,10 +1,12 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -13,6 +15,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/labstack/gommon/random"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -21,12 +25,13 @@ import (
 )
 
 type SQL struct {
-	url *url.URL
-	db  *sql.DB
+	url    *url.URL
+	db     *usql.DB
+	logger ulogger.Logger
 }
 
-func New(storeUrl *url.URL) (*SQL, error) {
-	var db *sql.DB
+func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
+	var db *usql.DB
 	var err error
 	var q string
 
@@ -45,7 +50,7 @@ func New(storeUrl *url.URL) (*SQL, error) {
 
 		dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable host=%s port=%d", dbUser, dbPassword, dbName, dbHost, dbPort)
 
-		db, err = sql.Open(storeUrl.Scheme, dbInfo)
+		db, err = usql.Open(storeUrl.Scheme, dbInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open postgres DB: %+v", err)
 		}
@@ -77,7 +82,7 @@ func New(storeUrl *url.URL) (*SQL, error) {
 			filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=10000&_pragma=journal_mode=WAL", filename)
 		}
 
-		db, err = sql.Open("sqlite", filename)
+		db, err = usql.Open("sqlite", filename)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open sqlite DB: %+v", err)
 		}
@@ -103,8 +108,9 @@ func New(storeUrl *url.URL) (*SQL, error) {
 	}
 
 	return &SQL{
-		url: storeUrl,
-		db:  db,
+		url:    storeUrl,
+		db:     db,
+		logger: logger,
 	}, nil
 }
 
@@ -115,6 +121,17 @@ func (m *SQL) Health(ctx context.Context) (int, string, error) {
 func (m *SQL) Close(_ context.Context) error {
 	// noop
 	return nil
+}
+
+func (m *SQL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return m.Set(ctx, key, b, opts...)
 }
 
 func (m *SQL) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
@@ -128,18 +145,26 @@ func (m *SQL) Set(_ context.Context, hash []byte, value []byte, opts ...options.
 }
 
 func (m *SQL) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
-	// not supported in memory store yet
 	return errors.New("TTL is not supported in a sql store")
+}
+
+func (m *SQL) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (m *SQL) Get(_ context.Context, hash []byte) ([]byte, error) {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 
-	var bytes []byte
-	err := m.db.QueryRow("SELECT value FROM blob WHERE key = $1", key.CloneBytes()).Scan(&bytes)
+	var b []byte
+	err := m.db.QueryRow("SELECT value FROM blob WHERE key = $1", key.CloneBytes()).Scan(&b)
 
-	return bytes, err
+	return b, err
 }
 
 func (m *SQL) Exists(_ context.Context, hash []byte) (bool, error) {

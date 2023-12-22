@@ -5,9 +5,9 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
@@ -19,7 +19,7 @@ type Client struct {
 	conn   *grpc.ClientConn
 }
 
-func NewClient(ctx context.Context, logger utils.Logger) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	initResolver(logger)
 
@@ -51,7 +51,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func initResolver(logger utils.Logger) {
+func initResolver(logger ulogger.Logger) {
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	switch grpcResolver {
 	case "k8s":

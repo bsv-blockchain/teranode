@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -48,7 +50,7 @@ func TestRedis(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -78,9 +80,10 @@ func TestRedis(t *testing.T) {
 	// Spend txid with spend1_2
 	err = r.Spend(ctx, []*utxostore.Spend{spend1_2})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, utxostore.ErrSpent))
+	assert.True(t, errors.Is(err, utxostore.ErrTypeSpent))
 
-	errSpentExtra, ok := err.(*utxostore.ErrSpentExtra)
+	var errSpentExtra *utxostore.ErrSpent
+	ok := errors.As(err, &errSpentExtra)
 	require.True(t, ok)
 	assert.Equal(t, errSpentExtra.SpendingTxID.String(), spend1.SpendingTxID.String())
 }
@@ -89,7 +92,7 @@ func TestRedisLockTime(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -112,14 +115,13 @@ func TestRedisLockTime(t *testing.T) {
 	// Spend txid with spend1
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
 	require.Error(t, err)
-	assert.Equal(t, "utxo not spendable yet, due to lock time", err.Error())
 }
 
 func TestRedisTTL(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -133,8 +135,15 @@ func TestRedisTTL(t *testing.T) {
 	err = r.Store(ctx, tx1)
 	require.NoError(t, err)
 
-	_, err = r.Get(ctx, spend1)
+	var val *utxostore.Response
+
+	val, err = r.Get(ctx, spend1)
 	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_OK), val.Status)
+	assert.Nil(t, val.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
+
+	r.spentUtxoTtl = 1
 
 	// Spend txid with spend1
 	err = r.Spend(ctx, []*utxostore.Spend{spend1})
@@ -143,13 +152,27 @@ func TestRedisTTL(t *testing.T) {
 	// check the ttl
 	dur := r.rdb.TTL(ctx, utxoHash0.String())
 	assert.Greater(t, dur.Val(), time.Duration(0)*time.Second)
+
+	val, err = r.Get(ctx, spend1)
+	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_SPENT), val.Status)
+	assert.Equal(t, val.SpendingTxID, spend1.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	val, err = r.Get(ctx, spend1)
+	require.NoError(t, err)
+	assert.Equal(t, int(utxostore_api.Status_NOT_FOUND), val.Status)
+	assert.Nil(t, val.SpendingTxID)
+	assert.Equal(t, uint32(0), val.LockTime)
 }
 
 func TestRollbackSpend(t *testing.T) {
 	u, err, _ := gocore.Config().GetURL("utxostore")
 	require.NoError(t, err)
 
-	r, err := NewRedisClient(u)
+	r, err := NewRedisClient(ulogger.TestLogger{}, u)
 	// r, err := NewRedisRing(u)
 	// r, err := NewRedisCluster(u)
 	require.NoError(t, err)
@@ -170,9 +193,10 @@ func TestRollbackSpend(t *testing.T) {
 	// Spend txid with spend2 and spend1_2
 	err = r.Spend(ctx, []*utxostore.Spend{spend2, spend1_2})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, utxostore.ErrSpent))
+	assert.True(t, errors.Is(err, utxostore.ErrTypeSpent))
 
-	errSpentExtra, ok := err.(*utxostore.ErrSpentExtra)
+	var errSpentExtra *utxostore.ErrSpent
+	ok := errors.As(err, &errSpentExtra)
 	require.True(t, ok)
 	assert.Equal(t, errSpentExtra.SpendingTxID.String(), spend1.SpendingTxID.String())
 }

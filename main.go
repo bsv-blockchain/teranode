@@ -12,16 +12,17 @@ import (
 	"strings"
 	"time"
 
+	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
-	"github.com/bitcoin-sv/ubsv/cmd/status/status"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
-	"github.com/bitcoin-sv/ubsv/services/blobserver"
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -32,14 +33,17 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
+	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -87,9 +91,9 @@ func main() {
 		s3_blaster.Init()
 		s3_blaster.Start()
 		return
-	case "status.run":
-		status.Init()
-		status.Start()
+	case "blockchainstatus.run":
+		blockchainstatus.Init()
+		blockchainstatus.Start()
 		return
 	case "blaster.run":
 		// txblaster.Init()
@@ -101,13 +105,11 @@ func main() {
 		return
 	}
 
-	logger := gocore.Log(progname)
+	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
+	logger := initLogger(serviceName)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
-
-	// sentry
-	startSentry(logger)
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -118,11 +120,12 @@ func main() {
 	startPropagation := shouldStart("Propagation")
 	startSeeder := shouldStart("Seeder")
 	startMiner := shouldStart("Miner")
-	startBlobServer := shouldStart("BlobServer")
+	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
+	startStatus := shouldStart("Status")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -159,7 +162,6 @@ func main() {
 		logger.Infof("Starting tracer")
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		samplingRateStr, _ := gocore.Config().Get("tracing_SampleRate", "0.01")
 		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
 		if err != nil {
@@ -176,14 +178,24 @@ func main() {
 		}
 	}
 
-	sm, ctx := servicemanager.NewServiceManager()
+	sm, ctx := servicemanager.NewServiceManager(logger)
 
 	var blockchainService *blockchain.Blockchain
 
-	// blockchain service needs to start first !
+	// status server
+	if startStatus {
+		if err := sm.AddService("Status", status.New(
+			logger.New("Status"),
+		)); err != nil {
+			panic(err)
+		}
+		time.Sleep(1 * time.Second) // wait for grpc server to start
+	}
+
+	// blockchain service
 	if startBlockchain {
 		var err error
-		blockchainService, err = blockchain.New(gocore.Log("bchn"))
+		blockchainService, err = blockchain.New(logger.New("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -196,7 +208,7 @@ func main() {
 	// bootstrap server
 	if startBootstrap {
 		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			gocore.Log("bootS"),
+			logger.New("bootS"),
 		)); err != nil {
 			panic(err)
 		}
@@ -217,10 +229,71 @@ func main() {
 		}
 
 		if err := sm.AddService("TxMetaStore", txmeta.New(
-			gocore.Log("txsts"),
+			logger.New("txsts"),
 			txMetaStoreURL,
 		)); err != nil {
 			panic(err)
+		}
+	}
+
+	// asset service
+	if startAsset {
+		if err := sm.AddService("Asset", asset.NewServer(
+			logger.New("asset"),
+			getUtxoStore(ctx, logger),
+			getTxStore(logger),
+			getTxMetaStore(logger),
+			getSubtreeStore(logger),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
+	var blockValidationClient *blockvalidation.Client
+	if startBlockAssembly || startPropagation || startValidator {
+		blockValidationClient = blockvalidation.NewClient(ctx, logger)
+	}
+
+	// blockAssembly
+	if startBlockAssembly {
+		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
+			// should this be done globally somewhere?
+			blockchainClient, err := blockchain.NewClient(ctx, logger)
+			if err != nil {
+				panic(err)
+			}
+
+			assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
+			if !ok {
+				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
+				if !ok {
+					panic(err)
+				}
+			}
+
+			assetClient, err := asset.NewClient(ctx, logger, assetAddr)
+			if err != nil {
+				panic(err)
+			}
+
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
+
+			if err = sm.AddService("BlockAssembly", blockassembly.New(
+				logger.New("bass"),
+				getTxStore(logger),
+				getUtxoStore(ctx, logger),
+				getTxMetaStore(logger),
+				getSubtreeStore(logger),
+				blockchainClient,
+				assetClient,
+				blockValidationClient,
+				nil,
+			)); err != nil {
+				panic(err)
+			}
 		}
 	}
 
@@ -232,70 +305,25 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				nil,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
 
+			// statusClient, err := status.NewClient(ctx, logger)
+			// if err != nil {
+			// 	logger.Fatalf("could not create status client [%v]", err)
+			// }
+
 			if err := sm.AddService("Block Validation", blockvalidation.New(
-				gocore.Log("bval"),
+				logger.New("bval"),
 				getUtxoStore(ctx, logger),
 				getSubtreeStore(logger),
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
-			)); err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	// blob server
-	if startBlobServer {
-		if err := sm.AddService("BlobServer", blobserver.NewServer(
-			gocore.Log("blob"),
-			getUtxoStore(ctx, logger),
-			getTxStore(logger),
-			getTxMetaStore(logger),
-			getSubtreeStore(logger),
-		)); err != nil {
-			panic(err)
-		}
-	}
-
-	// blockAssembly
-	if startBlockAssembly {
-		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			// should this be done globally somewhere?
-			blockchainClient, err := blockchain.NewClient(ctx)
-			if err != nil {
-				panic(err)
-			}
-
-			blobServerAddr, ok := gocore.Config().Get("coinbase_blobserverGrpcAddress")
-			if !ok {
-				blobServerAddr, ok = gocore.Config().Get("blobserver_grpcAddress")
-				if !ok {
-					panic(err)
-				}
-			}
-
-			blobServerClient, err := blobserver.NewClient(ctx, logger, blobServerAddr)
-			if err != nil {
-				panic(err)
-			}
-
-			blockValidationClient := blockvalidation.NewClient(ctx)
-
-			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				gocore.Log("bass"),
-				getTxStore(logger),
-				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
-				getSubtreeStore(logger),
-				blockchainClient,
-				blobServerClient,
-				blockValidationClient,
+				nil,
 			)); err != nil {
 				panic(err)
 			}
@@ -306,9 +334,10 @@ func main() {
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
 			if err := sm.AddService("Validator", validator.NewServer(
-				gocore.Log("valid"),
+				logger.New("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				blockValidationClient,
 			)); err != nil {
 				panic(err)
 			}
@@ -317,8 +346,8 @@ func main() {
 
 	// utxo store server
 	if startUtxoStore {
-		if err := sm.AddService("UTXOStoreServer", utxo.New(
-			gocore.Log("utxo"),
+		if err = sm.AddService("UTXOStoreServer", utxo.New(
+			logger.New("utxo"),
 			getUtxoMemoryStore(),
 		)); err != nil {
 			panic(err)
@@ -329,8 +358,8 @@ func main() {
 	if startSeeder {
 		_, found := gocore.Config().Get("seeder_grpcListenAddress")
 		if found {
-			if err := sm.AddService("Seeder", seeder.NewServer(
-				gocore.Log("seed"),
+			if err = sm.AddService("Seeder", seeder.NewServer(
+				logger.New("seed"),
 			)); err != nil {
 				panic(err)
 			}
@@ -339,8 +368,8 @@ func main() {
 
 	// p2p server
 	if startP2P {
-		if err := sm.AddService("P2P", p2p.NewServer(
-			gocore.Log("P2P"),
+		if err = sm.AddService("P2P", p2p.NewServer(
+			logger.New("P2P"),
 		)); err != nil {
 			panic(err)
 		}
@@ -348,16 +377,16 @@ func main() {
 
 	// coinbase tracker server
 	if startCoinbase {
-		if err := sm.AddService("Coinbase", coinbase.New(
-			gocore.Log("coinB"),
+		if err = sm.AddService("Coinbase", coinbase.New(
+			logger.New("coinB"),
 		)); err != nil {
 			panic(err)
 		}
 	}
 
 	if startFaucet {
-		if err := sm.AddService("Faucet", faucet.New(
-			gocore.Log("faucet"),
+		if err = sm.AddService("Faucet", faucet.New(
+			logger.New("faucet"),
 		)); err != nil {
 			panic(err)
 		}
@@ -373,6 +402,7 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
+				blockValidationClient,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -392,8 +422,8 @@ func main() {
 					panic(err)
 				}
 			} else {
-				if err := sm.AddService("PropagationServer", propagation.New(
-					gocore.Log("prop"),
+				if err = sm.AddService("PropagationServer", propagation.New(
+					logger.New("prop"),
 					getTxStore(logger),
 					validatorClient,
 				)); err != nil {
@@ -405,7 +435,7 @@ func main() {
 
 	// miner
 	if startMiner {
-		if err := sm.AddService("miner", miner.NewMiner(ctx)); err != nil {
+		if err = sm.AddService("miner", miner.NewMiner(ctx, logger.New("miner"))); err != nil {
 			panic(err)
 		}
 	}
@@ -441,24 +471,42 @@ func main() {
 	}
 }
 
-func startSentry(logger *gocore.Logger) {
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok {
+func initLogger(serviceName string) ulogger.Logger {
+	logLevel, _ := gocore.Config().Get("logLevel", "info")
+	logOptions := []ulogger.Option{
+		ulogger.WithLevel(logLevel),
+	}
+
+	// sentry
+	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
 		if err != nil {
-			logger.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
+			panic("failed to parse sentry_traces_sample_rate: " + err.Error())
 		}
 
-		if err = sentry.Init(sentry.ClientOptions{
-			Dsn:        sentryDns,
-			ServerName: serviceName,
-
-			TracesSampleRate: tracesSampleRate,
-		}); err != nil {
-			logger.Fatalf("sentry.Init: %s", err)
+		w, err := zlogsentry.New(sentryDns,
+			zlogsentry.WithEnvironment("dev"),
+			zlogsentry.WithRelease("1.0.0"),
+			zlogsentry.WithServerName(serviceName),
+			zlogsentry.WithSampleRate(tracesSampleRate),
+		)
+		if err != nil {
+			panic("sentry.Init: " + err.Error())
 		}
+
+		multi := zerolog.MultiLevelWriter(os.Stdout, w)
+		logOptions = append(logOptions, ulogger.WithWriter(multi))
 	}
+
+	useLogger, ok := gocore.Config().Get("logger")
+	if ok && useLogger != "" {
+		logOptions = append(logOptions, ulogger.WithLoggerType(useLogger))
+	}
+
+	logger := ulogger.New(progname, logOptions...)
+
+	return logger
 }
 
 func shouldStart(app string) bool {
@@ -522,8 +570,8 @@ func printUsage() {
 	fmt.Println("    -miner=<1|0>")
 	fmt.Println("          whether to start the miner service")
 	fmt.Println("")
-	fmt.Println("    -blobserver=<1|0>")
-	fmt.Println("          whether to start the blob server")
+	fmt.Println("    -asset=<1|0>")
+	fmt.Println("          whether to start the assert service")
 	fmt.Println("")
 	fmt.Println("    -coinbase=<1|0>")
 	fmt.Println("          whether to start the coinbase server")

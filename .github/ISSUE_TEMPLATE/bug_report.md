@@ -41,13 +41,13 @@ SETTINGS
 SERVICE_NAME=validation-service
 advertisingInterval=10s
 advertisingURL=
-blobserver_clientName=M1
-blobserver_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
-blobserver_grpcListenAddress=:8091
-blobserver_httpAddress=https://m1.scaling.ubsv.dev
-blobserver_httpListenAddress=:8090
-blobserver_http_port=80
-blobserver_https_port=443
+asset_clientName=M1
+asset_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
+asset_grpcListenAddress=:8091
+asset_httpAddress=https://m1.scaling.ubsv.dev
+asset_httpListenAddress=:8090
+asset_http_port=80
+asset_https_port=443
 ...
 ```
 

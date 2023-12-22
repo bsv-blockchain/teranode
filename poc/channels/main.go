@@ -15,7 +15,10 @@ func main() {
 	ctx := context.Background()
 	ch := make(chan int)
 
-	subtree := util.NewTreeByLeafCount(1024 * 1024)
+	subtree, err := util.NewTreeByLeafCount(1024 * 1024)
+	if err != nil {
+		panic(err)
+	}
 
 	go func() {
 		for {
@@ -26,7 +29,7 @@ func main() {
 				b := make([]byte, 8)
 				binary.LittleEndian.PutUint64(b, uint64(n))
 				hash, _ := chainhash.NewHash(b)
-				_ = subtree.AddNode(hash, uint64(n), uint64(n))
+				_ = subtree.AddNode(*hash, uint64(n), uint64(n))
 			}
 		}
 	}()

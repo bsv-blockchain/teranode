@@ -1,13 +1,16 @@
 package badger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -35,12 +38,12 @@ func init() {
 
 type Badger struct {
 	store  *badger.DB
-	logger utils.Logger
+	logger ulogger.Logger
 	// mu     sync.RWMutex
 }
 
 type loggerWrapper struct {
-	utils.Logger
+	ulogger.Logger
 }
 
 var (
@@ -51,7 +54,7 @@ func (l loggerWrapper) Warningf(format string, args ...interface{}) {
 	l.Warnf(format, args...)
 }
 
-func New(logger utils.Logger, dir string) (*Badger, error) {
+func New(logger ulogger.Logger, dir string) (*Badger, error) {
 	bLogger := loggerWrapper{logger}
 	opts := badger.DefaultOptions(dir).
 		WithLogger(bLogger).
@@ -106,6 +109,17 @@ func (s *Badger) Close(ctx context.Context) error {
 	return s.store.Close()
 }
 
+func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return s.Set(ctx, key, b, opts...)
+}
+
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
 	start := gocore.CurrentTime()
@@ -152,6 +166,15 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	}
 
 	return s.Set(ctx, key, objectBytes, options.WithTTL(ttl))
+}
+
+func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := s.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {

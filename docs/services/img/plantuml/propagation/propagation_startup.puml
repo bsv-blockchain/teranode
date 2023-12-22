@@ -1,0 +1,56 @@
+@startuml
+
+participant "Propagation Server" as Server
+participant "Configuration System" as Config
+participant "UDP6 Listeners" as UDP6
+participant "HTTP Server" as HTTP
+participant "DRPC Server" as DRPC
+participant "fRPC Server" as fRPC
+participant "QUIC Server" as QUIC
+participant "gRPC Server" as gRPC
+
+activate Server
+
+Server -> Config: Get ipv6_addresses
+Config --> Server: ipv6Addresses
+Server -> UDP6: StartUDP6Listeners(ctx, ipv6Addresses)
+activate UDP6
+UDP6 --> Server: Listeners started/failed
+deactivate UDP6
+
+Server -> Config: Get propagation_httpAddress
+Config --> Server: httpAddress
+Server -> HTTP: StartHTTPServer(ctx, serverURL)
+activate HTTP
+HTTP --> Server: HTTP Server started/failed
+deactivate HTTP
+
+Server -> Config: Get propagation_drpcListenAddress
+Config --> Server: drpcAddress
+Server -> DRPC: drpcServer(ctx, drpcAddress)
+activate DRPC
+DRPC --> Server: DRPC Server started/failed
+deactivate DRPC
+
+Server -> Config: Get propagation_frpcListenAddress
+Config --> Server: frpcAddress
+Server -> fRPC: frpcServer(ctx, frpcAddress)
+activate fRPC
+fRPC --> Server: fRPC Server started/failed
+deactivate fRPC
+
+Server -> Config: Get propagation_quicListenAddress
+Config --> Server: quicAddress
+Server -> QUIC: quicServer(ctx, quicAddress)
+activate QUIC
+QUIC --> Server: QUIC Server started/failed
+deactivate QUIC
+
+Server -> gRPC: StartGRPCServer(ctx, "propagation")
+activate gRPC
+gRPC --> Server: gRPC Server started/failed
+deactivate gRPC
+
+deactivate Server
+
+@enduml

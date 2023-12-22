@@ -1,10 +1,13 @@
 package blockvalidation
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,42 +18,81 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/deduplicator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
 type BlockValidation struct {
-	logger           utils.Logger
-	blockchainClient blockchain.ClientI
-	subtreeStore     blob.Store
-	subtreeTTL       time.Duration
-	txStore          blob.Store
-	txMetaStore      txmeta.Store
-	validatorClient  validator.Interface
+	logger              ulogger.Logger
+	blockchainClient    blockchain.ClientI
+	subtreeStore        blob.Store
+	subtreeTTL          time.Duration
+	txStore             blob.Store
+	txMetaStore         txmeta.Store
+	validatorClient     validator.Interface
+	subtreeDeDuplicator *deduplicator.DeDuplicator
 }
 
-func NewBlockValidation(logger utils.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
+type missingTx struct {
+	tx  *bt.Tx
+	idx int
+}
+type missingTxHash struct {
+	hash *chainhash.Hash
+	idx  int
+}
+
+func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	bv := &BlockValidation{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		subtreeTTL:       subtreeTTL,
-		txStore:          txStore,
-		txMetaStore:      txMetaStore,
-		validatorClient:  validatorClient,
+		logger:              logger,
+		blockchainClient:    blockchainClient,
+		subtreeStore:        subtreeStore,
+		subtreeTTL:          subtreeTTL,
+		txStore:             txStore,
+		txMetaStore:         txMetaStore,
+		validatorClient:     validatorClient,
+		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 	}
 
 	return bv
+}
+
+func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.SetCache(hash, txMeta)
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, hashes map[chainhash.Hash]*txmeta.Data) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.SetCacheMulti(hashes)
+	}
+
+	return nil
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string) error {
@@ -66,40 +108,67 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
 	// validate all the subtrees in the block
+	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 	err := u.validateBLockSubtrees(spanCtx, block, baseUrl)
 	if err != nil {
 		return err
 	}
+	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 	// get all 100 previous block headers on the main chain
+	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
 	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
 	}
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+	if err != nil {
+		return err
+	}
+	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 	// Add the coinbase transaction to the metaTxStore
+	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
 	err = u.storeCoinbaseTx(spanCtx, block)
 	if err != nil {
 		return err
 	}
+	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
+
+	// decouple the tracing context to not cancel the context when finalize the block processing in the background
+	//callerSpan := opentracing.SpanFromContext(spanCtx)
+	//validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	//
+	//go func() {
+	//	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
+	//	if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	//		if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+	//			u.logger.Errorf("[ValidateBlock] failed to invalidate block: %s", err)
+	//		}
+	//		u.logger.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
+	//	}
+	//}()
 
 	// validate the block
 	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
 	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
+	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
 		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 	}
+	u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(spanCtx, block, true); err != nil {
+	if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
+	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%w]", block.Hash().String(), err)
+		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
 	}
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	callerSpan := opentracing.SpanFromContext(spanCtx)
@@ -113,11 +182,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
 	}()
 
 	prometheusBlockValidationValidateBlockDuration.Observe(util.TimeSince(timeStart))
 
-	u.logger.Infof("[ValidateBlock][%s] DONE", block.Hash().String())
+	u.logger.Infof("[ValidateBlock][%s] DONE but finalizeBlockValidation will continue in the background", block.Hash().String())
 
 	return nil
 }
@@ -151,14 +221,26 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
 
-	g, gCtx := errgroup.WithContext(spanCtx)
+	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	callerSpan := opentracing.SpanFromContext(spanCtx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
+	g, gCtx := errgroup.WithContext(setCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
+
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
+	if err != nil {
+		return fmt.Errorf("failed to get block header ids: %w", err)
+	}
+	blockID := ids[0]
 
 	g.Go(func() error {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
-		err = u.updateSubtreesTTL(gCtx, block)
+		err := u.updateSubtreesTTL(gCtx, block)
 		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%w]", block.Hash().String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%s]", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 
 		return nil
 	})
@@ -166,11 +248,12 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	g.Go(func() error {
 		// add the transactions in this block to the txMeta block hashes
 		u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-		if err = model.UpdateTxMinedStatus(gCtx, u.txMetaStore, subtrees, block.Header); err != nil {
+		if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, subtrees, blockID); err != nil {
 			// TODO this should be a fatal error, but for now we just log it
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
 		}
+		u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
 
 		return nil
 	})
@@ -190,6 +273,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 	// update the subtree TTLs
 	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		g.Go(func() error {
@@ -216,10 +300,14 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		stat.AddTime(start)
 	}()
 
+	// TODO This can be very slow, but mostly isn't :-S, example:
+	// 14:05:29 | INFO  | BlockValidation.go:94 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees
+	// 14:10:01 | INFO  | BlockValidation.go:99 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees DONE
+
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
-	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	missingSubtreesMu := sync.Mutex{}
 	for idx, subtreeHash := range block.Subtrees {
@@ -248,13 +336,46 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 		return err
 	}
 
+	startGet := gocore.CurrentTime()
+	statGet := stat.NewStat("1b. GetSubtrees")
+
+	subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
+	subtreeBytesMapMu := sync.Mutex{}
+	g, gCtx = errgroup.WithContext(spanCtx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2) // mostly IO bound, so double the limit
+	for _, subtreeHash := range missingSubtrees {
+		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
+		if subtreeHash != nil {
+			subtreeHash := subtreeHash
+			g.Go(func() error {
+				// get subtree from network over http using the baseUrl
+				txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
+				if err != nil {
+					return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+				}
+
+				subtreeBytesMapMu.Lock()
+				subtreeBytesMap[*subtreeHash] = txHashes
+				subtreeBytesMapMu.Unlock()
+
+				return nil
+			})
+		}
+	}
+	statGet.AddTime(startGet)
+
+	if err = g.Wait(); err != nil {
+		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees from network: %v", block.Hash().String(), err)
+	}
+
 	start2 := gocore.CurrentTime()
 	stat2 := stat.NewStat("2. validateSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
 	for _, subtreeHash := range missingSubtrees {
+		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
-			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl); err != nil {
+			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl, &subtreeBytesMap); err != nil {
 				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
@@ -264,8 +385,167 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	return nil
 }
 
-func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtree")
+// getMissingTransactionsBatch gets a batch of transactions from the network
+// NOTE: it does not return the transactions in the same order as the txHashes
+func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []missingTxHash, baseUrl string) ([]*bt.Tx, error) {
+	txIDBytes := make([]byte, 32*len(txHashes))
+	for idx, txHash := range txHashes {
+		copy(txIDBytes[idx*32:(idx+1)*32], txHash.hash[:])
+	}
+
+	// do http request to baseUrl + txHash.String()
+	u.logger.Debugf("[getMissingTransactionsBatch] getting %d txs from other miner %s", len(txHashes), baseUrl)
+	url := fmt.Sprintf("%s/txs", baseUrl)
+	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to do http request"), err)
+	}
+	defer body.Close()
+
+	// read the body into transactions using go-bt
+	missingTxs := make([]*bt.Tx, 0, len(txHashes))
+	var tx *bt.Tx
+	for {
+		tx, err = u.readTxFromReader(body)
+		if err != nil || tx == nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read transaction from body"), err)
+		}
+
+		missingTxs = append(missingTxs, tx)
+	}
+
+	return missingTxs, nil
+}
+
+func (u *BlockValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
+	defer func() {
+		// there is a bug in go-bt, that does not check input and throws a runtime error in
+		// github.com/libsv/go-bt/v2@v2.2.2/input.go:76 +0x16b
+		if r := recover(); r != nil {
+			switch x := r.(type) {
+			case string:
+				err = errors.New(x)
+			case error:
+				err = x
+			default:
+				err = fmt.Errorf("unknown panic: %v", r)
+			}
+		}
+	}()
+
+	tx = &bt.Tx{}
+	_, err = tx.ReadFrom(body)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
+	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
+	defer func() {
+		//stat.AddTime(startTotal)
+	}()
+
+	// get transaction from network over http using the baseUrl
+	if baseUrl == "" {
+		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
+	}
+
+	//start := gocore.CurrentTime()
+	alreadyHaveTransaction := true
+	txBytes, err := u.txStore.Get(ctx, txHash[:])
+	//stat.NewStat("getTxFromStore").AddTime(start)
+	if txBytes == nil || err != nil {
+		alreadyHaveTransaction = false
+
+		// do http request to baseUrl + txHash.String()
+		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
+		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
+		//startM := gocore.CurrentTime()
+		//statM := stat.NewStat("http fetch missing tx")
+		txBytes, err = util.DoHTTPRequest(ctx, url)
+		//statM.AddTime(startM)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
+		}
+	}
+
+	// validate the transaction by creating a transaction object
+	tx, err := bt.NewTxFromBytes(txBytes)
+	if err != nil {
+		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
+	}
+
+	if !alreadyHaveTransaction {
+		//start = gocore.CurrentTime()
+		// store the transaction, we did not get it via propagation
+		err = u.txStore.Set(ctx, txHash[:], txBytes)
+		//stat.NewStat("storeTx").AddTime(start)
+		if err != nil {
+			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
+		}
+	}
+
+	return tx, nil
+}
+
+func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
+	defer func() {
+		stat.AddTime(startTotal)
+		prometheusBlockValidationBlessMissingTransaction.Inc()
+		prometheusBlockValidationBlessMissingTransactionDuration.Observe(util.TimeSince(startTotal))
+	}()
+
+	if tx == nil {
+		return nil, fmt.Errorf("[blessMissingTransaction] tx is nil")
+	}
+	u.logger.Debugf("[blessMissingTransaction][%s] called", tx.TxID())
+
+	if tx.IsCoinbase() {
+		return nil, fmt.Errorf("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
+	}
+
+	// validate the transaction in the validation service
+	// this should spend utxos, create the tx meta and create new utxos
+	// todo return tx meta data
+	err = u.validatorClient.Validate(ctx, tx)
+	if err != nil {
+		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
+		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", tx.TxID(), err.Error())
+	}
+
+	start := gocore.CurrentTime()
+	txMeta, err = u.txMetaStore.GetMeta(ctx, tx.TxIDChainHash())
+	stat.NewStat("getTxMeta").AddTime(start)
+	if err != nil {
+		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", tx.TxID(), err.Error())
+	}
+
+	if txMeta == nil {
+		return nil, fmt.Errorf("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
+	}
+
+	return txMeta, nil
+}
+
+func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
+	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
+	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
+
+	return u.subtreeDeDuplicator.DeDuplicate(ctx, *subtreeHash, func() error {
+		return u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeHashesMap...)
+	})
+}
+
+func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
@@ -277,107 +557,78 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	u.logger.Infof("[validateSubtree][%s] called", subtreeHash.String())
 
 	start := gocore.CurrentTime()
-	// get subtree from store
-	subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
-	stat.NewStat("1. subtreeExists").AddTime(start)
-	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
-	}
-	if subtreeExists {
-		// subtree already exists in store, which means it's valid
-		// TODO is this true?
-		return nil
-	}
+	var txHashes []chainhash.Hash
 
-	// get subtree from network over http using the baseUrl
-	if baseUrl == "" {
-		return fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
-	}
-
-	start = gocore.CurrentTime()
-	// do http request to baseUrl + subtreeHash.String()
-	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
-	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
-	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
-	stat.NewStat("2. http fetch subtree").AddTime(start)
-	if err != nil {
-		return errors.Join(fmt.Errorf("failed to do http request"), err)
-	}
-
-	start = gocore.CurrentTime()
-	// the subtree bytes we got from our competing miner only contain the transaction hashes
-	// it's basically just a list of 32 byte transaction hashes
-	txHashes := make([]*chainhash.Hash, len(subtreeBytes)/32)
-	for i := 0; i < len(subtreeBytes); i += 32 {
-		txHashes[i/32], err = chainhash.NewHash(subtreeBytes[i : i+32])
+	// check whether we have the subtree in the subtreeHashesMap and can skip getting it here
+	if len(subtreeHashesMap) > 0 && len(*subtreeHashesMap[0]) > 0 && len((*subtreeHashesMap[0])[*subtreeHash]) > 0 {
+		txHashes = (*subtreeHashesMap[0])[*subtreeHash]
+	} else {
+		// get subtree from store
+		subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
+		stat.NewStat("1. subtreeExists").AddTime(start)
 		if err != nil {
-			return errors.Join(errors.New("failed to create transaction hash from bytes"), err)
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 		}
-	}
-	stat.NewStat("3. createTxHashes").AddTime(start)
+		if subtreeExists {
+			// subtree already exists in store, which means it's valid
+			// TODO is this true?
+			return nil
+		}
 
-	nrTransactions := len(txHashes)
-	if !util.IsPowerOfTwo(nrTransactions) {
-		//u.logger.Warnf("subtree is not a power of two [%d], mining on incomplete tree", nrTransactions)
-		height := math.Ceil(math.Log2(float64(nrTransactions)))
-		nrTransactions = int(math.Pow(2, height)) // 1024 * 1024
+		// get subtree from network over http using the baseUrl
+		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, subtreeHash, baseUrl)
+		if err != nil {
+			return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+		}
 	}
 
 	// create the empty subtree
-	subtree := util.NewTreeByLeafCount(nrTransactions)
+	height := math.Ceil(math.Log2(float64(len(txHashes))))
+	subtree, err := util.NewTree(int(height))
+	if err != nil {
+		return err
+	}
 
 	start = gocore.CurrentTime()
 	// validate the subtree
-	txMetaMap := sync.Map{}
+	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(1024) // max 1024 concurrent requests
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
+	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := 0
-	var missingTxHashesMu sync.Mutex
-	for idx, txHash := range txHashes {
-		if txHash == nil {
-			// TODO throw error here?
-			continue
-		}
 
-		txHash := txHash
-		idx := idx
+	// cycle through batches of 1024 txHashes at a time
+	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
+	for i := 0; i < len(txHashes); i += batchSize {
+		i := i
 		g.Go(func() error {
 			var txMeta *txmeta.Data
 			var err error
-			if txHash.IsEqual(model.CoinbasePlaceholderHash) {
-				txMeta = &txmeta.Data{
-					Fee:         0,
-					SizeInBytes: 0,
-				}
-			} else {
-				// is the txid in the store?
-				// no - get it from the network
-				// yes - is the txid blessed?
-				// if all txs in tree are blessed, then bless the tree
-				txMeta, err = u.txMetaStore.GetMeta(gCtx, txHash)
+			// cycle through the batch size, making sure not to go over the length of the txHashes
+			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+				txHash := txHashes[i+j]
+				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
-					if strings.Contains(err.Error(), "not found") {
+					if errors.Is(err, txmeta.ErrNotFound) {
 						// collect all missing transactions for processing in order
 						// that is why we use an indexed slice instead of just a slice append
-						missingTxHashesMu.Lock()
-						missingTxHashes[idx] = txHash
+						missingTxHashes[i+j] = &txHash
 						nrOfMissingTransactions++
-						missingTxHashesMu.Unlock()
-						return nil
+						continue
 					} else {
 						return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
 					}
 				}
-			}
 
-			if txMeta == nil {
-				return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
-			}
+				if txMeta == nil {
+					return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
+				}
 
-			txMetaMap.Store(txHash, txMeta)
+				txMetaSlice[i+j] = txMeta
+			}
 
 			return nil
 		})
@@ -394,14 +645,23 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 		// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
 		// this is done to make sure the order is preserved when getting them in parallel
 		// compact the missingTxHashes to only a list of the missing ones
-		missingTxHashesCompacted := make([]*chainhash.Hash, 0, nrOfMissingTransactions)
-		for _, txHash := range missingTxHashes {
+		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions)
+		for idx, txHash := range missingTxHashes {
 			if txHash != nil {
-				missingTxHashesCompacted = append(missingTxHashesCompacted, txHash)
+				missingTxHashesCompacted = append(missingTxHashesCompacted, missingTxHash{
+					hash: txHash,
+					idx:  idx,
+				})
 			}
 		}
 
-		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, &txMetaMap)
+		if len(missingTxHashes) == 1 {
+			u.logger.Infof("[validateSubtree][%s] processing missing tx %s for subtree instance", subtreeHash.String(), missingTxHashes[0].String())
+		} else {
+			u.logger.Infof("[validateSubtree][%s] processing %d missing tx for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
+		}
+
+		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
 		if err != nil {
 			return err
 		}
@@ -409,15 +669,43 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	start = gocore.CurrentTime()
-	var ok bool
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
-	for _, txHash := range txHashes {
+	for idx, txHash := range txHashes {
 		// finally add the transaction hash and fee to the subtree
-		_txMeta, _ := txMetaMap.Load(txHash)
-		txMeta, ok = _txMeta.(*txmeta.Data)
-		if !ok {
-			return fmt.Errorf("[validateSubtree][%s] tx meta is not of type *txmeta.Data [%s]", subtreeHash.String(), txHash.String())
+		txMeta = txMetaSlice[idx]
+		if txMeta == nil {
+			found := false
+			index := -1
+			for i, h := range txHashes {
+				if h.IsEqual(&txHash) {
+					found = true
+					index = i
+					break
+				}
+			}
+			if found {
+				u.logger.Warnf("[validateSubtree][%s] tx meta exists in txHashes @ %d of %d [%s]", subtreeHash.String(), index, len(txHashes), txHash.String())
+			} else {
+				u.logger.Warnf("[validateSubtree][%s] tx meta not found in txHashes. Not possible? [%s]", subtreeHash.String(), txHash.String())
+			}
+
+			found = false
+			index = -1
+			for i, missingTxHash := range missingTxHashes {
+				if txHash.IsEqual(missingTxHash) {
+					found = true
+					index = i
+					break
+				}
+			}
+			if found {
+				u.logger.Warnf("[validateSubtree][%s] tx meta exists in missingTxHashes but wasn't processed? @ %d of %d [%s]", subtreeHash.String(), index, len(missingTxHashes), txHash.String())
+			} else {
+				u.logger.Warnf("[validateSubtree][%s] tx meta not found in missingTxHashes [%s]", subtreeHash.String(), txHash.String())
+			}
+
+			return fmt.Errorf("[validateSubtree][%s] tx meta not found in txMetaSlice [%s]", subtreeHash.String(), txHash.String())
 		}
 
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
@@ -454,54 +742,130 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	return nil
 }
 
-func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []*chainhash.Hash, baseUrl string, txMetaMap *sync.Map) (err error) {
+func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
+	if baseUrl == "" {
+		return nil, fmt.Errorf("[validateSubtree][%s] baseUrl for subtree is empty", subtreeHash.String())
+	}
+
+	start := gocore.CurrentTime()
+	// do http request to baseUrl + subtreeHash.String()
+	u.logger.Infof("[validateSubtree][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
+	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
+	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
+	}
+	stat.NewStat("2. http fetch subtree").AddTime(start)
+	defer func() {
+		_ = body.Close()
+	}()
+
+	start = gocore.CurrentTime()
+	txHashes := make([]chainhash.Hash, 0, 1024*1024)
+	buffer := make([]byte, chainhash.HashSize)
+	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4)
+
+	for {
+		n, err := io.ReadFull(bufferedReader, buffer)
+		if n > 0 {
+			txHashes = append(txHashes, chainhash.Hash(buffer))
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, fmt.Errorf("unexpected EOF: partial hash read")
+			}
+			return nil, fmt.Errorf("error reading stream: %v", err)
+		}
+	}
+
+	// // the subtree bytes we got from our competing miner only contain the transaction hashes
+	// // it's basically just a list of 32 byte transaction hashes
+	// txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
+	// for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+	// 	txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+	// }
+	stat.NewStat("3. createTxHashes").AddTime(start)
+
+	return txHashes, nil
+}
+
+func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
+	missingTxHashes []missingTxHash, baseUrl string, txMetaSlice []*txmeta.Data) error {
+
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
 	defer func() {
 		span.Finish()
 	}()
 
-	// process all the missing transactions in order, there might be parent / child dependencies
-	var missingTxs []*bt.Tx
-	missingTxs, err = u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
+	u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+	missingTxs, err := u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
 	}
 
+	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 	var txMeta *txmeta.Data
-	var tx *bt.Tx
-	for _, tx = range missingTxs {
-		txMeta, err = u.blessMissingTransaction(spanCtx, tx)
-		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String()), err)
+	var mTx missingTx
+	for _, mTx = range missingTxs {
+		if mTx.tx == nil {
+			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 		}
-		txMetaMap.Store(tx.TxIDChainHash(), txMeta)
+		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx)
+		if err != nil {
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String()), err)
+		}
+		if txMeta == nil {
+			u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+		}
+
+		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+		txMetaSlice[mTx.idx] = txMeta
+	}
+
+	// check if all missing transactions have been blessed
+	count := 0
+	for _, txMeta := range txMetaSlice {
+		if txMeta == nil {
+			count++
+		}
+	}
+	if count > 0 {
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice", subtreeHash.String(), count)
 	}
 
 	return nil
 }
 
-func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []*chainhash.Hash, baseUrl string) (missingTxs []*bt.Tx, err error) {
-	// TODO get these in proper batches
-
+func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []missingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
-	missingTxs = make([]*bt.Tx, len(missingTxHashes))
+	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
 
-	// TODO #148 should be using ctx, but there is a race condition in the StatsContext
-	g, gCtx := errgroup.WithContext(context.Background())
-	g.SetLimit(32)
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
-	var tx *bt.Tx
-	for idx, txHash := range missingTxHashes {
-		txHash := txHash
-		idx := idx
+	// get the transactions in batches of 500
+	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
+	for i := 0; i < len(missingTxHashes); i += batchSize {
+		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
 		g.Go(func() error {
-			tx, err = u.getMissingTransaction(gCtx, txHash, baseUrl)
+			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[blessMissingTransaction][%s] failed to get transaction", txHash.String()), err)
+				return errors.Join(fmt.Errorf("[getMissingTransactions] failed to get missing transactions batch"), err)
 			}
+
 			missingTxsMu.Lock()
-			missingTxs[idx] = tx
+			for _, tx := range missingTxsBatch {
+				if tx == nil {
+					missingTxsMu.Unlock()
+					return fmt.Errorf("[getMissingTransactions] #1 missing transaction is nil")
+				}
+				missingTxsMap[*tx.TxIDChainHash()] = tx
+			}
 			missingTxsMu.Unlock()
 
 			return nil
@@ -512,87 +876,21 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 		return nil, errors.Join(fmt.Errorf("[blessMissingTransaction] failed to get all transactions"), err)
 	}
 
+	// populate the missingTx slice with the tx data
+	missingTxs = make([]missingTx, 0, len(missingTxHashes))
+	for _, mTx := range missingTxHashes {
+		if mTx.hash == nil {
+			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.hash.String())
+		}
+		tx, ok := missingTxsMap[*mTx.hash]
+		if !ok {
+			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.hash.String())
+		}
+		if tx == nil {
+			return nil, fmt.Errorf("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.hash.String())
+		}
+		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.idx})
+	}
+
 	return missingTxs, nil
-}
-
-func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
-	defer func() {
-		stat.AddTime(startTotal)
-	}()
-
-	// get transaction from network over http using the baseUrl
-	if baseUrl == "" {
-		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
-	}
-
-	start := gocore.CurrentTime()
-	alreadyHaveTransaction := true
-	txBytes, err := u.txStore.Get(ctx, txHash[:])
-	stat.NewStat("getTxFromStore").AddTime(start)
-	if txBytes == nil || err != nil {
-		alreadyHaveTransaction = false
-
-		// do http request to baseUrl + txHash.String()
-		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
-		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-		startM := gocore.CurrentTime()
-		statM := stat.NewStat("http fetch missing tx")
-		txBytes, err = util.DoHTTPRequest(ctx, url)
-		statM.AddTime(startM)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
-		}
-	}
-
-	// validate the transaction by creating a transaction object
-	tx, err := bt.NewTxFromBytes(txBytes)
-	if err != nil {
-		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
-	}
-
-	if !alreadyHaveTransaction {
-		start = gocore.CurrentTime()
-		// store the transaction, we did not get it via propagation
-		err = u.txStore.Set(ctx, txHash[:], txBytes)
-		stat.NewStat("storeTx").AddTime(start)
-		if err != nil {
-			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
-		}
-	}
-
-	return tx, nil
-}
-
-func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
-	defer func() {
-		stat.AddTime(startTotal)
-		prometheusBlockValidationBlessMissingTransaction.Inc()
-		prometheusBlockValidationBlessMissingTransactionDuration.Observe(util.TimeSince(startTotal))
-	}()
-
-	u.logger.Infof("[blessMissingTransaction][%s] called", tx.TxID())
-
-	if tx.IsCoinbase() {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
-	}
-
-	// validate the transaction in the validation service
-	// this should spend utxos, create the tx meta and create new utxos
-	// todo return tx meta data
-	err = u.validatorClient.Validate(ctx, tx)
-	if err != nil {
-		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", tx.TxID(), err.Error())
-	}
-
-	start := gocore.CurrentTime()
-	txMeta, err = u.txMetaStore.GetMeta(ctx, tx.TxIDChainHash())
-	stat.NewStat("getTxMeta").AddTime(start)
-	if err != nil {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", tx.TxID(), err.Error())
-	}
-
-	return txMeta, nil
 }

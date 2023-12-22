@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,7 +20,7 @@ import (
 
 type Client struct {
 	client  blockchain_api.BlockchainAPIClient
-	logger  utils.Logger
+	logger  ulogger.Logger
 	running bool
 	conn    *grpc.ClientConn
 }
@@ -29,8 +30,8 @@ type BestBlockHeader struct {
 	Height uint32
 }
 
-func NewClient(ctx context.Context) (ClientI, error) {
-	logger := gocore.Log("blkcC")
+func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
+	logger = logger.New("blkcC")
 
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
@@ -58,7 +59,7 @@ func NewClient(ctx context.Context) (ClientI, error) {
 
 		baClient = blockchain_api.NewBlockchainAPIClient(baConn)
 
-		_, err = baClient.Health(ctx, &emptypb.Empty{})
+		_, err = baClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
 			if retries < maxRetries {
 				retries++
@@ -81,7 +82,7 @@ func NewClient(ctx context.Context) (ClientI, error) {
 	}, nil
 }
 
-func NewClientWithAddress(ctx context.Context, logger utils.Logger, address string) (ClientI, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -98,10 +99,11 @@ func NewClientWithAddress(ctx context.Context, logger utils.Logger, address stri
 }
 
 func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
-	return c.client.Health(ctx, &emptypb.Empty{})
+	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
 }
 
-func (c Client) AddBlock(ctx context.Context, block *model.Block, external bool) error {
+func (c Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	external := peerID != ""
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
 		CoinbaseTx:       block.CoinbaseTx.Bytes(),
@@ -109,6 +111,7 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block, external bool)
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		External:         external,
+		PeerId:           peerID,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -152,10 +155,11 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
 }
 
-func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
+func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
 		NumberOfBlocks: n,
 		IncludeOrphans: includeOrphans,
+		FromHeight:     fromHeight,
 	})
 	if err != nil {
 		return nil, err
@@ -238,6 +242,26 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	}
 
 	return headers, resp.Heights, nil
+}
+
+func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return err
+}
+
+func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
+		StartHash:       blockHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Ids, nil
 }
 
 func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {

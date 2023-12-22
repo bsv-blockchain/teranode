@@ -1,0 +1,24 @@
+@startuml
+
+participant "Server\n (services/blockvalidation/Server.go)" as Server
+participant "Subtree Store" as SubtreeStore
+
+== Subtree Found Handling ==
+Server -> Server : SubtreeFound()
+activate Server
+Server -> SubtreeStore : Exists(spanCtx, subtreeHash[:])
+activate SubtreeStore
+SubtreeStore --> Server
+deactivate SubtreeStore
+deactivate Server
+
+== Retrieve Subtree ==
+Server -> Server : Get()
+activate Server
+Server -> SubtreeStore : Get(ctx, request.Hash)
+activate SubtreeStore
+SubtreeStore --> Server
+deactivate SubtreeStore
+deactivate Server
+
+@enduml

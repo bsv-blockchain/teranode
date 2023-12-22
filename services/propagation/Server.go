@@ -17,7 +17,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -26,17 +25,16 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-p2p/wire"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/quic-go/quic-go"
+	http3 "github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var (
@@ -51,7 +49,7 @@ var (
 type PropagationServer struct {
 	status atomic.Uint32
 	propagation_api.UnsafePropagationAPIServer
-	logger    utils.Logger
+	logger    ulogger.Logger
 	txStore   blob.Store
 	validator validator.Interface
 }
@@ -62,7 +60,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
+func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
@@ -70,6 +68,10 @@ func New(logger utils.Logger, txStore blob.Store, validatorClient validator.Inte
 		txStore:   txStore,
 		validator: validatorClient,
 	}
+}
+
+func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
 }
 
 func (ps *PropagationServer) Init(_ context.Context) (err error) {
@@ -87,28 +89,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
-	httpAddress, ok := gocore.Config().Get("propagation_httpAddress")
-	if ok {
-		var serverURL *url.URL
-		serverURL, err = url.Parse(httpAddress)
-		if err != nil {
-			return fmt.Errorf("HTTP server failed to parse URL [%w]", err)
-		}
-		err = ps.StartHTTPServer(ctx, serverURL)
-		if err != nil {
-			return fmt.Errorf("HTTP server failed [%w]", err)
-		}
-	}
-
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("propagation_drpcListenAddress")
-	if ok {
-		err = ps.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
 	if ok {
@@ -121,10 +101,28 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	// Experimental QUIC server - to test throughput at scale
 	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
 	if ok {
-		err = ps.quicServer(ctx, quicAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start QUIC server: %v", err)
-		}
+		// Create an error channel
+		errChan := make(chan error, 1) // Buffered channel
+
+		// Context for the QUIC server
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Run the QUIC server in a goroutine
+		go func() {
+			err := ps.quicServer(ctx, quicAddress)
+			if err != nil {
+				errChan <- err // Send any errors to the error channel
+			}
+			close(errChan) // Close the channel when done
+		}()
+
+		go func() {
+			if err := <-errChan; err != nil {
+				ps.logger.Errorf("failed to start QUIC server: %v", err)
+			}
+		}()
+
 	}
 
 	ps.status.Store(2)
@@ -135,38 +133,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *PropagationServer) drpcServer(ctx context.Context, drpcAddress string) error {
-	ps.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-
-	// register the proto-specific methods on the mux
-	err := propagation_api.DRPCRegisterPropagationAPI(m, ps)
-	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
-	}
-
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			ps.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -289,94 +255,62 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
 
-	config := &quic.Config{
-		MaxIncomingStreams:         10000,         // for example
-		MaxStreamReceiveWindow:     4 * (1 << 20), // 4 MB for example
-		MaxIncomingUniStreams:      10000,
-		MaxConnectionReceiveWindow: 4 * (1 << 20),
-		// MaxMaxReceiveConnectionFlowControlWindow: 8 * (1 << 20), // 8 MB for example
-	}
-	listener, err := quic.ListenAddr(quicAddresses, ps.generateTLSConfig(), config)
-	if err != nil {
-		ps.logger.Fatalf("error starting QUIC listener: %v", err)
+	server := http3.Server{
+		Addr:      quicAddresses,
+		TLSConfig: ps.generateTLSConfig(), // Assume generateTLSConfig() sets up your TLS
 	}
 
-	go func() {
-		sess, err := listener.Accept(ctx)
-		if err != nil {
-			ps.logger.Errorf("error accepting new QUIC connection: %v", err)
-			return
-		}
-		for {
-			stream, err := sess.AcceptStream(ctx)
-			if err != nil {
-				return
-			}
-			ps.handleStream(ctx, stream)
-		}
-	}()
+	http.Handle("/tx", http.HandlerFunc(ps.handleStream))
+
+	err := server.ListenAndServe() // Empty because certs are in TLSConfig
+	if err != nil {
+		ps.logger.Errorf("error starting HTTP server: %v", err)
+		return err
+	}
 
 	return nil
 }
 
-func (ps *PropagationServer) handleStream(ctx context.Context, stream quic.Stream) {
+func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var txLength uint32
 	var err error
-	var buf []byte
+	var txData []byte
 	for {
 		// Read the size of the incoming transaction first
-		err = binary.Read(stream, binary.BigEndian, &txLength)
+		err = binary.Read(r.Body, binary.BigEndian, &txLength)
 		if err != nil {
 			if err != io.EOF {
-				ps.logger.Errorf("error reading transaction length: %v\n", err)
+				ps.logger.Errorf("Error reading transaction length: %v\n", err)
 			}
+			break
+		}
+
+		if txLength == 0 {
 			return
 		}
 
-		// Now read the transaction data
-		buf = make([]byte, txLength)
-		_, err = io.ReadFull(stream, buf)
+		// Read the transaction data
+		txData = make([]byte, txLength)
+		_, err := io.ReadFull(r.Body, txData)
 		if err != nil {
-			ps.logger.Errorf("error reading transaction data: %v\n", err)
-			return
+			ps.logger.Errorf("Error reading transaction data: %v\n", err)
+			break
 		}
 
 		// Process the received bytes
+		ctx := context.Background()
 		go func(txb []byte) {
 			if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 				Tx: txb,
 			}); err != nil {
 				ps.logger.Errorf("error processing transaction: %v", err)
 			}
-		}(buf)
+		}(txData)
 	}
-}
-
-func (ps *PropagationServer) StartHTTPServer(ctx context.Context, serverURL *url.URL) error {
-	// start a simple http listener that handles incoming transaction requests
-	http.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-		if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-			Tx: body,
-		}); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-	})
-
-	go func() {
-		if err := http.ListenAndServe(serverURL.Host, nil); err != nil {
-			ps.logger.Errorf("HTTP server failed [%s]", err)
-		}
-	}()
-
-	return nil
 }
 
 func (ps *PropagationServer) Stop(_ context.Context) error {
@@ -403,6 +337,24 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 		_, _ = sb.WriteString(fmt.Sprintf("Validator: GOOD %d - %q\n", code, details))
 	}
 
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+	if localValidator {
+		blockHeight, err := ps.validator.GetBlockHeight()
+		if err != nil {
+			errs = append(errs, err)
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
+		} else {
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+		}
+
+		if blockHeight <= 0 {
+			errs = append(errs, errors.New("blockHeight <= 0"))
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
+		} else {
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+		}
+	}
+
 	if len(errs) > 0 {
 		return -1, sb.String(), errors.New("Health errors occurred")
 	}
@@ -410,7 +362,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 	return 0, sb.String(), nil
 }
 
-func (ps *PropagationServer) Health(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		propagationStat.NewStat("Health", true).AddTime(start)
@@ -584,7 +536,16 @@ func (ps *PropagationServer) generateTLSConfig() *tls.Config {
 		ps.logger.Errorf("error generating rsa key: %s", err.Error())
 		return nil
 	}
+
 	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+
+	remoteAddress, err := utils.GetPublicIPAddress()
+	if err != nil {
+		ps.logger.Fatalf("Failed to get public IP address: %v", err)
+	}
+	// Add IP SANs
+	template.IPAddresses = []net.IP{net.ParseIP(remoteAddress)}
+
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
 		ps.logger.Errorf("error creating x509 certificate: %s", err.Error())

@@ -1,0 +1,44 @@
+@startuml
+participant "Coinbase Service" as Coinbase
+participant "Asset Client" as AssetClient
+participant "Asset Server Handler\n(asset/grpc.go)" as AssetServer
+database "Subscriber DB" as SubDB
+participant "Blockchain Client" as BlockchainClient
+participant "Blockchain Server" as BlockchainServer
+participant "Block Assembly Server" as BlockAssemblyServer
+
+Coinbase -> AssetClient : Subscribe(ctx, "")
+activate AssetClient
+AssetClient -> AssetServer : Subscribe(ctx, "")
+activate AssetServer
+
+AssetServer -> SubDB : Track subscriber
+activate SubDB
+SubDB --> AssetServer
+deactivate SubDB
+
+AssetServer -> BlockchainClient : Subscribe()
+activate BlockchainClient
+
+BlockchainServer -> BlockchainServer : AddBlock()
+BlockchainServer -> BlockchainClient : Send Notification Block, MiningOn
+BlockchainClient -> AssetServer : Send Notification Block, MiningOn
+activate AssetServer
+AssetServer --> Coinbase : Notification Block, MiningOn
+deactivate AssetServer
+
+BlockAssemblyServer -> BlockAssemblyServer : init() - New Subtree
+BlockAssemblyServer -> BlockchainServer : Send Notification Subtree
+BlockchainServer -> BlockchainClient : Send Notification Subtree
+BlockchainClient -> AssetServer : Send Notification Subtree
+
+activate AssetServer
+AssetServer --> Coinbase : Notification Subtree
+
+
+deactivate BlockchainClient
+
+deactivate AssetServer
+
+deactivate AssetClient
+@enduml

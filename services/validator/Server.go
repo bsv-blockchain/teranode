@@ -3,13 +3,14 @@ package validator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -19,15 +20,13 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"storj.io/drpc/drpcmux"
-	"storj.io/drpc/drpcserver"
 )
 
 var stats = gocore.NewStat("validator")
@@ -41,16 +40,17 @@ type subscriber struct {
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator           Interface
-	logger              utils.Logger
-	utxoStore           utxostore.Interface
-	txMetaStore         txmetastore.Store
-	kafkaSignal         chan os.Signal
-	newSubscriptions    chan subscriber
-	deadSubscriptions   chan subscriber
-	subscribers         map[subscriber]bool
-	subscriptionCtx     context.Context
-	cancelSubscriptions context.CancelFunc
+	validator             Interface
+	logger                ulogger.Logger
+	utxoStore             utxostore.Interface
+	txMetaStore           txmetastore.Store
+	blockValidationClient blockValidationTxMetaClient
+	kafkaSignal           chan os.Signal
+	newSubscriptions      chan subscriber
+	deadSubscriptions     chan subscriber
+	subscribers           map[subscriber]bool
+	subscriptionCtx       context.Context
+	cancelSubscriptions   context.CancelFunc
 }
 
 func Enabled() bool {
@@ -59,24 +59,29 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger utils.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store, blockValidationClient blockValidationTxMetaClient) *Server {
 	initPrometheusMetrics()
 	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
 	return &Server{
-		logger:              logger,
-		utxoStore:           utxoStore,
-		txMetaStore:         txMetaStore,
-		newSubscriptions:    make(chan subscriber, 10),
-		deadSubscriptions:   make(chan subscriber, 10),
-		subscribers:         make(map[subscriber]bool),
-		subscriptionCtx:     subscriptionCtx,
-		cancelSubscriptions: cancelSubscriptions,
+		logger:                logger,
+		utxoStore:             utxoStore,
+		txMetaStore:           txMetaStore,
+		blockValidationClient: blockValidationClient,
+		newSubscriptions:      make(chan subscriber, 10),
+		deadSubscriptions:     make(chan subscriber, 10),
+		subscribers:           make(map[subscriber]bool),
+		subscriptionCtx:       subscriptionCtx,
+		cancelSubscriptions:   cancelSubscriptions,
 	}
 }
 
+func (v *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (v *Server) Init(ctx context.Context) (err error) {
-	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore)
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore, v.blockValidationClient)
 	if err != nil {
 		return fmt.Errorf("could not create validator [%w]", err)
 	}
@@ -110,8 +115,14 @@ func (v *Server) Start(ctx context.Context) error {
 						})
 						if err != nil {
 							v.logger.Errorf("[Validator] Error validating transaction: %s", err)
+
 						}
 						if !response.Valid {
+							tx, err := bt.NewTxFromBytes(txBytes)
+							if err == nil {
+								v.sendInvalidTxNotification(tx.TxID(), response.Reason)
+							}
+
 							v.logger.Errorf("[Validator] Invalid transaction: %s", response.Reason)
 						}
 						processedN := n.Add(1)
@@ -154,15 +165,6 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Experimental DRPC server - to test throughput at scale
-	drpcAddress, ok := gocore.Config().Get("validator_drpcListenAddress")
-	if ok {
-		err := v.drpcServer(ctx, drpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to start DRPC server: %v", err)
-		}
-	}
-
 	// Experimental fRPC server - to test throughput at scale
 	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
 	if ok {
@@ -171,6 +173,24 @@ func (v *Server) Start(ctx context.Context) error {
 			v.logger.Errorf("failed to start fRPC server: %v", err)
 		}
 	}
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				v.logger.Infof("[Validator] Stopping channel listeners go routine")
+				return
+			case s := <-v.newSubscriptions:
+				v.subscribers[s] = true
+				v.logger.Infof("[Validator] New Subscription received from %s (Total=%d).", s.source, len(v.subscribers))
+
+			case s := <-v.deadSubscriptions:
+				delete(v.subscribers, s)
+				safeClose(s.done)
+				v.logger.Infof("[Validator] Subscription removed (Total=%d).", len(v.subscribers))
+			}
+		}
+	}()
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
@@ -190,13 +210,39 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (v *Server) Health(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
+		prometheusHealth.Inc()
 		stats.NewStat("Health", true).AddTime(start)
 	}()
 
-	prometheusHealth.Inc()
+	var sb strings.Builder
+	errs := make([]error, 0)
+
+	blockHeight, err := v.validator.GetBlockHeight()
+	if err != nil {
+		errs = append(errs, err)
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+	}
+
+	if blockHeight <= 0 {
+		errs = append(errs, errors.New("blockHeight <= 0"))
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
+	} else {
+		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
+	}
+
+	if len(errs) > 0 {
+		return &validator_api.HealthResponse{
+			Ok:        false,
+			Details:   sb.String(),
+			Timestamp: uint32(time.Now().Unix()),
+		}, err
+	}
+
 	return &validator_api.HealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -311,35 +357,15 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	}, nil
 }
 
-func (v *Server) drpcServer(ctx context.Context, drpcAddress string) error {
-	v.logger.Infof("Starting DRPC server on %s", drpcAddress)
-	m := drpcmux.New()
-	// register the proto-specific methods on the mux
-	err := validator_api.DRPCRegisterValidatorAPI(m, v)
+func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error) {
+	blockHeight, err := v.validator.GetBlockHeight()
 	if err != nil {
-		return fmt.Errorf("failed to register DRPC service: %v", err)
-	}
-	// create the drpc server
-	s := drpcserver.New(m)
-
-	// listen on a tcp socket
-	var lis net.Listener
-	lis, err = net.Listen("tcp", drpcAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen on drpc server: %v", err)
+		return nil, status.Errorf(codes.Internal, "cannot get block height: %v", err)
 	}
 
-	// run the server
-	// N.B.: if you want TLS, you need to wrap the net.Listener with
-	// TLS before passing to Serve here.
-	go func() {
-		err = s.Serve(ctx, lis)
-		if err != nil {
-			v.logger.Errorf("failed to serve drpc: %v", err)
-		}
-	}()
-
-	return nil
+	return &validator_api.GetBlockHeightResponse{
+		Height: blockHeight,
+	}, nil
 }
 
 func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
@@ -381,7 +407,7 @@ func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {
 	// prometheusBlockchainSubscribe.Inc()
-
+	v.logger.Debugf("subscribe request from %s", req.Source)
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 
@@ -415,8 +441,17 @@ func (v *Server) sendInvalidTxNotification(txId string, reason string) {
 		go func(s subscriber) {
 			v.logger.Debugf("[Validator] Sending notification to %s: %s", s.source, notification)
 			if err := s.subscription.Send(notification); err != nil {
+				v.logger.Errorf("[Validator] Error sending notification to %s: %s", s.source, err)
 				v.deadSubscriptions <- s
 			}
 		}(sub)
 	}
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }

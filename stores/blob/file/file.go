@@ -2,7 +2,9 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,30 +12,41 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type File struct {
-	path        string
-	logger      utils.Logger
+	paths       []string
+	logger      ulogger.Logger
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
 	// mu     sync.RWMutex
 }
 
-func New(dir string) (*File, error) {
-	logger := gocore.Log("file")
+func New(logger ulogger.Logger, dir string, multiDirs ...[]string) (*File, error) {
+	logger = logger.New("file")
 
-	// create directory if not exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
+	paths := []string{dir}
+	if len(multiDirs) > 0 {
+		paths = multiDirs[0]
+		// create the directories if they don't exist
+		for _, d := range multiDirs[0] {
+			if err := os.MkdirAll(d, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create directory: %w", err)
+			}
+		}
+	} else {
+		// create directory if not exists
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create directory: %w", err)
+		}
 	}
 
 	fileStore := &File{
-		path:        dir,
+		paths:       paths,
 		logger:      logger,
 		fileTTLs:    make(map[string]time.Time),
 		fileTTLsCtx: context.Background(),
@@ -53,34 +66,36 @@ func (s *File) loadTTLs() error {
 	s.fileTTLsMu.Lock()
 	defer s.fileTTLsMu.Unlock()
 
-	s.logger.Infof("Loading file TTLs: %s", s.path)
+	for _, path := range s.paths {
+		s.logger.Infof("Loading file TTLs: %s", path)
 
-	// get all files in the directory that end with .ttl
-	files, err := findFilesByExtension(s.path, ".ttl")
-	if err != nil {
-		return fmt.Errorf("failed to find ttl files: %w", err)
-	}
-
-	var ttlBytes []byte
-	var ttl time.Time
-	for _, fileName := range files {
-		if fileName[len(fileName)-4:] != ".ttl" {
-			continue
-		}
-
-		// read the ttl
-		ttlBytes, err = os.ReadFile(fileName)
+		// get all files in the directory that end with .ttl
+		files, err := findFilesByExtension(path, ".ttl")
 		if err != nil {
-			return fmt.Errorf("failed to read ttl file: %w", err)
+			return fmt.Errorf("failed to find ttl files: %w", err)
 		}
 
-		ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
-		if err != nil {
-			s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
-			continue
-		}
+		var ttlBytes []byte
+		var ttl time.Time
+		for _, fileName := range files {
+			if fileName[len(fileName)-4:] != ".ttl" {
+				continue
+			}
 
-		s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+			// read the ttl
+			ttlBytes, err = os.ReadFile(fileName)
+			if err != nil {
+				return fmt.Errorf("failed to read ttl file: %w", err)
+			}
+
+			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
+			if err != nil {
+				s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+				continue
+			}
+
+			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+		}
 	}
 
 	return nil
@@ -94,7 +109,7 @@ func (s *File) ttlCleaner(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			s.logger.Debugf("Cleaning file TTLs: %s", s.path)
+			s.logger.Debugf("Cleaning file TTLs")
 
 			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			s.fileTTLsMu.Lock()
@@ -132,19 +147,55 @@ func (s *File) Close(_ context.Context) error {
 	return nil
 }
 
+func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
+	defer reader.Close()
+
+	fileName, err := s.getFileNameForSet(key, opts)
+	if err != nil {
+		return fmt.Errorf("failed to get file name: %w", err)
+	}
+
+	// write the bytes from the reader to a file with the filename
+	file, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err = io.Copy(file, reader); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	return nil
+}
+
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
+
+	fileName, err := s.getFileNameForSet(hash, opts)
+	if err != nil {
+		return fmt.Errorf("failed to get file name: %w", err)
+	}
+
+	// write bytes to file
+	if err = os.WriteFile(fileName, value, 0644); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
-	// TODO: handle options
-	// TTL is not supported by file store
 	fileOptions := options.NewSetOptions(opts...)
 
 	if fileOptions.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(fileOptions.TTL)
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return fmt.Errorf("failed to write ttl to file: %w", err)
+			return "", fmt.Errorf("failed to write ttl to file: %w", err)
 		}
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
@@ -155,12 +206,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
 	}
 
-	// write bytes to file
-	if err := os.WriteFile(fileName, value, 0644); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
-	}
-
-	return nil
+	return fileName, nil
 }
 
 func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
@@ -169,12 +215,28 @@ func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 	return nil
 }
 
+func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
+	fileName := s.filename(hash)
+	file, err := os.Open(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, options.ErrNotFound
+		}
+		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+	}
+
+	return file, nil
+}
+
 func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, options.ErrNotFound
+		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}
 
@@ -200,13 +262,15 @@ func (s *File) Del(_ context.Context, hash []byte) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
-	// remove ttl file
+	// remove ttl file, if exists
 	_ = os.Remove(fileName + ".ttl")
 	return os.Remove(fileName)
 }
 
 func (s *File) filename(hash []byte) string {
-	return fmt.Sprintf("%s/%x", s.path, bt.ReverseBytes(hash))
+	// determine path to use, based on the first byte of the hash and the number of paths
+	path := s.paths[hash[0]%byte(len(s.paths))]
+	return fmt.Sprintf("%s/%x", path, bt.ReverseBytes(hash))
 }
 
 func findFilesByExtension(root, ext string) ([]string, error) {

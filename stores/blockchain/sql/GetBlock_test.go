@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ func TestSQL_GetBlock(t *testing.T) {
 		storeUrl, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
 		headerHash, err := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")

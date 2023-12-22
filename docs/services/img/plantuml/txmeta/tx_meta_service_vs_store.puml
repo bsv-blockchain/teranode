@@ -1,0 +1,16 @@
+@startuml
+actor "Block Validator Service" as BVS
+participant "TX Meta Service\n(gRPC Interface)" as TXMS
+participant "TX Meta Store" as TXMStore
+database "DB Implementation" as DB
+
+== Scenario 1: Block Validator -> TX Meta Service -> TX Meta Store -> DB ==
+BVS -> TXMS : gRPC Call (Get/Set)
+TXMS -> TXMStore : Invoke Store Interface
+TXMStore -> DB : Query/Update
+
+== Scenario 2: Block Validator -> TX Meta Store -> DB ==
+BVS -> TXMStore : Direct Store Access (Get/Create)
+TXMStore -> DB : Query/Update
+
+@enduml

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/ordishs/go-utils"
@@ -20,11 +21,11 @@ type Minio struct {
 	client     *minio.Client
 	bucketName string
 	tempTTL    bool
-	logger     utils.Logger
+	logger     ulogger.Logger
 }
 
-func New(minioURL *url.URL) (*Minio, error) {
-	logger := gocore.Log("minio")
+func New(logger ulogger.Logger, minioURL *url.URL) (*Minio, error) {
+	logger = logger.New("minio")
 
 	useSSL := minioURL.Scheme == "minios"
 	secretAccessKey, _ := minioURL.User.Password()
@@ -110,6 +111,17 @@ func (m *Minio) Close(ctx context.Context) error {
 	return nil //m.client.Close()
 }
 
+func (m *Minio) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return m.Set(ctx, key, b, opts...)
+}
+
 func (m *Minio) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
@@ -184,6 +196,15 @@ func (m *Minio) SetTTL(ctx context.Context, hash []byte, ttl time.Duration) erro
 	}
 
 	return nil
+}
+
+func (m *Minio) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (m *Minio) Get(ctx context.Context, hash []byte) ([]byte, error) {

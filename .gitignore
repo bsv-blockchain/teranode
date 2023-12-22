@@ -3,6 +3,7 @@
 build/
 data/
 *.run
+ubsv
 .DS_Store
 *.pprof
 .idea/
@@ -24,3 +25,6 @@ vite.config.ts.timestamp-*
 private_key
 
 coverage.out
+
+*.prof
+/model/generated_test_data/

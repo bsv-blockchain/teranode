@@ -1,0 +1,58 @@
+@startuml
+participant Caller
+participant "Server" as S
+participant "Ticker" as T
+participant "HTTP Server" as HS
+participant "gRPC Server" as GS
+participant "Config" as C
+
+Caller -> S : Start(ctx)
+activate S
+
+create T
+S -> T : Start New Ticker\n(10 seconds)
+activate T
+T --> S : Ticker Started
+deactivate T
+
+S -> S : Start Go Routine\n(for Ticker)
+activate S
+S -> S : Broadcast Ping Notifications\n(Every 10 seconds)
+deactivate S
+
+S -> C : Get HTTP Listen Address
+activate C
+C --> S : Address
+deactivate C
+
+create HS
+S -> HS : Initialize HTTP Server
+activate HS
+HS --> S : HTTP Server Ready
+deactivate HS
+
+S -> S : Start Go Routine\n(for HTTP Server)
+activate S
+
+S -> HS : Start HTTP Server
+HS --> S : HTTP Server Running
+deactivate HS
+deactivate S
+
+create GS
+S -> GS : Initialize gRPC Server
+activate GS
+GS --> S : gRPC Server Ready
+deactivate GS
+
+S -> S : Start Go Routine\n(for gRPC Server)
+activate S
+S -> GS : Start gRPC Server
+GS --> S : gRPC Server Running
+deactivate GS
+deactivate S
+
+S --> Caller : Started
+deactivate S
+
+@enduml

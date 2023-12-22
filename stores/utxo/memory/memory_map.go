@@ -27,6 +27,10 @@ func (mm *MapWithLocking) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (mm *MapWithLocking) GetBlockHeight() (uint32, error) {
+	return mm.BlockHeight, nil
+}
+
 func (mm *MapWithLocking) Get(hash *chainhash.Hash) (*UTXO, bool) {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()
@@ -72,7 +76,7 @@ func (mm *MapWithLocking) Store(hash *chainhash.Hash, nLockTime uint32) (int, er
 	return int(utxostore_api.Status_OK), nil
 }
 
-func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int, uint32, error) {
+func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int, uint32, *chainhash.Hash, error) {
 	mm.mu.Lock()
 	defer mm.mu.Unlock()
 
@@ -80,9 +84,9 @@ func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int
 		// if utxo exists, it has not been spent yet
 		if utxo.Hash != nil {
 			if utxo.Hash.IsEqual(txID) {
-				return int(utxostore_api.Status_OK), utxo.LockTime, nil
+				return int(utxostore_api.Status_OK), utxo.LockTime, utxo.Hash, nil
 			} else {
-				return int(utxostore_api.Status_SPENT), utxo.LockTime, nil
+				return int(utxostore_api.Status_SPENT), utxo.LockTime, utxo.Hash, nil
 			}
 		}
 
@@ -96,11 +100,11 @@ func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int
 				}
 			}
 		} else {
-			return int(utxostore_api.Status_LOCKED), utxo.LockTime, nil
+			return int(utxostore_api.Status_LOCKED), utxo.LockTime, nil, nil
 		}
 
-		return int(utxostore_api.Status_OK), utxo.LockTime, nil
+		return int(utxostore_api.Status_OK), utxo.LockTime, nil, nil
 	}
 
-	return int(utxostore_api.Status_NOT_FOUND), 0, nil
+	return int(utxostore_api.Status_NOT_FOUND), 0, nil, nil
 }

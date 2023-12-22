@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
@@ -25,13 +25,13 @@ import (
 var embeddedFiles embed.FS
 
 type Faucet struct {
-	logger         utils.Logger
+	logger         ulogger.Logger
 	e              *echo.Echo
 	coinbaseClient coinbase.ClientI
 	distributor    *distributor.Distributor
 }
 
-func New(logger utils.Logger) *Faucet {
+func New(logger ulogger.Logger) *Faucet {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -51,10 +51,14 @@ func New(logger utils.Logger) *Faucet {
 	return f
 }
 
+func (f *Faucet) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (f *Faucet) Init(ctx context.Context) error {
 	var err error
 
-	f.coinbaseClient, err = coinbase.NewClient(ctx)
+	f.coinbaseClient, err = coinbase.NewClient(ctx, f.logger)
 	if err != nil {
 		return fmt.Errorf("could not create coinbase client: %v", err)
 	}
@@ -146,7 +150,7 @@ func (f *Faucet) faucetHandler(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Invalid request")
 	}
 
-	tx, err := f.coinbaseClient.RequestFunds(c.Request().Context(), payload.Address)
+	tx, err := f.coinbaseClient.RequestFunds(c.Request().Context(), payload.Address, true)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}

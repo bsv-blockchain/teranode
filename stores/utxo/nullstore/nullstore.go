@@ -19,6 +19,10 @@ func (m *NullStore) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *NullStore) GetBlockHeight() (uint32, error) {
+	return 0, nil
+}
+
 func (m *NullStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "NullStore Store", nil
 }

@@ -1,0 +1,60 @@
+@startuml
+participant "TX Validator (Validator.go)" as TXValidator
+participant "UTXO Store" as UTXOStore
+database "Datastore Implementation" as Datastore
+
+== Fetch Block Height ==
+
+TXValidator -> UTXOStore: getBlockHeight()
+activate UTXOStore
+
+UTXOStore -> Datastore: Fetch Current Block Height
+activate Datastore
+Datastore --> UTXOStore: Current Block Height
+deactivate Datastore
+
+UTXOStore --> TXValidator: Block Height
+deactivate UTXOStore
+
+== Spend TX ==
+
+
+TXValidator -> UTXOStore: Spend(UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Mark UTXO as Spent
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Spend
+deactivate UTXOStore
+
+== Unspend TX ==
+
+
+TXValidator -> UTXOStore: Unspend(UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Revert UTXO to Unspent
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Unspend
+deactivate UTXOStore
+
+== Store TX ==
+
+TXValidator -> UTXOStore: Store(New UTXO)
+activate UTXOStore
+
+UTXOStore -> Datastore: Store New UTXO
+activate Datastore
+Datastore --> UTXOStore: Acknowledgement
+deactivate Datastore
+
+UTXOStore --> TXValidator: Confirmation of Store
+deactivate UTXOStore
+
+@enduml

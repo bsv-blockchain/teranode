@@ -1,0 +1,33 @@
+@startuml
+participant "Server.go" as Server
+participant "BlockValidation.go" as BlockValidation
+participant "validateBlockSubtrees" as ValidateBlockSubtrees
+participant "validateSubtree" as ValidateSubtree
+participant "TxMetaStore" as TxMetaStore
+
+Server -> Server: catchup() or processBlockFound()
+
+Server -> BlockValidation: ValidateBlock(ctx, block, baseUrl)
+activate BlockValidation
+
+BlockValidation -> ValidateBlockSubtrees: validateBlockSubtrees(ctx, block, baseUrl)
+activate ValidateBlockSubtrees
+
+ValidateBlockSubtrees -> ValidateSubtree: validateSubtree(ctx, block, baseUrl)
+activate ValidateSubtree
+
+ValidateSubtree -> TxMetaStore: getMeta()
+activate TxMetaStore
+
+TxMetaStore --> ValidateSubtree: Subtree Meta Data
+deactivate TxMetaStore
+
+ValidateSubtree --> ValidateBlockSubtrees: Subtree Validated
+deactivate ValidateSubtree
+
+ValidateBlockSubtrees --> BlockValidation: Subtrees Validated
+deactivate ValidateBlockSubtrees
+
+BlockValidation --> Server: Block Validated
+deactivate BlockValidation
+@enduml

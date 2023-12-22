@@ -15,7 +15,7 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
 
@@ -55,7 +55,7 @@ func Start() {
 	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key")
 	flag.Parse()
 
-	logger := gocore.Log("s3_blaster")
+	logger := ulogger.New("s3_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -91,7 +91,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	txStore, err := blob.NewStore(logger, txStoreUrl)
 	if err != nil {
 		panic(err)

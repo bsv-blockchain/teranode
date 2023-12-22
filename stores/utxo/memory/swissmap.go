@@ -38,6 +38,10 @@ func (m *SwissMap) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *SwissMap) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *SwissMap) Health(_ context.Context) (int, string, error) {
 	return 0, "SwissMap Store", nil
 }
@@ -75,7 +79,7 @@ func (m *SwissMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 		defer cancel()
 	}
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}
@@ -137,7 +141,7 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 					})
 				}
 			} else {
-				return utxostore.ErrLockTime
+				return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 			}
 
 			return nil
@@ -145,7 +149,7 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 			if utxo.Hash == nil {
 				return nil
 			} else {
-				return utxostore.ErrSpent
+				return utxostore.NewErrSpent(utxo.Hash)
 			}
 		}
 	}

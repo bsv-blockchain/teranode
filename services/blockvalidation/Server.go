@@ -4,25 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	blockvalidation_api "github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var stats = gocore.NewStat("blockvalidation")
@@ -40,13 +44,14 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger           utils.Logger
+	logger           ulogger.Logger
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
 	txStore          blob.Store
 	txMetaStore      txmeta_store.Store
 	validatorClient  validator.Interface
+	statusClient     status.ClientI
 
 	blockFoundCh        chan processBlockFound
 	catchupCh           chan processBlockCatchup
@@ -65,8 +70,8 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
+func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
+	txMetaStore txmeta_store.Store, validatorClient validator.Interface, statusClient status.ClientI) *Server {
 
 	initPrometheusMetrics()
 
@@ -76,6 +81,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
 		validatorClient:      validatorClient,
+		statusClient:         statusClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
 		processingSubtree:    make(map[chainhash.Hash]bool),
@@ -85,7 +91,7 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 	// create a caching tx meta store
 	if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		bVal.txMetaStore = newTxMetaCache(txMetaStore)
+		bVal.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 	} else {
 		bVal.txMetaStore = txMetaStore
 	}
@@ -93,8 +99,12 @@ func New(logger utils.Logger, utxoStore utxostore.Interface, subtreeStore blob.S
 	return bVal
 }
 
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *Server) Init(ctx context.Context) (err error) {
-	if u.blockchainClient, err = blockchain.NewClient(ctx); err != nil {
+	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
 		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
 	}
 
@@ -138,6 +148,23 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+
+	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
+	if ok {
+		err := u.frpcServer(ctx, frpcAddress)
+		if err != nil {
+			u.logger.Errorf("[Block Validation] failed to start fRPC server: %v", err)
+		}
+	}
+
+	httpAddress, ok := gocore.Config().Get("blockvalidation_httpListenAddress")
+	if ok {
+		err := u.httpServer(ctx, httpAddress)
+		if err != nil {
+			u.logger.Errorf("[Block Validation] failed to start http server: %v", err)
+		}
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
 		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
@@ -148,13 +175,104 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
+	u.logger.Infof("Starting fRPC server on %s", frpcAddress)
+
+	frpcBv := &fRPC_BlockValidation{
+		blockValidation: u.blockValidation,
+		logger:          u.logger,
+	}
+
+	s, err := blockvalidation_api.NewServer(frpcBv, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create fRPC server: %v", err)
+	}
+
+	concurrency, ok := gocore.Config().GetInt("blockvalidation_frpcConcurrency")
+	if ok {
+		u.logger.Infof("[Block Validation] Setting fRPC server concurrency to %d", concurrency)
+		s.SetConcurrency(uint64(concurrency))
+	}
+
+	// run the server
+	go func() {
+		err = s.Start(frpcAddress)
+		if err != nil {
+			u.logger.Errorf("[Block Validation] failed to serve frpc: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		err = s.Shutdown()
+		if err != nil {
+			u.logger.Errorf("[Block Validation] failed to shutdown frpc server: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
+	startTime := time.Now()
+
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	e.Use(middleware.Recover())
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+	}))
+
+	e.GET("/alive", func(c echo.Context) error {
+		return c.String(http.StatusOK, fmt.Sprintf("Asset service is alive. Uptime: %s\n", time.Since(startTime)))
+	})
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+	e.GET("/subtree/:hash", func(c echo.Context) error {
+		txHashStr := c.Param("hash")
+		txHash, err := chainhash.NewHashFromStr(txHashStr)
+		if err != nil {
+			return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+		}
+		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), txHash[:])
+		if err != nil {
+			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to get subtree: %v", err))
+		}
+
+		return c.Blob(200, echo.MIMEOctetStream, subtreeBytes)
+	})
+
+	go func() {
+		if err := e.Start(httpAddress); err != nil {
+			u.logger.Errorf("[Block Validation] failed to start http server: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+
+		u.logger.Infof("[Block Validation] Shutting down block validation http server")
+		if err := e.Shutdown(ctx); err != nil {
+			u.logger.Errorf("[Block Validation] failed to shutdown http server: %v", err)
+		}
+	}()
+
+	return nil
+}
+
 func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
 
 	return nil
 }
 
-func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_api.HealthResponse, error) {
+func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
 	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", stats)
 	defer func() {
 		stat.AddTime(start)
@@ -164,15 +282,16 @@ func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*blockvalidation_a
 
 	return &blockvalidation_api.HealthResponse{
 		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: uint32(time.Now().Unix()),
 	}, nil
 }
 
-func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*emptypb.Empty, error) {
+func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockValidationBlockFoundDuration.Observe(util.TimeSince(start))
+		u.logger.Infof("[BlockFound][%s] DONE from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
 	}()
 
 	prometheusBlockValidationBlockFound.Inc()
@@ -183,6 +302,24 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		return nil, err
 	}
 
+	// if u.statusClient != nil {
+	// 	u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 		Timestamp: timestamppb.Now(),
+	// 		Type:      "BlockValidation",
+	// 		Subtype:   "BlockFound (start)",
+	// 		Value:     hash.String(),
+	// 	})
+
+	// 	defer func() {
+	// 		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
+	// 			Timestamp: timestamppb.Now(),
+	// 			Type:      "BlockValidation",
+	// 			Subtype:   "BlockFound (end)",
+	// 			Value:     hash.String(),
+	// 		})
+	// 	}()
+	// }
+
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
 	if err != nil {
@@ -190,7 +327,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 	if exists {
 		//u.logger.Warnf("block found that already exists [%s]", hash.String())
-		return &emptypb.Empty{}, nil
+		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
@@ -203,7 +340,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
 
-	return &emptypb.Empty{}, nil
+	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
@@ -389,7 +526,7 @@ LOOP:
 	return nil
 }
 
-func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*emptypb.Empty, error) {
+func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:SubtreeFound")
 	defer func() {
@@ -408,7 +545,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
 		u.logger.Warnf("[SubtreeFound][%s] already processing subtree", subtreeHash.String())
-		return &emptypb.Empty{}, nil
+		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
 	u.processSubtreeNotify.Set(*subtreeHash, true, 1*time.Minute)
@@ -422,7 +559,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 	if exists {
 		u.logger.Warnf("[SubtreeFound][%s] subtree found that already exists", subtreeHash.String())
-		return &emptypb.Empty{}, nil
+		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
 	if req.GetBaseUrl() == "" {
@@ -470,7 +607,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		}
 	}()
 
-	return &emptypb.Empty{}, nil
+	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
@@ -481,5 +618,33 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 
 	return &blockvalidation_api.GetSubtreeResponse{
 		Subtree: subtree,
+	}, nil
+}
+
+func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockValidationSetTXMetaCache.Inc()
+	for _, meta := range request.Data {
+		go func(meta []byte) {
+			// first 32 bytes is hash
+			hash := chainhash.Hash(meta[:32])
+
+			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
+			if err != nil {
+				u.logger.Errorf("failed to create tx meta data from bytes: %v", err)
+			}
+
+			if err = u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {
+				u.logger.Errorf("failed to set tx meta data: %v", err)
+			}
+		}(meta)
+	}
+
+	return &blockvalidation_api.SetTxMetaResponse{
+		Ok: true,
 	}, nil
 }

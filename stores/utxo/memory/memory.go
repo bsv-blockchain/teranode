@@ -42,6 +42,10 @@ func (m *Memory) SetBlockHeight(height uint32) error {
 	return nil
 }
 
+func (m *Memory) GetBlockHeight() (uint32, error) {
+	return m.BlockHeight, nil
+}
+
 func (m *Memory) Health(_ context.Context) (int, string, error) {
 	return 0, "Memory Store", nil
 }
@@ -74,14 +78,14 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	if m.timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+		_, cancel = context.WithTimeout(ctx, m.timeout)
 		defer cancel()
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, utxoHashes, err := utxostore.GetFeesAndUtxoHashes(ctx, tx)
+	utxoHashes, err := utxostore.GetUtxoHashes(tx)
 	if err != nil {
 		return err
 	}
@@ -141,13 +145,13 @@ func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 				return nil
 			}
 
-			return utxostore.ErrLockTime
+			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 		} else {
 			if utxo.Hash.IsEqual(spend.SpendingTxID) {
 				return nil
 			}
 
-			return utxostore.ErrSpent
+			return utxostore.NewErrSpent(utxo.Hash)
 		}
 	}
 

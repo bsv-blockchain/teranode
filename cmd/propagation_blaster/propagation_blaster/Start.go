@@ -6,30 +6,27 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
+	"net/http"
+	_ "net/http/pprof"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"net/http"
-	_ "net/http/pprof"
-	"net/url"
-
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
-	"storj.io/drpc/drpcconn"
 )
 
 var (
@@ -43,7 +40,6 @@ var (
 	workerCount                     int
 	grpcClient                      propagation_api.PropagationAPIClient
 	// streamClient                    *propagation.StreamingClient
-	drpcClient        propagation_api.DRPCPropagationAPIClient
 	frpcClient        *propagation_api.Client
 	broadcastProtocol string
 	httpUrl           *url.URL
@@ -96,11 +92,11 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|drpc|frpc)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|frpc)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
-	logger := gocore.Log("propagation_blaster")
+	logger := ulogger.New("propagation_blaster")
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -124,16 +120,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
-
-	case "drpc":
-		if propagationDrpcAddress, ok := gocore.Config().Get("propagation_drpcAddress"); ok {
-			rawConn, err := net.Dial("tcp", propagationDrpcAddress)
-			if err != nil {
-				panic(err)
-			}
-			conn := drpcconn.New(rawConn)
-			drpcClient = propagation_api.NewDRPCPropagationAPIClient(conn)
-		}
 
 	case "frpc":
 		if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
@@ -178,8 +164,6 @@ func Start() {
 		log.Printf("Starting %d stream worker(s)", workerCount)
 	case "http":
 		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
-	case "drpc":
-		log.Printf("Starting %d drpc-broadcaster worker(s)", workerCount)
 	case "frpc":
 		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
@@ -193,7 +177,7 @@ func Start() {
 	<-make(chan struct{})
 }
 
-func worker(logger utils.Logger) {
+func worker(logger ulogger.Logger) {
 	prometheusWorkers.Inc()
 	defer func() {
 		prometheusWorkers.Dec()
@@ -235,7 +219,7 @@ func worker(logger utils.Logger) {
 	}
 }
 
-func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtendedBytes []byte) error {
+func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExtendedBytes []byte) error {
 	switch broadcastProtocol {
 
 	case "disabled":
@@ -269,14 +253,6 @@ func sendToPropagationServer(ctx context.Context, logger utils.Logger, txExtende
 	case "grpc":
 
 		_, err := grpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
-			Tx: txExtendedBytes,
-		})
-
-		return err
-
-	case "drpc":
-
-		_, err := drpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
 

@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -28,7 +29,7 @@ type miningCandidateResponse struct {
 }
 
 type BlockAssembler struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	utxoStore        utxostore.Interface
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
@@ -39,13 +40,14 @@ type BlockAssembler struct {
 	bestBlockHeight          uint32
 	currentChain             []*model.BlockHeader
 	currentChainMap          map[chainhash.Hash]uint32
+	currentChainMapIDs       map[uint32]struct{}
 	currentChainMapMu        sync.RWMutex
 	blockchainSubscriptionCh chan *model.Notification
 	maxBlockReorgRollback    int
 	maxBlockReorgCatchup     int
 }
 
-func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxostore.Interface,
+func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
@@ -59,6 +61,7 @@ func NewBlockAssembler(ctx context.Context, logger utils.Logger, utxoStore utxos
 		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
 		miningCandidateCh:     make(chan chan *miningCandidateResponse),
 		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
+		currentChainMapIDs:    make(map[uint32]struct{}, maxBlockReorgCatchup),
 		maxBlockReorgRollback: maxBlockReorgRollback,
 		maxBlockReorgCatchup:  maxBlockReorgCatchup,
 	}
@@ -78,13 +81,21 @@ func (b *BlockAssembler) TxCount() uint64 {
 	return b.subtreeProcessor.TxCount()
 }
 
-func (b *BlockAssembler) startChannelListeners(context context.Context) {
+func (b *BlockAssembler) QueueLength() int64 {
+	return b.subtreeProcessor.QueueLength()
+}
+
+func (b *BlockAssembler) SubtreeCount() int {
+	return b.subtreeProcessor.SubtreeCount()
+}
+
+func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	var err error
 
 	// start a subscription for the best block header
 	// this will be used to reset the subtree processor when a new block is mined
 	go func() {
-		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(context, "BlockAssembler")
+		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 			return
@@ -97,26 +108,26 @@ func (b *BlockAssembler) startChannelListeners(context context.Context) {
 
 		for {
 			select {
-			case <-context.Done():
+			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
 				return
 
 			case responseCh := <-b.miningCandidateCh:
-				start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
+				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
 				miningCandidate, subtrees, err := b.getMiningCandidate()
 				responseCh <- &miningCandidateResponse{
 					miningCandidate: miningCandidate,
 					subtrees:        subtrees,
 					err:             err,
 				}
-				stat.AddTime(start)
+				// stat.AddTime(start)
 
 			case notification := <-b.blockchainSubscriptionCh:
 				switch notification.Type {
 				case model.NotificationType_Block:
-					_, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
+					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
 					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
@@ -242,11 +253,23 @@ func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
 		return fmt.Errorf("error getting block headers from blockchain: %v", err)
 	}
 
+	ids, err := b.blockchainClient.GetBlockHeaderIDs(ctx, b.bestBlockHeader.Hash(), uint64(b.maxBlockReorgCatchup))
+	if err != nil {
+		return fmt.Errorf("error getting block headers from blockchain: %v", err)
+	}
+
 	b.currentChainMapMu.Lock()
+
 	b.currentChainMap = make(map[chainhash.Hash]uint32, len(b.currentChain))
 	for _, blockHeader := range b.currentChain {
 		b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
 	}
+
+	b.currentChainMapIDs = make(map[uint32]struct{}, len(ids))
+	for _, id := range ids {
+		b.currentChainMapIDs[id] = struct{}{}
+	}
+
 	b.currentChainMapMu.Unlock()
 
 	return nil
@@ -259,13 +282,24 @@ func (b *BlockAssembler) GetCurrentChainMap() map[chainhash.Hash]uint32 {
 	return b.currentChainMap
 }
 
+func (b *BlockAssembler) GetCurrentChainMapIDs() map[uint32]struct{} {
+	b.currentChainMapMu.RLock()
+	defer b.currentChainMapMu.RUnlock()
+
+	return b.currentChainMapIDs
+}
+
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(node *util.SubtreeNode) error {
+func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
 	b.subtreeProcessor.Add(node)
 	return nil
+}
+
+func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
+	return b.subtreeProcessor.Remove(hash)
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
@@ -300,9 +334,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
 		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree := util.NewTree(height)
+		topTree, err := util.NewTree(height)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
+		}
 		for _, subtree := range subtrees {
-			_ = topTree.AddNode(subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}

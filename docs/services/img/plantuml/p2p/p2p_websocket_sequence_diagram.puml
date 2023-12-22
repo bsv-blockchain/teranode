@@ -1,0 +1,61 @@
+@startuml
+
+actor Client
+control "Server" as Server
+database "Client Channels" as Channels
+queue "newClientCh" as NewClientCh
+queue "deadClientCh" as DeadClientCh
+control "Notification Channel" as NotificationChannel
+
+=== New Client ==
+
+Client -> Server: Request WebSocket connection
+activate Server
+
+
+Server -> NewClientCh: Add new client
+activate NewClientCh
+NewClientCh -> Channels: Add to client channels
+deactivate NewClientCh
+deactivate Server
+
+=== New Notification ==
+loop WebSocket communication
+    NotificationChannel -> Server: Receive WebSocket data
+    activate Server
+    alt Data is a new notification
+        Server -> Channels: Dispatch notification
+        loop Each client channel
+            Channels --> Client: Send notification
+        end
+    else Data is a ping
+        Server -> Channels: Dispatch ping
+        loop Each client channel
+            Channels --> Client: Send ping
+        end
+    end
+    deactivate Server
+end
+
+=== Error ==
+alt WebSocket Error
+    NotificationChannel -> Server: Report error
+    activate Server
+    Server -> DeadClientCh: Add to dead clients
+    activate DeadClientCh
+    DeadClientCh -> Channels: Remove from client channels
+    deactivate DeadClientCh
+    deactivate Server
+else Client Disconnects
+    Client -> Server: Close connection
+    activate Server
+    Server -> DeadClientCh: Add to dead clients
+    activate DeadClientCh
+    DeadClientCh -> Channels: Remove from client channels
+    deactivate DeadClientCh
+    deactivate Server
+end
+
+deactivate NotificationChannel
+
+@enduml

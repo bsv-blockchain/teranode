@@ -8,10 +8,9 @@ import (
 )
 
 type txIDAndFee struct {
-	node   *util.SubtreeNode
-	waitCh chan struct{}
-	time   int64
-	next   atomic.Pointer[txIDAndFee]
+	node util.SubtreeNode
+	time int64
+	next atomic.Pointer[txIDAndFee]
 }
 
 type txIDAndFeeBatch struct {

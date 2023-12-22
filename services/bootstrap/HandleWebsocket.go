@@ -11,13 +11,13 @@ import (
 )
 
 type discoveryMsg struct {
-	Type                  string    `json:"type"`
-	ConnectedAt           time.Time `json:"connectedAt"`
-	BlobServerGRPCAddress string    `json:"blobServerGRPCAddress"`
-	BlobServerHTTPAddress string    `json:"blobServerHTTPAddress"`
-	Source                string    `json:"source"`
-	Ip                    string    `json:"ip"`
-	Name                  string    `json:"name"`
+	Type             string    `json:"type"`
+	ConnectedAt      time.Time `json:"connectedAt"`
+	AssetGRPCAddress string    `json:"AssetGRPCAddress"`
+	AssetHTTPAddress string    `json:"AssetHTTPAddress"`
+	Source           string    `json:"source"`
+	Ip               string    `json:"ip"`
+	Name             string    `json:"name"`
 }
 
 var (
@@ -44,13 +44,13 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 
 				for _, sub := range s.subscribers {
 					dm := &discoveryMsg{
-						Type:                  bootstrap_api.Type_ADD.String(),
-						ConnectedAt:           sub.ConnectedAt.AsTime(),
-						BlobServerGRPCAddress: sub.BlobServerGRPCAddress,
-						BlobServerHTTPAddress: sub.BlobServerHTTPAddress,
-						Source:                sub.Source,
-						Ip:                    sub.Ip,
-						Name:                  sub.Name,
+						Type:             bootstrap_api.Type_ADD.String(),
+						ConnectedAt:      sub.ConnectedAt.AsTime(),
+						AssetGRPCAddress: sub.AssetGRPCAddress,
+						AssetHTTPAddress: sub.AssetHTTPAddress,
+						Source:           sub.Source,
+						Ip:               sub.Ip,
+						Name:             sub.Name,
 					}
 
 					data, err := json.MarshalIndent(dm, "", "  ")
@@ -81,8 +81,8 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 					if msg.Info.ConnectedAt != nil {
 						dm.ConnectedAt = msg.Info.ConnectedAt.AsTime()
 					}
-					dm.BlobServerGRPCAddress = msg.Info.BlobServerGRPCAddress
-					dm.BlobServerHTTPAddress = msg.Info.BlobServerHTTPAddress
+					dm.AssetGRPCAddress = msg.Info.AssetGRPCAddress
+					dm.AssetHTTPAddress = msg.Info.AssetHTTPAddress
 					dm.Source = msg.Info.Source
 					dm.Ip = msg.Info.Ip
 					dm.Name = msg.Info.Name

@@ -315,7 +315,7 @@ func (x *PropagationApiProcessTransactionRequest) decode(d *polyglot.Decoder) er
 }
 
 type PropagationAPI interface {
-	Health(context.Context, *PropagationApiEmptyMessage) (*PropagationApiHealthResponse, error)
+	HealthGRPC(context.Context, *PropagationApiEmptyMessage) (*PropagationApiHealthResponse, error)
 	ProcessTransaction(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 	ProcessTransactionDebug(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 }
@@ -347,7 +347,7 @@ func NewServer(propagationAPI PropagationAPI, tlsConfig *tls.Config, logger *zer
 			var res *PropagationApiHealthResponse
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = propagationAPI.Health(ctx, req)
+			res, err = propagationAPI.HealthGRPC(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -537,7 +537,7 @@ func (c *Client) FromConn(conn net.Conn, streamHandler ...frisbee.NewStreamHandl
 	return c.Client.FromConn(conn, func(stream *frisbee.Stream) {})
 }
 
-func (c *subPropagationAPIClient) Health(ctx context.Context, req *PropagationApiEmptyMessage) (res *PropagationApiHealthResponse, err error) {
+func (c *subPropagationAPIClient) HealthGRPC(ctx context.Context, req *PropagationApiEmptyMessage) (res *PropagationApiHealthResponse, err error) {
 	ch := make(chan *PropagationApiHealthResponse, 1)
 	p := packet.Get()
 	p.Metadata.Operation = 10

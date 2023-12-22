@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -12,7 +13,7 @@ import (
 type NullStore struct {
 }
 
-func New() *NullStore {
+func New(_ ulogger.Logger) *NullStore {
 	return &NullStore{}
 }
 
@@ -20,15 +21,8 @@ func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.
 	return m.Get(ctx, hash)
 }
 
-func (m *NullStore) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	status := txmeta.Data{
-		// Fee:            fee,
-		// SizeInBytes:    sizeInBytes,
-		// FirstSeen:      time.Now(),
-		// ParentTxHashes: parentTxHashes,
-		// UtxoHashes:     utxoHashes,
-		// LockTime:       nLockTime,
-	}
+func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, error) {
+	status := txmeta.Data{}
 	return &status, nil
 }
 
@@ -40,7 +34,11 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return txMeta, nil
 }
 
-func (m *NullStore) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	return nil
+}
+
+func (m *NullStore) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
 	return nil
 }
 

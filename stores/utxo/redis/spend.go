@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strconv"
 	"strings"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -16,8 +17,9 @@ var scriptString string
 
 var luaScript = redis.NewScript(scriptString)
 
-func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, blockHeight uint32) error {
-	res, err := luaScript.Run(ctx, rdb, []string{spend.Hash.String()}, spend.SpendingTxID.String(), blockHeight).Result()
+func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, blockHeight, ttl uint32) error {
+	// ttl is in seconds, convert to milliseconds
+	res, err := luaScript.Run(ctx, rdb, []string{spend.Hash.String()}, spend.SpendingTxID.String(), blockHeight, ttl).Result()
 	if err != nil {
 		return err
 	}
@@ -35,8 +37,23 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 		return utxostore.ErrNotFound
 	}
 
-	if s == "LOCKED" {
-		return utxostore.ErrLockTime
+	if strings.HasPrefix(s, "LOCKED") {
+		parts := strings.Split(s[7:], ",")
+		if len(parts) != 2 {
+			return fmt.Errorf("%w: No extra data returned", utxostore.ErrTypeLockTime)
+		}
+
+		lockTime, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("%w: %v", utxostore.ErrTypeLockTime, err)
+		}
+
+		blockHeight, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("%w: %v", utxostore.ErrTypeLockTime, err)
+		}
+
+		return utxostore.NewErrLockTime(uint32(lockTime), uint32(blockHeight))
 	}
 
 	if strings.HasPrefix(s, "SPENT") {
@@ -45,7 +62,7 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 			return err
 		}
 
-		return utxostore.NewErrSpentExtra(hash)
+		return utxostore.NewErrSpent(hash)
 	}
 
 	return fmt.Errorf("unknown response from spend: %v", res)

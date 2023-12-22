@@ -5,23 +5,27 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
 
 type notificationMsg struct {
-	Timestamp    time.Time `json:"timestamp,omitempty"`
-	Type         string    `json:"type"`
-	Hash         string    `json:"hash,omitempty"`
-	BaseURL      string    `json:"base_url,omitempty"`
-	PeerId       string    `json:"peer_id,omitempty"`
-	PreviousHash string    `json:"previousblockhash,omitempty"`
-	TxCount      uint64    `json:"tx_count,omitempty"`
-	Height       uint32    `json:"height,omitempty"`
-	SizeInBytes  uint64    `json:"size_in_bytes,omitempty"`
-	Miner        string    `json:"miner,omitempty"`
+	Timestamp    string `json:"timestamp,omitempty"`
+	Type         string `json:"type"`
+	Hash         string `json:"hash,omitempty"`
+	BaseURL      string `json:"base_url,omitempty"`
+	PeerId       string `json:"peer_id,omitempty"`
+	PreviousHash string `json:"previousblockhash,omitempty"`
+	TxCount      uint64 `json:"tx_count,omitempty"`
+	Height       uint32 `json:"height,omitempty"`
+	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`
+	Miner        string `json:"miner,omitempty"`
 }
+
+const (
+	isoFormat = "2006-01-02T15:04:05Z"
+)
 
 var (
 	upgrader = websocket.Upgrader{
@@ -53,7 +57,8 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 				}
 
 				data, err := json.MarshalIndent(&notificationMsg{
-					Type: blobserver_api.Type_Ping.String(),
+					Timestamp: time.Now().UTC().Format(isoFormat),
+					Type:      asset_api.Type_PING.String(),
 				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %w", err)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/labstack/gommon/random"
 	"github.com/ordishs/gocore"
 )
@@ -21,7 +22,7 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
-func InitSQLDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
 		return InitPostgresDB(logger, storeUrl)
@@ -32,7 +33,7 @@ func InitSQLDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func InitPostgresDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	dbHost := storeUrl.Hostname()
 	port := storeUrl.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -61,7 +62,7 @@ func InitPostgresDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return db, nil
 }
 
-func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	var filename string
 	var err error
 
@@ -83,7 +84,7 @@ func InitSQLiteDB(logger *gocore.Logger, storeUrl *url.URL) (*sql.DB, error) {
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */
-		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=1000&_pragma=journal_mode=WAL", filename)
+		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL", filename)
 	}
 
 	logger.Infof("Using sqlite DB: %s", filename)

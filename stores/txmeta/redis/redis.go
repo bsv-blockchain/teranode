@@ -3,12 +3,14 @@ package redis
 import (
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,12 +24,13 @@ var luaScript = redis.NewScript(scriptString)
 
 type Redis struct {
 	url       *url.URL
+	logger    ulogger.Logger
 	rdb       redis.Cmdable
 	txMetaTtl time.Duration
 	mode      string
 }
 
-func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	o := &redis.Options{
 		Addr: u.Host,
 	}
@@ -48,13 +51,14 @@ func NewRedisClient(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "client",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,
 	}, nil
 }
 
-func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make([]string, 0)
@@ -80,13 +84,14 @@ func NewRedisCluster(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "cluster",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,
 	}, nil
 }
 
-func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
+func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
 
 	addrs := make(map[string]string)
@@ -114,6 +119,7 @@ func NewRedisRing(u *url.URL, password ...string) (*Redis, error) {
 
 	return &Redis{
 		url:       u,
+		logger:    logger,
 		mode:      "ring",
 		txMetaTtl: time.Duration(txMetaTtl) * time.Second,
 		rdb:       rdb,
@@ -181,9 +187,22 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	return data, nil
 }
 
-// SetMined uses a lua script to update the block hash of a transaction
-func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
-	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockHash.CloneBytes()).Result()
+func (r *Redis) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	for _, hash := range hashes {
+		if err = r.SetMined(ctx, hash, blockID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// SetMined uses a lua script to update the block id (bytes) of a transaction
+func (r *Redis) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
+	var blockBytes [4]byte
+	binary.LittleEndian.PutUint32(blockBytes[:], blockID)
+
+	res, err := luaScript.Run(ctx, r.rdb, []string{hash.String()}, blockBytes[:]).Result()
 	if err != nil {
 		return err
 	}

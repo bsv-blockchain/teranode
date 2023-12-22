@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/Shopify/sarama"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, sarama.SyncProducer, error) {
@@ -72,7 +72,7 @@ func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
 	return conn, nil
 }
 
-func StartKafkaGroupListener(ctx context.Context, logger utils.Logger, kafkaURL *url.URL, groupID string, workerCh chan []byte) error {
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan []byte) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 

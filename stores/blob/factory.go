@@ -21,23 +21,22 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 // NewStore
 // TODO add options to all stores
-func NewStore(logger utils.Logger, storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
+func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
 	switch storeUrl.Scheme {
 	case "null":
-		store, err = null.New()
+		store, err = null.New(logger)
 		if err != nil {
 			return nil, fmt.Errorf("error creating null blob store: %v", err)
 		}
 	case "memory":
 		store = memory.New()
 	case "file":
-		store, err = file.New("." + storeUrl.Path) // relative
+		store, err = file.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
 			return nil, fmt.Errorf("error creating file blob store: %v", err)
 		}
@@ -47,39 +46,39 @@ func NewStore(logger utils.Logger, storeUrl *url.URL, opts ...options.Options) (
 			return nil, fmt.Errorf("error creating badger blob store: %v", err)
 		}
 	case "postgres", "sqlite", "sqlitememory":
-		store, err = sql.New(storeUrl)
+		store, err = sql.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating sql blob store: %v", err)
 		}
 	case "gcs":
-		store, err = gcs.New(strings.Replace(storeUrl.Path, "/", "", 1))
+		store, err = gcs.New(logger, strings.Replace(storeUrl.Path, "/", "", 1))
 		if err != nil {
 			return nil, fmt.Errorf("error creating gcs blob store: %v", err)
 		}
 	case "minio":
 		fallthrough
 	case "minios":
-		store, err = minio.New(storeUrl)
+		store, err = minio.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating minio blob store: %v", err)
 		}
 	case "s3":
-		store, err = s3.New(storeUrl, opts...)
+		store, err = s3.New(logger, storeUrl, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
 		}
 	case "kinesiss3":
-		store, err = kinesiss3.New(storeUrl)
+		store, err = kinesiss3.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating kinesiss3 blob store: %v", err)
 		}
 	case "seaweedfs":
-		store, err = seaweedfs.New(storeUrl)
+		store, err = seaweedfs.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating seaweedfs blob store: %v", err)
 		}
 	case "seaweedfss3":
-		store, err = seaweedfss3.New(storeUrl)
+		store, err = seaweedfss3.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating seaweedfss3 blob store: %v", err)
 		}
@@ -112,22 +111,29 @@ func NewStore(logger utils.Logger, storeUrl *url.URL, opts ...options.Options) (
 			localTTLStorePath = "/tmp/localTTL"
 		}
 
+		localTTLStorePaths := strings.Split(localTTLStorePath, "|")
+		for i, item := range localTTLStorePaths {
+			localTTLStorePaths[i] = strings.TrimSpace(item)
+		}
+
 		var ttlStore Store
 		if ttlStoreType == "badger" {
+			if len(localTTLStorePaths) > 1 {
+				return nil, errors.New("badger store only supports one path")
+			}
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create badger store"), err)
 			}
 		} else {
 			// default is file store
-			ttlStore, err = file.New(localTTLStorePath)
+			ttlStore, err = file.New(logger, localTTLStorePath, localTTLStorePaths)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create file store"), err)
 			}
 		}
 
-		logger := gocore.Log("localTTL")
-		store, err = localttl.New(logger, ttlStore, store)
+		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to create localTTL store"), err)
 		}

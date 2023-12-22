@@ -1,0 +1,79 @@
+name: build-ubsv
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'Repo name'
+        required: true
+        type: string
+      tag:
+        description: 'Deployment tag'
+        required: true
+        type: string
+      region:
+        description: 'AWS region'
+        required: true
+        type: string
+      arch:
+        description: 'Architecture to build'
+        required: true
+        type: string
+
+jobs:
+  build-docker:
+    name: Build Docker image
+    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "self-hosted", "Linux", "ARM64" ]') || 'ubsv-runner' }}
+
+    strategy: # This will cause the workflow to terminate if any job fails
+      fail-fast: true
+    steps:
+      - uses: actions/checkout@v3
+
+      # Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        # with:
+        #  buildkitd-flags: --debug # Debug logs
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      # Get current cluster ID for base image
+      - name: Get Cluster Base ID
+        id: base
+        run: echo "id=$(cat ./deploy/docker/CLUSTER_BASE_ID)" >> $GITHUB_OUTPUT
+
+      # Get current cluster ID for run image
+      - name: Get Cluster Run ID
+        id: run
+        run: echo "id=$(cat ./deploy/docker/CLUSTER_RUN_ID)" >> $GITHUB_OUTPUT
+
+      # Build and push Docker image to AWS ECR
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            GITHUB_SHA=${{github.sha}}
+            DEBUG=true
+            GITHUB_REF=${{github.ref_name}}
+            BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-build-${{ steps.base.outputs.id }}
+            RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}

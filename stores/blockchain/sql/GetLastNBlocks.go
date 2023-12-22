@@ -13,14 +13,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) ([]*model.BlockInfo, error) {
+func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetLastNBlocks")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t", n, includeOrphans)))
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t-%d", n, includeOrphans, fromHeight)))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().([]*model.BlockInfo); ok && cacheData != nil {
@@ -31,6 +31,11 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	fromHeightQuery := ""
+	if fromHeight > 0 {
+		fromHeightQuery = fmt.Sprintf("WHERE height <= %d", fromHeight)
+	}
 
 	var q string
 
@@ -49,6 +54,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 		,b.height
 		,b.inserted_at
 		FROM blocks b
+		WHERE invalid = false
 		ORDER BY height DESC
 	  LIMIT $1
 		)
@@ -74,11 +80,12 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 				WITH RECURSIVE ChainBlocks AS (
 					SELECT id, parent_id, height
 					FROM blocks
-					WHERE hash = (
-						SELECT
-	   					b.hash
-							FROM blocks b
-							ORDER BY chain_work DESC, id ASC
+					WHERE invalid = false
+					AND hash = (
+						SELECT b.hash
+						FROM blocks b
+						WHERE b.invalid = false
+						ORDER BY chain_work DESC, peer_id ASC, id ASC
 						LIMIT 1
 					)
 					UNION ALL
@@ -86,8 +93,10 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool) 
 					FROM blocks bb
 					JOIN ChainBlocks cb ON bb.id = cb.parent_id
 					WHERE bb.id != cb.id
+					  AND bb.invalid = false
 				)
 				SELECT id FROM ChainBlocks
+				` + fromHeightQuery + `
 				LIMIT $1
 			)
 		)

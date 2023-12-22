@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -25,11 +25,11 @@ type serviceEndpointResolver interface {
 type serviceClient struct {
 	k8s          kubernetes.Interface
 	namespace    string
-	logger       utils.Logger
+	logger       ulogger.Logger
 	resolveCache *ttlcache.Cache[string, []string]
 }
 
-func newInClusterClient(logger utils.Logger, namespace string) (*serviceClient, error) {
+func newInClusterClient(logger ulogger.Logger, namespace string) (*serviceClient, error) {
 	logger.Debugf("[k8s] newInClusterClient called with namespace: %s", namespace)
 	config, err := rest.InClusterConfig()
 	if err != nil {

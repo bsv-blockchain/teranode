@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
-	"github.com/ordishs/go-utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"google.golang.org/grpc"
 )
 
@@ -20,7 +20,7 @@ type transaction struct {
 }
 
 type StreamingClient struct {
-	logger        utils.Logger
+	logger        ulogger.Logger
 	transactionCh chan *transaction
 	timingsCh     chan chan timing
 	conn          *grpc.ClientConn
@@ -30,7 +30,7 @@ type StreamingClient struct {
 	testMode      bool
 }
 
-func NewStreamingClient(ctx context.Context, logger utils.Logger, bufferSize int, testMode ...bool) (*StreamingClient, error) {
+func NewStreamingClient(ctx context.Context, logger ulogger.Logger, bufferSize int, testMode ...bool) (*StreamingClient, error) {
 	sc := &StreamingClient{
 		logger:        logger,
 		transactionCh: make(chan *transaction, bufferSize),

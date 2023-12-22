@@ -9,10 +9,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -22,7 +22,7 @@ import (
 // UTXOStore type carries the logger within it
 type UTXOStore struct {
 	utxostore_api.UnsafeUtxoStoreAPIServer
-	logger utils.Logger
+	logger ulogger.Logger
 	store  utxostore.Interface
 }
 
@@ -32,7 +32,7 @@ func Enabled() bool {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, s utxostore.Interface, opts ...Options) *UTXOStore {
+func New(logger ulogger.Logger, s utxostore.Interface, opts ...Options) *UTXOStore {
 	initPrometheusMetrics()
 
 	if len(opts) > 0 {
@@ -47,6 +47,10 @@ func New(logger utils.Logger, s utxostore.Interface, opts ...Options) *UTXOStore
 	}
 }
 
+func (u *UTXOStore) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
 func (u *UTXOStore) Init(_ context.Context) error {
 	return nil
 }
@@ -55,7 +59,7 @@ func (u *UTXOStore) Init(_ context.Context) error {
 func (u *UTXOStore) Start(ctx context.Context) error {
 
 	// get the latest block height to compare against lock time utxos
-	blockchainClient, err := blockchain.NewClient(ctx)
+	blockchainClient, err := blockchain.NewClient(ctx, u.logger)
 	if err != nil {
 		return err
 	}
@@ -107,7 +111,7 @@ func (u *UTXOStore) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *UTXOStore) Health(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
+func (u *UTXOStore) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*utxostore_api.HealthResponse, error) {
 	prometheusUtxoGet.Inc()
 
 	return &utxostore_api.HealthResponse{

@@ -1,0 +1,21 @@
+@startuml
+participant "Server" as S
+database "gRPC Subscribers" as GRPC
+participant "gRPC Subscriber" as GS
+
+== Ping gRPC Subscribers ==
+S -> GRPC : Iterate over gRPC Subscribers
+activate GRPC
+loop Each gRPC Subscriber
+    S -> GS : Send Ping via gRPC Stream
+    activate GS
+    alt If Subscriber Responds
+        GS --> S : Acknowledge Ping
+    else If Subscriber Does Not Respond
+        S -> GRPC : Remove Unresponsive Subscriber
+    end
+    deactivate GS
+end
+deactivate GRPC
+deactivate S
+@enduml

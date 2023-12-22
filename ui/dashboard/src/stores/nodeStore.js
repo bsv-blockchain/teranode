@@ -21,7 +21,7 @@ const updateFn = (json) => {
   updateFns.forEach(async (fn) => await fn(json))
 }
 
-export const blobServerHTTPAddress = writable('', (set) => {
+export const assetHTTPAddress = writable('', (set) => {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
     if (url.host.includes('localhost:517')) {
@@ -39,15 +39,15 @@ export const blobServerHTTPAddress = writable('', (set) => {
   return set
 })
 
-export function connectToBlobServer(blobServerHTTPAddress) {
-  const url = new URL(blobServerHTTPAddress)
+export function connectToAsset(assetHTTPAddress) {
+  const url = new URL(assetHTTPAddress)
   const port = url.port || (url.protocol === 'http:' ? "80" : "443")
   const wsUrl = `${url.protocol === 'http:' ? 'ws' : 'wss'}://${url.hostname}:${port}/ws`
 
   let socket = new WebSocket(wsUrl)
 
   socket.onopen = () => {
-    console.log(`BlobserverWS connection opened to ${wsUrl}`)
+    console.log(`AssetWS connection opened to ${wsUrl}`)
   }
 
   socket.onmessage = async (event) => {
@@ -62,7 +62,7 @@ export function connectToBlobServer(blobServerHTTPAddress) {
         // Update the node with the new block
         let nodesData = get(nodes)
         const index = nodesData.findIndex(
-          (node) => node.blobServerHTTPAddress === json.base_url
+          (node) => node.assetHTTPAddress === json.base_url
         )
 
         if (index === -1) {
@@ -88,16 +88,16 @@ export function connectToBlobServer(blobServerHTTPAddress) {
 
       updateFn(json)
     } catch (error) {
-      console.error('BlobserverWS: Error parsing WebSocket data:', error)
+      console.error('AssetWS: Error parsing WebSocket data:', error)
     }
   }
 
   socket.onclose = () => {
-    console.log(`BlobserverWS connection closed by server (${wsUrl})`)
+    console.log(`AssetWS connection closed by server (${wsUrl})`)
     socket = null
 
     setTimeout(() => {
-      connectToBlobServer(blobServerHTTPAddress)
+      connectToAsset(assetHTTPAddress)
     }, 5000) // Adjust the delay as necessary
   }
 }

@@ -1,6 +1,7 @@
 package gcs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/api/option"
@@ -17,11 +19,11 @@ import (
 type GCS struct {
 	client *storage.Client
 	bucket *storage.BucketHandle
-	logger utils.Logger
+	logger ulogger.Logger
 }
 
-func New(bucketName string) (*GCS, error) {
-	logger := gocore.Log("gcs")
+func New(logger ulogger.Logger, bucketName string) (*GCS, error) {
+	logger = logger.New("gcs")
 
 	client, err := storage.NewClient(context.Background(), option.WithCredentialsFile("./keyfile.json"))
 	if err != nil {
@@ -58,7 +60,18 @@ func (g *GCS) Close(_ context.Context) error {
 	return g.client.Close()
 }
 
-func (g *GCS) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+func (g *GCS) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return g.Set(ctx, key, b, opts...)
+}
+
+func (g *GCS) Set(ctx context.Context, key []byte, value []byte, _ ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_gcs", true).NewStat("Set").AddTime(start)
@@ -94,6 +107,15 @@ func (g *GCS) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 
 	// TODO implement
 	return nil
+}
+
+func (g *GCS) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := g.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (g *GCS) Get(ctx context.Context, hash []byte) ([]byte, error) {

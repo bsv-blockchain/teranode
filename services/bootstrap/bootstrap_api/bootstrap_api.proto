@@ -8,7 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
 service BootstrapAPI {
-  rpc Health (google.protobuf.Empty) returns (HealthResponse) {}
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc Connect(Info) returns (stream Notification) {}
   rpc GetNodes(google.protobuf.Empty) returns (NodeList) {}
 }
@@ -29,8 +29,8 @@ message HealthResponse {
 // swagger:enum Peer
 message Info {
   google.protobuf.Timestamp connectedAt = 1;
-  string blobServerGRPCAddress = 2;
-  string blobServerHTTPAddress = 3;
+  string AssetGRPCAddress = 2;
+  string AssetHTTPAddress = 3;
   string source = 4;
   string ip = 5;
   string name = 6;

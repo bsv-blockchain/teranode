@@ -2,6 +2,7 @@
 local hash = KEYS[1]
 local spendingTxID = ARGV[1]
 local blockHeight = ARGV[2]
+local ttl = ARGV[3]
 
 -- Get value from Redis
 local v = redis.call('GET', hash)
@@ -27,14 +28,14 @@ end
 if lockTime > 500000000 then
   local currentUnixTime = tonumber(redis.call('TIME')[1])
   if lockTime > currentUnixTime then
-    return 'LOCKED'
+    return 'LOCKED' .. lockTime
   end
 end
 
 if lockTime > 0 then
   blockHeight = tonumber(blockHeight)
   if lockTime > blockHeight then
-    return 'LOCKED'
+    return 'LOCKED' .. lockTime .. ',' .. blockHeight
   end
 end
 
@@ -42,6 +43,11 @@ end
 local updatedValue = lockTime .. ',' .. spendingTxID
 
 -- Update in Redis
-redis.call('SET', hash, updatedValue)
+ttl = tonumber(ttl)
+if ttl > 0 then
+  redis.call('SET', hash, updatedValue, 'EX', ttl)
+else
+  redis.call('SET', hash, updatedValue)
+end
 
 return 'OK'

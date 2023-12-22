@@ -8,10 +8,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,18 +20,22 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	txmeta_api.UnsafeTxMetaAPIServer
-	logger         utils.Logger
+	logger         ulogger.Logger
 	txMetaStoreURL *url.URL
 	store          txmeta.Store
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger utils.Logger, txMetaStoreURL *url.URL) *Server {
+func New(logger ulogger.Logger, txMetaStoreURL *url.URL) *Server {
 	initPrometheusMetrics()
 	return &Server{
 		logger:         logger,
 		txMetaStoreURL: txMetaStoreURL,
 	}
+}
+
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
 }
 
 func (u *Server) Init(_ context.Context) (err error) {
@@ -59,7 +63,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) Health(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
+func (u *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*txmeta_api.HealthResponse, error) {
 	prometheusTxMetaHealth.Inc()
 
 	return &txmeta_api.HealthResponse{
@@ -105,12 +109,7 @@ func (u *Server) SetMined(ctx context.Context, request *txmeta_api.SetMinedReque
 		return nil, err
 	}
 
-	blockHash, err := chainhash.NewHash(request.BlockHash)
-	if err != nil {
-		return nil, err
-	}
-
-	err = u.store.SetMined(ctx, hash, blockHash)
+	err = u.store.SetMined(ctx, hash, request.BlockId)
 	if err != nil {
 		return nil, err
 	}
@@ -138,16 +137,10 @@ func (u *Server) Get(ctx context.Context, request *txmeta_api.GetRequest) (*txme
 		parentTxHashes[index] = parentTxHash.CloneBytes()
 	}
 
-	blockHashes := make([][]byte, len(tx.BlockHashes))
-	for index, blockHash := range tx.BlockHashes {
-		blockHashes[index] = blockHash.CloneBytes()
-	}
-
 	return &txmeta_api.GetResponse{
 		Fee:            tx.Fee,
 		ParentTxHashes: parentTxHashes,
-		FirstSeen:      tx.FirstSeen,
-		BlockHashes:    blockHashes,
+		BlockIDs:       tx.BlockIDs,
 	}, nil
 }
 

@@ -483,7 +483,7 @@ func (x *ValidatorApiValidateTransactionBatchResponse) decode(d *polyglot.Decode
 }
 
 type ValidatorAPI interface {
-	Health(context.Context, *ValidatorApiEmptyMessage) (*ValidatorApiHealthResponse, error)
+	HealthGRPC(context.Context, *ValidatorApiEmptyMessage) (*ValidatorApiHealthResponse, error)
 	ValidateTransaction(context.Context, *ValidatorApiValidateTransactionRequest) (*ValidatorApiValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidatorApiValidateTransactionBatchRequest) (*ValidatorApiValidateTransactionBatchResponse, error)
 
@@ -544,7 +544,7 @@ func NewServer(validatorAPI ValidatorAPI, tlsConfig *tls.Config, logger *zerolog
 			var res *ValidatorApiHealthResponse
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = validatorAPI.Health(ctx, req)
+			res, err = validatorAPI.HealthGRPC(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -821,7 +821,7 @@ func (c *Client) FromConn(conn net.Conn, streamHandler ...frisbee.NewStreamHandl
 	return c.Client.FromConn(conn, func(stream *frisbee.Stream) {})
 }
 
-func (c *subValidatorAPIClient) Health(ctx context.Context, req *ValidatorApiEmptyMessage) (res *ValidatorApiHealthResponse, err error) {
+func (c *subValidatorAPIClient) HealthGRPC(ctx context.Context, req *ValidatorApiEmptyMessage) (res *ValidatorApiHealthResponse, err error) {
 	ch := make(chan *ValidatorApiHealthResponse, 1)
 	p := packet.Get()
 	p.Metadata.Operation = 10

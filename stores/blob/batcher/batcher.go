@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/exp/rand"
@@ -17,7 +19,7 @@ import (
 )
 
 type Batcher struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	blobStore        BlobStore
 	sizeInBytes      int
 	writeKeys        bool
@@ -38,7 +40,7 @@ type BlobStore interface {
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 }
 
-func New(logger utils.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
+func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
 	b := &Batcher{
 		logger:           logger,
 		blobStore:        blobStore,
@@ -136,7 +138,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		// flush current batch keys
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
-			if err := b.blobStore.Set(b.queueCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
+			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
 				return fmt.Errorf("error putting batch keys: %v", err)
 			}
 			return nil
@@ -182,6 +184,17 @@ func (b *Batcher) Close(_ context.Context) error {
 	return nil
 }
 
+func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	bb, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return b.Set(ctx, key, bb, opts...)
+}
+
 func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	b.queue.enqueue(&BatchItem{
 		hash:  chainhash.Hash(hash),
@@ -193,6 +206,10 @@ func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...opti
 
 func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
 	return errors.New("TTL is not supported in a batcher store")
+}
+
+func (b *Batcher) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("getIoReader is not supported in a batcher store")
 }
 
 func (b *Batcher) Get(_ context.Context, _ []byte) ([]byte, error) {

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -14,27 +14,27 @@ import (
 type void struct{}
 
 type Peer struct {
-	ConnectedAt           time.Time
-	BlobServerGrpcAddress string
-	BlobServerHttpAddress string
-	Source                string
-	Name                  string
+	ConnectedAt      time.Time
+	AssetGrpcAddress string
+	AssetHttpAddress string
+	Source           string
+	Name             string
 }
 
 type Client struct {
-	client                bootstrap_api.BootstrapAPIClient
-	logger                utils.Logger
-	blobServerGrpcAddress string
-	blobServerHttpAddress string
-	peers                 map[Peer]void
-	callbackFunc          func(peer Peer)
-	source                string
-	name                  string
+	client           bootstrap_api.BootstrapAPIClient
+	logger           ulogger.Logger
+	AssetGrpcAddress string
+	AssetHttpAddress string
+	peers            map[Peer]void
+	callbackFunc     func(peer Peer)
+	source           string
+	name             string
 }
 
-func NewClient(source string, name string) *Client {
+func NewClient(logger ulogger.Logger, source string, name string) *Client {
 	return &Client{
-		logger: gocore.Log("bootC"),
+		logger: logger.New("bootC"),
 		peers:  make(map[Peer]void),
 		source: source,
 		name:   name,
@@ -42,7 +42,7 @@ func NewClient(source string, name string) *Client {
 }
 
 // WithLogger overrides with default logger for the client
-func (c *Client) WithLogger(logger utils.Logger) *Client {
+func (c *Client) WithLogger(logger ulogger.Logger) *Client {
 	c.logger = logger
 	return c
 }
@@ -53,17 +53,17 @@ func (c *Client) WithCallback(callbackFunc func(peer Peer)) *Client {
 	return c
 }
 
-// WithBlobServerGrpcAddress overrides the local GRPC address for the client
-func (c *Client) WithBlobServerGrpcAddress(addr string) *Client {
-	c.blobServerGrpcAddress = addr
-	c.logger.Debugf("Local address set to: %s", c.blobServerGrpcAddress)
+// WithAssetGrpcAddress overrides the local GRPC address for the client
+func (c *Client) WithAssetGrpcAddress(addr string) *Client {
+	c.AssetGrpcAddress = addr
+	c.logger.Debugf("Local address set to: %s", c.AssetGrpcAddress)
 	return c
 }
 
-// WithBlobServerHttpAddress overrides the local HTTP address for the client
-func (c *Client) WithBlobServerHttpAddress(addr string) *Client {
-	c.blobServerHttpAddress = addr
-	c.logger.Debugf("Local address set to: %s", c.blobServerHttpAddress)
+// WithAssetHttpAddress overrides the local HTTP address for the client
+func (c *Client) WithAssetHttpAddress(addr string) *Client {
+	c.AssetHttpAddress = addr
+	c.logger.Debugf("Local address set to: %s", c.AssetHttpAddress)
 	return c
 }
 
@@ -83,7 +83,7 @@ func (c *Client) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		c.logger.Infof("BlobServer GRPC address: %s", c.blobServerGrpcAddress)
+		c.logger.Infof("Asset GRPC address: %s", c.AssetGrpcAddress)
 
 		var resp *bootstrap_api.Notification
 		var stream bootstrap_api.BootstrapAPI_ConnectClient
@@ -96,12 +96,12 @@ func (c *Client) Start(ctx context.Context) error {
 
 			default:
 				c.logger.Infof("Connecting to bootstrap server at: %s", bootstrap_grpcAddress)
-				c.logger.Debugf("BlobServerGRPC address: %s", c.blobServerGrpcAddress)
+				c.logger.Debugf("AssetGRPC address: %s", c.AssetGrpcAddress)
 				stream, err = c.client.Connect(ctx, &bootstrap_api.Info{
-					BlobServerGRPCAddress: c.blobServerGrpcAddress,
-					BlobServerHTTPAddress: c.blobServerHttpAddress,
-					Source:                c.source,
-					Name:                  c.name,
+					AssetGRPCAddress: c.AssetGrpcAddress,
+					AssetHTTPAddress: c.AssetHttpAddress,
+					Source:           c.source,
+					Name:             c.name,
 				})
 				if err != nil {
 					c.logger.Errorf("Could not connect to bootstrap server: %v. Retry in 1 second", err)
@@ -123,15 +123,15 @@ func (c *Client) Start(ctx context.Context) error {
 
 					case bootstrap_api.Type_ADD:
 						peer := Peer{
-							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
-							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
-							BlobServerHttpAddress: resp.Info.BlobServerHTTPAddress,
-							Source:                resp.Info.Source,
-							Name:                  resp.Info.Name,
+							ConnectedAt:      resp.Info.ConnectedAt.AsTime(),
+							AssetGrpcAddress: resp.Info.AssetGRPCAddress,
+							AssetHttpAddress: resp.Info.AssetHTTPAddress,
+							Source:           resp.Info.Source,
+							Name:             resp.Info.Name,
 						}
 
 						c.peers[peer] = void{}
-						c.logger.Infof("Added peer %s / %s / %s (%s)", resp.Info.Name, resp.Info.BlobServerGRPCAddress, resp.Info.BlobServerHTTPAddress, resp.Info.Source)
+						c.logger.Infof("Added peer %s / %s / %s (%s)", resp.Info.Name, resp.Info.AssetGRPCAddress, resp.Info.AssetHTTPAddress, resp.Info.Source)
 
 						if c.callbackFunc != nil {
 							c.callbackFunc(peer)
@@ -139,15 +139,15 @@ func (c *Client) Start(ctx context.Context) error {
 
 					case bootstrap_api.Type_REMOVE:
 						peer := Peer{
-							ConnectedAt:           resp.Info.ConnectedAt.AsTime(),
-							BlobServerGrpcAddress: resp.Info.BlobServerGRPCAddress,
-							BlobServerHttpAddress: resp.Info.BlobServerHTTPAddress,
-							Source:                resp.Info.Source,
-							Name:                  resp.Info.Name,
+							ConnectedAt:      resp.Info.ConnectedAt.AsTime(),
+							AssetGrpcAddress: resp.Info.AssetGRPCAddress,
+							AssetHttpAddress: resp.Info.AssetHTTPAddress,
+							Source:           resp.Info.Source,
+							Name:             resp.Info.Name,
 						}
 
 						delete(c.peers, peer)
-						c.logger.Infof("Removed peer %s / %s / %s (%s)", resp.Info.Name, resp.Info.BlobServerGRPCAddress, resp.Info.BlobServerHTTPAddress, resp.Info.Source)
+						c.logger.Infof("Removed peer %s / %s / %s (%s)", resp.Info.Name, resp.Info.AssetGRPCAddress, resp.Info.AssetHTTPAddress, resp.Info.Source)
 					}
 				}
 			}

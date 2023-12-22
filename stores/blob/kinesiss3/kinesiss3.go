@@ -1,8 +1,10 @@
 package kinesiss3
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
@@ -25,11 +28,11 @@ type KinesisS3 struct {
 	uploader       *s3manager.Uploader
 	downloader     *s3manager.Downloader
 	bucket         string
-	logger         utils.Logger
+	logger         ulogger.Logger
 }
 
-func New(s3URL *url.URL) (*KinesisS3, error) {
-	logger := gocore.Log("kinesisS3")
+func New(logger ulogger.Logger, s3URL *url.URL) (*KinesisS3, error) {
+	logger = logger.New("kinesisS3")
 
 	region := s3URL.Query().Get("region")
 
@@ -94,6 +97,17 @@ func (g *KinesisS3) Close(_ context.Context) error {
 	return nil
 }
 
+func (g *KinesisS3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+
+	return g.Set(ctx, key, b, opts...)
+}
+
 func (g *KinesisS3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	var rec firehose.Record
 	var recInput firehose.PutRecordInput
@@ -121,6 +135,15 @@ func (g *KinesisS3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) e
 
 	// TODO implement
 	return nil
+}
+
+func (g *KinesisS3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+	b, err := g.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
 func (g *KinesisS3) Get(ctx context.Context, hash []byte) ([]byte, error) {

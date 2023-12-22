@@ -13,6 +13,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -46,11 +47,11 @@ func Start() {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
-	debugLevel := gocore.NewLogLevelFromString("INFO")
+	debugLevel := "INFO"
 	if *debug {
-		debugLevel = gocore.NewLogLevelFromString("DEBUG")
+		debugLevel = "DEBUG"
 	}
-	var logger = gocore.Log("chainintegrity", debugLevel)
+	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel))
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {
@@ -211,7 +212,7 @@ func Start() {
 				}
 
 				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
-				if err != nil {
+				if err != nil || subtree == nil {
 					logger.Errorf("failed to parse subtree %s for block %s: %s", subtreeHash, block, err)
 					continue
 				}
