@@ -5,9 +5,8 @@ on:
       - 'v*'
       - 'scaling-v*'
     branches:
-      - jeff-multiarch
-      # - master
-      # - staging
+      - master
+      - staging
 
 env:
   # These variables aren't used for called reusable workflows, so we have to also define 'with' variables below

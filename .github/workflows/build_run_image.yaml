@@ -2,7 +2,8 @@ name: Build run container image
 on:
   push:
     branches:
-      - jeff-multiarch
+      - master
+      - staging
 
 env:
   REPO: ubsv
