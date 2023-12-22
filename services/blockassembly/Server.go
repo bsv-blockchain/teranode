@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -119,6 +120,20 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.assetClient, ba.blockValidationClient)
 		if err != nil {
 			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
+		}
+	}
+
+	auxiliarySubtreeStoreDir, ok := gocore.Config().Get("blockassembly_auxiliarySubtreeStore", "")
+	if ok && auxiliarySubtreeStoreDir != "" {
+		auxiliarySubtreeStore, err := file.New(ba.logger, auxiliarySubtreeStoreDir)
+		if err != nil {
+			return fmt.Errorf("failed to init auxiliary subtree store: %s", err)
+		}
+
+		// wrap the subtree store with the auxiliary subtree store
+		ba.subtreeStore, err = NewAuxiliaryStore(ba.logger, ba.subtreeStore, auxiliarySubtreeStore)
+		if err != nil {
+			return fmt.Errorf("failed to create auxiliary subtree store: %s", err)
 		}
 	}
 

@@ -140,7 +140,7 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	go func() {
 		<-ctx.Done()
 		h.logger.Infof("[Asset] %s (impl) service shutting down", mode)
-		err := h.e.Shutdown(ctx)
+		err := h.e.Shutdown(context.Background())
 		if err != nil {
 			h.logger.Errorf("[Asset] %s (impl) service shutdown error: %s", mode, err)
 		}

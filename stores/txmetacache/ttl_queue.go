@@ -3,12 +3,9 @@ package txmetacache
 import (
 	"sync/atomic"
 	"time"
-
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type ttlQueueItem struct {
-	hash *chainhash.Hash
 	time int64
 	next atomic.Pointer[ttlQueueItem]
 }

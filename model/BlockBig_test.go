@@ -49,7 +49,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 
 	err = loadTxMetaIntoMemory(cachedTxMetaStore)
 	require.NoError(t, err)
@@ -60,8 +60,9 @@ func TestBigBlock_Valid(t *testing.T) {
 	data, err := cachedTxMetaStore.Get(context.Background(), reqTxId)
 	require.NoError(t, err)
 	require.Equal(t, &txmeta.Data{
-		Fee:         1,
-		SizeInBytes: 1,
+		Fee:            1,
+		SizeInBytes:    1,
+		ParentTxHashes: []*chainhash.Hash{},
 	}, data)
 
 	for idx, subtreeHash := range block.Subtrees {
@@ -430,8 +431,9 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			g.Go(func() error {
 				for _, data := range saveBatch {
 					if err = txMetaStore.SetCache(&data.hash, &txmeta.Data{
-						Fee:         data.fee,
-						SizeInBytes: data.sizeInBytes,
+						Fee:            data.fee,
+						SizeInBytes:    data.sizeInBytes,
+						ParentTxHashes: []*chainhash.Hash{},
 					}); err != nil {
 						return err
 					}
@@ -452,8 +454,9 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	if len(batch) > 0 {
 		for _, data := range batch {
 			if err := txMetaStore.SetCache(&data.hash, &txmeta.Data{
-				Fee:         data.fee,
-				SizeInBytes: data.sizeInBytes,
+				Fee:            data.fee,
+				SizeInBytes:    data.sizeInBytes,
+				ParentTxHashes: []*chainhash.Hash{},
 			}); err != nil {
 				return err
 			}

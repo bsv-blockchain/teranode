@@ -17,6 +17,21 @@ func NewSyncedMap[K comparable, V any]() *SyncedMap[K, V] {
 	}
 }
 
+func (m *SyncedMap[K, V]) Length() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return len(m.m)
+}
+
+func (m *SyncedMap[K, V]) Exists(key K) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	_, ok := m.m[key]
+	return ok
+}
+
 func (m *SyncedMap[K, V]) Get(key K) (V, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -29,6 +44,14 @@ func (m *SyncedMap[K, V]) Get(key K) (V, bool) {
 func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	m.m[key] = value
+	m.mu.Unlock()
+}
+
+func (m *SyncedMap[K, V]) SetMulti(keys []K, value V) {
+	m.mu.Lock()
+	for _, key := range keys {
+		m.m[key] = value
+	}
 	m.mu.Unlock()
 }
 

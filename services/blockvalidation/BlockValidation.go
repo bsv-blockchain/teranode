@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/deduplicator"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
@@ -29,13 +30,14 @@ import (
 )
 
 type BlockValidation struct {
-	logger           ulogger.Logger
-	blockchainClient blockchain.ClientI
-	subtreeStore     blob.Store
-	subtreeTTL       time.Duration
-	txStore          blob.Store
-	txMetaStore      txmeta.Store
-	validatorClient  validator.Interface
+	logger              ulogger.Logger
+	blockchainClient    blockchain.ClientI
+	subtreeStore        blob.Store
+	subtreeTTL          time.Duration
+	txStore             blob.Store
+	txMetaStore         txmeta.Store
+	validatorClient     validator.Interface
+	subtreeDeDuplicator *deduplicator.DeDuplicator
 }
 
 type missingTx struct {
@@ -54,13 +56,14 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	bv := &BlockValidation{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		subtreeTTL:       subtreeTTL,
-		txStore:          txStore,
-		txMetaStore:      txMetaStore,
-		validatorClient:  validatorClient,
+		logger:              logger,
+		blockchainClient:    blockchainClient,
+		subtreeStore:        subtreeStore,
+		subtreeTTL:          subtreeTTL,
+		txStore:             txStore,
+		txMetaStore:         txMetaStore,
+		validatorClient:     validatorClient,
+		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 	}
 
 	return bv
@@ -74,6 +77,19 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 		}()
 
 		return cache.SetCache(hash, txMeta)
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, hashes map[chainhash.Hash]*txmeta.Data) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.SetCacheMulti(hashes)
 	}
 
 	return nil
@@ -519,7 +535,17 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlob")
+	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
+	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
+	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
+
+	return u.subtreeDeDuplicator.DeDuplicate(ctx, *subtreeHash, func() error {
+		return u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeHashesMap...)
+	})
+}
+
+func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {
@@ -579,12 +605,11 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 	for i := 0; i < len(txHashes); i += batchSize {
 		i := i
 		g.Go(func() error {
-			var txHash chainhash.Hash
 			var txMeta *txmeta.Data
 			var err error
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-				txHash = txHashes[i+j]
+				txHash := txHashes[i+j]
 				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
 					if errors.Is(err, txmeta.ErrNotFound) {
@@ -738,7 +763,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	start = gocore.CurrentTime()
 	txHashes := make([]chainhash.Hash, 0, 1024*1024)
 	buffer := make([]byte, chainhash.HashSize)
-	bufferedReader := bufio.NewReader(body)
+	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4)
 
 	for {
 		n, err := io.ReadFull(bufferedReader, buffer)

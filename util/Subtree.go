@@ -419,7 +419,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 		}
 	}()
 
-	buf := bufio.NewReader(reader)
+	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
 
 	// read root hash
 	st.rootHash = new(chainhash.Hash)

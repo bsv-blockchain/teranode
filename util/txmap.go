@@ -217,6 +217,55 @@ func (g *SplitSwissMapUint64) Length() int {
 	return length
 }
 
+type SplitGoMap struct {
+	m           map[uint16]*SyncedMap[[32]byte, struct{}]
+	nrOfBuckets uint16
+}
+
+func NewSplitGoMap(length int) *SplitGoMap {
+	m := &SplitGoMap{
+		m:           make(map[uint16]*SyncedMap[[32]byte, struct{}], length),
+		nrOfBuckets: 1024,
+	}
+
+	for i := uint16(0); i <= m.nrOfBuckets; i++ {
+		m.m[i] = NewSyncedMap[[32]byte, struct{}]()
+	}
+
+	return m
+}
+
+func (g *SplitGoMap) Buckets() uint16 {
+	return g.nrOfBuckets
+}
+
+func (g *SplitGoMap) Exists(hash [32]byte) bool {
+	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
+}
+
+func (g *SplitGoMap) Get(hash [32]byte) (uint64, bool) {
+	_, ok := g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
+	return 0, ok
+}
+
+func (g *SplitGoMap) Put(hash [32]byte, n uint64) error {
+	g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Set(hash, struct{}{})
+	return nil
+}
+func (g *SplitGoMap) PutMulti(bucket uint16, hashes [][32]byte) error {
+	g.m[bucket].SetMulti(hashes, struct{}{})
+	return nil
+}
+
+func (g *SplitGoMap) Length() int {
+	length := 0
+	for i := uint16(0); i <= g.nrOfBuckets; i++ {
+		length += g.m[i].Length()
+	}
+
+	return length
+}
+
 func Bytes2Uint16Buckets(b [32]byte, mod uint16) uint16 {
 	return (uint16(b[0])<<8 | uint16(b[1])) % mod
 }
