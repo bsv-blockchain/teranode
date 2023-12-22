@@ -1,0 +1,23 @@
+@startuml
+entity Validator
+control "Kafka Producer" as Kafka
+participant "Block Assembler" as BlockAssembler
+entity "UTXO Store" as UTXOStore
+
+alt if Kafka Producer exists
+    Validator -> Kafka: publishToKafka()
+    Kafka -> BlockAssembler: consume()
+    alt if error in Kafka publish
+        Validator -> UTXOStore: reverseSpends()
+        Validator --> Validator: Return error
+    end
+else Kafka Producer does not exist
+    Validator -> BlockAssembler: Store()
+    alt if error in block assembler store
+        Validator -> UTXOStore: reverseSpends()
+        Validator --> Validator: Return error
+    end
+end
+
+Validator --> Validator: Return success
+@enduml
