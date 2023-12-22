@@ -3,20 +3,25 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 
@@ -168,4 +173,231 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	f, _ = os.Create("mem.prof")
 	defer f.Close()
 	_ = pprof.WriteHeapProfile(f)
+}
+
+func TestBlockValidation_validateBlock_small(t *testing.T) {
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	subtree, err := util.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+
+	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
+	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
+	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
+
+	_, err = txMetaStore.Create(context.Background(), tx1)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx2)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx3)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx4)
+	require.NoError(t, err)
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	nBits := model.NewNBitFromString("2000ffff")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	require.NoError(t, err)
+
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes = append(subtreeHashes, subtree.RootHash())
+	// now create a subtree with the coinbase to calculate the merkle root
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	var calculatedMerkleRootHash *chainhash.Hash
+	calculatedMerkleRootHash = replicatedSubtree.RootHash()
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           nBits,
+		Nonce:          0,
+	}
+
+	// mine to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	block := &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(subtree.Length()),
+		SizeInBytes:      123123,
+		Subtrees:         subtreeHashes, // should be the subtree with placeholder
+	}
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient)
+	start := time.Now()
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	require.NoError(t, err)
+	t.Logf("Time taken: %s\n", time.Since(start))
+}
+func TestBlockValidation_validateBlock(t *testing.T) {
+	initPrometheusMetrics()
+	txCount := 1024
+	// subtreeHashes := make([]*chainhash.Hash, 0)
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	subtree, err := util.NewTreeByLeafCount(txCount)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	fees := 0
+	for i := 0; i < txCount-1; i++ {
+		tx := newTx(uint32(i))
+
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
+		fees += 100
+		_, err = txMetaStore.Create(context.Background(), tx)
+		require.NoError(t, err)
+	}
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	nBits := model.NewNBitFromString("2000ffff")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+uint64(fees))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	require.NoError(t, err)
+
+	// require.NoError(t, err)
+	// t.Logf("subtree hash: %s", subtree.RootHash().String())
+
+	// var merkleRootsubtreeHashes []*chainhash.Hash
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes = append(subtreeHashes, subtree.RootHash())
+	// now create a subtree with the coinbase to calculate the merkle root
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	var calculatedMerkleRootHash *chainhash.Hash
+	// if len(subtreeHashes) == 1 {
+	calculatedMerkleRootHash = replicatedSubtree.RootHash()
+	// } else {
+	// 	calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes)
+	// 	require.NoError(t, err)
+	// }
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           nBits,
+		Nonce:          0,
+	}
+
+	// mine to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	block := &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(subtree.Length()),
+		SizeInBytes:      123123,
+		Subtrees:         subtreeHashes, // should be the subtree with placeholder
+	}
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient)
+	start := time.Now()
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	require.NoError(t, err)
+	t.Logf("Time taken: %s\n", time.Since(start))
+}
+
+// copied from BigBlock_test
+func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
+	var calculatedMerkleRootHash *chainhash.Hash
+	if len(hashes) == 1 {
+		calculatedMerkleRootHash = hashes[0]
+	} else if len(hashes) > 0 {
+		// Create a new subtree with the hashes of the subtrees
+		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		if err != nil {
+			return nil, err
+		}
+		for _, hash := range hashes {
+			err := st.AddNode(*hash, 1, 0)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		calculatedMerkleRoot := st.RootHash()
+		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return calculatedMerkleRootHash, nil
 }

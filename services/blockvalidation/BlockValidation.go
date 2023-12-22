@@ -605,12 +605,11 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	for i := 0; i < len(txHashes); i += batchSize {
 		i := i
 		g.Go(func() error {
-			var txHash chainhash.Hash
 			var txMeta *txmeta.Data
 			var err error
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-				txHash = txHashes[i+j]
+				txHash := txHashes[i+j]
 				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
 					if errors.Is(err, txmeta.ErrNotFound) {
