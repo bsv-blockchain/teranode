@@ -3,6 +3,7 @@
 build/
 data/
 *.run
+ubsv
 .DS_Store
 *.pprof
 .idea/

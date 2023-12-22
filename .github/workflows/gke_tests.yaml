@@ -1,0 +1,38 @@
+name: tests
+on:
+  workflow_call
+
+jobs:
+  go-lint-and-test:
+    name: Go Lint and Test
+    runs-on: ubsv-runner
+    strategy: # This will cause the workflow to terminate if any job fails
+      fail-fast: true
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          # Disabling shallow clone is recommended for improving relevancy of reporting
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v4 # v4 has caching enabled by default
+        with:
+          go-version: '1.21.0'
+
+#      - name: Install deps and lint deps
+#        run: make install-lint
+#
+#      - name: Run golangci-lint
+#        run: make lint
+
+      - name: Run Go tests
+        run: make longtests
+
+      - uses: twingate/github-action@v1
+        with:
+          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
+
+      # - name: SonarQube Scan
+      #   uses: sonarsource/sonarqube-scan-action@master
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #     SONAR_HOST_URL: https://sonarqube.ubsv.dev
