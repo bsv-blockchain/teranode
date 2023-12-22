@@ -236,7 +236,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 
 	g.Go(func() error {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
-		err = u.updateSubtreesTTL(gCtx, block)
+		err := u.updateSubtreesTTL(gCtx, block)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%s]", block.Hash().String(), err)
 		}

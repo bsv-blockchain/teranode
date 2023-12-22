@@ -176,7 +176,6 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 }
 
 func TestBlockValidation_validateBlock_small(t *testing.T) {
-	t.Skip("Skipping test as it is a new test and currently fails with a race condition")
 
 	initPrometheusMetrics()
 
@@ -275,7 +274,6 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 func TestBlockValidation_validateBlock(t *testing.T) {
-	t.Skip("Skipping test as it is a new test and currently fails with a race condition")
 
 	initPrometheusMetrics()
 	txCount := 1024
