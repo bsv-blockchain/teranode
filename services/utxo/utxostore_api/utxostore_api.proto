@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;utxostore_api";
+option go_package = "./;utxostore_api";
 
 package utxostore_api;
 

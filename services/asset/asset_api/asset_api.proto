@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;asset_api";
+option go_package = "./;asset_api";
 
 package asset_api;
 

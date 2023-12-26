@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;blockassembly_api";
+option go_package = "./;blockassembly_api";
 
 package blockassembly_api;
 

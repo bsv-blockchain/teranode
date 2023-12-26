@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;coinbase_api";
+option go_package = "./;coinbase_api";
 
 package coinbase_api;
 

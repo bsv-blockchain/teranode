@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;txmeta_api";
+option go_package = "./;txmeta_api";
 
 package txmeta_api;
 

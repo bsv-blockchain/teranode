@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;status_api";
+option go_package = "/.;status_api";
 
 package status_api;
 
@@ -20,4 +20,3 @@ message HealthResponse {
   string details = 2;
   google.protobuf.Timestamp timestamp = 3;
 }
-
