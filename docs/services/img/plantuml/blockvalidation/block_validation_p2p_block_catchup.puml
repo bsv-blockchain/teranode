@@ -1,0 +1,37 @@
+@startuml
+queue "catchupCh\nCatchup Channel" as CatchupCh
+participant "Validation Service" as ValidationService
+entity "Block Validation\n(BlockValidation.go)" as BVVB
+
+participant "Blockchain Client" as BC
+participant "Util HTTP Request" as Util
+
+
+CatchupCh -> ValidationService: catchup(ctx1, c.block, c.baseURL)
+activate ValidationService
+
+
+alt Not Exists
+    loop Until Parent Block Found
+
+        alt Not Exists
+            ValidationService -> ValidationService: getBlockHeaders(spanCtx, fromBlockHeaderHash, baseURL)
+            activate ValidationService
+            ValidationService -> BC: GetBlockExists(spanCtx, blockHeader.Hash())
+            BC --> ValidationService: exists / not exists
+            deactivate ValidationService
+
+            alt Not Exists
+                ValidationService -> Util: DoHTTPRequest(spanCtx, URL)
+                activate Util
+                Util --> ValidationService: block data
+                ValidationService -> BVVB: ValidateBlock(spanCtx, block, baseURL)
+                deactivate Util
+            end
+        end
+    end
+end
+
+deactivate ValidationService
+
+@enduml

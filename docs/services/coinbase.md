@@ -18,14 +18,13 @@
 
 ##  Directory Structure and Main Files
 
+
+
+
 ## How to run
 
-###     Preconditions
 
-###     How to run
-
-
-###     Configuration options (settings flags)
+## Configuration options (settings flags)
 
 
 ## Troubleshooting

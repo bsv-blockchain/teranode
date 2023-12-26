@@ -1,4 +1,4 @@
-# 🌐 TX Validator Service
+# 🌐 Blockchain Service
 
 ## Index
 
@@ -14,22 +14,15 @@
 
 - input  / output
 
+
+
+
+
 ## Technology and specific Stores
 
-##  Directory Structure and Main Files
+## Directory Structure and Main Files
 
 ## How to run
 
-###     Preconditions
 
-###     How to run
-
-
-###     Configuration options (settings flags)
-
-
-## Troubleshooting
-
-
-
-## References (like third party)
+## Configuration options (settings flags)
