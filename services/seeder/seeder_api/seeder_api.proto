@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;seeder_api";
+option go_package = "./;seeder_api";
 
 package seeder_api;
 

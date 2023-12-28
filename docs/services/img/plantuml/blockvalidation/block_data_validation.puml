@@ -1,0 +1,55 @@
+@startuml
+entity "Block" as Block
+entity "Block Header" as Header
+entity "Subtree Data" as SubtreeData
+entity "Merkle Root Check" as MerkleRootCheck
+database "Subtree Store" as SubtreeStore
+database "Tx Meta Store" as TxMetaStore
+
+Block -> Block: Valid()
+activate Block
+
+Block -> Header: HasMetTargetDifficulty()
+activate Header
+
+Header--> Block: headerBlock / err
+
+deactivate Header
+
+
+Block -> Block: Check Timestamp & Median Time Past
+Block -> Block: Blockate Coinbase Tx
+
+
+' Detailed GetAndValidateSubtrees process
+Block -> Block: GetAndValidateSubtrees(ctx)
+activate Block
+
+Block -> SubtreeStore: Get Subtree Data
+activate SubtreeStore
+SubtreeStore --> Block: Subtree data / err
+deactivate SubtreeStore
+
+Block -> SubtreeData: Deserialize Subtree Data
+Block -> Block: Validate Each Subtree
+
+deactivate Block
+' End of detailed GetAndValidateSubtrees process
+
+
+Block -> SubtreeData: Check First Tx in First Subtree is Coinbase
+Block -> MerkleRootCheck: CheckMerkleRoot(ctx)
+activate MerkleRootCheck
+MerkleRootCheck --> Block: err
+deactivate MerkleRootCheck
+
+Block -> Block: Check Block Reward and Fees
+Block -> Block: Check Duplicate Transactions
+Block -> TxMetaStore: Check Order and Blessed Transactions
+activate TxMetaStore
+TxMetaStore --> Block: err
+deactivate TxMetaStore
+
+deactivate Block
+
+@enduml

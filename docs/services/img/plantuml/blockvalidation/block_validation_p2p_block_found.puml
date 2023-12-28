@@ -1,0 +1,39 @@
+@startuml
+participant "P2P Service" as P2P
+participant "Block Validation Client" as BVC
+participant "Block Validation Server" as BVS
+participant "Blockchain Client" as BC
+queue "blockFoundCh\nBlock Found Channel" as BFC
+
+P2P -> P2P: Init()
+activate P2P
+
+P2P -> BVC: NewClient()
+
+activate BVC
+BVC -> P2P
+deactivate BVC
+
+P2P -> P2P: handleBlockTopic(ctx)
+activate P2P
+P2P -> BVC: BlockFound(ctx, hash, blockMessageUrl)
+activate BVC
+
+BVC -> BVS: BlockFound(ctx, req)
+activate BVS
+
+BVS -> BC: GetBlockExists(ctx, hash)
+activate BC
+BC --> BVS: exists / not exists
+deactivate BC
+
+alt Not Exists
+BVS -> BFC: blockFoundCh <- processBlockFound{hash, baseURL}
+end
+
+deactivate BVS
+deactivate BVC
+deactivate P2P
+deactivate P2P
+
+@enduml

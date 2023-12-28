@@ -1,0 +1,47 @@
+@startuml
+participant "Propagation Module \n(services/propagation/Server.go)" as Propagation
+participant "BlockValidation Module \n(services/blockvalidation/Server.go)" as BlockValidation
+control "gRPC Validator \nClient.go" as GRPCClient
+entity "Validator Server \n(Server.go)" as ValidatorServer
+control "batchWorker" as BatchWorker
+
+== Transaction Propagation ==
+Propagation -> Propagation: ProcessTransaction()
+activate Propagation
+Propagation -> GRPCClient: Validate()
+
+GRPCClient -> ValidatorServer: Validate()
+
+alt if batching enabled
+    ValidatorServer -> BatchWorker: sendBatchToValidator()
+    BatchWorker -> BatchWorker: ValidateTransactionBatch()
+    BatchWorker -> ValidatorServer
+else batching disabled
+    ValidatorServer -> ValidatorServer: ValidateTransaction()
+end
+
+ValidatorServer -> GRPCClient: Return errors, if any
+GRPCClient -> Propagation: Return errors, if any
+
+deactivate Propagation
+
+== Block Validation ==
+BlockValidation -> BlockValidation: blessMissingTransaction()
+activate BlockValidation
+BlockValidation -> GRPCClient: Validate()
+
+GRPCClient -> ValidatorServer: Validate()
+
+alt if batching enabled
+    ValidatorServer -> BatchWorker: sendBatchToValidator()
+    BatchWorker -> BatchWorker: ValidateTransactionBatch()
+    BatchWorker -> ValidatorServer
+else batching disabled
+    ValidatorServer -> ValidatorServer: ValidateTransaction()
+end
+
+ValidatorServer -> GRPCClient: Return errors, if any
+GRPCClient -> BlockValidation: Return errors, if any
+
+deactivate BlockValidation
+@enduml

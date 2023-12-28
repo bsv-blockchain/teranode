@@ -1,4 +1,4 @@
-name: deploy-to-eks
+name: test-build-deploy
 on:
   push:
     tags:
@@ -7,149 +7,68 @@ on:
     branches:
       - master
       - staging
+
+env:
+  # These variables aren't used for called reusable workflows, so we have to also define 'with' variables below
+  REPO: ubsv
+  ECR_REGION: eu-north-1
+
 jobs:
-  go-lint-and-test:
-    runs-on: ubsv-runner
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
-
-    name: Go Lint and Test
+  # Get version tag
+  get_tag:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting
-          fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@v4 # v4 has caching enabled by default
-        with:
-          go-version: '1.21.0'
-
-#      - name: Install deps and lint deps
-#        run: make install-lint
-#
-#      - name: Run golangci-lint
-#        run: make lint
-
-      - name: Run Go tests
-        run: make longtests
-
-      - uses: twingate/github-action@v1
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
-
-      # - name: SonarQube Scan
-      #   uses: sonarsource/sonarqube-scan-action@master
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: https://sonarqube.ubsv.dev
-
-  build-docker:
-    name: Build Docker image
-    runs-on: ubsv-runner
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
-
-
-    steps:
-      - uses: actions/checkout@v3
-
-      # Set up AWS CLI
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2.2.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1  # Replace with your desired AWS region
-
-      # Setup Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      # Authenticate Docker to AWS ECR
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1.7.0
-        with:
-          mask-password: true
-          region: eu-north-1
-
-      # Build and push Docker image to AWS ECR
-      - name: Build Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          file: ./Dockerfile
-          push: false # Do not push here
-          tags: ubsv:${{ github.sha }}
-          load: true
-          build-args: |
-            GITHUB_SHA=${{github.sha}}
-            DEBUG=true
-            GITHUB_REF=${{github.ref_name}}
-
-      - name: Push to eu-north-1
+      - name: Determine deployment tag
+        id: deployment_tag
         run: |
           if [[ '${{ github.ref_type }}' == 'tag' ]]; then
             export tag=${{ github.ref_name }}
             echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
           else
             export tag=${{ github.sha }}
             echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
           fi
-          docker tag ubsv:${{ github.sha }} 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
-          docker push 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
-
-  eks-deploy-eu-allinone:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+    outputs:
+      deployment_tag: ${{ steps.deployment_tag.outputs.id }}
+  # Tests and code lint
+  test_and_lint:
+    uses: ./.github/workflows/gke_tests.yaml
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/v')
-    with:
-      region: eu-west-1
-      ubsv_env: allinone
-
-  eks-deploy-eu-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+  # Build for X86 (AMD64)
+  build_amd64:
+    needs: [test_and_lint, get_tag]
+    uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
-      region: eu-west-1
-      ubsv_env: scaling
-
-  eks-deploy-asia-allinone:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+      arch: amd64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+  # Build for ARM64 (Graviton and Darwin)
+  build_arm64:
+    needs: [test_and_lint, get_tag]
+    uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/v')
     with:
-      region: ap-northeast-1
-      ubsv_env: allinone
-
-  eks-deploy-asia-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+      arch: arm64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+  # Create docker manifest for multiple architecture tags
+  create_manifest:
+    needs: [build_amd64, build_arm64, get_tag]
+    uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
     with:
-      region: ap-northeast-1
-      ubsv_env: scaling
-
-  eks-deploy-us-allinone:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
+      region: eu-north-1
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+  deploy:
+    needs: [create_manifest, get_tag]
+    uses: ./.github/workflows/gke_deploy.yaml
     secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/v')
     with:
-      region: us-east-1
-      ubsv_env: allinone
-
-  eks-deploy-us-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    needs: [build-docker, go-lint-and-test]
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: us-east-1
-      ubsv_env: scaling
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}

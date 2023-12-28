@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;validator_api";
+option go_package = "./;validator_api";
 
 package validator_api;
 

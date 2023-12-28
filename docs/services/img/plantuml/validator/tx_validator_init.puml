@@ -1,0 +1,42 @@
+@startuml
+participant Main
+entity "Server Instance" as Server
+control "NewServer()" as NewServer
+control "Init()" as Init
+control "Start()" as Start
+
+Main -> NewServer: Initialize
+NewServer -> Server: Create instance
+NewServer -> Server: Initialize channels
+NewServer -> Server: Initialize subscribers map
+NewServer -> Server: Create subscription context
+NewServer -> Main: Return instance
+
+Main -> Init: Initialize validator
+Init -> Server: Create validator
+alt if error in validator creation
+    Init -> Main: Return error
+else validator created successfully
+    Init -> Main: Return success
+end
+
+Main -> Start: Start services
+'Start -> Server: Retrieve Kafka config
+'alt if Kafka config exists
+'    Start -> Server: Setup Kafka
+'end
+alt if DRPC config exists
+    Start -> Server: Setup DRPC server
+end
+alt if fRPC config exists
+    Start -> Server: Setup fRPC server
+end
+Start -> Server: Manage subscriptions
+Start -> Server: Start gRPC server
+alt if error in gRPC server
+    Start -> Main: Return error
+else gRPC started successfully
+    Start -> Main: Return success
+end
+
+@enduml

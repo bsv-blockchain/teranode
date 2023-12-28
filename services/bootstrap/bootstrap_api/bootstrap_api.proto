@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = ".;bootstrap_api";
+option go_package = "./;bootstrap_api";
 
 package bootstrap_api;
 
