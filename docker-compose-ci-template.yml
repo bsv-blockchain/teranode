@@ -73,7 +73,7 @@ services:
     ports:
       - "18081-18089:8081-8089"
       - "18090-18092:8090-8092"
-  
+
   ubsv-1-coinbase:
     <<: *ubsv-base
     command: ["./ubsv", "-miner=0", "-coinbase=1"]
@@ -169,7 +169,7 @@ services:
     #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
       - "28093-28093:8093-8093"
-  
+
   # ubsv-3:
   #   <<: *ubsv-base
   #   command: ["./ubsv", "-miner=0", "-coinbase=0"]
