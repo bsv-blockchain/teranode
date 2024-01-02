@@ -3,33 +3,31 @@
 
 ## Index
 
-- [Introduction](#introduction)
-- [Getting Started](#getting-started)
-  - [Pre-requisites and Installation](#pre-requisites-and-installation)
-  - [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
-- [Advanced Usage  [ TO-DO ]](#advanced-usage)
-  - [Settings](#settings)
-  - [Makefile](#makefile)
-    - [Proto buffers (protoc)](#proto-buffers-protoc)
-    - [Running Tests](#running-tests)
-  - [gRPC Logging](#grpc-logging)
-- [Running the Node in Production  [ TO-DO ]](#running-the-node-in-production---to-do-)
-- [Architecture](#architecture)
-- [Micro-Services](#micro-services)
-- [Technology  [ TO-DO ]](#technology---to-do-)
-- [Project Structure and Coding Conventions](#project-structure-and-coding-conventions)
-  - [Project Structure](#project-structure)
-  - [Directory Structure and Descriptions:](#directory-structure-and-descriptions)
-  - [Coding Conventions](#coding-conventions)
-  - [TODO ERROR HANDLING, LOGGING, ...](#todo---error-handling-logging-)
-  - [Testing Conventions [TODO]](#testing-conventions---todo)
-- [License](#license)
+1. [Introduction](#1-introduction)
+2. [Getting Started](#2-getting-started)
+- [2.1. Pre-requisites and Installation](#21-pre-requisites-and-installation)
+- [Running the Node and Individual Services Locally for Development](#running-the-node-and-individual-services-locally-for-development)
+3. [Advanced Usage](#3-advanced-usage)
+- [3.1. Settings](#31-settings)
+- [3.2. Makefile](#32-makefile)
+- [3.3. Proto buffers (protoc)](#33-proto-buffers-protoc)
+- [3.4. Running Tests](#34-running-tests)
+- [3.5. gRPC Logging](#35-grpc-logging)
+4. [Running the Node in Production  [ TO-DO ]](#4-running-the-node-in-production---to-do-)
+5. [Architecture](#5-architecture)
+6. [Micro-Services](#6-micro-services)
+7. [Technology](#7-technology)
+8. [Project Structure and Coding Conventions](#8-project-structure-and-coding-conventions)
+- [8.1 Directory Structure and Descriptions:](#81-directory-structure-and-descriptions)
+- [8.2. Coding Conventions](#82-coding-conventions)
+- [8.3. Error Handling](#83-error-handling)
+- [8.4. Logging](#84-logging)
+- [8.5. Testing Conventions](#85-testing-conventions)
+9. [License](#9-license)
 
 
 
-
-
-## Introduction
+## 1. Introduction
 
 ---
 
@@ -42,11 +40,11 @@ The node has been designed as a collection of microservices, each handling speci
 
 ---
 
-## Getting Started
+## 2. Getting Started
 
 ---
 
-### Pre-requisites and Installation
+### 2.1. Pre-requisites and Installation
 
 To be able to run the node locally, please check the [Installation Guide for Developers and Contributors](docs/developerSetup.md).
 
@@ -56,21 +54,21 @@ Please refer to the [Locally Running Services Documentation](docs/locallyRunning
 
 ---
 
-## Advanced Usage
+## 3. Advanced Usage
 
-### Settings
+### 3.1. Settings
 
 All services accept settings allowing local and remote servers to have their own specific configuration.
 
 For more information on how to create and use settings, please check the [Settings Documentation](docs/settings.md).
 
-### Makefile
+### 3.2. Makefile
 
 The Makefile facilitates a variety of development and build tasks for the UBSV project.
 
 Check the [Makefile Documentation](docs/makefile.md) for detailed documentation. Some use cases will be highlighted here:
 
-#### Proto buffers (protoc)
+### 3.3. Proto buffers (protoc)
 
 You can generate the protobuf files by running the following command:
 
@@ -82,7 +80,7 @@ You can read more about proto buffers in the Technology section.
 
 For additional make commands, please check the [Makefile Documentation](docs/makefile.md).
 
-#### Running Tests
+### 3.4. Running Tests
 
 There are 2 commands to run tests:
 
@@ -94,7 +92,7 @@ make test  # Executes Go tests excluding the playground and PoC directories.
 make testall  # Executes Go tests excluding the playground and PoC directories.
 ```
 
-### gRPC Logging
+### 3.5. gRPC Logging
 
 Additional logs can be produced when the node is run with the following environment variables set: `GRPC_VERBOSITY=debug GRPC_TRACE=client_channel,round_robin`
 
@@ -102,14 +100,14 @@ Additional logs can be produced when the node is run with the following environm
 
 ---
 
-## Running the Node in Production  [ TO-DO ]
+## 4. Running the Node in Production  [ TO-DO ]
 
 ---
 
 
 ---
 
-## Architecture
+## 5. Architecture
 
 ---
 
@@ -118,7 +116,7 @@ Please check the [Architecture Documentation](docs/architecture/architecture.md)
 
 ---
 
-## Micro-Services
+## 6. Micro-Services
 
 ---
 
@@ -126,15 +124,15 @@ Detailed Node Service documentation:
 
 + [Asset Server](docs/services/assetServer.md)
 
-+ [Propagation Service - TODO](docs/services/propagation.md)
++ [Propagation Service](docs/services/propagation.md)
 
-+ [Validator Service - TODO](docs/services/validator.md)
++ [Validator Service](docs/services/validator.md)
 
-+ [Block Validation Service - TODO](docs/services/blockValidation.md)
++ [Block Validation Service](docs/services/blockValidation.md)
 
-+ [Block Assembly Service - TODO](docs/services/blockAssembly.md)
++ [Block Assembly Service](docs/services/blockAssembly.md)
 
-+ [Blockchain Service - TODO](docs/services/blockchain.md)
++ [Blockchain Service](docs/services/blockchain.md)
 
 Store Documentation:
 
@@ -146,7 +144,7 @@ Store Documentation:
 
 Overlay Service documentation:
 
-+ [Coinbase - TODO](docs/services/coinbase.md)
++ [Coinbase](docs/services/coinbase.md)
 
 + [P2P](docs/services/p2p.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
@@ -154,12 +152,13 @@ Overlay Service documentation:
 
 ---
 
-## Technology  [ TO-DO ]
+## 7. Technology
 
 ---
 
 
-* Go
+
+
 * grpc
   -- gRPC vs IPV6 multicast
   -- — https://grpc.io/docs/what-is-grpc/introduction/
@@ -172,15 +171,10 @@ Overlay Service documentation:
 
 ---
 
-## Project Structure and Coding Conventions
+## 8. Project Structure and Coding Conventions
 
----
 
-### Project Structure
-
-Documenting a set of directories in Markdown can be efficiently done using a combination of nested lists and descriptions. Here's a structure that many developers find readable and straightforward:
-
-### Directory Structure and Descriptions:
+### 8.1 Directory Structure and Descriptions:
 
 ```
 ubsv/
@@ -251,25 +245,24 @@ ubsv/
 ```
 
 
-### Coding Conventions
+### 8.2. Coding Conventions
 
 For naming conventions please check the [Naming Conventions](docs/guidelines/namingConventions.md).
 
-### TODO - ERROR HANDLING, LOGGING, ...
+### 8.3. Error Handling
 
-xxx
+### 8.4. Logging
 
-### Testing Conventions - [TODO]
+### 8.5. Testing Conventions
 
-xxxx
 
 ---
 
 
-## License
+## 9. License
 
 ---
-**Copyright © 2023 BSV Blockchain Org. All rights reserved.**
+**Copyright © 2024 BSV Blockchain Org. All rights reserved.**
 
 No part of this software may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the author.
 
