@@ -675,6 +675,14 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	var txMeta *txmeta.Data
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
 	for idx, txHash := range txHashes {
+		// if placeholder just add it and continue
+		if txHash.IsEqual(model.CoinbasePlaceholderHash) {
+			err = subtree.AddNode(txHash, 0, 0)
+			if err != nil {
+				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to add coinbase placeholder node to subtree", subtreeHash.String()), err)
+			}
+			continue
+		}
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
