@@ -47,13 +47,14 @@ services:
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      startTxMetaStore: "false"
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "true"
+      startTxStore: "true"
       txstore: badger:///data/ubsv1/txstore
       subtreestore: badger:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
-      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
+      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
       startP2P: true
@@ -65,8 +66,7 @@ services:
       blockvalidation_httpAddress: "http://localhost:8088"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
-      startTxStore: "true"
-      propagation_grpcAddresses: localhost:8084|ubsv-2:8084
+      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084
     volumes:
       - ./data/ubsv1/txstore:/data/ubsv1/txstore
       - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
@@ -80,17 +80,19 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       asset_httpAddress: "http://ubsv-1:8090"
+      startBlockValidation: false
+      startBlockAssembly: false
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "false"
       startTxStore: "false"
       mine_initial_blocks_count: 200
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
-      startP2P: true
-      feature_libP2P: true
+      startP2P: false
+      feature_libP2P: false
       feature_bootstrap: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
@@ -98,10 +100,10 @@ services:
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
-      propagation_grpcAddresses: localhost:8084|ubsv-2:8084
-    # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+    volumes:
+      - ./data/ubsv1/txstore:/data/ubsv1/txstore
+      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
       - "18093-18093:8093-8093"
 
@@ -115,8 +117,9 @@ services:
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      startTxMetaStore: "false"
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "true"
+      startTxStore: "true"
       txstore: badger:///data/ubsv2/txstore
       subtreestore: badger:///data/ubsv2/subtreestore
       coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
@@ -128,9 +131,10 @@ services:
       securityLevelGRPC: 0
       securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-2:8087"
+      blockvalidation_httpAddress: "http://localhost:8088"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
-      propagation_grpcAddresses: ubsv-1:8084|localhost:8084
+      propagation_grpcAddresses: localhost:8084 | ubsv-1:8084
     volumes:
       - ./data/ubsv2/txstore:/data/ubsv2/txstore
       - ./data/ubsv2/subtreestore:/data/ubsv2/subtreestore
@@ -140,22 +144,24 @@ services:
 
   ubsv-2-coinbase:
     <<: *ubsv-base
-    command: ["./ubsv", "-miner=0", "-coinbase=1"]
+    command: ["./ubsv", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       asset_httpAddress: "http://ubsv-2:8090"
+      startBlockValidation: false
+      startBlockAssembly: false
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "false"
       startTxStore: "false"
-      txstore: badger:///data/ubsv2/txstore
-      subtreestore: badger:///data/ubsv2/subtreestore
-      coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
+      # txstore: badger:///data/ubsv2/txstore
+      # subtreestore: badger:///data/ubsv2/subtreestore
+      coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
       startBootstrap: false
-      startP2P: true
-      feature_libP2P: true
+      startP2P: false
+      feature_libP2P: false
       feature_bootstrap: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
@@ -163,10 +169,10 @@ services:
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
-      propagation_grpcAddresses: ubsv-1:8084|localhost:8084
-    # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      propagation_grpcAddresses: ubsv-2:8084|ubsv-1:8084
+    volumes:
+      - ./data/ubsv1/txstore:/data/ubsv1/txstore
+      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
       - "28093-28093:8093-8093"
 
