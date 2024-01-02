@@ -4,7 +4,6 @@ participant "Propagation Server" as Server
 participant "Configuration System" as Config
 participant "UDP6 Listeners" as UDP6
 participant "HTTP Server" as HTTP
-participant "DRPC Server" as DRPC
 participant "fRPC Server" as fRPC
 participant "QUIC Server" as QUIC
 participant "gRPC Server" as gRPC
@@ -24,13 +23,6 @@ Server -> HTTP: StartHTTPServer(ctx, serverURL)
 activate HTTP
 HTTP --> Server: HTTP Server started/failed
 deactivate HTTP
-
-Server -> Config: Get propagation_drpcListenAddress
-Config --> Server: drpcAddress
-Server -> DRPC: drpcServer(ctx, drpcAddress)
-activate DRPC
-DRPC --> Server: DRPC Server started/failed
-deactivate DRPC
 
 Server -> Config: Get propagation_frpcListenAddress
 Config --> Server: frpcAddress

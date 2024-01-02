@@ -15,7 +15,7 @@ The `Validator` service is responsible for:
 ![Tx_Validator_Service_Container_Diagram.png](img%2FTx_Validator_Service_Container_Diagram.png)
 
 
-The `Validator` service receives notifications about new Txs through various channels - gRPC, fRPC and dRPC (where fRPC and dRPC are considered experimental).
+The `Validator` service receives notifications about new Txs through various channels - gRPC and fRPC (where fRPC is considered experimental).
 
 Also, the `Validator` service will accept gRPC subscriptions from the P2P Service, where rejected tx notifications are pushed to.
 
@@ -47,10 +47,9 @@ We can see here the steps in the validator (`services/validator/Server.go`)  `Ne
 3. Return the outcome (success or error).
 
 * **`Start` Function**:
-1. Optionally, set up a DRPC server if the configuration exists.
-2. Optionally, set up an fRPC server if the configuration exists.
-3. Start a goroutine to manage new and dead subscriptions.
-4. Start the gRPC server and handle any errors.
+1. Optionally, set up an fRPC server if the configuration exists.
+2. Start a goroutine to manage new and dead subscriptions.
+3. Start the gRPC server and handle any errors.
 
 ### 2.2. Receiving Transaction Validation Requests
 
@@ -71,8 +70,8 @@ BlockValidation and Propagation invoke the validator process with and without ba
     - The gRPC Validator client forwards this request to the Validator Server.
     - The Validator Server follows a similar logic as above, deciding between batch processing and direct transaction validation based on the batching configuration.
 
-It must be noted that the Block Validation and Propagation services can communicate with the Tx Validation service through other channels as well, such as fRPC and dRPC. Those altenative communication channels are considered experimental and will not be covered in detail.
-Note that, as of the time of writing, fRPC and dRPC does not support batch processing. Also, they do not support load balancing (meaning that only a single transaction validator instance will be possible within each node).
+It must be noted that the Block Validation and Propagation services can communicate with the Tx Validation service through other channels as well, such as fRPC. Those altenative communication channels are considered experimental and will not be covered in detail.
+Note that, as of the time of writing, fRPC does not support batch processing. Also, they do not support load balancing (meaning that only a single transaction validator instance will be possible within each node).
 
 ### 2.3. Validating the Transaction
 
@@ -218,7 +217,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 
 2. **gRPC**: Google's Remote Procedure Call system, used here for server-client communication. It enables the server to expose specific methods that clients can call remotely.
 
-3. **DRPC and fRPC**: These are alternative RPC frameworks to gRPC. DRPC (developed by Storj) is designed to be simpler and more efficient than gRPC, while fRPC is a framework for creating RPC servers and clients.
+3. **fRPC**: These are alternative RPC frameworks to gRPC. fRPC is a framework for creating RPC servers and clients.
 
 4. **Kafka (by Apache)**: A distributed streaming platform (optionally) used here for message handling. Kafka is used for distributing transaction validation data to the block assembly.
 
@@ -295,7 +294,7 @@ To run the Validator Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Validator Service locally.
 
 
 ## 7. Configuration options (settings flags)
@@ -306,18 +305,16 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 3. **validator_kafkaWorkers**: Indicates the number of workers to be used for Kafka consumers. This setting controls the level of parallelism or concurrency in processing Kafka messages.
 
-4. **validator_drpcListenAddress**: The listening address for the DRPC server.
+4. **validator_frpcListenAddress**: The listening address for the fRPC server.
 
-5. **validator_frpcListenAddress**: The listening address for the fRPC server.
+5. **validator_frpcConcurrency**: Sets the concurrency level for the fRPC server.
 
-6. **validator_frpcConcurrency**: Sets the concurrency level for the fRPC server.
+6. **blockvalidation_txMetaCacheBatcherEnabled**: Determines whether the batcher for transaction metadata caching in the block validation process is enabled.
 
-7. **blockvalidation_txMetaCacheBatcherEnabled**: Determines whether the batcher for transaction metadata caching in the block validation process is enabled.
+7. **blockvalidation_txMetaCacheBatchSize**: Specifies the batch size for transaction metadata caching in the block validation process.
 
-8. **blockvalidation_txMetaCacheBatchSize**: Specifies the batch size for transaction metadata caching in the block validation process.
+8. **blockvalidation_txMetaCacheBatchTimeoutMillis**: Indicates the timeout (in milliseconds) for the batch operation in transaction metadata caching.
 
-9. **blockvalidation_txMetaCacheBatchTimeoutMillis**: Indicates the timeout (in milliseconds) for the batch operation in transaction metadata caching.
+9. **blockassembly_disabled**: A boolean setting that indicates whether the block assembly feature is disabled.
 
-10. **blockassembly_disabled**: A boolean setting that indicates whether the block assembly feature is disabled.
-
-11. **blockassembly_kafkaBrokers**: Defines the Kafka brokers' address for the block assembly process.
+10. **blockassembly_kafkaBrokers**: Defines the Kafka brokers' address for the block assembly process.

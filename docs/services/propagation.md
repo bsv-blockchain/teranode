@@ -16,13 +16,13 @@ At a glance, the Propagation service:
 ![Propagation_Service_Container_Diagram.png](img%2FPropagation_Service_Container_Diagram.png)
 
 
-The service implements multiple experimental alternative communication methods (e.g. DRPC, fRPC, QUIC) for transaction propagation, as well as UDP listeners over IPv6. At the time of writing, the gRPC protocol is the primary communication method.
+The service implements multiple experimental alternative communication methods (e.g. fRPC, QUIC) for transaction propagation, as well as UDP listeners over IPv6. At the time of writing, the gRPC protocol is the primary communication method.
 
-- `StartUDP6Listeners`, `quicServer`, `drpcServer`, `frpcServer`, `StartHTTPServer`: These functions are designed to start various network listeners for different protocols like UDP, QUIC, DRPC, fRPC, and HTTP. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports.
+- `StartUDP6Listeners`, `quicServer`, `frpcServer`, `StartHTTPServer`: These functions are designed to start various network listeners for different protocols like UDP, QUIC, DRPC, fRPC, and HTTP. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
-The Notice how fRPC and DRPC do not allow for load balancing.
+The Notice how fRPC does not allow for load balancing.
 
 ![Propagation_Service_Component_Diagram.png](img%2FPropagation_Service_Component_Diagram.png)
 
@@ -79,12 +79,11 @@ Main technologies involved:
   - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
   - `libsv/go-p2p/wire` is used for P2P transaction propagation in the UBSV network.
 
-3. **Networking Protocols (UDP, HTTP, QUIC, DRPC, fRPC)**:
+3. **Networking Protocols (UDP, HTTP, QUIC, fRPC)**:
   - The service uses various networking protocols for communication:
     - **UDP (User Datagram Protocol)**: A lightweight, connectionless protocol used for low-latency and loss-tolerating connections.
     - **HTTP (Hypertext Transfer Protocol)**.
     - **QUIC (Quick UDP Internet Connections)**: A transport layer network protocol designed by Google to improve the performance of connection-oriented web applications.
-    - **DRPC**: DRPC is a lightweight, drop-in, protocol buffer-based gRPC replacement for Go.
     - **fRPC**: fRPC-go is a lightweight, fast, and secure RPC framework implemented for Go.
 
 4. **Cryptography**:
@@ -122,7 +121,7 @@ To run the Propagation Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Propagation=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Propagation Service locally.
 
 
 ## 7. Configuration options (settings flags)
@@ -138,17 +137,14 @@ The Propagation service uses the following configuration options:
 3. **`propagation_httpAddress`**:
   - Used in the `Start()` function to set the HTTP address for the propagation server.
 
-4. **`propagation_drpcListenAddress`**:
-  - Used in the `Start()` function to set the address for the DRPC (Distributed RPC) server.
-
-5. **`propagation_frpcListenAddress`**:
+4. **`propagation_frpcListenAddress`**:
   - Used in the `Start()` function to set the address for the fRPC server.
 
-6. **`propagation_quicListenAddress`**:
+5. **`propagation_quicListenAddress`**:
   - Used in the `Start()` function to set the address for the QUIC server.
 
-7. **`ipv6_interface`**:
+6. **`ipv6_interface`**:
   - Used in the `StartUDP6Listeners()` function to find the network interface name for setting up IPv6 listeners.
 
-8. **`propagation_frpcConcurrency`**:
+7. **`propagation_frpcConcurrency`**:
   - Used in the `frpcServer()` function to set the concurrency level for the fRPC server.
