@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -179,56 +178,4 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	}
 
 	return c.Stream(200, echo.MIMEOctetStream, r)
-}
-
-func (h *HTTP) GetSubtreeStream() func(c echo.Context) error {
-	return func(c echo.Context) error {
-		start := gocore.CurrentTime()
-		defer func() {
-			AssetStat.NewStat("GetSubtreeStream_http").AddTime(start)
-		}()
-
-		h.logger.Debugf("[Asset_http] GetSubtreeStream for %s: %s", c.Request().RemoteAddr, c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		subtreeBytes, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		subtree := &util.Subtree{}
-		nodeChan, errChan, err := subtree.DeserializeChan(subtreeBytes)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-
-		// Set response type
-		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
-		c.Response().WriteHeader(http.StatusOK)
-
-		for {
-			select {
-			case node, ok := <-nodeChan:
-				if !ok {
-					return nil // Channel closed, end of stream
-				}
-				if _, err := c.Response().Write(node.Hash[:]); err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError, "Failed to write to response")
-				}
-				c.Response().Flush()
-
-			case err := <-errChan:
-				if err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
-			}
-		}
-	}
 }
