@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -259,6 +260,15 @@ func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest)
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 	}, nil
+}
+
+func (g *GRPC) BlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("GetBlockStats").AddTime(start)
+	}()
+
+	return g.repository.GetBlockStats(ctx)
 }
 
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeaderRequest) (*asset_api.GetBlockHeaderResponse, error) {

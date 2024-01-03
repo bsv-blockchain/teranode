@@ -166,8 +166,8 @@
         "title": "24h Stats",
         "live": "Live",
         "fields": {
-          "tx_confirmed": "Confirmed Tx",
-          "tx_mempool": "Mempool Tx",
+          "tx_confirmed": "Mined Transactions",
+          "tx_mempool": "Pending Transactions",
           "blocks_total": "Total Blocks",
           "block_latest_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",

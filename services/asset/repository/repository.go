@@ -89,6 +89,9 @@ func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) (
 
 	return tx, nil
 }
+func (r *Repository) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	return r.BlockchainClient.GetBlockStats(ctx)
+}
 
 func (r *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
