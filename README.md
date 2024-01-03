@@ -3,6 +3,7 @@
 
 ## Index
 
+
 1. [Introduction](#1-introduction)
 2. [Getting Started](#2-getting-started)
 - [2.1. Pre-requisites and Installation](#21-pre-requisites-and-installation)
@@ -13,10 +14,18 @@
 - [3.3. Proto buffers (protoc)](#33-proto-buffers-protoc)
 - [3.4. Running Tests](#34-running-tests)
 - [3.5. gRPC Logging](#35-grpc-logging)
-4. [Running the Node in Production  [ TO-DO ]](#4-running-the-node-in-production---to-do-)
+4. [Running the Node in Production](#4-running-the-node-in-production)
 5. [Architecture](#5-architecture)
 6. [Micro-Services](#6-micro-services)
 7. [Technology](#7-technology)
+- [7.1. Go](#71-go)
+- [7.2. gRPC](#72-grpc)
+- [7.3. fRPC and DRPC](#73-frpc-and-drpc)
+- [7.4. Protobuf](#74-protobuf)
+- [7.5. IPv6 Multicast ](#75-ipv6-multicast-)
+- [7.6. Stores](#76-stores)
+- [7.7. Docker ](#77-docker-)
+- [7.8. Kubernetes](#78-kubernetes)
 8. [Project Structure and Coding Conventions](#8-project-structure-and-coding-conventions)
 - [8.1 Directory Structure and Descriptions:](#81-directory-structure-and-descriptions)
 - [8.2. Coding Conventions](#82-coding-conventions)
@@ -24,8 +33,6 @@
 - [8.4. Logging](#84-logging)
 - [8.5. Testing Conventions](#85-testing-conventions)
 9. [License](#9-license)
-
-
 
 ## 1. Introduction
 
@@ -100,7 +107,9 @@ Additional logs can be produced when the node is run with the following environm
 
 ---
 
-## 4. Running the Node in Production  [ TO-DO ]
+## 4. Running the Node in Production
+
+-- TODO
 
 ---
 
@@ -144,8 +153,6 @@ Store Documentation:
 
 Overlay Service documentation:
 
-+ [Coinbase](docs/services/coinbase.md)
-
 + [P2P](docs/services/p2p.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
@@ -156,16 +163,144 @@ Overlay Service documentation:
 
 ---
 
+### 7.1. Go
+
+The project is written in Go. Go, often referred to as Golang, is an open-source programming language created at Google in 2007 and officially announced in 2009. Go was designed with a focus on simplicity, efficiency, and productivity, making it well-suited for building scalable and reliable software systems.
+
+Key characteristics and features of the Go programming language include:
+
+1. **Concurrency:** Go includes built-in support for concurrent programming through goroutines and channels. Goroutines are lightweight threads that allow developers to write concurrent code easily. Channels facilitate communication and synchronization between goroutines.
+
+2. **Efficiency:** Go is known for its high performance and efficient resource utilization. It compiles to native machine code, and its runtime system is designed to manage memory efficiently.
+
+3. **Simplicity:** Go has a clean and minimalistic syntax, which makes it easy to read and write code. The language was intentionally designed to be simple and straightforward to reduce complexity and bugs.
+
+4. **Strong Typing:** Go is statically typed, which means that variable types are determined at compile-time. This helps catch many errors early in the development process.
+
+5. **Garbage Collection:** Go includes a garbage collector that automatically manages memory allocation and deallocation, relieving developers from the burden of manual memory management.
+
+6. **Standard Library:** Go has a rich standard library that covers a wide range of tasks, from networking and file I/O to web development and more. This reduces the need for third-party libraries in many cases.
+
+7. **Cross-Platform:** Go is designed to be cross-platform, and it supports various operating systems and architectures. You can write Go code on one platform and compile it for another without modification.
+
+8. **Open Source:** Go is open source, which means that the source code is freely available for anyone to use, modify, and distribute.
+
+9. **Community:** The Go programming language has a strong and active community of developers, which results in a wealth of resources, documentation, and third-party libraries.
+
+Read more on: https://go.dev/
 
 
+### 7.2. gRPC
 
-* grpc
-  -- gRPC vs IPV6 multicast
-  -- — https://grpc.io/docs/what-is-grpc/introduction/
-* protobuf
-* Stores (options)
-* Docker
-* Kubernetes
+Certainly, here's a more concise summary of gRPC:
+
+**gRPC** is an open-source framework for efficient and high-performance communication between services in distributed systems. Key features include:
+
+1. **Language Agnostic:** Use Protocol Buffers for language-agnostic service definitions.
+
+2. **Efficiency:** Built on HTTP/2 for faster, multiplexed communication.
+
+3. **Strong Typing:** Clearly defined service contracts and data types.
+
+4. **Bidirectional Streaming:** Supports both unary and bidirectional streaming.
+
+5. **Security:** Pluggable authentication and authorization mechanisms.
+
+6. **Code Generation:** Auto-generates client and server code in multiple languages.
+
+7. **Middleware:** Easily add interceptors and middleware for cross-cutting concerns.
+
+8. **Load Balancing:** Automatic client-side load balancing for reliability.
+
+gRPC is widely used for building microservices. It offers efficient and strongly typed communication between services.
+
+Read more on: https://grpc.io/docs/what-is-grpc/introduction/
+
+
+### 7.3. fRPC and DRPC
+
+fRPC (or Frisbee RPC), is an RPC Framework (similar to gRPC or Apache Thrift) that’s designed from the ground up to be lightweight, extensible, and extremely performant. It allows autogeneration from your existing Protobuf definition files.
+
+Read more on: https://frpc.io/
+
+
+DRPC is a lightweight, drop-in, protocol buffer-based gRPC replacement. DRPC is small, extensible, efficient, and can still be autogenerated from your existing Protobuf definition files.
+
+Read more on: https://storj.github.io/drpc/
+
+Both fRPC and DRPC are widely used as an experimental technology in the project. gRPC is still the reference RPC implementation for the project.
+
+### 7.4. Protobuf
+
+
+**Protocol Buffers (Protobuf)** is a language-agnostic data serialization format developed by Google. Key features include:
+
+1. **Efficiency:** Compact binary format for efficient data transmission and storage.
+2. **Strong Typing:** Enforces well-defined data types for early error detection.
+3. **Code Generation:** Generates code for data serialization and deserialization.
+4. **Backward Compatibility:** Supports evolving data schemas without breaking existing code.
+5. **Extensibility:** Allows adding fields and options to messages without compatibility issues.
+
+You can learn more and find detailed documentation about Protobuf on the official website:
+[Google's Protocol Buffers](https://developers.google.com/protocol-buffers)
+
+Also, read about how to generate this project's protobuf files in the [3.3. Proto buffers (protoc)](#33-proto-buffers-protoc) section.
+
+### 7.5. IPv6 Multicast
+
+IPv6 multicast is a communication method in IPv6 networks that allows one-to-many and many-to-many communication. It is used for sending data packets from one source to multiple receivers efficiently, especially in scenarios where multiple recipients want to receive the same data simultaneously. IPv6 multicast is an improvement over IPv4 multicast and offers several advantages, including a larger address space and simplified addressing.
+
+In terms of the UBSV project, IPv6 multicast is used for the propagation of transactions across the network. An originator will broadcast a transaction to a multicast group, and all nodes that have joined that group will receive the transaction. This is a much more efficient way of propagating transactions across the network, as opposed to the traditional unicast method, where the originator would have to send the transaction to each node individually.
+
+Here are some key points about IPv6 multicast:
+
+1. **Multicast Addressing:** IPv6 multicast uses a specific range of addresses called "IPv6 multicast addresses." These addresses begin with the prefix `ff00::/8`. The last 120 bits of the address are used to specify the multicast group, and the remaining 8 bits are used for flags.
+
+2. **Multicast Groups:** Devices that want to receive multicast traffic join specific multicast groups by expressing interest in those groups. They do this by sending a multicast group membership report to their local router. Routers use this information to forward multicast traffic only to devices interested in a particular group.
+
+3. **Efficiency:** IPv6 multicast is efficient because it eliminates the need for sending multiple unicast copies of data to individual recipients. Instead, a single copy of the data is sent to a multicast group, and routers replicate and forward the data only to devices that have joined that group.
+
+4. **Scope:** IPv6 multicast addresses have different scopes, indicating the range of the multicast group's visibility. Common multicast address scopes include link-local, site-local, and global scopes. The scope determines how far the multicast traffic can propagate in the network.
+
+5. **Applications:** IPv6 multicast is commonly used in various applications, such as video streaming, online gaming, content distribution networks (CDNs), network management, and more. It is particularly useful for delivering real-time data to multiple recipients, reducing network congestion and improving scalability.
+
+6. **Routing:** Multicast routing protocols, such as Protocol Independent Multicast (PIM), are used to manage and control the forwarding of multicast traffic within an IPv6 network. These protocols ensure that multicast data reaches the intended recipients efficiently.
+
+
+### 7.6. Stores
+
+The system uses a number of different store technologies to store data. Different microservices allow different storage options, please check the specific service documentation for more details. The following stores are the most commonly used:
+
+1. **Aerospike**:
+  - A high-performance, NoSQL distributed database.
+  - Suitable for environments requiring high throughput and low latency.
+  - Handles large volumes of data with fast read/write capabilities.
+  - https://aerospike.com.
+
+2. **Memory (In-Memory Store)**:
+  - Stores data directly in the application's memory.
+  - Offers the fastest access times but lacks persistence; data is lost if the service restarts.
+  - Useful for development or testing purposes.
+
+3. **Redis**:
+  - An in-memory data structure store, used as a database, cache, and message broker.
+  - Offers fast data access and can persist data to disk.
+  - Useful for scenarios requiring rapid access combined with the ability to handle volatile or transient data.
+  - https://redis.com.
+
+4. **SQL**:
+  - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+  - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
+    - https://www.postgresql.org.
+
+
+### 7.7. Docker
+
+-- TODO
+
+
+### 7.8. Kubernetes
+-- TODO
   * [Kubernetes Resolver for gRPC](k8sresolver/README.md)
 
 
