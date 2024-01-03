@@ -1,0 +1,163 @@
+<script lang="ts">
+  import { goto } from '$app/navigation'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
+  import { pageLinks, contentLeft } from '../../../../stores/nav'
+  import MobileNavbar from '$lib/components/navigation/mobile-navbar/index.svelte'
+  import Drawer from '$lib/components/navigation/drawer/index.svelte'
+  import Logo from '$lib/components/logo/index.svelte'
+  import Menu from '$lib/components/navigation/menu/index.svelte'
+  import Toolbar from '$internal/components/toolbar/index.svelte'
+  import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
+  import ContentMenu from '../../content/menu/index.svelte'
+
+  export let testId: string | undefined | null = null
+  export let showGlobalToolbar = true
+
+  let links: { path: string; label: string; selected?: boolean }[] = []
+
+  $: {
+    links = []
+    if ($pageLinks) {
+      links = $pageLinks.items
+    }
+  }
+
+  function onLogo() {
+    goto('/')
+  }
+
+  function onMenuItem(e) {
+    const { item, type } = e.detail
+
+    if (type === 'page-links') {
+      goto(item.path)
+    } else {
+      window.open(item.path, '_blank')
+    }
+  }
+
+  let showMenu = true
+  let showMobileNavbar = false
+  $: {
+    let newShowMobileNavbar = $mediaSize <= MediaSize.sm
+    if (showMobileNavbar !== newShowMobileNavbar) {
+      showMenu = false
+    }
+    showMobileNavbar = newShowMobileNavbar
+  }
+
+  function onToggleMenu() {
+    showMenu = !showMenu
+  }
+
+  function onDrawerMetrics(e) {
+    const detail = e.detail
+
+    if (!showMobileNavbar) {
+      if (detail.position === 'left') {
+        $contentLeft = detail.width
+      }
+    }
+  }
+
+  $: expanded = showMobileNavbar || $contentLeft > 60
+
+  $: showDrawer = (showMobileNavbar && showMenu) || !showMobileNavbar
+
+  function onDrawerClose(e) {
+    showMenu = false
+  }
+</script>
+
+{#if showMobileNavbar}
+  <MobileNavbar>
+    <div class="navbar-content">
+      <div class="logo-container" on:click={onLogo}>
+        <Logo name="teranode" height={28} />
+        <Logo name="teranode-text" height={14} />
+      </div>
+      <div class="icon" on:click={(e) => onToggleMenu()}>
+        <AnimMenuIcon open={showDrawer} />
+      </div>
+    </div>
+  </MobileNavbar>
+{/if}
+
+<div
+  class="content-container"
+  data-test-id={testId}
+  style:--offset-top={showMobileNavbar ? `var(--header-height)` : '0'}
+  style:--offset-left={showMobileNavbar ? '0px' : `${$contentLeft}px`}
+>
+  <ContentMenu>
+    {#if showGlobalToolbar}
+      <Toolbar style="padding-bottom: 13px;" />
+    {/if}
+    <slot />
+  </ContentMenu>
+</div>
+
+{#if showDrawer}
+  <Drawer
+    snapBelowHeader={showMobileNavbar}
+    enableCollapse={!showMobileNavbar}
+    minWidth={60}
+    maxWidth={212}
+    collapsed={!expanded}
+    showCover={showMobileNavbar}
+    showHeader={!showMobileNavbar}
+    coverColor="var(--app-cover-bg-color)"
+    on:metrics={onDrawerMetrics}
+    on:close={onDrawerClose}
+    on:header-select={onLogo}
+  >
+    <div slot="header" class="logo-container">
+      <Logo name="teranode" height={28} />
+      {#if expanded}
+        <Logo name="teranode-text" height={14} />
+      {/if}
+    </div>
+    <Menu
+      collapsed={!expanded}
+      idField="path"
+      data={links}
+      on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
+    />
+  </Drawer>
+{/if}
+
+<style>
+  .navbar-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    width: 100%;
+    padding: 0 16px;
+  }
+  .navbar-content .icon {
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0);
+  }
+
+  .content-container {
+    position: absolute;
+    top: var(--offset-top);
+    left: var(--offset-left);
+    bottom: 0;
+    width: calc(100% - var(--offset-left));
+    overflow-x: hidden;
+    overflow-y: auto;
+    transition:
+      top 0.2s linear,
+      left 0.2s linear,
+      width 0.2s linear;
+  }
+
+  .logo-container {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+  }
+</style>

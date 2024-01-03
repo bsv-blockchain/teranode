@@ -1,0 +1,372 @@
+{
+  "comp": {
+    "footer": {
+      "copyright": "© {{ year }} Teranode"
+    },
+    "pager": {
+      "prev": "Prev",
+      "dots": "...",
+      "next": "Next",
+      "page": "Page",
+      "of_total": "of {{ total }}",
+      "show": "Show rows:",
+      "rows_per_page": "rows per page",
+      "go": "Go",
+      "page_size": "Page Size",
+      "rows": "{{ rows }}",
+      "all_rows": "All"
+    },
+    "table-toggle": {
+      "tooltip": {
+        "standard": "Standard table",
+        "div": "Div table"
+      }
+    },
+    "range-toggle": {
+      "24h": {
+        "label": "24H",
+        "tooltip": "24 Hours"
+      },
+      "1w": {
+        "label": "1W",
+        "tooltip": "1 Week"
+      },
+      "1m": {
+        "label": "1M",
+        "tooltip": "30 Days"
+      },
+      "3m": {
+        "label": "3M",
+        "tooltip": "90 Days"
+      }
+    },
+    "msgbox": {
+      "block": {
+        "title": "Block",
+        "fields": {
+          "age": "Age",
+          "timestamp": "Timestamp",
+          "receivedAt": "Received at",
+          "hash": "Hash",
+          "base_url": "From",
+          "peer_id": "Peer"
+        }
+      },
+      "mining_on": {
+        "title": "Mining on",
+        "fields": {
+          "age": "Age",
+          "hash": "Hash",
+          "previousblockhash": "Previous Block Hash",
+          "base_url": "From",
+          "peer_id": "Peer",
+          "tx_count": "TxCount",
+          "size_in_bytes": "Size",
+          "height": "Height",
+          "miner": "Miner"
+        }
+      },
+      "subtree": {
+        "title": "Subtree",
+        "fields": {
+          "age": "Age",
+          "hash": "Hash",
+          "base_url": "From",
+          "peer_id": "Peer"
+        }
+      },
+      "ping": {
+        "title": "Ping",
+        "fields": {
+          "age": "Age",
+          "receivedAt": "Received at"
+        }
+      },
+      "status": {
+        "title": "Status",
+        "fields": {
+          "age": "Age",
+          "timestamp": "Timestamp",
+          "type": "Type",
+          "source": "Source",
+          "subtype": "Subtype",
+          "value": "Value",
+          "base_url": "From",
+          "latency": "Latency"
+        },
+        "type": {
+          "getminingcandidate": {
+            "title": "Get mining candidate"
+          },
+          "blockvalidation": {
+            "title": "Block validation"
+          }
+        }
+      }
+    },
+    "toolbar": {
+      "reverse": "Reverse",
+      "placeholder": "Block Hash / Subtree Hash / Tx Id"
+    },
+    "breadcrumbs": {
+      "page": {
+        "home": {
+          "title": "Dashboard"
+        },
+        "viewer": {
+          "title": "Block Viewer",
+          "page": {
+            "block": {
+              "title": "Block Details"
+            },
+            "subtree": {
+              "title": "Subtree Details"
+            },
+            "tx": {
+              "title": "Transaction Details"
+            }
+          }
+        },
+        "chain": {
+          "title": "Chain"
+        },
+        "metrics": {
+          "title": "Metrics"
+        },
+        "p2p": {
+          "title": "P2P"
+        },
+        "network": {
+          "title": "Network"
+        }
+      }
+    },
+    "no-data": {
+      "title": "No Data",
+      "body": "We are unable to retrieve the data for your request.",
+      "reverse": "Reverse"
+    },
+    "error": {
+      "404": {
+        "title": "Page Not Found",
+        "body": "The requested URL {{ url }} was not found on this server or it doesn't exist.",
+        "home": "Go to Dashboard"
+      },
+      "x": {
+        "title": "Error {{ status }}",
+        "home": "Go to Dashboard"
+      },
+      "fatal": {
+        "title": "Fatal Error",
+        "home": "Go to Dashboard"
+      }
+    }
+  },
+  "page": {
+    "home": {
+      "menu-label": "Dashboard",
+      "stats": {
+        "title": "24h Stats",
+        "live": "Live",
+        "fields": {
+          "tx_confirmed": "Confirmed Tx",
+          "tx_mempool": "Mempool Tx",
+          "blocks_total": "Total Blocks",
+          "block_latest_height": "Latest Block Height",
+          "avg_block_size": "Average Block Size",
+          "avg_txs_per_block": "Average Tx/Block"
+        }
+      },
+      "txs": {
+        "title": "Network Transactions"
+      }
+    },
+    "viewer": {
+      "menu-label": "Block Viewer",
+      "title": "Blocks",
+      "subtitle": "Blocks from {{ fromHeight }} to {{ toHeight }}",
+      "col-defs-label": {
+        "height": "Height",
+        "hash": "Hash",
+        "timestamp": "Timestamp (UTC)",
+        "age": "Age",
+        "deltaTime": "Delta Time",
+        "miner": "Miner",
+        "coinbaseValue": "Block Reward",
+        "transactionCount": "Tx",
+        "tps": "TPS",
+        "size": "Size (Bytes)"
+      }
+    },
+    "viewer-block": {
+      "details": {
+        "title": "Block Details #{{ height }}",
+        "tab": {
+          "overview": "Overview",
+          "json": "JSON"
+        },
+        "fields": {
+          "timestamp": "Timestamp (UTC)",
+          "txCount": "Transactions",
+          "totalFee": "Total Fee",
+          "avgFee": "Average Fee",
+          "sizeInBytes": "Size",
+          "difficulty": "Difficulty",
+          "nonce": "Nonce",
+          "bits": "Bits",
+          "confirmations": "Confirmations",
+          "confirmations_value": "{{ count }} Confirmations",
+          "merkleroot": "Merkle Root",
+          "chainwork": "Chainwork",
+          "miner": "Miner"
+        }
+      },
+      "subtrees": {
+        "title": "Subtrees for Block #{{ height }}",
+        "subtitle": "{{ count }} subtrees found",
+        "subtitle_singular": "{{ count }} subtree found",
+        "col-defs-label": {
+          "height": "Height",
+          "hash": "Subtree Hash",
+          "transactionCount": "Transactions",
+          "fee": "Fees",
+          "size": "Size"
+        }
+      }
+    },
+    "viewer-subtree": {
+      "details": {
+        "title": "Subtree Details #{{ height }}",
+        "tab": {
+          "overview": "Overview",
+          "json": "JSON"
+        },
+        "fields": {
+          "block": "Block",
+          "txCount": "Transactions",
+          "totalFee": "Total Fee",
+          "avgFee": "Average Fee",
+          "sizeInBytes": "Size",
+          "nonce": "Nonce",
+          "bits": "Bits",
+          "confirmations": "Confirmations",
+          "confirmations_value": "{{ count }} Confirmations",
+          "merkleroot": "Merkle Root",
+          "chainwork": "Chainwork",
+          "miner": "Miner"
+        }
+      },
+      "txs": {
+        "title": "Transactions for Subtree #{{ height }}",
+        "subtitle": "{{ count }} transactions found",
+        "subtitle_singular": "{{ count }} transaction found",
+        "col-defs-label": {
+          "index": "Index",
+          "txid": "Transaction ID",
+          "inputsCount": "Inputs",
+          "outputsCount": "Outputs",
+          "kbFee": "Fee Per KB",
+          "size": "Size",
+          "timestamp": "Timestamp"
+        }
+      }
+    },
+    "viewer-tx": {
+      "details": {
+        "title": "Transaction Details",
+        "tab": {
+          "overview": "Overview",
+          "json": "JSON"
+        },
+        "fields": {
+          "txid": "Tx ID",
+          "block": "Block",
+          "timestamp": "Timestamp",
+          "confirmations": "Confirmations",
+          "confirmations_value": "{{ count }} Confirmations",
+          "sizeInBytes": "Tx Size",
+          "fee_rate": "Fee Rate",
+          "fee_paid": "Fee Paid"
+        }
+      },
+      "txs": {
+        "input": {
+          "title": "Input ({{ count }} Tx)",
+          "total": "Total Input: {{ amount }} BSV"
+        },
+        "output": {
+          "title": "Output ({{ count }} Tx)",
+          "total": "Total Output: {{ amount }} BSV"
+        },
+        "load-more": "Load 10 More"
+      }
+    },
+    "chain": {
+      "menu-label": "Chain"
+    },
+    "metrics": {
+      "menu-label": "Metrics"
+    },
+    "p2p": {
+      "menu-label": "P2P",
+      "title": "P2P",
+      "by_peer": "By peer",
+      "filter": "Filter",
+      "live": "Live",
+      "paused": "Paused"
+    },
+    "network": {
+      "menu-label": "Network",
+      "nodes": {
+        "title": "Connected Nodes",
+        "fields": {
+          "base_url": "Address",
+          "height": "Height",
+          "tx_count": "TX Count",
+          "size_in_bytes": "Size",
+          "miner": "Miner",
+          "hash": "Latest hash",
+          "previousblockhash": "Previous hash",
+          "receivedAt": "Last seen"
+        }
+      },
+      "chaintip": {}
+    },
+    "status": {
+      "menu-label": "Status",
+      "title": "Status",
+      "filter": "Filter",
+      "live": "Live",
+      "paused": "Paused"
+    }
+  },
+  "notifications": {
+    "failure": "Error: {{ error }}",
+    "copy-success": "Successfully copied.",
+    "copy-failure": "Failed to copy.",
+    "title": {
+      "success": "Success",
+      "failure": "Failure",
+      "warn": "Warning",
+      "info": "Information"
+    }
+  },
+  "validation": {
+    "required": "Required"
+  },
+  "data": {
+    "not-available": "N/A"
+  },
+  "tooltip": {
+    "copy-to-clipboard": "Copy to clipboard",
+    "reverse-hash": "Reverse hash",
+    "previous-block": "Previous block",
+    "next-block": "Next block"
+  },
+  "graph": {
+    "series": {
+      "date": "Date",
+      "tx_count": "Tx Count"
+    }
+  }
+}
