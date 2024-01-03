@@ -15,12 +15,14 @@ type fRPC_BlockAssembly struct {
 	ba *BlockAssembly
 }
 
-func (f *fRPC_BlockAssembly) Health(ctx context.Context, message *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.BlockassemblyApiHealthResponse, error) {
-	// start := gocore.CurrentTime()
-	// defer func() {
-	// 	blockAssemblyStat.NewStat("Health_frpc").AddTime(start)
-	// }()
+func (f *fRPC_BlockAssembly) Health(_ context.Context, _ *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.BlockassemblyApiHealthResponse, error) {
+	return &blockassembly_api.BlockassemblyApiHealthResponse{
+		Ok:        true,
+		Timestamp: uint32(time.Now().Unix()),
+	}, nil
+}
 
+func (f *fRPC_BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.BlockassemblyApiHealthResponse, error) {
 	return &blockassembly_api.BlockassemblyApiHealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -87,12 +89,32 @@ func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembl
 	}, err
 }
 
-func (f *fRPC_BlockAssembly) GetMiningCandidate(ctx context.Context, message *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.ModelMiningCandidate, error) {
+func (f *fRPC_BlockAssembly) RemoveTx(_ context.Context, request *blockassembly_api.BlockassemblyApiRemoveTxRequest) (*blockassembly_api.BlockassemblyApiEmptyMessage, error) {
+	startTime := time.Now()
+	prometheusBlockAssemblyRemoveTx.Inc()
+	defer func() {
+		prometheusBlockAssemblyRemoveTxDuration.Observe(util.TimeSince(startTime))
+	}()
+
+	if len(request.Txid) != 32 {
+		return nil, fmt.Errorf("invalid txid length: %d for %s", len(request.Txid), utils.ReverseAndHexEncodeSlice(request.Txid))
+	}
+
+	hash := chainhash.Hash(request.Txid)
+
+	if err := f.ba.blockAssembler.RemoveTx(hash); err != nil {
+		return nil, err
+	}
+
+	return &blockassembly_api.BlockassemblyApiEmptyMessage{}, nil
+}
+
+func (f *fRPC_BlockAssembly) GetMiningCandidate(_ context.Context, _ *blockassembly_api.BlockassemblyApiEmptyMessage) (*blockassembly_api.ModelMiningCandidate, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (f *fRPC_BlockAssembly) SubmitMiningSolution(ctx context.Context, request *blockassembly_api.BlockassemblyApiSubmitMiningSolutionRequest) (*blockassembly_api.BlockassemblyApiSubmitMiningSolutionResponse, error) {
+func (f *fRPC_BlockAssembly) SubmitMiningSolution(_ context.Context, _ *blockassembly_api.BlockassemblyApiSubmitMiningSolutionRequest) (*blockassembly_api.BlockassemblyApiSubmitMiningSolutionResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }

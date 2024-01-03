@@ -213,3 +213,28 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 
 	return nil
 }
+
+func (s *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	req := &blockvalidation_api.SetMinedMultiRequest{
+		Hashes:  make([][]byte, 0, len(hashes)),
+		BlockId: blockID,
+	}
+
+	for _, hash := range hashes {
+		req.Hashes = append(req.Hashes, hash.CloneBytes())
+	}
+
+	if s.frpcClient != nil {
+		_, err = s.frpcClient.BlockValidationAPI.SetMinedMulti(ctx, &blockvalidation_api.BlockvalidationApiSetMinedMultiRequest{
+			Hashes:  req.Hashes,
+			BlockId: blockID,
+		})
+	} else {
+		_, err = s.apiClient.SetMinedMulti(ctx, req)
+	}
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -648,3 +648,28 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 		Ok: true,
 	}, nil
 }
+
+func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	u.logger.Warnf("GRPC SetMinedMulti %d: %d", request.BlockId, len(request.Hashes))
+
+	hashes := make([]*chainhash.Hash, 0, len(request.Hashes))
+	for _, hash := range request.Hashes {
+		hash32 := chainhash.Hash(hash)
+		hashes = append(hashes, &hash32)
+	}
+
+	prometheusBlockValidationSetMinedMulti.Inc()
+	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockvalidation_api.SetMinedMultiResponse{
+		Ok: true,
+	}, nil
+}

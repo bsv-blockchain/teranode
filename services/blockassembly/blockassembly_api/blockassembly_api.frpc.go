@@ -370,6 +370,64 @@ func (x *BlockassemblyApiAddTxBatchRequest) decode(d *polyglot.Decoder) error {
 	return nil
 }
 
+type BlockassemblyApiRemoveTxRequest struct {
+	error error
+	flags uint8
+
+	Txid []byte
+}
+
+func NewBlockassemblyApiRemoveTxRequest() *BlockassemblyApiRemoveTxRequest {
+	return &BlockassemblyApiRemoveTxRequest{}
+}
+
+func (x *BlockassemblyApiRemoveTxRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockassemblyApiRemoveTxRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bytes(x.Txid)
+	}
+}
+
+func (x *BlockassemblyApiRemoveTxRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockassemblyApiRemoveTxRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Txid, err = d.Bytes(nil)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type BlockassemblyApiAddTxResponse struct {
 	error error
 	flags uint8
@@ -642,9 +700,9 @@ func (x *BlockassemblyApiSubmitMiningSolutionResponse) decode(d *polyglot.Decode
 }
 
 type BlockAssemblyAPI interface {
-	Health(context.Context, *BlockassemblyApiEmptyMessage) (*BlockassemblyApiHealthResponse, error)
-	NewChaintipAndHeight(context.Context, *BlockassemblyApiNewChaintipAndHeightRequest) (*BlockassemblyApiEmptyMessage, error)
+	HealthGRPC(context.Context, *BlockassemblyApiEmptyMessage) (*BlockassemblyApiHealthResponse, error)
 	AddTx(context.Context, *BlockassemblyApiAddTxRequest) (*BlockassemblyApiAddTxResponse, error)
+	RemoveTx(context.Context, *BlockassemblyApiRemoveTxRequest) (*BlockassemblyApiEmptyMessage, error)
 	AddTxBatch(context.Context, *BlockassemblyApiAddTxBatchRequest) (*BlockassemblyApiAddTxBatchResponse, error)
 	GetMiningCandidate(context.Context, *BlockassemblyApiEmptyMessage) (*ModelMiningCandidate, error)
 	SubmitMiningSolution(context.Context, *BlockassemblyApiSubmitMiningSolutionRequest) (*BlockassemblyApiSubmitMiningSolutionResponse, error)
@@ -677,7 +735,7 @@ func NewServer(blockAssemblyAPI BlockAssemblyAPI, tlsConfig *tls.Config, logger 
 			var res *BlockassemblyApiHealthResponse
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = blockAssemblyAPI.Health(ctx, req)
+			res, err = blockAssemblyAPI.HealthGRPC(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -691,13 +749,13 @@ func NewServer(blockAssemblyAPI BlockAssemblyAPI, tlsConfig *tls.Config, logger 
 		return
 	}
 	table[11] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		req := NewBlockassemblyApiNewChaintipAndHeightRequest()
+		req := NewBlockassemblyApiAddTxRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
-			var res *BlockassemblyApiEmptyMessage
+			var res *BlockassemblyApiAddTxResponse
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = blockAssemblyAPI.NewChaintipAndHeight(ctx, req)
+			res, err = blockAssemblyAPI.AddTx(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -711,13 +769,13 @@ func NewServer(blockAssemblyAPI BlockAssemblyAPI, tlsConfig *tls.Config, logger 
 		return
 	}
 	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		req := NewBlockassemblyApiAddTxRequest()
+		req := NewBlockassemblyApiRemoveTxRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
-			var res *BlockassemblyApiAddTxResponse
+			var res *BlockassemblyApiEmptyMessage
 			outgoing = incoming
 			outgoing.Content.Reset()
-			res, err = blockAssemblyAPI.AddTx(ctx, req)
+			res, err = blockAssemblyAPI.RemoveTx(ctx, req)
 			if err != nil {
 				if _, ok := err.(CloseError); ok {
 					action = frisbee.CLOSE
@@ -829,18 +887,18 @@ func (s *Server) SetOnClosed(f func(*frisbee.Async, error)) error {
 
 type subBlockAssemblyAPIClient struct {
 	client                         *frisbee.Client
-	nextHealth                     uint16
-	nextHealthMu                   sync.RWMutex
-	inflightHealth                 map[uint16]chan *BlockassemblyApiHealthResponse
-	inflightHealthMu               sync.RWMutex
-	nextNewChaintipAndHeight       uint16
-	nextNewChaintipAndHeightMu     sync.RWMutex
-	inflightNewChaintipAndHeight   map[uint16]chan *BlockassemblyApiEmptyMessage
-	inflightNewChaintipAndHeightMu sync.RWMutex
+	nextHealthGRPC                 uint16
+	nextHealthGRPCMu               sync.RWMutex
+	inflightHealthGRPC             map[uint16]chan *BlockassemblyApiHealthResponse
+	inflightHealthGRPCMu           sync.RWMutex
 	nextAddTx                      uint16
 	nextAddTxMu                    sync.RWMutex
 	inflightAddTx                  map[uint16]chan *BlockassemblyApiAddTxResponse
 	inflightAddTxMu                sync.RWMutex
+	nextRemoveTx                   uint16
+	nextRemoveTxMu                 sync.RWMutex
+	inflightRemoveTx               map[uint16]chan *BlockassemblyApiEmptyMessage
+	inflightRemoveTxMu             sync.RWMutex
 	nextAddTxBatch                 uint16
 	nextAddTxBatchMu               sync.RWMutex
 	inflightAddTxBatch             map[uint16]chan *BlockassemblyApiAddTxBatchResponse
@@ -866,30 +924,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	table := make(frisbee.HandlerTable)
 
 	table[10] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		c.BlockAssemblyAPI.inflightHealthMu.RLock()
-		if ch, ok := c.BlockAssemblyAPI.inflightHealth[incoming.Metadata.Id]; ok {
-			c.BlockAssemblyAPI.inflightHealthMu.RUnlock()
+		c.BlockAssemblyAPI.inflightHealthGRPCMu.RLock()
+		if ch, ok := c.BlockAssemblyAPI.inflightHealthGRPC[incoming.Metadata.Id]; ok {
+			c.BlockAssemblyAPI.inflightHealthGRPCMu.RUnlock()
 			res := NewBlockassemblyApiHealthResponse()
 			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 			ch <- res
 		} else {
-			c.BlockAssemblyAPI.inflightHealthMu.RUnlock()
+			c.BlockAssemblyAPI.inflightHealthGRPCMu.RUnlock()
 		}
 		return
 	}
 	table[11] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		c.BlockAssemblyAPI.inflightNewChaintipAndHeightMu.RLock()
-		if ch, ok := c.BlockAssemblyAPI.inflightNewChaintipAndHeight[incoming.Metadata.Id]; ok {
-			c.BlockAssemblyAPI.inflightNewChaintipAndHeightMu.RUnlock()
-			res := NewBlockassemblyApiEmptyMessage()
-			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
-			ch <- res
-		} else {
-			c.BlockAssemblyAPI.inflightNewChaintipAndHeightMu.RUnlock()
-		}
-		return
-	}
-	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockAssemblyAPI.inflightAddTxMu.RLock()
 		if ch, ok := c.BlockAssemblyAPI.inflightAddTx[incoming.Metadata.Id]; ok {
 			c.BlockAssemblyAPI.inflightAddTxMu.RUnlock()
@@ -898,6 +944,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 			ch <- res
 		} else {
 			c.BlockAssemblyAPI.inflightAddTxMu.RUnlock()
+		}
+		return
+	}
+	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.BlockAssemblyAPI.inflightRemoveTxMu.RLock()
+		if ch, ok := c.BlockAssemblyAPI.inflightRemoveTx[incoming.Metadata.Id]; ok {
+			c.BlockAssemblyAPI.inflightRemoveTxMu.RUnlock()
+			res := NewBlockassemblyApiEmptyMessage()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.BlockAssemblyAPI.inflightRemoveTxMu.RUnlock()
 		}
 		return
 	}
@@ -952,18 +1010,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 
 	c.BlockAssemblyAPI = new(subBlockAssemblyAPIClient)
 	c.BlockAssemblyAPI.client = c.Client
-	c.BlockAssemblyAPI.nextHealthMu.Lock()
-	c.BlockAssemblyAPI.nextHealth = 0
-	c.BlockAssemblyAPI.nextHealthMu.Unlock()
-	c.BlockAssemblyAPI.inflightHealth = make(map[uint16]chan *BlockassemblyApiHealthResponse)
-	c.BlockAssemblyAPI.nextNewChaintipAndHeightMu.Lock()
-	c.BlockAssemblyAPI.nextNewChaintipAndHeight = 0
-	c.BlockAssemblyAPI.nextNewChaintipAndHeightMu.Unlock()
-	c.BlockAssemblyAPI.inflightNewChaintipAndHeight = make(map[uint16]chan *BlockassemblyApiEmptyMessage)
+	c.BlockAssemblyAPI.nextHealthGRPCMu.Lock()
+	c.BlockAssemblyAPI.nextHealthGRPC = 0
+	c.BlockAssemblyAPI.nextHealthGRPCMu.Unlock()
+	c.BlockAssemblyAPI.inflightHealthGRPC = make(map[uint16]chan *BlockassemblyApiHealthResponse)
 	c.BlockAssemblyAPI.nextAddTxMu.Lock()
 	c.BlockAssemblyAPI.nextAddTx = 0
 	c.BlockAssemblyAPI.nextAddTxMu.Unlock()
 	c.BlockAssemblyAPI.inflightAddTx = make(map[uint16]chan *BlockassemblyApiAddTxResponse)
+	c.BlockAssemblyAPI.nextRemoveTxMu.Lock()
+	c.BlockAssemblyAPI.nextRemoveTx = 0
+	c.BlockAssemblyAPI.nextRemoveTxMu.Unlock()
+	c.BlockAssemblyAPI.inflightRemoveTx = make(map[uint16]chan *BlockassemblyApiEmptyMessage)
 	c.BlockAssemblyAPI.nextAddTxBatchMu.Lock()
 	c.BlockAssemblyAPI.nextAddTxBatch = 0
 	c.BlockAssemblyAPI.nextAddTxBatchMu.Unlock()
@@ -987,22 +1045,22 @@ func (c *Client) FromConn(conn net.Conn, streamHandler ...frisbee.NewStreamHandl
 	return c.Client.FromConn(conn, func(stream *frisbee.Stream) {})
 }
 
-func (c *subBlockAssemblyAPIClient) Health(ctx context.Context, req *BlockassemblyApiEmptyMessage) (res *BlockassemblyApiHealthResponse, err error) {
+func (c *subBlockAssemblyAPIClient) HealthGRPC(ctx context.Context, req *BlockassemblyApiEmptyMessage) (res *BlockassemblyApiHealthResponse, err error) {
 	ch := make(chan *BlockassemblyApiHealthResponse, 1)
 	p := packet.Get()
 	p.Metadata.Operation = 10
 
-	c.nextHealthMu.Lock()
-	c.nextHealth += 1
-	id := c.nextHealth
-	c.nextHealthMu.Unlock()
+	c.nextHealthGRPCMu.Lock()
+	c.nextHealthGRPC += 1
+	id := c.nextHealthGRPC
+	c.nextHealthGRPCMu.Unlock()
 	p.Metadata.Id = id
 
 	req.Encode(p.Content)
 	p.Metadata.ContentLength = uint32(len(*p.Content))
-	c.inflightHealthMu.Lock()
-	c.inflightHealth[id] = ch
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	c.inflightHealthGRPC[id] = ch
+	c.inflightHealthGRPCMu.Unlock()
 	err = c.client.WritePacket(p)
 	if err != nil {
 		packet.Put(p)
@@ -1014,43 +1072,9 @@ func (c *subBlockAssemblyAPIClient) Health(ctx context.Context, req *Blockassemb
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-	c.inflightHealthMu.Lock()
-	delete(c.inflightHealth, id)
-	c.inflightHealthMu.Unlock()
-	packet.Put(p)
-	return
-}
-
-func (c *subBlockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, req *BlockassemblyApiNewChaintipAndHeightRequest) (res *BlockassemblyApiEmptyMessage, err error) {
-	ch := make(chan *BlockassemblyApiEmptyMessage, 1)
-	p := packet.Get()
-	p.Metadata.Operation = 11
-
-	c.nextNewChaintipAndHeightMu.Lock()
-	c.nextNewChaintipAndHeight += 1
-	id := c.nextNewChaintipAndHeight
-	c.nextNewChaintipAndHeightMu.Unlock()
-	p.Metadata.Id = id
-
-	req.Encode(p.Content)
-	p.Metadata.ContentLength = uint32(len(*p.Content))
-	c.inflightNewChaintipAndHeightMu.Lock()
-	c.inflightNewChaintipAndHeight[id] = ch
-	c.inflightNewChaintipAndHeightMu.Unlock()
-	err = c.client.WritePacket(p)
-	if err != nil {
-		packet.Put(p)
-		return
-	}
-	select {
-	case res = <-ch:
-		err = res.error
-	case <-ctx.Done():
-		err = ctx.Err()
-	}
-	c.inflightNewChaintipAndHeightMu.Lock()
-	delete(c.inflightNewChaintipAndHeight, id)
-	c.inflightNewChaintipAndHeightMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	delete(c.inflightHealthGRPC, id)
+	c.inflightHealthGRPCMu.Unlock()
 	packet.Put(p)
 	return
 }
@@ -1058,7 +1082,7 @@ func (c *subBlockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, re
 func (c *subBlockAssemblyAPIClient) AddTx(ctx context.Context, req *BlockassemblyApiAddTxRequest) (res *BlockassemblyApiAddTxResponse, err error) {
 	ch := make(chan *BlockassemblyApiAddTxResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 12
+	p.Metadata.Operation = 11
 
 	c.nextAddTxMu.Lock()
 	c.nextAddTx += 1
@@ -1085,6 +1109,40 @@ func (c *subBlockAssemblyAPIClient) AddTx(ctx context.Context, req *Blockassembl
 	c.inflightAddTxMu.Lock()
 	delete(c.inflightAddTx, id)
 	c.inflightAddTxMu.Unlock()
+	packet.Put(p)
+	return
+}
+
+func (c *subBlockAssemblyAPIClient) RemoveTx(ctx context.Context, req *BlockassemblyApiRemoveTxRequest) (res *BlockassemblyApiEmptyMessage, err error) {
+	ch := make(chan *BlockassemblyApiEmptyMessage, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 12
+
+	c.nextRemoveTxMu.Lock()
+	c.nextRemoveTx += 1
+	id := c.nextRemoveTx
+	c.nextRemoveTxMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightRemoveTxMu.Lock()
+	c.inflightRemoveTx[id] = ch
+	c.inflightRemoveTxMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightRemoveTxMu.Lock()
+	delete(c.inflightRemoveTx, id)
+	c.inflightRemoveTxMu.Unlock()
 	packet.Put(p)
 	return
 }

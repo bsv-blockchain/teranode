@@ -482,12 +482,194 @@ func (x *ValidatorApiValidateTransactionBatchResponse) decode(d *polyglot.Decode
 	return nil
 }
 
+type ValidatorApiGetBlockHeightResponse struct {
+	error error
+	flags uint8
+
+	Height uint32
+}
+
+func NewValidatorApiGetBlockHeightResponse() *ValidatorApiGetBlockHeightResponse {
+	return &ValidatorApiGetBlockHeightResponse{}
+}
+
+func (x *ValidatorApiGetBlockHeightResponse) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *ValidatorApiGetBlockHeightResponse) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Uint32(x.Height)
+	}
+}
+
+func (x *ValidatorApiGetBlockHeightResponse) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *ValidatorApiGetBlockHeightResponse) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Height, err = d.Uint32()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type ValidatorApiSubscribeRequest struct {
+	error error
+	flags uint8
+
+	Source string
+}
+
+func NewValidatorApiSubscribeRequest() *ValidatorApiSubscribeRequest {
+	return &ValidatorApiSubscribeRequest{}
+}
+
+func (x *ValidatorApiSubscribeRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *ValidatorApiSubscribeRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).String(x.Source)
+	}
+}
+
+func (x *ValidatorApiSubscribeRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *ValidatorApiSubscribeRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Source, err = d.String()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type ValidatorApiRejectedTxNotification struct {
+	error error
+	flags uint8
+
+	TxId   string
+	Reason string
+}
+
+func NewValidatorApiRejectedTxNotification() *ValidatorApiRejectedTxNotification {
+	return &ValidatorApiRejectedTxNotification{}
+}
+
+func (x *ValidatorApiRejectedTxNotification) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *ValidatorApiRejectedTxNotification) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).String(x.TxId).String(x.Reason)
+	}
+}
+
+func (x *ValidatorApiRejectedTxNotification) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *ValidatorApiRejectedTxNotification) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.TxId, err = d.String()
+	if err != nil {
+		return err
+	}
+	x.Reason, err = d.String()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type ValidatorAPI interface {
 	HealthGRPC(context.Context, *ValidatorApiEmptyMessage) (*ValidatorApiHealthResponse, error)
 	ValidateTransaction(context.Context, *ValidatorApiValidateTransactionRequest) (*ValidatorApiValidateTransactionResponse, error)
 	ValidateTransactionBatch(context.Context, *ValidatorApiValidateTransactionBatchRequest) (*ValidatorApiValidateTransactionBatchResponse, error)
 
 	ValidateTransactionStream(srv *ValidateTransactionStreamServer) error
+	GetBlockHeight(context.Context, *ValidatorApiEmptyMessage) (*ValidatorApiGetBlockHeightResponse, error)
+
+	Subscribe(req *ValidatorApiSubscribeRequest, srv *SubscribeServer) error
 }
 
 type contextKey int
@@ -597,6 +779,26 @@ func NewServer(validatorAPI ValidatorAPI, tlsConfig *tls.Config, logger *zerolog
 		}
 		return
 	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewValidatorApiEmptyMessage()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *ValidatorApiGetBlockHeightResponse
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = validatorAPI.GetBlockHeight(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
 	var fsrv *frisbee.Server
 	var err error
 	if tlsConfig != nil {
@@ -625,6 +827,8 @@ func NewServer(validatorAPI ValidatorAPI, tlsConfig *tls.Config, logger *zerolog
 		switch open.operation {
 		case 13:
 			s.createValidateTransactionStreamServer(validatorAPI, stream)
+		case 15:
+			s.createSubscribeServer(validatorAPI, stream)
 		}
 	})
 
@@ -721,12 +925,68 @@ func (x *ValidateTransactionStreamServer) CloseAndSend(m *ValidatorApiValidateTr
 	return x.CloseSend()
 }
 
+type SubscribeServer struct {
+	recv func() (*ValidatorApiSubscribeRequest, error)
+	send func(*ValidatorApiRejectedTxNotification) error
+
+	stream *frisbee.Stream
+	closed *atomic.Bool
+}
+
+func (s *Server) createSubscribeServer(validatorAPI ValidatorAPI, stream *frisbee.Stream) {
+	srv := &SubscribeServer{
+		closed: atomic.NewBool(false),
+		stream: stream,
+	}
+
+	srv.send = func(m *ValidatorApiRejectedTxNotification) error {
+		p := packet.Get()
+
+		m.Encode(p.Content)
+		p.Metadata.ContentLength = uint32(len(*p.Content))
+		return srv.stream.WritePacket(p)
+	}
+
+	incoming, err := stream.ReadPacket()
+	if err != nil {
+		return
+	}
+	req := NewValidatorApiSubscribeRequest()
+	_ = req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+	go func() {
+
+		err := validatorAPI.Subscribe(req, srv)
+		if err != nil {
+			res := ValidatorApiRejectedTxNotification{error: err}
+			res.flags = SetErrorFlag(res.flags, true)
+			srv.CloseAndSend(&res)
+		} else {
+			srv.CloseSend()
+		}
+	}()
+}
+
+func (x *SubscribeServer) Send(m *ValidatorApiRejectedTxNotification) error {
+	return x.send(m)
+}
+func (x *SubscribeServer) CloseSend() error {
+	return x.send(&ValidatorApiRejectedTxNotification{error: io.EOF})
+}
+
+func (x *SubscribeServer) CloseAndSend(m *ValidatorApiRejectedTxNotification) error {
+	err := x.send(m)
+	if err != nil {
+		return err
+	}
+	return x.CloseSend()
+}
+
 type subValidatorAPIClient struct {
 	client                             *frisbee.Client
-	nextHealth                         uint16
-	nextHealthMu                       sync.RWMutex
-	inflightHealth                     map[uint16]chan *ValidatorApiHealthResponse
-	inflightHealthMu                   sync.RWMutex
+	nextHealthGRPC                     uint16
+	nextHealthGRPCMu                   sync.RWMutex
+	inflightHealthGRPC                 map[uint16]chan *ValidatorApiHealthResponse
+	inflightHealthGRPCMu               sync.RWMutex
 	nextValidateTransaction            uint16
 	nextValidateTransactionMu          sync.RWMutex
 	inflightValidateTransaction        map[uint16]chan *ValidatorApiValidateTransactionResponse
@@ -735,6 +995,10 @@ type subValidatorAPIClient struct {
 	nextValidateTransactionBatchMu     sync.RWMutex
 	inflightValidateTransactionBatch   map[uint16]chan *ValidatorApiValidateTransactionBatchResponse
 	inflightValidateTransactionBatchMu sync.RWMutex
+	nextGetBlockHeight                 uint16
+	nextGetBlockHeightMu               sync.RWMutex
+	inflightGetBlockHeight             map[uint16]chan *ValidatorApiGetBlockHeightResponse
+	inflightGetBlockHeightMu           sync.RWMutex
 	nextStreamingID                    uint16
 	nextStreamingIDMu                  sync.RWMutex
 }
@@ -748,14 +1012,14 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	table := make(frisbee.HandlerTable)
 
 	table[10] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		c.ValidatorAPI.inflightHealthMu.RLock()
-		if ch, ok := c.ValidatorAPI.inflightHealth[incoming.Metadata.Id]; ok {
-			c.ValidatorAPI.inflightHealthMu.RUnlock()
+		c.ValidatorAPI.inflightHealthGRPCMu.RLock()
+		if ch, ok := c.ValidatorAPI.inflightHealthGRPC[incoming.Metadata.Id]; ok {
+			c.ValidatorAPI.inflightHealthGRPCMu.RUnlock()
 			res := NewValidatorApiHealthResponse()
 			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 			ch <- res
 		} else {
-			c.ValidatorAPI.inflightHealthMu.RUnlock()
+			c.ValidatorAPI.inflightHealthGRPCMu.RUnlock()
 		}
 		return
 	}
@@ -783,6 +1047,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.ValidatorAPI.inflightGetBlockHeightMu.RLock()
+		if ch, ok := c.ValidatorAPI.inflightGetBlockHeight[incoming.Metadata.Id]; ok {
+			c.ValidatorAPI.inflightGetBlockHeightMu.RUnlock()
+			res := NewValidatorApiGetBlockHeightResponse()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.ValidatorAPI.inflightGetBlockHeightMu.RUnlock()
+		}
+		return
+	}
 	var err error
 	if tlsConfig != nil {
 		c.Client, err = frisbee.NewClient(table, context.Background(), frisbee.WithTLS(tlsConfig), frisbee.WithLogger(logger))
@@ -798,10 +1074,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 
 	c.ValidatorAPI = new(subValidatorAPIClient)
 	c.ValidatorAPI.client = c.Client
-	c.ValidatorAPI.nextHealthMu.Lock()
-	c.ValidatorAPI.nextHealth = 0
-	c.ValidatorAPI.nextHealthMu.Unlock()
-	c.ValidatorAPI.inflightHealth = make(map[uint16]chan *ValidatorApiHealthResponse)
+	c.ValidatorAPI.nextHealthGRPCMu.Lock()
+	c.ValidatorAPI.nextHealthGRPC = 0
+	c.ValidatorAPI.nextHealthGRPCMu.Unlock()
+	c.ValidatorAPI.inflightHealthGRPC = make(map[uint16]chan *ValidatorApiHealthResponse)
 	c.ValidatorAPI.nextValidateTransactionMu.Lock()
 	c.ValidatorAPI.nextValidateTransaction = 0
 	c.ValidatorAPI.nextValidateTransactionMu.Unlock()
@@ -810,6 +1086,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.ValidatorAPI.nextValidateTransactionBatch = 0
 	c.ValidatorAPI.nextValidateTransactionBatchMu.Unlock()
 	c.ValidatorAPI.inflightValidateTransactionBatch = make(map[uint16]chan *ValidatorApiValidateTransactionBatchResponse)
+	c.ValidatorAPI.nextGetBlockHeightMu.Lock()
+	c.ValidatorAPI.nextGetBlockHeight = 0
+	c.ValidatorAPI.nextGetBlockHeightMu.Unlock()
+	c.ValidatorAPI.inflightGetBlockHeight = make(map[uint16]chan *ValidatorApiGetBlockHeightResponse)
 	return c, nil
 }
 
@@ -826,17 +1106,17 @@ func (c *subValidatorAPIClient) HealthGRPC(ctx context.Context, req *ValidatorAp
 	p := packet.Get()
 	p.Metadata.Operation = 10
 
-	c.nextHealthMu.Lock()
-	c.nextHealth += 1
-	id := c.nextHealth
-	c.nextHealthMu.Unlock()
+	c.nextHealthGRPCMu.Lock()
+	c.nextHealthGRPC += 1
+	id := c.nextHealthGRPC
+	c.nextHealthGRPCMu.Unlock()
 	p.Metadata.Id = id
 
 	req.Encode(p.Content)
 	p.Metadata.ContentLength = uint32(len(*p.Content))
-	c.inflightHealthMu.Lock()
-	c.inflightHealth[id] = ch
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	c.inflightHealthGRPC[id] = ch
+	c.inflightHealthGRPCMu.Unlock()
 	err = c.client.WritePacket(p)
 	if err != nil {
 		packet.Put(p)
@@ -848,9 +1128,9 @@ func (c *subValidatorAPIClient) HealthGRPC(ctx context.Context, req *ValidatorAp
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-	c.inflightHealthMu.Lock()
-	delete(c.inflightHealth, id)
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	delete(c.inflightHealthGRPC, id)
+	c.inflightHealthGRPCMu.Unlock()
 	packet.Put(p)
 	return
 }
@@ -1006,6 +1286,114 @@ func (x *ValidateTransactionStreamClient) CloseAndRecv() (*ValidatorApiValidateT
 	if err != nil {
 		return nil, err
 	}
+	return x.recv()
+}
+
+func (c *subValidatorAPIClient) GetBlockHeight(ctx context.Context, req *ValidatorApiEmptyMessage) (res *ValidatorApiGetBlockHeightResponse, err error) {
+	ch := make(chan *ValidatorApiGetBlockHeightResponse, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 14
+
+	c.nextGetBlockHeightMu.Lock()
+	c.nextGetBlockHeight += 1
+	id := c.nextGetBlockHeight
+	c.nextGetBlockHeightMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightGetBlockHeightMu.Lock()
+	c.inflightGetBlockHeight[id] = ch
+	c.inflightGetBlockHeightMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightGetBlockHeightMu.Lock()
+	delete(c.inflightGetBlockHeight, id)
+	c.inflightGetBlockHeightMu.Unlock()
+	packet.Put(p)
+	return
+}
+
+func (c *subValidatorAPIClient) Subscribe(ctx context.Context, req *ValidatorApiSubscribeRequest) (*SubscribeClient, error) {
+	p := packet.Get()
+
+	c.nextStreamingIDMu.Lock()
+	c.nextStreamingID += 1
+	id := c.nextStreamingID
+	c.nextStreamingIDMu.Unlock()
+
+	open := &RPCStreamOpen{operation: 15}
+
+	open.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+
+	fStream := c.client.Stream(id)
+	fStream.WritePacket(p)
+
+	if req != nil {
+		p2 := packet.Get()
+		req.Encode(p2.Content)
+		p2.Metadata.ContentLength = uint32(len(*p2.Content))
+		fStream.WritePacket(p2)
+	}
+
+	stream := SubscribeClient{
+		context: ctx,
+		stream:  fStream,
+		closed:  atomic.NewBool(false),
+	}
+
+	stream.recv = func() (*ValidatorApiRejectedTxNotification, error) {
+		p, err := stream.stream.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+
+		res := NewValidatorApiRejectedTxNotification()
+		err = res.Decode(*p.Content)
+		if err != nil {
+			return nil, err
+		}
+		if errors.Is(res.error, io.EOF) {
+			return nil, io.EOF
+		}
+
+		return res, nil
+	}
+
+	stream.close = func() {
+		stream.stream.Close()
+	}
+	stream.send = func(m *ValidatorApiSubscribeRequest) error {
+		p := packet.Get()
+
+		m.Encode(p.Content)
+		p.Metadata.ContentLength = uint32(len(*p.Content))
+		return stream.stream.WritePacket(p)
+	}
+	return &stream, nil
+}
+
+type SubscribeClient struct {
+	context context.Context
+	recv    func() (*ValidatorApiRejectedTxNotification, error)
+	close   func()
+	closed  *atomic.Bool
+
+	stream *frisbee.Stream
+	send   func(*ValidatorApiSubscribeRequest) error
+}
+
+func (x *SubscribeClient) Recv() (*ValidatorApiRejectedTxNotification, error) {
 	return x.recv()
 }
 

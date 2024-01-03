@@ -773,8 +773,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 			// add the transactions in this block to the txMeta block hashes
 			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
 
-			// TODO this needs to be sent to the block validation cache as well !!!
-			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.txMetaStore, subtreesInJob, blockID); err != nil {
+			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
 				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
 			}
 			return nil

@@ -260,3 +260,7 @@ func (c Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 
 	return nil
 }
+func (c Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	//TODO implement me
+	panic("implement me")
+}

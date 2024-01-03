@@ -15,6 +15,9 @@ import (
 	"github.com/rs/zerolog"
 
 	"sync"
+
+	"go.uber.org/atomic"
+	"io"
 )
 
 var (
@@ -314,9 +317,70 @@ func (x *PropagationApiProcessTransactionRequest) decode(d *polyglot.Decoder) er
 	return nil
 }
 
+type PropagationApiProcessTransactionHexRequest struct {
+	error error
+	flags uint8
+
+	Tx string
+}
+
+func NewPropagationApiProcessTransactionHexRequest() *PropagationApiProcessTransactionHexRequest {
+	return &PropagationApiProcessTransactionHexRequest{}
+}
+
+func (x *PropagationApiProcessTransactionHexRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *PropagationApiProcessTransactionHexRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).String(x.Tx)
+	}
+}
+
+func (x *PropagationApiProcessTransactionHexRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *PropagationApiProcessTransactionHexRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Tx, err = d.String()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type PropagationAPI interface {
 	HealthGRPC(context.Context, *PropagationApiEmptyMessage) (*PropagationApiHealthResponse, error)
 	ProcessTransaction(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
+	ProcessTransactionHex(context.Context, *PropagationApiProcessTransactionHexRequest) (*PropagationApiEmptyMessage, error)
+
+	ProcessTransactionStream(srv *ProcessTransactionStreamServer) error
 	ProcessTransactionDebug(context.Context, *PropagationApiProcessTransactionRequest) (*PropagationApiEmptyMessage, error)
 }
 
@@ -329,6 +393,33 @@ func SetErrorFlag(flags uint8, error bool) uint8 {
 }
 func HasErrorFlag(flags uint8) bool {
 	return flags&(1<<1) == 1
+}
+
+type RPCStreamOpen struct {
+	operation uint16
+}
+
+func (x *RPCStreamOpen) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *RPCStreamOpen) Encode(b *polyglot.Buffer) {
+	polyglot.Encoder(b).Uint16(x.operation)
+}
+
+func (x *RPCStreamOpen) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *RPCStreamOpen) decode(d *polyglot.Decoder) error {
+	var err error
+	x.operation, err = d.Uint16()
+	return err
 }
 
 type Server struct {
@@ -381,6 +472,26 @@ func NewServer(propagationAPI PropagationAPI, tlsConfig *tls.Config, logger *zer
 		return
 	}
 	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewPropagationApiProcessTransactionHexRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *PropagationApiEmptyMessage
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = propagationAPI.ProcessTransactionHex(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewPropagationApiProcessTransactionRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -414,6 +525,23 @@ func NewServer(propagationAPI PropagationAPI, tlsConfig *tls.Config, logger *zer
 		}
 	}
 
+	fsrv.SetStreamHandler(func(conn *frisbee.Async, stream *frisbee.Stream) {
+		p, err := stream.ReadPacket()
+		if err != nil {
+			return
+		}
+		open := &RPCStreamOpen{}
+		err = open.Decode(*p.Content)
+		if err != nil {
+			stream.Close()
+			return
+		}
+		switch open.operation {
+		case 13:
+			s.createProcessTransactionStreamServer(propagationAPI, stream)
+		}
+	})
+
 	fsrv.ConnContext = func(ctx context.Context, conn *frisbee.Async) context.Context {
 		return context.WithValue(ctx, connectionContextKey, conn)
 	}
@@ -437,16 +565,93 @@ func (s *Server) SetOnClosed(f func(*frisbee.Async, error)) error {
 	return nil
 }
 
+type ProcessTransactionStreamServer struct {
+	recv func() (*PropagationApiProcessTransactionRequest, error)
+	send func(*PropagationApiEmptyMessage) error
+
+	stream *frisbee.Stream
+	closed *atomic.Bool
+}
+
+func (s *Server) createProcessTransactionStreamServer(propagationAPI PropagationAPI, stream *frisbee.Stream) {
+	srv := &ProcessTransactionStreamServer{
+		closed: atomic.NewBool(false),
+		stream: stream,
+	}
+
+	srv.recv = func() (*PropagationApiProcessTransactionRequest, error) {
+		p, err := srv.stream.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+
+		res := NewPropagationApiProcessTransactionRequest()
+		err = res.Decode(*p.Content)
+		if err != nil {
+			return nil, err
+		}
+		if errors.Is(res.error, io.EOF) {
+			return nil, io.EOF
+		}
+
+		return res, nil
+	}
+	srv.send = func(m *PropagationApiEmptyMessage) error {
+		p := packet.Get()
+
+		m.Encode(p.Content)
+		p.Metadata.ContentLength = uint32(len(*p.Content))
+		return srv.stream.WritePacket(p)
+	}
+
+	go func() {
+		err := propagationAPI.ProcessTransactionStream(srv)
+		if err != nil {
+			res := PropagationApiEmptyMessage{error: err}
+			res.flags = SetErrorFlag(res.flags, true)
+			srv.CloseAndSend(&res)
+		} else {
+			srv.CloseSend()
+		}
+	}()
+}
+
+func (x *ProcessTransactionStreamServer) Recv() (*PropagationApiProcessTransactionRequest, error) {
+	return x.recv()
+}
+
+func (x *ProcessTransactionStreamServer) close() {
+	x.stream.Close()
+}
+func (x *ProcessTransactionStreamServer) Send(m *PropagationApiEmptyMessage) error {
+	return x.send(m)
+}
+func (x *ProcessTransactionStreamServer) CloseSend() error {
+	return x.send(&PropagationApiEmptyMessage{error: io.EOF})
+}
+
+func (x *ProcessTransactionStreamServer) CloseAndSend(m *PropagationApiEmptyMessage) error {
+	err := x.send(m)
+	if err != nil {
+		return err
+	}
+	return x.CloseSend()
+}
+
 type subPropagationAPIClient struct {
 	client                            *frisbee.Client
-	nextHealth                        uint16
-	nextHealthMu                      sync.RWMutex
-	inflightHealth                    map[uint16]chan *PropagationApiHealthResponse
-	inflightHealthMu                  sync.RWMutex
+	nextHealthGRPC                    uint16
+	nextHealthGRPCMu                  sync.RWMutex
+	inflightHealthGRPC                map[uint16]chan *PropagationApiHealthResponse
+	inflightHealthGRPCMu              sync.RWMutex
 	nextProcessTransaction            uint16
 	nextProcessTransactionMu          sync.RWMutex
 	inflightProcessTransaction        map[uint16]chan *PropagationApiEmptyMessage
 	inflightProcessTransactionMu      sync.RWMutex
+	nextProcessTransactionHex         uint16
+	nextProcessTransactionHexMu       sync.RWMutex
+	inflightProcessTransactionHex     map[uint16]chan *PropagationApiEmptyMessage
+	inflightProcessTransactionHexMu   sync.RWMutex
 	nextProcessTransactionDebug       uint16
 	nextProcessTransactionDebugMu     sync.RWMutex
 	inflightProcessTransactionDebug   map[uint16]chan *PropagationApiEmptyMessage
@@ -464,14 +669,14 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	table := make(frisbee.HandlerTable)
 
 	table[10] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		c.PropagationAPI.inflightHealthMu.RLock()
-		if ch, ok := c.PropagationAPI.inflightHealth[incoming.Metadata.Id]; ok {
-			c.PropagationAPI.inflightHealthMu.RUnlock()
+		c.PropagationAPI.inflightHealthGRPCMu.RLock()
+		if ch, ok := c.PropagationAPI.inflightHealthGRPC[incoming.Metadata.Id]; ok {
+			c.PropagationAPI.inflightHealthGRPCMu.RUnlock()
 			res := NewPropagationApiHealthResponse()
 			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 			ch <- res
 		} else {
-			c.PropagationAPI.inflightHealthMu.RUnlock()
+			c.PropagationAPI.inflightHealthGRPCMu.RUnlock()
 		}
 		return
 	}
@@ -488,6 +693,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		return
 	}
 	table[12] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.PropagationAPI.inflightProcessTransactionHexMu.RLock()
+		if ch, ok := c.PropagationAPI.inflightProcessTransactionHex[incoming.Metadata.Id]; ok {
+			c.PropagationAPI.inflightProcessTransactionHexMu.RUnlock()
+			res := NewPropagationApiEmptyMessage()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.PropagationAPI.inflightProcessTransactionHexMu.RUnlock()
+		}
+		return
+	}
+	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.PropagationAPI.inflightProcessTransactionDebugMu.RLock()
 		if ch, ok := c.PropagationAPI.inflightProcessTransactionDebug[incoming.Metadata.Id]; ok {
 			c.PropagationAPI.inflightProcessTransactionDebugMu.RUnlock()
@@ -514,14 +731,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 
 	c.PropagationAPI = new(subPropagationAPIClient)
 	c.PropagationAPI.client = c.Client
-	c.PropagationAPI.nextHealthMu.Lock()
-	c.PropagationAPI.nextHealth = 0
-	c.PropagationAPI.nextHealthMu.Unlock()
-	c.PropagationAPI.inflightHealth = make(map[uint16]chan *PropagationApiHealthResponse)
+	c.PropagationAPI.nextHealthGRPCMu.Lock()
+	c.PropagationAPI.nextHealthGRPC = 0
+	c.PropagationAPI.nextHealthGRPCMu.Unlock()
+	c.PropagationAPI.inflightHealthGRPC = make(map[uint16]chan *PropagationApiHealthResponse)
 	c.PropagationAPI.nextProcessTransactionMu.Lock()
 	c.PropagationAPI.nextProcessTransaction = 0
 	c.PropagationAPI.nextProcessTransactionMu.Unlock()
 	c.PropagationAPI.inflightProcessTransaction = make(map[uint16]chan *PropagationApiEmptyMessage)
+	c.PropagationAPI.nextProcessTransactionHexMu.Lock()
+	c.PropagationAPI.nextProcessTransactionHex = 0
+	c.PropagationAPI.nextProcessTransactionHexMu.Unlock()
+	c.PropagationAPI.inflightProcessTransactionHex = make(map[uint16]chan *PropagationApiEmptyMessage)
 	c.PropagationAPI.nextProcessTransactionDebugMu.Lock()
 	c.PropagationAPI.nextProcessTransactionDebug = 0
 	c.PropagationAPI.nextProcessTransactionDebugMu.Unlock()
@@ -542,17 +763,17 @@ func (c *subPropagationAPIClient) HealthGRPC(ctx context.Context, req *Propagati
 	p := packet.Get()
 	p.Metadata.Operation = 10
 
-	c.nextHealthMu.Lock()
-	c.nextHealth += 1
-	id := c.nextHealth
-	c.nextHealthMu.Unlock()
+	c.nextHealthGRPCMu.Lock()
+	c.nextHealthGRPC += 1
+	id := c.nextHealthGRPC
+	c.nextHealthGRPCMu.Unlock()
 	p.Metadata.Id = id
 
 	req.Encode(p.Content)
 	p.Metadata.ContentLength = uint32(len(*p.Content))
-	c.inflightHealthMu.Lock()
-	c.inflightHealth[id] = ch
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	c.inflightHealthGRPC[id] = ch
+	c.inflightHealthGRPCMu.Unlock()
 	err = c.client.WritePacket(p)
 	if err != nil {
 		packet.Put(p)
@@ -564,9 +785,9 @@ func (c *subPropagationAPIClient) HealthGRPC(ctx context.Context, req *Propagati
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-	c.inflightHealthMu.Lock()
-	delete(c.inflightHealth, id)
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	delete(c.inflightHealthGRPC, id)
+	c.inflightHealthGRPCMu.Unlock()
 	packet.Put(p)
 	return
 }
@@ -605,10 +826,133 @@ func (c *subPropagationAPIClient) ProcessTransaction(ctx context.Context, req *P
 	return
 }
 
-func (c *subPropagationAPIClient) ProcessTransactionDebug(ctx context.Context, req *PropagationApiProcessTransactionRequest) (res *PropagationApiEmptyMessage, err error) {
+func (c *subPropagationAPIClient) ProcessTransactionHex(ctx context.Context, req *PropagationApiProcessTransactionHexRequest) (res *PropagationApiEmptyMessage, err error) {
 	ch := make(chan *PropagationApiEmptyMessage, 1)
 	p := packet.Get()
 	p.Metadata.Operation = 12
+
+	c.nextProcessTransactionHexMu.Lock()
+	c.nextProcessTransactionHex += 1
+	id := c.nextProcessTransactionHex
+	c.nextProcessTransactionHexMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightProcessTransactionHexMu.Lock()
+	c.inflightProcessTransactionHex[id] = ch
+	c.inflightProcessTransactionHexMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightProcessTransactionHexMu.Lock()
+	delete(c.inflightProcessTransactionHex, id)
+	c.inflightProcessTransactionHexMu.Unlock()
+	packet.Put(p)
+	return
+}
+
+func (c *subPropagationAPIClient) ProcessTransactionStream(ctx context.Context, req *PropagationApiProcessTransactionRequest) (*ProcessTransactionStreamClient, error) {
+	p := packet.Get()
+
+	c.nextStreamingIDMu.Lock()
+	c.nextStreamingID += 1
+	id := c.nextStreamingID
+	c.nextStreamingIDMu.Unlock()
+
+	open := &RPCStreamOpen{operation: 13}
+
+	open.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+
+	fStream := c.client.Stream(id)
+	fStream.WritePacket(p)
+
+	if req != nil {
+		p2 := packet.Get()
+		req.Encode(p2.Content)
+		p2.Metadata.ContentLength = uint32(len(*p2.Content))
+		fStream.WritePacket(p2)
+	}
+
+	stream := ProcessTransactionStreamClient{
+		context: ctx,
+		stream:  fStream,
+		closed:  atomic.NewBool(false),
+	}
+
+	stream.recv = func() (*PropagationApiEmptyMessage, error) {
+		p, err := stream.stream.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+
+		res := NewPropagationApiEmptyMessage()
+		err = res.Decode(*p.Content)
+		if err != nil {
+			return nil, err
+		}
+		if errors.Is(res.error, io.EOF) {
+			return nil, io.EOF
+		}
+
+		return res, nil
+	}
+
+	stream.close = func() {
+		stream.stream.Close()
+	}
+	stream.send = func(m *PropagationApiProcessTransactionRequest) error {
+		p := packet.Get()
+
+		m.Encode(p.Content)
+		p.Metadata.ContentLength = uint32(len(*p.Content))
+		return stream.stream.WritePacket(p)
+	}
+	return &stream, nil
+}
+
+type ProcessTransactionStreamClient struct {
+	context context.Context
+	recv    func() (*PropagationApiEmptyMessage, error)
+	close   func()
+	closed  *atomic.Bool
+
+	stream *frisbee.Stream
+	send   func(*PropagationApiProcessTransactionRequest) error
+}
+
+func (x *ProcessTransactionStreamClient) Recv() (*PropagationApiEmptyMessage, error) {
+	return x.recv()
+}
+func (x *ProcessTransactionStreamClient) Send(m *PropagationApiProcessTransactionRequest) error {
+	return x.send(m)
+}
+
+func (x *ProcessTransactionStreamClient) CloseSend() error {
+	return x.send(&PropagationApiProcessTransactionRequest{error: io.EOF})
+}
+
+func (x *ProcessTransactionStreamClient) CloseAndRecv() (*PropagationApiEmptyMessage, error) {
+	err := x.send(&PropagationApiProcessTransactionRequest{error: io.EOF})
+	if err != nil {
+		return nil, err
+	}
+	return x.recv()
+}
+
+func (c *subPropagationAPIClient) ProcessTransactionDebug(ctx context.Context, req *PropagationApiProcessTransactionRequest) (res *PropagationApiEmptyMessage, err error) {
+	ch := make(chan *PropagationApiEmptyMessage, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 14
 
 	c.nextProcessTransactionDebugMu.Lock()
 	c.nextProcessTransactionDebug += 1

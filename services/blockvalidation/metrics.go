@@ -27,6 +27,8 @@ var (
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc prometheus.Counter
+	prometheusBlockValidationSetMinedMulti      prometheus.Counter
+	prometheusBlockValidationSetMinedMultiFrpc  prometheus.Counter
 )
 
 var prometheusMetricsInitialised = false
@@ -183,7 +185,23 @@ func initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
 			Name:      "set_tx_meta_cache_frpc",
-			Help:      "Number of tx meta cache sets",
+			Help:      "Number of tx meta cache sets with frpc",
+		},
+	)
+
+	prometheusBlockValidationSetMinedMulti = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_mined_multi",
+			Help:      "Number of tx mined multi sets",
+		},
+	)
+
+	prometheusBlockValidationSetMinedMultiFrpc = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_mined_multi_frpc",
+			Help:      "Number of tx mined multi sets with frpc",
 		},
 	)
 

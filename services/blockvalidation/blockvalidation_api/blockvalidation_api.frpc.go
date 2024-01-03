@@ -5,13 +5,11 @@ package blockvalidation_api
 
 import (
 	"errors"
-	"net"
-
 	"github.com/loopholelabs/polyglot"
+	"net"
 
 	"context"
 	"crypto/tls"
-
 	"github.com/loopholelabs/frisbee-go"
 	"github.com/loopholelabs/frisbee-go/pkg/packet"
 	"github.com/rs/zerolog"
@@ -514,12 +512,148 @@ func (x *BlockvalidationApiSetTxMetaResponse) decode(d *polyglot.Decoder) error 
 	return nil
 }
 
+type BlockvalidationApiSetMinedMultiRequest struct {
+	error error
+	flags uint8
+
+	BlockId uint32
+	Hashes  [][]byte
+}
+
+func NewBlockvalidationApiSetMinedMultiRequest() *BlockvalidationApiSetMinedMultiRequest {
+	return &BlockvalidationApiSetMinedMultiRequest{}
+}
+
+func (x *BlockvalidationApiSetMinedMultiRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiSetMinedMultiRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Uint32(x.BlockId)
+		polyglot.Encoder(b).Slice(uint32(len(x.Hashes)), polyglot.BytesKind)
+		for _, v := range x.Hashes {
+			polyglot.Encoder(b).Bytes(v)
+		}
+	}
+}
+
+func (x *BlockvalidationApiSetMinedMultiRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiSetMinedMultiRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.BlockId, err = d.Uint32()
+	if err != nil {
+		return err
+	}
+	var sliceSize uint32
+	sliceSize, err = d.Slice(polyglot.BytesKind)
+	if err != nil {
+		return err
+	}
+	if uint32(len(x.Hashes)) != sliceSize {
+		x.Hashes = make([][]byte, sliceSize)
+	}
+	for i := uint32(0); i < sliceSize; i++ {
+		x.Hashes[i], err = d.Bytes([]byte{})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type BlockvalidationApiSetMinedMultiResponse struct {
+	error error
+	flags uint8
+
+	Ok bool
+}
+
+func NewBlockvalidationApiSetMinedMultiResponse() *BlockvalidationApiSetMinedMultiResponse {
+	return &BlockvalidationApiSetMinedMultiResponse{}
+}
+
+func (x *BlockvalidationApiSetMinedMultiResponse) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiSetMinedMultiResponse) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bool(x.Ok)
+	}
+}
+
+func (x *BlockvalidationApiSetMinedMultiResponse) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiSetMinedMultiResponse) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Ok, err = d.Bool()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type BlockValidationAPI interface {
 	HealthGRPC(context.Context, *BlockvalidationApiEmptyMessage) (*BlockvalidationApiHealthResponse, error)
 	BlockFound(context.Context, *BlockvalidationApiBlockFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	SubtreeFound(context.Context, *BlockvalidationApiSubtreeFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	Get(context.Context, *BlockvalidationApiGetSubtreeRequest) (*BlockvalidationApiGetSubtreeResponse, error)
 	SetTxMeta(context.Context, *BlockvalidationApiSetTxMetaRequest) (*BlockvalidationApiSetTxMetaResponse, error)
+	SetMinedMulti(context.Context, *BlockvalidationApiSetMinedMultiRequest) (*BlockvalidationApiSetMinedMultiResponse, error)
 }
 
 type contextKey int
@@ -642,6 +776,26 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 		}
 		return
 	}
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewBlockvalidationApiSetMinedMultiRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *BlockvalidationApiSetMinedMultiResponse
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = blockValidationAPI.SetMinedMulti(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
 	var fsrv *frisbee.Server
 	var err error
 	if tlsConfig != nil {
@@ -680,29 +834,33 @@ func (s *Server) SetOnClosed(f func(*frisbee.Async, error)) error {
 }
 
 type subBlockValidationAPIClient struct {
-	client                 *frisbee.Client
-	nextHealth             uint16
-	nextHealthMu           sync.RWMutex
-	inflightHealth         map[uint16]chan *BlockvalidationApiHealthResponse
-	inflightHealthMu       sync.RWMutex
-	nextBlockFound         uint16
-	nextBlockFoundMu       sync.RWMutex
-	inflightBlockFound     map[uint16]chan *BlockvalidationApiEmptyMessage
-	inflightBlockFoundMu   sync.RWMutex
-	nextSubtreeFound       uint16
-	nextSubtreeFoundMu     sync.RWMutex
-	inflightSubtreeFound   map[uint16]chan *BlockvalidationApiEmptyMessage
-	inflightSubtreeFoundMu sync.RWMutex
-	nextGet                uint16
-	nextGetMu              sync.RWMutex
-	inflightGet            map[uint16]chan *BlockvalidationApiGetSubtreeResponse
-	inflightGetMu          sync.RWMutex
-	nextSetTxMeta          uint16
-	nextSetTxMetaMu        sync.RWMutex
-	inflightSetTxMeta      map[uint16]chan *BlockvalidationApiSetTxMetaResponse
-	inflightSetTxMetaMu    sync.RWMutex
-	nextStreamingID        uint16
-	nextStreamingIDMu      sync.RWMutex
+	client                  *frisbee.Client
+	nextHealthGRPC          uint16
+	nextHealthGRPCMu        sync.RWMutex
+	inflightHealthGRPC      map[uint16]chan *BlockvalidationApiHealthResponse
+	inflightHealthGRPCMu    sync.RWMutex
+	nextBlockFound          uint16
+	nextBlockFoundMu        sync.RWMutex
+	inflightBlockFound      map[uint16]chan *BlockvalidationApiEmptyMessage
+	inflightBlockFoundMu    sync.RWMutex
+	nextSubtreeFound        uint16
+	nextSubtreeFoundMu      sync.RWMutex
+	inflightSubtreeFound    map[uint16]chan *BlockvalidationApiEmptyMessage
+	inflightSubtreeFoundMu  sync.RWMutex
+	nextGet                 uint16
+	nextGetMu               sync.RWMutex
+	inflightGet             map[uint16]chan *BlockvalidationApiGetSubtreeResponse
+	inflightGetMu           sync.RWMutex
+	nextSetTxMeta           uint16
+	nextSetTxMetaMu         sync.RWMutex
+	inflightSetTxMeta       map[uint16]chan *BlockvalidationApiSetTxMetaResponse
+	inflightSetTxMetaMu     sync.RWMutex
+	nextSetMinedMulti       uint16
+	nextSetMinedMultiMu     sync.RWMutex
+	inflightSetMinedMulti   map[uint16]chan *BlockvalidationApiSetMinedMultiResponse
+	inflightSetMinedMultiMu sync.RWMutex
+	nextStreamingID         uint16
+	nextStreamingIDMu       sync.RWMutex
 }
 type Client struct {
 	*frisbee.Client
@@ -714,14 +872,14 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	table := make(frisbee.HandlerTable)
 
 	table[10] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
-		c.BlockValidationAPI.inflightHealthMu.RLock()
-		if ch, ok := c.BlockValidationAPI.inflightHealth[incoming.Metadata.Id]; ok {
-			c.BlockValidationAPI.inflightHealthMu.RUnlock()
+		c.BlockValidationAPI.inflightHealthGRPCMu.RLock()
+		if ch, ok := c.BlockValidationAPI.inflightHealthGRPC[incoming.Metadata.Id]; ok {
+			c.BlockValidationAPI.inflightHealthGRPCMu.RUnlock()
 			res := NewBlockvalidationApiHealthResponse()
 			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 			ch <- res
 		} else {
-			c.BlockValidationAPI.inflightHealthMu.RUnlock()
+			c.BlockValidationAPI.inflightHealthGRPCMu.RUnlock()
 		}
 		return
 	}
@@ -773,6 +931,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.BlockValidationAPI.inflightSetMinedMultiMu.RLock()
+		if ch, ok := c.BlockValidationAPI.inflightSetMinedMulti[incoming.Metadata.Id]; ok {
+			c.BlockValidationAPI.inflightSetMinedMultiMu.RUnlock()
+			res := NewBlockvalidationApiSetMinedMultiResponse()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.BlockValidationAPI.inflightSetMinedMultiMu.RUnlock()
+		}
+		return
+	}
 	var err error
 	if tlsConfig != nil {
 		c.Client, err = frisbee.NewClient(table, context.Background(), frisbee.WithTLS(tlsConfig), frisbee.WithLogger(logger))
@@ -788,10 +958,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 
 	c.BlockValidationAPI = new(subBlockValidationAPIClient)
 	c.BlockValidationAPI.client = c.Client
-	c.BlockValidationAPI.nextHealthMu.Lock()
-	c.BlockValidationAPI.nextHealth = 0
-	c.BlockValidationAPI.nextHealthMu.Unlock()
-	c.BlockValidationAPI.inflightHealth = make(map[uint16]chan *BlockvalidationApiHealthResponse)
+	c.BlockValidationAPI.nextHealthGRPCMu.Lock()
+	c.BlockValidationAPI.nextHealthGRPC = 0
+	c.BlockValidationAPI.nextHealthGRPCMu.Unlock()
+	c.BlockValidationAPI.inflightHealthGRPC = make(map[uint16]chan *BlockvalidationApiHealthResponse)
 	c.BlockValidationAPI.nextBlockFoundMu.Lock()
 	c.BlockValidationAPI.nextBlockFound = 0
 	c.BlockValidationAPI.nextBlockFoundMu.Unlock()
@@ -808,6 +978,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.BlockValidationAPI.nextSetTxMeta = 0
 	c.BlockValidationAPI.nextSetTxMetaMu.Unlock()
 	c.BlockValidationAPI.inflightSetTxMeta = make(map[uint16]chan *BlockvalidationApiSetTxMetaResponse)
+	c.BlockValidationAPI.nextSetMinedMultiMu.Lock()
+	c.BlockValidationAPI.nextSetMinedMulti = 0
+	c.BlockValidationAPI.nextSetMinedMultiMu.Unlock()
+	c.BlockValidationAPI.inflightSetMinedMulti = make(map[uint16]chan *BlockvalidationApiSetMinedMultiResponse)
 	return c, nil
 }
 
@@ -824,17 +998,17 @@ func (c *subBlockValidationAPIClient) HealthGRPC(ctx context.Context, req *Block
 	p := packet.Get()
 	p.Metadata.Operation = 10
 
-	c.nextHealthMu.Lock()
-	c.nextHealth += 1
-	id := c.nextHealth
-	c.nextHealthMu.Unlock()
+	c.nextHealthGRPCMu.Lock()
+	c.nextHealthGRPC += 1
+	id := c.nextHealthGRPC
+	c.nextHealthGRPCMu.Unlock()
 	p.Metadata.Id = id
 
 	req.Encode(p.Content)
 	p.Metadata.ContentLength = uint32(len(*p.Content))
-	c.inflightHealthMu.Lock()
-	c.inflightHealth[id] = ch
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	c.inflightHealthGRPC[id] = ch
+	c.inflightHealthGRPCMu.Unlock()
 	err = c.client.WritePacket(p)
 	if err != nil {
 		packet.Put(p)
@@ -846,9 +1020,9 @@ func (c *subBlockValidationAPIClient) HealthGRPC(ctx context.Context, req *Block
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-	c.inflightHealthMu.Lock()
-	delete(c.inflightHealth, id)
-	c.inflightHealthMu.Unlock()
+	c.inflightHealthGRPCMu.Lock()
+	delete(c.inflightHealthGRPC, id)
+	c.inflightHealthGRPCMu.Unlock()
 	packet.Put(p)
 	return
 }
@@ -985,6 +1159,40 @@ func (c *subBlockValidationAPIClient) SetTxMeta(ctx context.Context, req *Blockv
 	c.inflightSetTxMetaMu.Lock()
 	delete(c.inflightSetTxMeta, id)
 	c.inflightSetTxMetaMu.Unlock()
+	packet.Put(p)
+	return
+}
+
+func (c *subBlockValidationAPIClient) SetMinedMulti(ctx context.Context, req *BlockvalidationApiSetMinedMultiRequest) (res *BlockvalidationApiSetMinedMultiResponse, err error) {
+	ch := make(chan *BlockvalidationApiSetMinedMultiResponse, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 15
+
+	c.nextSetMinedMultiMu.Lock()
+	c.nextSetMinedMulti += 1
+	id := c.nextSetMinedMulti
+	c.nextSetMinedMultiMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightSetMinedMultiMu.Lock()
+	c.inflightSetMinedMulti[id] = ch
+	c.inflightSetMinedMultiMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightSetMinedMultiMu.Lock()
+	delete(c.inflightSetMinedMulti, id)
+	c.inflightSetMinedMultiMu.Unlock()
 	packet.Put(p)
 	return
 }
