@@ -205,11 +205,7 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 		Time:       solution.Time,
 		Version:    solution.Version,
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func (s *Client) batchWorker(ctx context.Context) {

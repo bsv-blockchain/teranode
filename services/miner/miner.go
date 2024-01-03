@@ -13,14 +13,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
-
-var ErrCancelled = ubsverrors.New("mining job cancelled")
 
 type Miner struct {
 	logger                           ulogger.Logger
@@ -115,7 +112,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			go func(ctx context.Context) {
 				err := m.mine(ctx, m.waitSeconds)
 				if err != nil {
-					if errors.Is(err, ErrCancelled) {
+					if errors.Is(err, context.Canceled) {
 						m.logger.Infof("[Miner]: %v", err)
 					} else {
 						m.logger.Errorf("[Miner]: %v", err)
@@ -192,7 +189,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 		for {
 			select {
 			case <-ctx.Done():
-				return ErrCancelled
+				return context.Canceled
 			default:
 				time.Sleep(1 * time.Second)
 				randWait--
