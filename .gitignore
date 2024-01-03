@@ -20,6 +20,10 @@ package/
 .env.*
 !.env.example
 vite.config.js.timestamp-*
+
+.vercel
+.output
+
 vite.config.ts.timestamp-*
 
 private_key
@@ -28,3 +32,5 @@ coverage.out
 
 *.prof
 /model/generated_test_data/
+
+.sentryclirc
