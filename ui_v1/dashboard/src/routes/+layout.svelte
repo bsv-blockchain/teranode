@@ -82,9 +82,9 @@
         Viewer
       </a>
 
-      <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
+      <!-- <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
         Chain
-      </a>
+      </a> -->
       <a class="navbar-item" href="/metrics" on:click={handleNavbarItemClick}>
         Metrics
       </a>
