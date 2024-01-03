@@ -355,7 +355,8 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
 	subtreeBytesMapMu := sync.Mutex{}
 	g, gCtx = errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2) // mostly IO bound, so double the limit
+	g.SetLimit(8) // mostly IO bound, so double the limit
+
 	for _, subtreeHash := range missingSubtrees {
 		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
@@ -364,7 +365,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 				// get subtree from network over http using the baseUrl
 				txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
 				if err != nil {
-					return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+					return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network: %v", subtreeHash.String(), err)
 				}
 
 				subtreeBytesMapMu.Lock()
@@ -378,7 +379,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	statGet.AddTime(startGet)
 
 	if err = g.Wait(); err != nil {
-		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees from network: %v", block.Hash().String(), err)
+		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees for block: %v", block.Hash().String(), err)
 	}
 
 	start2 := gocore.CurrentTime()
