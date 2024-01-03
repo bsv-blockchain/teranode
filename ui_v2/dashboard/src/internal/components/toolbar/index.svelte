@@ -19,16 +19,16 @@
     const keyCode = e.detail.code || e.detail.key
 
     if (keyCode === 'Enter') {
-      console.log('call api: search = ', searchValue)
+      // console.log('call api: search = ', searchValue)
       lastSearchCalled = searchValue
       const result: any = await api.searchItem({ q: searchValue })
       if (result.ok) {
-        success(JSON.stringify(result.data, null, 2))
+        // success(JSON.stringify(result.data, null, 2))
         const { type, hash } = result.data
-        console.log('Redirecting in 2 seconds..')
-        setTimeout(() => {
-          goto(getDetailsUrl(type, hash))
-        }, 2000)
+        // console.log('Redirecting in 2 seconds..')
+        // setTimeout(() => {
+        goto(getDetailsUrl(type, hash))
+        // }, 2000)
       } else {
         failure(result.error.message)
       }

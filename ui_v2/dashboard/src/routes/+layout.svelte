@@ -88,18 +88,6 @@
         label: $i18n.t('page.viewer.menu-label'),
       },
       {
-        icon: 'icon-link-line',
-        iconSelected: 'icon-link-solid',
-        path: '/chain',
-        label: $i18n.t('page.chain.menu-label'),
-      },
-      {
-        icon: 'icon-stats-line',
-        iconSelected: 'icon-stats-solid',
-        path: '/metrics',
-        label: $i18n.t('page.metrics.menu-label'),
-      },
-      {
         icon: 'icon-p2p-line',
         iconSelected: 'icon-p2p-solid',
         path: '/p2p',

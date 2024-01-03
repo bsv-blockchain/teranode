@@ -106,7 +106,7 @@
     },
     "toolbar": {
       "reverse": "Reverse",
-      "placeholder": "Block Hash / Subtree Hash / Tx Id"
+      "placeholder": "Block Hash / Subtree Hash / TxID / UTXO Hash"
     },
     "breadcrumbs": {
       "page": {
@@ -126,9 +126,6 @@
               "title": "Transaction Details"
             }
           }
-        },
-        "chain": {
-          "title": "Chain"
         },
         "metrics": {
           "title": "Metrics"
@@ -300,9 +297,6 @@
         },
         "load-more": "Load 10 More"
       }
-    },
-    "chain": {
-      "menu-label": "Chain"
     },
     "metrics": {
       "menu-label": "Metrics"

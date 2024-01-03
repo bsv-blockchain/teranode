@@ -91,6 +91,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	e.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	e.GET("/block/:hash/json", h.GetBlockByHash(JSON))
 
+	e.GET("/search", h.Search)
+
 	e.GET("/lastblocks", h.GetLastNBlocks)
 
 	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
