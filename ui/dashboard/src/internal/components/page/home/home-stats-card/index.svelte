@@ -1,17 +1,19 @@
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { addNumCommas } from '$lib/utils/format'
-
+  import { failure } from '$lib/utils/notifications'
+  import * as api from '$internal/api'
   import { Icon } from '$lib/components'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { sock as p2pSock } from '$internal/stores/p2pStore'
+  import { getCoordinateSystemDimensions } from 'echarts'
   //   import { sock as nodeSock } from '$internal/stores/nodeStore'
   //   import { sock as statusSock } from '$internal/stores/statusStore'
   //   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
 
-  // TODO, connect to real data source
-  import { mockData } from './data'
+  let loading = true
+  let data = {}
 
   const baseKey = 'page.home.stats'
   const fieldKey = `${baseKey}.fields`
@@ -24,25 +26,49 @@
 
   $: connected = $p2pSock !== null
 
-  const idCols3 = [
-    'tx_confirmed',
-    'blocks_total',
-    'avg_block_size',
-    'tx_mempool',
-    'block_latest_height',
-    'avg_txs_per_block',
-  ]
-  const idCols = [
-    'tx_confirmed',
-    'tx_mempool',
-    'blocks_total',
-    'block_latest_height',
-    'avg_block_size',
-    'avg_txs_per_block',
-  ]
+  const cols = ['block_count', 'tx_count', 'max_height', 'avg_block_size', 'avg_tx_count_per_block']
 
+  async function getData() {
+    // console.log('call api: search = ', searchValue)
+    const result: any = await api.getBlockStats()
+    if (result.ok) {
+      data = {
+        block_count: {
+          id: 'block_count',
+          icon: 'icon-cube-line',
+          value: result.data.block_count,
+        },
+        tx_count: {
+          id: 'tx_count',
+          icon: 'icon-arrow-transfer-line',
+          value: result.data.block_count,
+        },
+        max_height: {
+          id: 'max_height',
+          icon: 'icon-cube-line',
+          value: result.data.max_height,
+        },
+        avg_block_size: {
+          id: 'avg_block_size',
+          icon: 'icon-scale-line',
+          value: result.data.avg_block_size,
+        },
+        avg_tx_count_per_block: {
+          id: 'avg_tx_count_per_block',
+          icon: 'icon-scale-line',
+          value: result.data.avg_tx_count_per_block,
+        },
+      }
+
+      loading = false
+    } else {
+      failure(result.error.message)
+    }
+    return false
+  }
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
-  $: cols = colCount === 3 ? idCols3 : idCols
+
+  $: getData()
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
@@ -55,27 +81,37 @@
     </div>
   </div>
   <div class="content" style:--grid-template-columns={`repeat(${colCount}, 1fr)`}>
-    {#each cols as colId, i}
+    {#if loading}
       <div class="block">
-        <div
-          class="block-content"
-          class:first={i % colCount === 0}
-          class:last={i % colCount === colCount - 1}
-        >
-          <div class="icon">
-            <Icon name={mockData[colId].icon} size={18} />
-          </div>
+        <div class="block-content">
           <div class="fields">
-            <div class="label">
-              {t(`${fieldKey}.${colId}`)}
-            </div>
-            <div class="value">
-              {addNumCommas(mockData[colId].value)}
-            </div>
+            <div class="label">{t(`${fieldKey}.loading`)}</div>
           </div>
         </div>
       </div>
-    {/each}
+    {:else}
+      {#each cols as colId, i}
+        <div class="block">
+          <div
+            class="block-content"
+            class:first={i % colCount === 0}
+            class:last={i % colCount === colCount - 1}
+          >
+            <div class="icon">
+              <Icon name={data[colId].icon} size={18} />
+            </div>
+            <div class="fields">
+              <div class="label">
+                {t(`${fieldKey}.${colId}`)}
+              </div>
+              <div class="value">
+                {addNumCommas(data[colId].value)}
+              </div>
+            </div>
+          </div>
+        </div>
+      {/each}
+    {/if}
   </div>
 </Card>
 

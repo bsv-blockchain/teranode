@@ -262,13 +262,22 @@ func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest)
 	}, nil
 }
 
-func (g *GRPC) BlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
+func (g *GRPC) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		AssetStat.NewStat("GetBlockStats").AddTime(start)
 	}()
 
 	return g.repository.GetBlockStats(ctx)
+}
+
+func (g *GRPC) GetBlockGraphData(ctx context.Context, in *asset_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("GetBlockGraphData").AddTime(start)
+	}()
+
+	return g.repository.GetBlockGraphData(ctx, in.PeriodMillis)
 }
 
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeaderRequest) (*asset_api.GetBlockHeaderResponse, error) {

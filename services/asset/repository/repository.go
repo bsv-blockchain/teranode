@@ -93,6 +93,10 @@ func (r *Repository) GetBlockStats(ctx context.Context) (*model.BlockStats, erro
 	return r.BlockchainClient.GetBlockStats(ctx)
 }
 
+func (r *Repository) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	return r.BlockchainClient.GetBlockGraphData(ctx, periodMillis)
+}
+
 func (r *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 	txMeta, err := r.TxMetaStore.Get(ctx, hash)

@@ -93,6 +93,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	e.GET("/search", h.Search)
 	e.GET("/blockstats", h.GetBlockStats)
+	e.GET("/blockgraphdata", h.GetBlockGraphData)
 
 	e.GET("/lastblocks", h.GetLastNBlocks)
 

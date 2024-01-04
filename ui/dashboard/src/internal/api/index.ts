@@ -127,3 +127,7 @@ export function getItemData(data: { type: ItemType; hash: string }, done?, fail?
 export function searchItem(data: { q: string }, done?, fail?) {
   return get(`${baseUrl}/search?${new URLSearchParams(data)}`, {}, done, fail)
 }
+
+export function getBlockStats(done?, fail?) {
+  return get(`${baseUrl}/blockstats`, {}, done, fail)
+}
