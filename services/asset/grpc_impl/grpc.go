@@ -377,6 +377,11 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*asset_api.GetNode
 }
 
 func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*asset_api.GetSubtreeResponse, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("Get").AddTime(start)
+	}()
+
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, err
@@ -393,11 +398,21 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 }
 
 func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*emptypb.Empty, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("Set").AddTime(start)
+	}()
+
 	ttl := time.Duration(request.Ttl) * time.Second
 	return &emptypb.Empty{}, g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
 }
 
 func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("SetTTL").AddTime(start)
+	}()
+
 	ttl := time.Duration(request.Ttl) * time.Second
 	return &emptypb.Empty{}, g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -20,9 +21,10 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		stat := AssetStat.NewStat("GetSubtree_http")
 		defer func() {
 			stat.AddTime(start)
+			h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s DONE in %s", mode, c.Request().RemoteAddr, c.Param("hash"), time.Since(start))
 		}()
 
-		h.logger.Debugf("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
