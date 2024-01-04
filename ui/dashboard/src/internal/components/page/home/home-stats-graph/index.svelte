@@ -1,10 +1,27 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { Chart, ChartContainer } from '$lib/components/chart'
   import Card from '$internal/components/card/index.svelte'
   import RangeToggle from '$internal/components/range-toggle/index.svelte'
   import i18n from '$internal/i18n'
-  import { getData, oneDayMillis } from './data'
   import { getGraphObj } from './graph'
+  import * as api from '$internal/api'
+  import { failure } from '$lib/utils/notifications'
+
+  const oneDayMillis = 1000 * 60 * 60 * 24
+
+  let data: any = []
+
+  async function getData(periodMillis: number) {
+    const res: any = await api.getBlockGraphData({ periodMillis })
+    if (res.ok) {
+      data = res.data.data_points
+      // console.log('SAO DATA', data)
+    } else {
+      // console.error(res.error)
+      failure(res.error.message)
+    }
+  }
 
   const baseKey = 'page.home.txs'
 
@@ -12,21 +29,26 @@
 
   $: t = $i18n.t
 
-  let rangeMillis = oneDayMillis
+  let rangeMillis
+  let graphObj
 
-  let now = new Date().getTime()
-  let from = now - rangeMillis
+  $: rangeMillis = oneDayMillis
 
-  let data = getData(new Date(from).toISOString(), new Date(now).toISOString())
+  $: if (rangeMillis) {
+    let from = new Date().getTime() - rangeMillis
 
-  $: {
-    now = new Date().getTime()
-    from = now - rangeMillis
-
-    data = getData(new Date(from).toISOString(), new Date(now).toISOString())
+    getData(from)
   }
 
-  $: graphObj = getGraphObj(t, data)
+  $: if (data) {
+    graphObj = getGraphObj(t, data)
+  }
+
+  onMount(() => {
+    let from = new Date().getTime() - rangeMillis
+
+    getData(from)
+  })
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={true} headerPadding="20px 24px 10px 24px">
@@ -34,6 +56,7 @@
     <RangeToggle bind:value={rangeMillis} />
   </div>
   <ChartContainer bind:renderKey height="500px">
-    <Chart options={graphObj?.grapOptions} {renderKey} />
+    <pre>{JSON.stringify(graphObj?.graphOptions)}</pre>
+    <!-- <Chart options={graphObj?.graphOptions} {renderKey} /> -->
   </ChartContainer>
 </Card>

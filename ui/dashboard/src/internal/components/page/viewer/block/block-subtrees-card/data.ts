@@ -4,6 +4,7 @@ import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/url
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
 
+const baseKey = 'page.viewer-block.subtrees'
 const labelKey = `${baseKey}.col-defs-label`
 
 export const mockData = {

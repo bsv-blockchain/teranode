@@ -8,7 +8,7 @@ export const getGraphObj = (t, data, smooth = true) => {
   const graphData: any[] = []
   if (data) {
     data.forEach((row) => {
-      graphData.push([new Date(row.timestamp).getTime(), parseInt(row.tx_count, 10)])
+      graphData.push([row.timestamp, row.tx_count])
     })
   }
   // graph mappers
@@ -40,10 +40,10 @@ export const getGraphObj = (t, data, smooth = true) => {
     },
   ]
   // graph options
-  let grapOptions: any = null
+  let graphOptions: any = null
   if (graphData?.length) {
     const seriesNames = [t('graph.series.tx_count')]
-    grapOptions = {
+    graphOptions = {
       grid: { top: 44, right: 30, bottom: 60, left: 80 },
       dataset: {
         source: graphData,
@@ -133,6 +133,6 @@ export const getGraphObj = (t, data, smooth = true) => {
   return {
     graphData,
     graphMappers,
-    grapOptions,
+    graphOptions,
   }
 }
