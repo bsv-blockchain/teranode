@@ -154,12 +154,15 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	stat := AssetStat.NewStat("GetSubtreeAsReader_http")
 	defer func() {
 		stat.AddTime(start)
+		h.logger.Infof("[Asset_http] GetSubtree using reader for %s: %s DONE in %s", c.Request().RemoteAddr, c.Param("hash"), time.Since(start))
 	}()
 
 	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 	if err != nil {
 		return err
 	}
+
+	h.logger.Infof("[Asset_http] GetSubtree using reader for %s: %s", c.Request().RemoteAddr, c.Param("hash"))
 
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)

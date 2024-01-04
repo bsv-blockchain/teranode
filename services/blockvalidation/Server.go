@@ -578,7 +578,8 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 			subtreeSpan.Finish()
 		}()
 
-		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, 30*time.Second)
+		timeout, _ := gocore.Config().GetInt("blockvalidation_subtreeValidationTimeout", 60)
+		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, time.Duration(timeout)*time.Second)
 		defer func() {
 			timeoutCancel()
 			u.processSubtreeNotify.Delete(*subtreeHash)
