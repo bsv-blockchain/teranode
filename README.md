@@ -42,7 +42,7 @@ The Bitcoin (BTC) _scalability issue_ refers to the challenge faced by the histo
 
 **UBSV** is BSV’s solution to the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
 
-UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, white strictly adhering to the Bitcoin whitepaper.
+UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of microservices, each handling specific functionalities of the BSV network.
 
 ---
