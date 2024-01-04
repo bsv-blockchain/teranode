@@ -12,11 +12,11 @@ import (
 // Data struct for the transaction metadata
 // do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
-	Tx             *bt.Tx            `json:"tx"`
-	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
-	BlockIDs       []uint32          `json:"blockIDs"`
-	Fee            uint64            `json:"fee"`
-	SizeInBytes    uint64            `json:"sizeInBytes"`
+	Tx             *bt.Tx           `json:"tx"`
+	ParentTxHashes []chainhash.Hash `json:"parentTxHashes"`
+	BlockIDs       []uint32         `json:"blockIDs"`
+	Fee            uint64           `json:"fee"`
+	SizeInBytes    uint64           `json:"sizeInBytes"`
 }
 
 type MetaData struct {
@@ -31,20 +31,10 @@ func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
 	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[16:24])
+	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
 
-	buf := bytes.NewReader(dataBytes[24:])
-
-	// read the parent tx hashes
-	var hashBytes [32]byte
-	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
-		_, err := io.ReadFull(buf, hashBytes[:])
-		if err != nil {
-			return nil, err
-		}
-		if d.ParentTxHashes[i], err = chainhash.NewHash(hashBytes[:]); err != nil {
-			return nil, err
-		}
+		d.ParentTxHashes[i] = chainhash.Hash(dataBytes[24+i*32 : 24+(i+1)*32])
 	}
 
 	return d, nil
@@ -62,13 +52,13 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
-	d.ParentTxHashes = make([]*chainhash.Hash, parentTxHashesLen)
+	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
 		if err != nil {
 			return nil, err
 		}
-		if d.ParentTxHashes[i], err = chainhash.NewHash(hashBytes[:]); err != nil {
+		if d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:]); err != nil {
 			return nil, err
 		}
 	}

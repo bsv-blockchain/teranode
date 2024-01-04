@@ -62,7 +62,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.Equal(t, &txmeta.Data{
 		Fee:            1,
 		SizeInBytes:    1,
-		ParentTxHashes: []*chainhash.Hash{},
+		ParentTxHashes: []chainhash.Hash{},
 	}, data)
 
 	for idx, subtreeHash := range block.Subtrees {
@@ -433,7 +433,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 					if err = txMetaStore.SetCache(&data.hash, &txmeta.Data{
 						Fee:            data.fee,
 						SizeInBytes:    data.sizeInBytes,
-						ParentTxHashes: []*chainhash.Hash{},
+						ParentTxHashes: []chainhash.Hash{},
 					}); err != nil {
 						return err
 					}
@@ -456,7 +456,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			if err := txMetaStore.SetCache(&data.hash, &txmeta.Data{
 				Fee:            data.fee,
 				SizeInBytes:    data.sizeInBytes,
-				ParentTxHashes: []*chainhash.Hash{},
+				ParentTxHashes: []chainhash.Hash{},
 			}); err != nil {
 				return err
 			}

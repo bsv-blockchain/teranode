@@ -59,7 +59,7 @@ func (c *Client) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, e
 		return nil, err
 	}
 
-	var parentTxHashes []*chainhash.Hash
+	var parentTxHashes []chainhash.Hash
 	parentTxHashes, err = getChainHashesFromBytes(resp.ParentTxHashes)
 	if err != nil {
 		return nil, err
@@ -122,16 +122,11 @@ func (c *Client) Delete(_ context.Context, _ *chainhash.Hash) error {
 	return nil // do not allow to Delete through grpc
 }
 
-func getChainHashesFromBytes(hashes [][]byte) (chainHashes []*chainhash.Hash, err error) {
+func getChainHashesFromBytes(hashes [][]byte) (chainHashes []chainhash.Hash, err error) {
 	if len(hashes) > 0 {
-		chainHashes = make([]*chainhash.Hash, len(hashes))
-		var hash *chainhash.Hash
+		chainHashes = make([]chainhash.Hash, len(hashes))
 		for index, hashBytes := range hashes {
-			hash, err = chainhash.NewHash(hashBytes)
-			if err != nil {
-				return nil, err
-			}
-			chainHashes[index] = hash
+			chainHashes[index] = chainhash.Hash(hashBytes)
 		}
 	}
 

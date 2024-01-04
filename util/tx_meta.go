@@ -12,13 +12,13 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 		return nil, err
 	}
 
-	var parentTxHashes []*chainhash.Hash
+	var parentTxHashes []chainhash.Hash
 	if tx.IsCoinbase() {
-		parentTxHashes = make([]*chainhash.Hash, 0)
+		parentTxHashes = make([]chainhash.Hash, 0)
 	} else {
-		parentTxHashes = make([]*chainhash.Hash, len(tx.Inputs))
+		parentTxHashes = make([]chainhash.Hash, len(tx.Inputs))
 		for index, input := range tx.Inputs {
-			parentTxHashes[index] = input.PreviousTxIDChainHash()
+			parentTxHashes[index] = *input.PreviousTxIDChainHash()
 		}
 	}
 

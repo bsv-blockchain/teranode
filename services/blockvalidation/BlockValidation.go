@@ -38,6 +38,7 @@ type BlockValidation struct {
 	txMetaStore         txmeta.Store
 	validatorClient     validator.Interface
 	subtreeDeDuplicator *deduplicator.DeDuplicator
+	optimisticMining    bool
 }
 
 type missingTx struct {
@@ -55,6 +56,8 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
+	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
+
 	bv := &BlockValidation{
 		logger:              logger,
 		blockchainClient:    blockchainClient,
@@ -64,6 +67,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		txMetaStore:         txMetaStore,
 		validatorClient:     validatorClient,
 		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
+		optimisticMining:    optimisticMining,
 	}
 
 	return bv
@@ -148,34 +152,42 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
-	// decouple the tracing context to not cancel the context when finalize the block processing in the background
-	//callerSpan := opentracing.SpanFromContext(spanCtx)
-	//validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	//
-	//go func() {
-	//	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	//	if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders); !ok {
-	//		if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-	//			u.logger.Errorf("[ValidateBlock] failed to invalidate block: %s", err)
-	//		}
-	//		u.logger.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
-	//	}
-	//}()
+	if u.optimisticMining {
+		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
+		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
+			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+		}
+		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
-	// validate the block
-	// TODO do we pass in the subtreeStore here or the list of loaded subtrees?
-	u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-	if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
-		return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
-	}
-	u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
+		// decouple the tracing context to not cancel the context when finalize the block processing in the background
+		callerSpan := opentracing.SpanFromContext(spanCtx)
+		validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
-	// if valid, store the block
-	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-	if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
-		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+		go func() {
+			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
+			if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
+				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
+
+				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+					u.logger.Errorf("[ValidateBlock] failed to invalidate block in background: %s", err)
+				}
+			}
+		}()
+	} else {
+		// validate the block
+		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
+		if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
+			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
+		}
+		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
+
+		// if valid, store the block
+		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
+		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
+			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+		}
+		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 	}
-	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {

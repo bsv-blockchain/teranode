@@ -19,9 +19,9 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			ParentTxHashes: []*chainhash.Hash{
-				hash3,
-				hash4,
+			ParentTxHashes: []chainhash.Hash{
+				*hash3,
+				*hash4,
 			},
 			BlockIDs: []uint32{
 				123,
@@ -54,9 +54,9 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []*chainhash.Hash{
-			hash3,
-			hash4,
+		ParentTxHashes: []chainhash.Hash{
+			*hash3,
+			*hash4,
 		},
 		BlockIDs: []uint32{
 			5,
@@ -78,9 +78,9 @@ func Benchmark_Bytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []*chainhash.Hash{
-			hash3,
-			hash4,
+		ParentTxHashes: []chainhash.Hash{
+			*hash3,
+			*hash4,
 		},
 		BlockIDs: []uint32{
 			5,
@@ -100,9 +100,9 @@ func Benchmark_MetaBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []*chainhash.Hash{
-			hash3,
-			hash4,
+		ParentTxHashes: []chainhash.Hash{
+			*hash3,
+			*hash4,
 		},
 	}
 
