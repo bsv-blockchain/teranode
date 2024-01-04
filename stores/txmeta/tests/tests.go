@@ -36,10 +36,9 @@ func Store(t *testing.T, db txmeta.Store) {
 	t.Run("extended tests", func(t *testing.T) {
 		_ = db.Delete(ctx, hash1)
 
-		parentTxHashes := make([]*chainhash.Hash, len(Tx1.Inputs))
+		parentTxHashes := make([]chainhash.Hash, len(Tx1.Inputs))
 		for index, input := range Tx1.Inputs {
-			parentTxHash := input.PreviousTxIDChainHash()
-			parentTxHashes[index] = parentTxHash
+			parentTxHashes[index] = *input.PreviousTxIDChainHash()
 		}
 
 		_, err := db.Create(ctx, Tx1)

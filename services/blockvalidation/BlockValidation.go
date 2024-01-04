@@ -152,6 +152,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
+	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
@@ -170,7 +171,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		callerSpan := opentracing.SpanFromContext(spanCtx)
 		validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
+		optimisticMiningWg.Add(1)
 		go func() {
+			defer optimisticMiningWg.Done()
+
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 			if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
 				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
@@ -207,6 +211,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	go func() {
+		optimisticMiningWg.Wait()
+
 		// this happens in the background, since we have already added the block to the blockchain
 		// TODO should we recover this somehow if it fails?
 		// what are the consequences of this failing?
