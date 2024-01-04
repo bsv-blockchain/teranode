@@ -151,7 +151,7 @@ func readFull(reader io.Reader, buf []byte) (int, error) {
 
 func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start := gocore.CurrentTime()
-	stat := AssetStat.NewStat("GetSubtree_http")
+	stat := AssetStat.NewStat("GetSubtreeAsReader_http")
 	defer func() {
 		stat.AddTime(start)
 	}()
