@@ -408,7 +408,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 				}
 
 				for _, parentTxHash := range txMeta.ParentTxHashes {
-					parentTxIdx, ok := b.txMap.Get(*parentTxHash)
+					parentTxIdx, ok := b.txMap.Get(parentTxHash)
 					if ok {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
@@ -416,7 +416,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 						}
 					} else {
 						// check whether the parent is in a block on our chain
-						parentTxMeta, err := txMetaStore.Get(gCtx, parentTxHash)
+						parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
 						if err != nil && !errors.Is(err, txmetastore.ErrNotFound) {
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
