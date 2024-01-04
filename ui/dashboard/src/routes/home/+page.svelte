@@ -93,7 +93,7 @@
   <div class="content">
     <HomeStatsCard />
     <HomeStatsGraph />
-    <BlocksTableCard data={blocks} />
+    <BlocksTableCard data={blocks} refresh={fetchData} />
   </div>
 </PageWithMenu>
 

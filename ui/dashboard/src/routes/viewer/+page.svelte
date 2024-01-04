@@ -85,7 +85,7 @@
 </script>
 
 <PageWithMenu>
-  <BlocksTableCard data={blocks} pageSize={20} />
+  <BlocksTableCard data={blocks} pageSize={20} refresh={fetchData} />
 </PageWithMenu>
 
 <style>

@@ -21,6 +21,7 @@
 
   export let data: any[] = []
   export let pageSize = 10
+  export let refresh = function () {}
 
   $: hasData = data && data.length > 0
 
@@ -56,7 +57,10 @@
       toHeight: hasData ? addNumCommas(data[0].height) : 'N/A',
     })}
   </div>
+
   <svelte:fragment slot="header-tools">
+    <button on:click={refresh}>Refresh</button>
+
     <Pager
       i18n={i18nLocal}
       expandUp={true}
