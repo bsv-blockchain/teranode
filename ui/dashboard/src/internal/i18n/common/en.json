@@ -150,7 +150,8 @@
           "tx_count": "Mined Transactions",
           "max_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",
-          "avg_tx_count_per_block": "Average Tx/Block"
+          "avg_tx_count_per_block": "Average Tx / Block",
+          "txns_per_second": "Txns / Second"
         }
       },
       "txs": {

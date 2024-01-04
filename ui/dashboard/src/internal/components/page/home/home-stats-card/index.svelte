@@ -8,6 +8,7 @@
   import i18n from '$internal/i18n'
   import { sock as p2pSock } from '$internal/stores/p2pStore'
   import { getCoordinateSystemDimensions } from 'echarts'
+  import Error from '../../../../../routes/+error.svelte'
   //   import { sock as nodeSock } from '$internal/stores/nodeStore'
   ///   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
 
@@ -25,44 +26,62 @@
 
   $: connected = $p2pSock !== null
 
-  const cols = ['block_count', 'tx_count', 'max_height', 'avg_block_size', 'avg_tx_count_per_block']
+  const cols = [
+    'block_count',
+    'tx_count',
+    'max_height',
+    'avg_block_size',
+    'avg_tx_count_per_block',
+    'txns_per_second',
+  ]
 
   async function getData() {
-    // console.log('call api: search = ', searchValue)
-    const result: any = await api.getBlockStats()
-    if (result.ok) {
-      data = {
-        block_count: {
-          id: 'block_count',
-          icon: 'icon-cube-line',
-          value: result.data.block_count,
-        },
-        tx_count: {
-          id: 'tx_count',
-          icon: 'icon-arrow-transfer-line',
-          value: result.data.tx_count,
-        },
-        max_height: {
-          id: 'max_height',
-          icon: 'icon-cube-line',
-          value: result.data.max_height,
-        },
-        avg_block_size: {
-          id: 'avg_block_size',
-          icon: 'icon-scale-line',
-          value: result.data.avg_block_size,
-        },
-        avg_tx_count_per_block: {
-          id: 'avg_tx_count_per_block',
-          icon: 'icon-scale-line',
-          value: result.data.avg_tx_count_per_block,
-        },
+    try {
+      // console.log('call api: search = ', searchValue)
+      const result: any = await api.getBlockStats()
+      if (result.ok) {
+        data = {
+          block_count: {
+            id: 'block_count',
+            icon: 'icon-cube-line',
+            value: result.data.block_count,
+          },
+          tx_count: {
+            id: 'tx_count',
+            icon: 'icon-arrow-transfer-line',
+            value: result.data.tx_count,
+          },
+          max_height: {
+            id: 'max_height',
+            icon: 'icon-network-line',
+            value: result.data.max_height,
+          },
+          avg_block_size: {
+            id: 'avg_block_size',
+            icon: 'icon-scale-line',
+            value: Math.round(result.data.avg_block_size),
+          },
+          avg_tx_count_per_block: {
+            id: 'avg_tx_count_per_block',
+            icon: 'icon-scale-line',
+            value: Math.round(result.data.avg_tx_count_per_block),
+          },
+          txns_per_second: {
+            id: 'txns_per_second',
+            icon: 'icon-binoculars-line',
+            value: Math.round(result.data.tx_count / 24 / 60 / 60),
+          },
+        }
+      } else {
+        failure(result.error.message)
       }
-
+    } catch (err: any) {
+      console.error(err)
+      failure(err.message)
+    } finally {
       loading = false
-    } else {
-      failure(result.error.message)
     }
+
     return false
   }
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
