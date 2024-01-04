@@ -41,7 +41,7 @@
         tx_count: {
           id: 'tx_count',
           icon: 'icon-arrow-transfer-line',
-          value: result.data.block_count,
+          value: result.data.tx_count,
         },
         max_height: {
           id: 'max_height',
