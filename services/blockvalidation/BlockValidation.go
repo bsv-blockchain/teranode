@@ -122,7 +122,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	// validate all the subtrees in the block
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
-	err := u.validateBLockSubtrees(spanCtx, block, baseUrl)
+	err := u.validateBlockSubtrees(spanCtx, block, baseUrl)
 	if err != nil {
 		return err
 	}
@@ -305,8 +305,8 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	return nil
 }
 
-func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBLockSubtrees")
+func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockSubtrees")
 	start, stat, _ := util.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
 	defer func() {
 		span.Finish()
@@ -331,7 +331,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 			// get subtree from store
 			subtreeExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:])
 			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
+				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 			}
 			if !subtreeExists {
 				// subtree already exists in store, which means it's valid
@@ -365,7 +365,7 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 				// get subtree from network over http using the baseUrl
 				txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
 				if err != nil {
-					return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network: %v", subtreeHash.String(), err)
+					return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from network: %v", subtreeHash.String(), err)
 				}
 
 				subtreeBytesMapMu.Lock()
@@ -379,18 +379,18 @@ func (u *BlockValidation) validateBLockSubtrees(ctx context.Context, block *mode
 	statGet.AddTime(startGet)
 
 	if err = g.Wait(); err != nil {
-		return fmt.Errorf("[validateSubtree][%s] failed to get subtrees for block: %v", block.Hash().String(), err)
+		return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtrees for block: %v", block.Hash().String(), err)
 	}
 
 	start2 := gocore.CurrentTime()
-	stat2 := stat.NewStat("2. validateSubtrees")
+	stat2 := stat.NewStat("2. validateBlockSubtrees")
 	// validate the missing subtrees in series, transactions might rely on each other
 	for _, subtreeHash := range missingSubtrees {
 		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
 			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl, &subtreeBytesMap); err != nil {
-				return errors.Join(fmt.Errorf("[ValidateBlock][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
+				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
 	}
@@ -592,7 +592,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		// get subtree from network over http using the baseUrl
 		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, subtreeHash, baseUrl)
 		if err != nil {
-			return fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String())
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get subtree from network", subtreeHash.String()), err)
 		}
 	}
 
