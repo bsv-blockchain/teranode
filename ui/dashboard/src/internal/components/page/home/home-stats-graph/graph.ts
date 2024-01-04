@@ -8,7 +8,7 @@ export const getGraphObj = (t, data, smooth = true) => {
   const graphData: any[] = []
   if (data) {
     data.forEach((row) => {
-      graphData.push([row.timestamp, row.tx_count])
+      graphData.push([row.timestamp * 1000, row.tx_count])
     })
   }
   // graph mappers
@@ -84,7 +84,8 @@ export const getGraphObj = (t, data, smooth = true) => {
           name: seriesName,
           type: 'line',
           smooth,
-          symbolSize: 0,
+          symbol: 'circle',    // Add this line to set the symbol shape
+          symbolSize: 10,       // And this line to set the symbol size
           yAxisIndex: mapper?.yAxisIndex ? mapper.yAxisIndex : 0,
           itemStyle: mapper?.itemStyle ? mapper.itemStyle : null,
           areaStyle: mapper?.areaStyle ? mapper.areaStyle : null,

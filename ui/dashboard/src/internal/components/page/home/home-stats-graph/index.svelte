@@ -57,7 +57,6 @@
   </div>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="500px">
-      <!-- <pre>{JSON.stringify(graphObj?.graphOptions)}</pre> -->
       <Chart options={graphObj?.graphOptions} {renderKey} />
     </ChartContainer>
   {/if}
