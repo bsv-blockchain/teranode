@@ -41,8 +41,7 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 }
 
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	ctx, _ = context.WithTimeout(ctx, 30*time.Second)
 
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
