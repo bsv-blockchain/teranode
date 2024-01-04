@@ -94,12 +94,6 @@
         label: $i18n.t('page.p2p.menu-label'),
       },
       {
-        icon: 'icon-status-line',
-        iconSelected: 'icon-status-solid',
-        path: '/status',
-        label: $i18n.t('page.status.menu-label'),
-      },
-      {
         icon: 'icon-network-line',
         iconSelected: 'icon-network-solid',
         path: '/network',

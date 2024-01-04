@@ -49,7 +49,7 @@ export function connectToP2PServer() {
 
           uniqueNodes[json.base_url] = json
 
-          miningNodes.set(Object.values(uniqueNodes))
+          // miningNodes.set(Object.values(uniqueNodes))
 
           const sorted = Object.values(uniqueNodes).sort((a: any, b: any) => {
             if (a.base_url < b.base_url) {

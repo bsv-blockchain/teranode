@@ -81,27 +81,6 @@
           "age": "Age",
           "receivedAt": "Received at"
         }
-      },
-      "status": {
-        "title": "Status",
-        "fields": {
-          "age": "Age",
-          "timestamp": "Timestamp",
-          "type": "Type",
-          "source": "Source",
-          "subtype": "Subtype",
-          "value": "Value",
-          "base_url": "From",
-          "latency": "Latency"
-        },
-        "type": {
-          "getminingcandidate": {
-            "title": "Get mining candidate"
-          },
-          "blockvalidation": {
-            "title": "Block validation"
-          }
-        }
       }
     },
     "toolbar": {

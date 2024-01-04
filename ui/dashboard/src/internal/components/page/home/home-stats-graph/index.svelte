@@ -12,7 +12,7 @@
 
   $: t = $i18n.t
 
-  let rangeMillis = 90 * oneDayMillis
+  let rangeMillis = oneDayMillis
 
   let now = new Date().getTime()
   let from = now - rangeMillis

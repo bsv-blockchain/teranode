@@ -9,8 +9,7 @@
   import { sock as p2pSock } from '$internal/stores/p2pStore'
   import { getCoordinateSystemDimensions } from 'echarts'
   //   import { sock as nodeSock } from '$internal/stores/nodeStore'
-  //   import { sock as statusSock } from '$internal/stores/statusStore'
-  //   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
+  ///   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
 
   let loading = true
   let data = {}
@@ -74,6 +73,7 @@
 <Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
   <div slot="header-tools">
     <div class="live">
+      <button on:click={getData}>Refresh</button>
       <div class="live-icon" class:connected>
         <Icon name="icon-status-light-glow-solid" size={14} />
       </div>
