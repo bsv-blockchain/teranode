@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -53,11 +52,9 @@ type Server struct {
 	validatorClient  validator.Interface
 	statusClient     status.ClientI
 
-	blockFoundCh        chan processBlockFound
-	catchupCh           chan processBlockCatchup
-	blockValidation     *BlockValidation
-	processingSubtreeMu sync.Mutex
-	processingSubtree   map[chainhash.Hash]bool
+	blockFoundCh    chan processBlockFound
+	catchupCh       chan processBlockCatchup
+	blockValidation *BlockValidation
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -84,7 +81,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		statusClient:         statusClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
-		processingSubtree:    make(map[chainhash.Hash]bool),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 	}
 
@@ -535,13 +531,17 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		prometheusBlockValidationSubtreeFoundDuration.Observe(util.TimeSince(start))
 	}()
 
-	prometheusBlockValidationSubtreeFound.Inc()
-	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
-
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	}
+
+	if req.GetBaseUrl() == "" {
+		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
+	}
+
+	prometheusBlockValidationSubtreeFound.Inc()
+	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", subtreeHash.String(), req.GetBaseUrl())
 
 	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
 		u.logger.Warnf("[SubtreeFound][%s] already processing subtree", subtreeHash.String())
@@ -562,10 +562,6 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
-	if req.GetBaseUrl() == "" {
-		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
-	}
-
 	goroutineStat := stat.NewStat("go routine")
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
@@ -574,34 +570,22 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 
 	// validate the subtree in the background
 	go func() {
-		// check if we are already processing this subtree
-		u.processingSubtreeMu.Lock()
-		processing, ok := u.processingSubtree[*subtreeHash]
-		if ok && processing {
-			u.processingSubtreeMu.Unlock()
-			u.logger.Warnf("[SubtreeFound][%s] subtree found that is already being processed", subtreeHash.String())
-			return
-		}
-
-		// add to processing map
-		u.processingSubtree[*subtreeHash] = true
-		u.processingSubtreeMu.Unlock()
-
 		// start a new span for the subtree validation
 		start = gocore.CurrentTime()
 		subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
 		defer func() {
 			goroutineStat.AddTime(start)
 			subtreeSpan.Finish()
+		}()
 
-			// remove from processing map when done
-			u.processingSubtreeMu.Lock()
-			delete(u.processingSubtree, *subtreeHash)
-			u.processingSubtreeMu.Unlock()
+		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, 15*time.Second)
+		defer func() {
+			timeoutCancel()
+			u.processSubtreeNotify.Delete(*subtreeHash)
 		}()
 
 		subtreeSpan.LogKV("hash", subtreeHash.String())
-		err = u.blockValidation.validateSubtree(subtreeSpanCtx, subtreeHash, req.GetBaseUrl())
+		err = u.blockValidation.validateSubtree(timeoutCtx, subtreeHash, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 		}

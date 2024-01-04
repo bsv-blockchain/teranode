@@ -778,7 +778,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("failed to do http request"), err)
+		return nil, errors.Join(fmt.Errorf("[validateSubtree][%s] failed to do http request", subtreeHash.String()), err)
 	}
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 	defer func() {
@@ -790,6 +790,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	buffer := make([]byte, chainhash.HashSize)
 	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4)
 
+	u.logger.Infof("[validateSubtree][%s] processing subtree response into tx hashes", subtreeHash.String())
 	for {
 		n, err := io.ReadFull(bufferedReader, buffer)
 		if n > 0 {
@@ -801,9 +802,9 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 				break
 			}
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, fmt.Errorf("unexpected EOF: partial hash read")
+				return nil, fmt.Errorf("[validateSubtree][%s] unexpected EOF: partial hash read", subtreeHash.String())
 			}
-			return nil, fmt.Errorf("error reading stream: %v", err)
+			return nil, fmt.Errorf("[validateSubtree][%s] error reading stream: %v", subtreeHash.String(), err)
 		}
 	}
 
@@ -814,6 +815,8 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	// 	txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
 	// }
 	stat.NewStat("3. createTxHashes").AddTime(start)
+
+	u.logger.Infof("[validateSubtree][%s] done with subtree response", subtreeHash.String())
 
 	return txHashes, nil
 }
