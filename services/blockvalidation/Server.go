@@ -578,7 +578,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 			subtreeSpan.Finish()
 		}()
 
-		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, 15*time.Second)
+		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, 30*time.Second)
 		defer func() {
 			timeoutCancel()
 			u.processSubtreeNotify.Delete(*subtreeHash)

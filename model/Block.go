@@ -485,26 +485,28 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-			if err != nil {
-				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
-			}
+		if b.SubtreeSlices[i] == nil {
+			subtreeHash := subtreeHash
+			g.Go(func() error {
+				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				if err != nil {
+					return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
+				}
 
-			subtree := &util.Subtree{}
-			err = subtree.DeserializeFromReader(subtreeReader)
-			if err != nil {
-				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
-			}
+				subtree := &util.Subtree{}
+				err = subtree.DeserializeFromReader(subtreeReader)
+				if err != nil {
+					return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+				}
 
-			b.SubtreeSlices[i] = subtree
+				b.SubtreeSlices[i] = subtree
 
-			sizeInBytes.Add(subtree.SizeInBytes)
-			txCount.Add(uint64(subtree.Length()))
+				sizeInBytes.Add(subtree.SizeInBytes)
+				txCount.Add(uint64(subtree.Length()))
 
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 
 	if err := g.Wait(); err != nil {

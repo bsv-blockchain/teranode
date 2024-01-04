@@ -154,12 +154,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {
+		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
 			return fmt.Errorf("invalid block header: %s - %v", block.Header.Hash().String(), err)
 		}
-
-		// TODO should we make sure all the subtrees are loaded?
 
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
