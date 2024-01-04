@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ncw/directio"
 	"io"
 	"io/fs"
 	"os"
@@ -218,7 +217,8 @@ func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 
 func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
 	fileName := s.filename(hash)
-	file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
+	file, err := os.Open(fileName)
+	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, options.ErrNotFound
