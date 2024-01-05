@@ -10,6 +10,7 @@ type Options struct {
 	logLevel   string
 	loggerType string
 	writer     io.Writer
+	filepath   string
 }
 
 type Option func(*Options)
@@ -19,6 +20,7 @@ func DefaultOptions() *Options {
 		logLevel:   "INFO",
 		loggerType: "zerolog",
 		writer:     os.Stdout,
+		filepath:   "citest.log",
 	}
 }
 
@@ -40,5 +42,11 @@ func WithLevel(level string) Option {
 func WithWriter(writer io.Writer) Option {
 	return func(o *Options) {
 		o.writer = writer
+	}
+}
+
+func WithFilePath(filePath string) Option {
+	return func(o *Options) {
+		o.filepath = filePath
 	}
 }

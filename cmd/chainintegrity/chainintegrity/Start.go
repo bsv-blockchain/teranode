@@ -1,7 +1,6 @@
 package chainintegrity
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"os"
@@ -45,13 +44,14 @@ func Start() {
 	}
 
 	debug := flag.Bool("debug", false, "enable debug logging")
+	logfile := flag.String("logfile", "chainintegrity.log", "path to logfile")
 	flag.Parse()
 
 	debugLevel := "INFO"
 	if *debug {
 		debugLevel = "DEBUG"
 	}
-	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel))
+	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {
@@ -343,28 +343,28 @@ func Start() {
 	}
 
 	// check all the transactions in tx blaster log
-	logger.Infof("checking transactions from tx blaster log")
-	txLog, err := os.OpenFile("data/txblaster.log", os.O_RDONLY, 0644)
-	if err != nil {
-		logger.Errorf("failed to open txblaster.log: %s", err)
-	} else {
-		fileScanner := bufio.NewScanner(txLog)
-		fileScanner.Split(bufio.ScanLines)
+	// logger.Infof("checking transactions from tx blaster log")
+	// txLog, err := os.OpenFile("data/txblaster.log", os.O_RDONLY, 0644)
+	// if err != nil {
+	// 	logger.Errorf("failed to open txblaster.log: %s", err)
+	// } else {
+	// 	fileScanner := bufio.NewScanner(txLog)
+	// 	fileScanner.Split(bufio.ScanLines)
 
-		var txHash *chainhash.Hash
-		for fileScanner.Scan() {
-			txId := fileScanner.Text()
-			txHash, err = chainhash.NewHashFromStr(txId)
-			if err != nil {
-				logger.Errorf("failed to parse tx id %s: %s", txId, err)
-				continue
-			}
+	// 	var txHash *chainhash.Hash
+	// 	for fileScanner.Scan() {
+	// 		txId := fileScanner.Text()
+	// 		txHash, err = chainhash.NewHashFromStr(txId)
+	// 		if err != nil {
+	// 			logger.Errorf("failed to parse tx id %s: %s", txId, err)
+	// 			continue
+	// 		}
 
-			_, ok := transactionMap[*txHash]
-			if !ok {
-				logger.Errorf("transaction %s does not exist in any subtree in any block", txHash)
-			}
-		}
-		_ = txLog.Close()
-	}
+	// 		_, ok := transactionMap[*txHash]
+	// 		if !ok {
+	// 			logger.Errorf("transaction %s does not exist in any subtree in any block", txHash)
+	// 		}
+	// 	}
+	// 	_ = txLog.Close()
+	// }
 }

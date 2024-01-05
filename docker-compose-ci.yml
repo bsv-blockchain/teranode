@@ -23,18 +23,28 @@ services:
 
   tx-blaster:
     container_name: tx-blaster
-    image: taal/ubsv:latest
+    image: taal/blaster:latest
     depends_on:
       - postgres
       - ubsv-1
     build:
       context: .
-      dockerfile: local.Dockerfile
+      dockerfile: local.txblaster.Dockerfile
     environment:
-      SETTINGS_CONTEXT: "docker"
+      SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
+      asset_httpAddress: "http://ubsv-1:8090"
+      propagation_grpcAddresses: ubsv-1:8084
+      coinbase_grpcAddress: ubsv-1:8093
+      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
     # pass arguments to the command
-    command: [ "./blaster.run", "-workers=1" ]
+    command: [ "./blaster.run", "-workers=1", "-print=1", "-profile=:9092", "-log=1", "-limit=1000", "-e2e", "-iterations=10"]
+    networks:
+      - ubsv-network
+    volumes:
+      - ./data:/app/data
+      - ./data/txblaster.log:/app/data/txblaster.log
 
   ubsv-1:
     container_name: ubsv-1
@@ -52,6 +62,13 @@ services:
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "false"
+      mine_initial_blocks: "true"
+      startCoinbase: "true"
+      coinbase_should_wait: "false"
+      coinbase_grpcAddress: localhost:8093
+      propagation_grpcAddresses: localhost:8084
+      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
+      coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
     expose:
       - 8081-8093
     ports:

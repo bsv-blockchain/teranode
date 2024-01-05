@@ -34,6 +34,8 @@ func New(service string, options ...Option) Logger {
 	switch opts.loggerType {
 	case "gocore":
 		return NewGoCoreLogger(service, options...)
+	case "file":
+		return NewFileLogger(service, options...)
 	default:
 		return NewZeroLogger(service, options...)
 	}

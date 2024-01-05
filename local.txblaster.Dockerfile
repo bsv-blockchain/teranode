@@ -67,5 +67,7 @@ RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
 ENV LD_LIBRARY_PATH=.
 
 # Set the entrypoint to the library
-ENTRYPOINT ["./blaster.run"]
+# ENTRYPOINT [ "tail", "-f", "/dev/null" ]
+# ENTRYPOINT [ "./blaster.run", "-workers=1", "-print=1", "-profile=:9092", "-log=1", "-limit=100", "-e2e", "-iterations=10"]
 #ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
+ENTRYPOINT [ "./blaster.run"]
