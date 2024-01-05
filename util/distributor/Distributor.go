@@ -226,8 +226,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 			wg.Add(1)
 
+			addr := addr
 			go func() {
-				start1, stat1, ctx1 := util.NewStatFromContext(spanCtx, "ProcessTransaction", stat)
+				start1, stat1, ctx1 := util.NewStatFromContext(spanCtx, addr, stat)
 				defer func() {
 					wg.Done()
 					stat1.AddTime(start1)
