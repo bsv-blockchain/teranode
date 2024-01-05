@@ -156,7 +156,8 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 	candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
 	if err != nil {
-		return fmt.Errorf("error getting mining candidate: %v", err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error getting mining candidate: %w", err)
 	}
 	m.logger.Debugf(candidate.Stringify())
 
@@ -164,7 +165,8 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 	solution, err := cpuminer.Mine(ctx, candidate)
 	if err != nil {
-		return fmt.Errorf("error mining block on %s: %v", candidateId, err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error mining block on %s: %w", candidateId, err)
 	}
 
 	if solution == nil {
@@ -209,7 +211,8 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error submitting mining solution for job %s: %w", candidateId, err)
 	}
 
 	prometheusBlockMined.Inc()
