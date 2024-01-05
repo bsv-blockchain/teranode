@@ -113,7 +113,7 @@ func (m *Miner) Start(ctx context.Context) error {
 				err := m.mine(ctx, m.waitSeconds)
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
-						m.logger.Infof("[Miner]: timeout waiting for new candidate")
+						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
 						m.logger.Errorf("[Miner]: %v", err)
 					}
