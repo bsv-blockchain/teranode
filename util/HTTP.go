@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	httpRequestTimeout, _ = gocore.Config().GetInt("http_Timeout", 60)
+	httpRequestTimeout, _ = gocore.Config().GetInt("http_timeout", 60)
 )
 
 func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
