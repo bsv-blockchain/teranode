@@ -32,5 +32,6 @@ coverage.out
 
 *.prof
 /model/generated_test_data/
+bins/
 
 .sentryclirc
