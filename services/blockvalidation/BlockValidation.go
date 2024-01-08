@@ -308,9 +308,12 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 		span.Finish()
 	}()
 
+	subtreeTTLConcurrency, _ := gocore.Config().GetInt("subtreeTTLConcurrency", 32)
+
 	// update the subtree TTLs
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
+	g.SetLimit(subtreeTTLConcurrency)
+
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		g.Go(func() error {

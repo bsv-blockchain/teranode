@@ -810,15 +810,27 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
+	subtreeTTLConcurrency, _ := gocore.Config().GetInt("subtreeTTLConcurrency", 32)
+
+	g, gCtx := errgroup.WithContext(setCtx)
+	g.SetLimit(subtreeTTLConcurrency)
+
 	// update the subtree TTLs
 	for _, subtreeHash := range block.Subtrees {
-		go func(subtreeHashBytes []byte) {
+		subtreeHashBytes := subtreeHash.CloneBytes()
+		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			err = ba.subtreeStore.SetTTL(setCtx, subtreeHashBytes, 0)
+			err = ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0)
 			if err != nil {
 				ba.logger.Warnf("failed to update subtree TTL: %v", err)
 			}
-		}(subtreeHash[:])
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return err
 	}
 
 	return nil

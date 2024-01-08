@@ -26,6 +26,11 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		span.Finish()
 	}()
 
+	updateTxMinedStatus := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
+	if !updateTxMinedStatus {
+		return nil
+	}
+
 	maxMinedRoutines, _ := gocore.Config().GetInt("txmeta_store_maxMinedRoutines", 128)
 	maxMinedBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
 
