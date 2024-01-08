@@ -52,10 +52,12 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		// If we did not serve JSON, we need to serialize the nodes into a byte slice.
 		// We use SerializeNodes() for this which does NOT include the fees and sizes.
+		start2 = gocore.CurrentTime()
 		b, err := subtree.SerializeNodes()
 		if err != nil {
 			return err
 		}
+		stat.NewStat("Serialize Subtree").AddTime(start2)
 
 		switch mode {
 		case BINARY_STREAM:
