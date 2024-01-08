@@ -47,7 +47,8 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 }
 
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
-	ctx, _ = context.WithTimeout(ctx, time.Duration(httpRequestTimeout)*time.Second) //nolint:govet
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(httpRequestTimeout)*time.Second)
+	defer cancel()
 
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

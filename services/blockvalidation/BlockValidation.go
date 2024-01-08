@@ -804,10 +804,9 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("[validateSubtree][%s] failed to do http request", subtreeHash.String()), err)
 	}
+	defer body.Close()
+
 	stat.NewStat("2. http fetch subtree").AddTime(start)
-	defer func() {
-		_ = body.Close()
-	}()
 
 	start = gocore.CurrentTime()
 	txHashes := make([]chainhash.Hash, 0, 1024*1024)

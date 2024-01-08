@@ -3,9 +3,11 @@ package http_impl
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,4 +46,13 @@ func TestSubtreeReader(t *testing.T) {
 	n, err = r.Read(buf)
 	assert.ErrorIs(t, err, io.EOF)
 	assert.Equal(t, 0, n)
+}
+
+func TestCalculateSpeed(t *testing.T) {
+	b := make([]byte, 1024)
+	duration := 1 * time.Second
+	sizeInKB := float64(len(b)) / 1024
+
+	res := fmt.Sprintf("%.2f kB): in %s (%.2f kB/sec)", sizeInKB, duration, calculateSpeed(duration, sizeInKB))
+	assert.Equal(t, "1.00 kB): in 1s (1.00 kB/sec)", res)
 }

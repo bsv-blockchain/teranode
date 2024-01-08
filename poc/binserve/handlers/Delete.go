@@ -26,18 +26,18 @@ func Delete(c echo.Context) error {
 
 	f, err := os.Create(filePath + ".ttl")
 	if err != nil {
-		return sendError(c, http.StatusInternalServerError, fmt.Errorf("Could not create TTL file %q: %w", filePath+".ttl", err))
+		return sendError(c, http.StatusInternalServerError, fmt.Errorf("could not create TTL file %q: %w", filePath+".ttl", err))
 	}
 
 	b := make([]byte, 8)
 	s := binary.PutVarint(b, time.Now().UnixMilli())
 
 	if _, err := f.Write(b[:s]); err != nil {
-		return sendError(c, http.StatusInternalServerError, fmt.Errorf("Could not write TTL to %q: %w", filePath+".ttl", err))
+		return sendError(c, http.StatusInternalServerError, fmt.Errorf("could not write TTL to %q: %w", filePath+".ttl", err))
 	}
 
 	if err := f.Close(); err != nil {
-		return sendError(c, http.StatusInternalServerError, fmt.Errorf("Could not close TTL file %q: %w", filePath+".ttl", err))
+		return sendError(c, http.StatusInternalServerError, fmt.Errorf("could not close TTL file %q: %w", filePath+".ttl", err))
 	}
 
 	return c.String(http.StatusOK, fmt.Sprintf("%s queued for deletion", filePath))

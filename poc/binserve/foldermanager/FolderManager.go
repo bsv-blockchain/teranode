@@ -161,7 +161,7 @@ func (f *folder) expireFiles(filename string) error {
 				f.logger.Debugf("Renamed %q to %q - not found", oldName, newName)
 				continue
 			} else {
-				return fmt.Errorf("Could not rename %q to %q: %w", oldName, newName, err)
+				return fmt.Errorf("could not rename %q to %q: %w", oldName, newName, err)
 			}
 		}
 

@@ -15,13 +15,31 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// calculateSpeed takes the duration of the transfer and the size of the data transferred (in bytes)
+// and returns the speed in kilobytes per second.
+func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
+	// Convert duration to seconds
+	seconds := duration.Seconds()
+
+	// Calculate speed in KB/s
+	speed := sizeInKB / seconds
+
+	return speed
+}
+
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
+		var b []byte
+
 		start := gocore.CurrentTime()
 		stat := AssetStat.NewStat("GetSubtree_http")
+
 		defer func() {
 			stat.AddTime(start)
-			h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s DONE in %s", mode, c.Request().RemoteAddr, c.Param("hash"), time.Since(start))
+			duration := time.Since(start)
+			sizeInKB := float64(len(b)) / 1024
+
+			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
 		}()
 
 		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
@@ -39,7 +57,8 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
-		stat.NewStat("Get Subtree from repository").AddTime(start2)
+
+		start2 = stat.NewStat("Get Subtree from repository").AddTime(start2)
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
@@ -52,11 +71,11 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		// If we did not serve JSON, we need to serialize the nodes into a byte slice.
 		// We use SerializeNodes() for this which does NOT include the fees and sizes.
-		start2 = gocore.CurrentTime()
-		b, err := subtree.SerializeNodes()
+		b, err = subtree.SerializeNodes()
 		if err != nil {
 			return err
 		}
+
 		stat.NewStat("Serialize Subtree").AddTime(start2)
 
 		switch mode {
