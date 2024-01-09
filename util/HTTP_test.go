@@ -56,10 +56,10 @@ func TestHTTPDownloadWithCancelledContext(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	defer resp.Body.Close()
-
 	// Read the response body before we cancel the context.  This should work.
 	data, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
 	require.NoError(t, err)
 
 	assert.Equal(t, binaryData, data)
