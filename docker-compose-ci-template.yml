@@ -50,8 +50,8 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: badger:///data/ubsv1/txstore
-      subtreestore: badger:///data/ubsv1/subtreestore
+      txstore: file:///data/ubsv1/txstore
+      subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -123,8 +123,8 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: badger:///data/ubsv2/txstore
-      subtreestore: badger:///data/ubsv2/subtreestore
+      txstore: file:///data/ubsv2/txstore
+      subtreestore: file:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
       startBootstrap: false
@@ -209,7 +209,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./data:/app/data
+      - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   tx-blaster-2:
@@ -240,7 +240,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./data:/app/data
+      - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   # ubsv-3:
