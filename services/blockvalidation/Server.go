@@ -562,11 +562,15 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
-	goroutineStat := stat.NewStat("go routine")
+	if req.GetBaseUrl() == "" {
+		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
+	}
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	setCtx = util.ContextWithStat(setCtx, stat)
+	goroutineStat := stat.NewStat("go routine")
 
 	// validate the subtree in the background
 	go func() {
@@ -596,6 +600,11 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "Get", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	subtree, err := u.subtreeStore.Get(ctx, request.Hash)
 	if err != nil {
 		return nil, err
