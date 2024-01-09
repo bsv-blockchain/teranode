@@ -115,7 +115,7 @@ func (m *Miner) Start(ctx context.Context) error {
 					if errors.Is(err, context.Canceled) {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
-						m.logger.Errorf("[Miner]: %v", err)
+						m.logger.Errorf("[Miner] %v", err)
 					}
 				} else {
 					// start the timer now, so we don't have to wait for the next tick
@@ -159,7 +159,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
 		return fmt.Errorf("error getting mining candidate: %w", err)
 	}
-	m.logger.Debugf(candidate.Stringify())
+	m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
 
@@ -207,7 +207,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 	}
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
-	m.logger.Debugf(solution.Stringify())
+	m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
@@ -238,7 +238,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 		}
 		previousHash, _ = chainhash.NewHash(candidate.PreviousHash)
 
-		m.logger.Debugf(candidate.Stringify())
+		m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 		candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
 

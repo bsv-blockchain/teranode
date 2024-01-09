@@ -378,7 +378,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 }
 
 func (s *Server) validatorSubscriptionListener(ctx context.Context) {
-	s.logger.Debugf("validatorSubscriptionListener\n")
+	s.logger.Debugf("validatorSubscriptionListener")
 	// Subscribe to the validator service
 	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
 	if err != nil {
@@ -530,9 +530,9 @@ ConnectLoop:
 			return
 		default:
 			if !anyConnected {
-				s.logger.Debugf("Searching for peers for topics %d\n", len(tn))
+				s.logger.Debugf("Searching for peers for topics %d", len(tn))
 				for _, topicName := range tn {
-					s.logger.Debugf("Searching for peers for topic %s..\n", topicName)
+					s.logger.Debugf("Searching for peers for topic %s..", topicName)
 
 					peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
@@ -676,7 +676,7 @@ func (s *Server) sendPeerMessage(ctx context.Context, pid peer.ID, msg []byte) (
 }
 
 func (s *Server) handleBlockTopic(ctx context.Context) {
-	s.logger.Debugf("handleBlockTopic\n")
+	s.logger.Debugf("handleBlockTopic")
 
 	var pubSubMessage *pubsub.Message
 	var blockMessage BlockMessage
