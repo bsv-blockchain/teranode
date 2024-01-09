@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -21,9 +22,12 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/pnet"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/multiformats/go-multiaddr"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	crypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -94,6 +98,9 @@ type RejectedTxMessage struct {
 	PeerId string
 }
 
+var usePrivateDht bool = false
+var dhtProtocolIdStr string
+
 func NewServer(logger ulogger.Logger) *Server {
 	logger.Debugf("Creating P2P service")
 	var pk *crypto.PrivKey
@@ -110,7 +117,7 @@ func NewServer(logger ulogger.Logger) *Server {
 	if !ok {
 		panic("p2p_ip not set in config")
 	}
-	p2pPort, ok := gocore.Config().Get("p2p_port")
+	p2pPort, ok := gocore.Config().GetInt("p2p_port")
 	if !ok {
 		panic("p2p_port not set in config")
 	}
@@ -141,15 +148,45 @@ func NewServer(logger ulogger.Logger) *Server {
 		panic("p2p_rejected_tx_topic not set in config")
 	}
 
+	dhtProtocolIdStr, ok = gocore.Config().Get("p2p_dht_protocol_id")
+	if !ok {
+		panic(fmt.Errorf("error getting p2p_dht_protocol_id"))
+	}
+	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
+	if !ok {
+		panic(fmt.Errorf("error getting p2p_shared_key"))
+	}
+	usePrivateDht = gocore.Config().GetBool("p2p_dht_use_private", false)
+
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
 	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
 	bestBlockTopicName = fmt.Sprintf("%s-%s", topicPrefix, bbtn)
 	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
 	rejectedTxTopicName = fmt.Sprintf("%s-%s", topicPrefix, rtn)
+	var h host.Host
+	if usePrivateDht {
+		s := ""
+		s += fmt.Sprintln("/key/swarm/psk/1.0.0/")
+		s += fmt.Sprintln("/base16/")
+		s += sharedKey
 
-	h, err := libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", p2pIp, p2pPort)), libp2p.Identity(*pk))
-	if err != nil {
-		panic(err)
+		psk, err := pnet.DecodeV1PSK(bytes.NewBuffer([]byte(s)))
+		if err != nil {
+			panic(err)
+		}
+		h, err = libp2p.New(
+			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", p2pIp, p2pPort)),
+			libp2p.Identity(*pk),
+			libp2p.PrivateNetwork(psk),
+		)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		h, err = libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", p2pIp, p2pPort)), libp2p.Identity(*pk))
+		if err != nil {
+			panic(err)
+		}
 	}
 	logger.Debugf("peer ID: %s", h.ID().Pretty())
 	logger.Debugf("Connect to me on:")
@@ -228,7 +265,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	topicNames := []string{bestBlockTopicName, blockTopicName, subtreeTopicName, miningOnTopicName, rejectedTxTopicName}
-	go s.discoverPeers(ctx, topicNames)
+	go s.discoverPeers(ctx, topicNames, usePrivateDht)
 
 	ps, err := pubsub.NewGossipSub(ctx, s.host)
 	if err != nil {
@@ -513,8 +550,52 @@ func readPrivateKey() (*crypto.PrivKey, error) {
 	return &priv, nil
 }
 
-func (s *Server) discoverPeers(ctx context.Context, tn []string) {
-	kademliaDHT := InitDHT(ctx, s.host)
+func (s *Server) discoverPeers(ctx context.Context, tn []string, usePrivateDht bool) {
+	var kademliaDHT *dht.IpfsDHT
+	var err error
+
+	if usePrivateDht {
+
+		bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
+		if len(bootstrapAddresses) == 0 {
+			panic(fmt.Errorf("bootstrapAddresses not set in config"))
+		}
+		for _, ba := range bootstrapAddresses {
+			bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
+			if err != nil {
+				panic(err)
+			}
+
+			peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
+			if err != nil {
+				panic(err)
+			}
+
+			// Connect to the bootstrap node.
+			err = s.host.Connect(ctx, *peerInfo)
+			if err != nil {
+				panic(err)
+			}
+		}
+		dhtProtocolID := protocol.ID(dhtProtocolIdStr)
+		var options []dht.Option
+		options = append(options, dht.ProtocolPrefix(dhtProtocolID))
+		options = append(options, dht.Mode(dht.ModeAuto))
+
+		// initialise the DHT
+		kademliaDHT, err = dht.New(ctx, s.host, options...)
+		if err != nil {
+			panic(err)
+		}
+
+		err = kademliaDHT.Bootstrap(ctx)
+		if err != nil {
+			panic(err)
+		}
+
+	} else {
+		kademliaDHT = InitDHT(ctx, s.host)
+	}
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
 	for _, topicName := range tn {
 		dutil.Advertise(ctx, routingDiscovery, topicName)
@@ -553,6 +634,7 @@ ConnectLoop:
 						}
 					}
 				}
+				time.Sleep(5 * time.Second)
 			} else {
 				s.logger.Debugf("Peer discovery complete")
 				s.logger.Debugf("connected to %d peers\n", len(s.host.Network().Peers()))
