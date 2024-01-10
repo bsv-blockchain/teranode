@@ -105,7 +105,8 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 			err := ws.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				deadClientCh <- ch
-				h.logger.Errorf("Failed to Send notification WS message: %v", err)
+				// don't log as ERROR, as this is expected when a client disconnects
+				h.logger.Infof("Failed to Send notification WS message: %v", err)
 				break
 			}
 		}

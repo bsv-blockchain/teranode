@@ -1,9 +1,9 @@
-# 🌐 TX Validator Service
+# 🌐 Coinbase Service
 
 ## Index
 
 
-## Description [TODO ]
+## 1. Description
 
 - Business rationale / what it is for
 
@@ -14,21 +14,25 @@
 
 - input  / output
 
-## Technology and specific Stores
 
-##  Directory Structure and Main Files
-
-
-
-
-## How to run
+Blockchain store
+AssetClient
+Distributor?
 
 
-## Configuration options (settings flags)
+## 2. Functionality
 
 
-## Troubleshooting
+## 3. Data Model
 
 
+## 4. Technology and specific Stores
 
-## References (like third party)
+
+## 5. Directory Structure and Main Files
+
+
+## 6. How to run
+
+
+## 7. onfiguration options (settings flags)

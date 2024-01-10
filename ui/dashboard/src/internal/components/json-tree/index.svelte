@@ -1,0 +1,114 @@
+<script lang="ts">
+  import { getDetailsUrl, DetailType } from '$internal/utils/urls'
+
+  export let data = {}
+  export let parentKey = ''
+  export let blockHash = ''
+
+  function getType(value: any) {
+    if (Array.isArray(value)) return 'array'
+    return typeof value
+  }
+
+  function castToArray(value: any): any[] {
+    return value as any[]
+  }
+</script>
+
+{#if data}
+  <div class="json-tree">
+    {#if typeof data === 'object'}
+      &#123;
+      <ul>
+        {#each Object.entries(data) as [key, value]}
+          <li>
+            <span class="key">{key}:</span>
+            {#if getType(value) === 'object' && value !== null}
+              <svelte:self data={value} {blockHash} />
+            {:else if getType(value) === 'array'}
+              [
+              <ul>
+                {#each value as item (item)}
+                  <li><svelte:self data={item} parentKey={key} {blockHash} /></li>
+                {/each}
+              </ul>
+              ]
+            {:else if getType(value) === 'string'}
+              {#if value.length === 64}
+                {#if key.toLowerCase().includes('txid')}
+                  <a href={getDetailsUrl(DetailType.tx, value)}>"{value}"</a>
+                {:else if key.includes('block') || key === 'hash'}
+                  <a href={getDetailsUrl(DetailType.block, value)}>"{value}"</a>
+                {:else if key === 'utxoHash'}
+                  <a href={getDetailsUrl('utxo', value)}>"{value}"</a>
+                {:else}
+                  <span class="string">"{value}"</span>
+                {/if}
+              {:else}
+                <span class="string">"{value}"</span>
+              {/if}
+            {:else if getType(value) === 'number'}
+              <span class="string2">{value}</span>
+            {:else}
+              <span class={getType(value)}>{value}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+      &#125;
+    {:else if castToArray(data).length === 64 && parentKey === 'subtrees'}
+      <a href={getDetailsUrl(DetailType.subtree, `${data}`, blockHash ? { blockHash } : {})}
+        >{data}</a
+      >
+    {:else if castToArray(data).length === 64 && parentKey.includes('block')}
+      <a href={getDetailsUrl(DetailType.block, `${data}`)}>{data}</a>
+    {:else if castToArray(data).length === 64 && parentKey.includes('utxo')}
+      <a href={getDetailsUrl('utxo', `${data}`)}>{data}</a>
+    {:else if castToArray(data).length === 64 && parentKey.includes('parentTx')}
+      <a href={getDetailsUrl(DetailType.tx, `${data}`)}>{data}</a>
+    {:else}
+      <span class={getType(data)}>{data}</span>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .json-tree {
+    font-family: var(--font-family-mono);
+
+    /* color: rgba(255, 255, 255, 0.88); */
+
+    font-family: JetBrains Mono;
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 200;
+    line-height: 20px;
+    /* letter-spacing: 0.3px; */
+  }
+
+  ul {
+    list-style-type: none;
+    padding-left: 15px;
+  }
+
+  .key {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .string {
+    color: #15b241;
+  }
+
+  .string2 {
+    color: #9917ff;
+  }
+
+  .boolean {
+    color: blue;
+  }
+
+  .undefined,
+  .null {
+    color: gray;
+  }
+</style>

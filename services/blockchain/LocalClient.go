@@ -43,6 +43,14 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
+func (c LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	return c.store.GetBlockStats(ctx)
+}
+
+func (c LocalClient) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	return c.store.GetBlockGraphData(ctx, periodMillis)
+}
+
 func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	return c.store.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
 }

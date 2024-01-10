@@ -242,6 +242,24 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockStats", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	return b.store.GetBlockStats(ctx1)
+}
+
+func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockGraphData", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	return b.store.GetBlockGraphData(ctx1, req.PeriodMillis)
+}
+
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetLastNBlocks", stats)
 	defer func() {

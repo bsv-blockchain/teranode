@@ -226,8 +226,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 			wg.Add(1)
 
+			addr := addr
 			go func() {
-				start1, stat1, ctx1 := util.NewStatFromContext(spanCtx, "ProcessTransaction", stat)
+				start1, stat1, ctx1 := util.NewStatFromContext(spanCtx, addr, stat)
 				defer func() {
 					wg.Done()
 					stat1.AddTime(start1)
@@ -237,9 +238,11 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				backoff := d.backoff
 
 				for {
+					ctx1, cancel := context.WithTimeout(ctx1, 5*time.Second)
 					_, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
 						Tx: tx.ExtendedBytes(),
 					})
+					cancel()
 
 					if err == nil {
 						responseWrapperCh <- &ResponseWrapper{

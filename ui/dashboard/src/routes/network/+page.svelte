@@ -1,78 +1,44 @@
-<script>
-  import { miningNodes, wsUrl, error } from '@stores/p2pStore.js'
-  import Node from './Node.svelte'
+<script lang="ts">
+  import { onMount } from 'svelte'
+
+  import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
+  import ConnectedNodesCard from '$internal/components/page/network/connected-nodes-card/index.svelte'
+
+  import { miningNodes, sock } from '$internal/stores/p2pStore'
+  import { humanTime } from '$internal/utils/humanTime'
+  import i18n from '$internal/i18n'
+
+  $: t = $i18n.t
+
+  $: connected = $sock !== null
+
+  let nodes: any[] = []
+
+  function updateData() {
+    const tmp: any[] = []
+    $miningNodes.forEach((node) => {
+      tmp.push({
+        ...node,
+        receivedAt: humanTime(node.receivedAt),
+      })
+    })
+    nodes = tmp
+  }
+
+  onMount(() => {
+    updateData()
+
+    const interval = setInterval(() => {
+      updateData()
+    }, 1000)
+
+    return () => clearInterval(interval)
+  })
 </script>
 
-<div class="url">
-  {$wsUrl}
-  {#if $error && $error.message}
-    <span class="error-message">{$error.message}</span>
-  {/if}
-</div>
-
-<div class="card-content">
-  <table class="table">
-    <thead>
-      <tr>
-        <th>Address</th>
-        <th class="right">Height</th>
-        <th class="right">TX Count</th>
-        <th class="right">Size</th>
-        <th>Miner</th>
-        <th>Latest hash</th>
-        <th>Previous hash</th>
-        <th class="right" style="width:120px;">Last seen</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each $miningNodes as node (node.base_url)}
-        <Node {node} />
-      {/each}
-    </tbody>
-  </table>
-</div>
+<PageWithMenu>
+  <ConnectedNodesCard data={nodes} {connected} />
+</PageWithMenu>
 
 <style>
-  .right {
-    text-align: right;
-  }
-
-  /* Custom styles for the table inside card-content */
-  .card-content .table {
-    width: 100%; /* Make the table take the full width of the card */
-    border-collapse: collapse; /* Collapse table borders */
-  }
-
-  .card-content .table th,
-  .card-content .table th {
-    background-color: #f5f5f5; /* Light background for table headers */
-    text-align: left; /* Align header text to the left */
-  }
-
-  .card-content .table tr:nth-child(even) {
-    background-color: #f9f9f9; /* Zebra-striping for even rows */
-  }
-
-  @media (max-width: 600px) {
-    .table tr {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: repeat(2, auto);
-    }
-
-    .table th {
-      grid-column: span 1;
-    }
-  }
-
-  .url {
-    display: inline-block;
-    margin-left: 25px;
-    padding: 10px;
-    font-size: 0.7rem;
-  }
-
-  .error-message {
-    color: red;
-  }
 </style>

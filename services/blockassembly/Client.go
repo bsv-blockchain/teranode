@@ -40,6 +40,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
 	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
 	sendBatchWorkers, _ := gocore.Config().GetInt("blockassembly_sendBatchWorkers", 1)
+	sendBatchRPCTimeoutSeconds, _ := gocore.Config().GetInt("blockassembly_sendBatchRPCTimeoutSeconds", 5)
+	sendBatchRPCTimeout := time.Duration(sendBatchRPCTimeoutSeconds) * time.Second
 
 	if batchSize > 0 && sendBatchWorkers <= 0 {
 		logger.Fatalf("expecting blockassembly_sendBatchWorkers > 0 when blockassembly_sendBatchSize = %d", batchSize)
@@ -69,7 +71,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 
 	if batchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
-			go client.batchWorker(ctx)
+			go client.batchWorker(ctx, sendBatchRPCTimeout)
 		}
 	}
 
@@ -205,17 +207,19 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 		Time:       solution.Time,
 		Version:    solution.Version,
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-func (s *Client) batchWorker(ctx context.Context) {
+func (s *Client) batchWorker(ctx context.Context, timeout time.Duration) {
 	for {
-		batch := <-s.batchCh
-		s.sendBatchToBlockAssembly(ctx, batch)
+		select {
+		case <-ctx.Done():
+			return
+		case batch := <-s.batchCh:
+			timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+			s.sendBatchToBlockAssembly(timeoutCtx, batch)
+			cancel()
+		}
 	}
 }
 

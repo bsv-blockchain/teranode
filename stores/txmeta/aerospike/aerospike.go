@@ -147,8 +147,6 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 		return nil, nil
 	}
 
-	var err error
-
 	status := &txmeta.Data{}
 
 	if fee, ok := value.Bins["fee"].(int); ok {
@@ -159,19 +157,13 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 		status.SizeInBytes = uint64(sb)
 	}
 
-	var cHash *chainhash.Hash
-
-	var parentTxHashes []*chainhash.Hash
+	var parentTxHashes []chainhash.Hash
 	if value.Bins["parentTxHashes"] != nil {
 		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([]byte)
 		if ok {
-			parentTxHashes = make([]*chainhash.Hash, 0, len(parentTxHashesInterface)/32)
+			parentTxHashes = make([]chainhash.Hash, 0, len(parentTxHashesInterface)/32)
 			for i := 0; i < len(parentTxHashesInterface); i += 32 {
-				cHash, err = chainhash.NewHash(parentTxHashesInterface[i : i+32])
-				if err != nil {
-					return nil, err
-				}
-				parentTxHashes = append(parentTxHashes, cHash)
+				parentTxHashes = append(parentTxHashes, chainhash.Hash(parentTxHashesInterface[i:i+32]))
 			}
 
 			status.ParentTxHashes = parentTxHashes

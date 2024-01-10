@@ -38,7 +38,7 @@ jobs:
     secrets: inherit
   # Build for X86 (AMD64)
   build_amd64:
-    needs: [test_and_lint, get_tag]
+    needs: [get_tag]
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     with:
@@ -48,7 +48,7 @@ jobs:
       region: eu-north-1
   # Build for ARM64 (Graviton and Darwin)
   build_arm64:
-    needs: [test_and_lint, get_tag]
+    needs: [ get_tag]
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     with:
@@ -58,7 +58,7 @@ jobs:
       region: eu-north-1
   # Create docker manifest for multiple architecture tags
   create_manifest:
-    needs: [build_amd64, build_arm64, get_tag]
+    needs: [test_and_lint, build_amd64, build_arm64, get_tag]
     uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
     with:

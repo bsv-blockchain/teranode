@@ -268,7 +268,7 @@ To run the Block Validation Service locally, you can execute the following comma
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockValidation=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Validation Service locally.
 
 ## 7. Configuration options (settings flags)
 

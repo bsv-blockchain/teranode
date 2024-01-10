@@ -1,11 +1,14 @@
 module.exports = {
   root: true,
   extends: [
-    'standard', // Use the StandardJS style rules
+    'eslint:recommended',
+    'plugin:@typescript-eslint/recommended',
     'plugin:svelte/recommended',
     'prettier',
+    'plugin:storybook/recommended',
   ],
-  plugins: ['standard'], // Enable the StandardJS plugin
+  parser: '@typescript-eslint/parser',
+  plugins: ['@typescript-eslint'],
   parserOptions: {
     sourceType: 'module',
     ecmaVersion: 2020,
@@ -16,11 +19,22 @@ module.exports = {
     es2017: true,
     node: true,
   },
+  overrides: [
+    {
+      files: ['*.svelte'],
+      parser: 'svelte-eslint-parser',
+      parserOptions: {
+        parser: '@typescript-eslint/parser',
+      },
+    },
+  ],
   rules: {
     // Configure any specific rules or overrides here
     semi: 'off', // Turn off semicolon requirement
+    '@typescript-eslint/no-explicit-any': 0,
+    'no-case-declarations': 0,
   },
   globals: {
-    d3: 'readonly',
+    localStorage: 'readonly',
   },
 }

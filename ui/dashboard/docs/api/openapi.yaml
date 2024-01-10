@@ -1,0 +1,734 @@
+openapi: 3.1.0
+info:
+  title: Bitcoin SV, UBSV - OpenAPI 3.1
+  description: |-
+    This is the Bitcoin SV, UBSV OpenAPI 3.1 specification.  You can find out more about
+    the project API at [https://github.com/bitcoin-sv/ubsv/docs/api/](https://github.com/bitcoin-sv/ubsv/docs/api/).
+
+    Some useful links:
+    - [The source API definition for the Bitcoin SV, UBSV project](https://github.com/bitcoin-sv/ubsv/tree/feature/ui-refresh/ui_v2/dashboard/docs/api/openapi.yaml)
+  termsOfService: https://github.com/bitcoin-sv/ubsv/docs/api/terms/
+  version: 0.0.1
+externalDocs:
+  description: Find out more about Bitcoin SV, UBSV
+  url: https://github.com/bitcoin-sv/ubsv/tree/feature/ui-refresh/ui_v2/dashboard/docs/api/rest.md
+servers:
+  - url: http://localhost:8090
+tags:
+  - name: search-item
+    description: Either a block, subtree or tx
+  - name: stats
+    description: Overall statistics
+  - name: block
+    description: Operations on block
+  - name: header
+    description: Operations on header
+  - name: subtree
+    description: Operations on subtree
+  - name: tx
+    description: Operations on tx
+  - name: txmeta
+    description: Operations on txmeta
+paths:
+  /search:
+    get:
+      tags:
+        - search-item
+      summary: Search for a search item
+      description: ''
+      operationId: getSearchItem
+      parameters:
+        - name: q
+          in: query
+          description: The search item hash
+          required: true
+          schema:
+            $ref: '#/components/schemas/Hash'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchItemDef'
+        '400':
+          description: Invalid hash supplied
+        '404':
+          description: SearchItem not found
+  /lastblocks:
+    get:
+      tags:
+        - block
+      summary: Request blocks
+      description: ''
+      operationId: getLastBlocks
+      parameters:
+        - name: fromHeight
+          in: query
+          description: |-
+            Highest block height in dataset of blocks, with descending consecutive heights.
+            If height is not provided, the highest available block height is assumed.
+          required: false
+          schema:
+            type: integer
+        - name: n
+          in: query
+          description: The size of the dataset
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Block'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /block:
+    get:
+      tags:
+        - block
+      summary: Request blocks
+      description: ''
+      operationId: getBlocks
+      parameters:
+        - in: query
+          name: offset
+          required: false
+          schema:
+            $ref: '#/components/schemas/PaginationOffset'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            $ref: '#/components/schemas/PaginationLimit'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Block'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /block/{hash}/json:
+    get:
+      tags:
+        - block
+      summary: Request a block
+      description: ''
+      operationId: getBlock
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          description: The header hash
+          schema:
+            $ref: '#/components/schemas/Hash'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockDetail'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /header/{hash}/json:
+    get:
+      tags:
+        - header
+      summary: Request a header
+      description: ''
+      operationId: getHeader
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          description: The header hash
+          schema:
+            $ref: '#/components/schemas/Hash'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeaderDetail'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /subtree/{hash}/json:
+    get:
+      tags:
+        - subtree
+      summary: Request a subtree
+      description: ''
+      operationId: getSubtree
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          description: The subtree hash
+          schema:
+            $ref: '#/components/schemas/Hash'
+        - in: query
+          name: offset
+          required: false
+          description: Offset applies to the transactions inside the Nodes field
+          schema:
+            $ref: '#/components/schemas/PaginationOffset'
+        - in: query
+          name: limit
+          required: false
+          description: Limit applies to the transactions inside the Nodes field
+          schema:
+            $ref: '#/components/schemas/PaginationLimit'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Subtree'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /tx/{hash}/json:
+    get:
+      tags:
+        - tx
+      summary: Request a transaction
+      description: ''
+      operationId: getTx
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          description: The transaction hash
+          schema:
+            $ref: '#/components/schemas/Hash'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TxDetail'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /txmeta/{hash}/json:
+    get:
+      tags:
+        - txmeta
+      summary: Request transaction meta information
+      description: ''
+      operationId: getTxMeta
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          description: The txmeta hash
+          schema:
+            $ref: '#/components/schemas/Hash'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TxMetaDetail'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /stats:
+    get:
+      tags:
+        - stats
+      summary: Request stats
+      description: ''
+      operationId: getStats
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  /txstats:
+    get:
+      tags:
+        - stats
+      summary: Request transaction stats
+      description: ''
+      operationId: getTxStats
+      parameters:
+        - in: query
+          name: dateFrom
+          required: true
+          description: Beginning of date range
+          schema:
+            $ref: '#/components/schemas/IsoDateTime'
+        - in: query
+          name: dateTo
+          required: true
+          description: End of date range
+          schema:
+            $ref: '#/components/schemas/IsoDateTime'
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TxStat'
+        '400':
+          description: Invalid information supplied
+        '404':
+          description: Not found
+  # /{item}/{hash}/json:
+  #   get:
+  #     tags:
+  #       - item
+  #     summary: Request item data
+  #     description: ''
+  #     operationId: getItemData
+  #     parameters:
+  #       - name: item
+  #         in: path
+  #         description: item
+  #         required: true
+  #         schema:
+  #           $ref: '#/components/schemas/Item'
+  #       - name: hash
+  #         in: path
+  #         description: The item hash
+  #         required: true
+  #         schema:
+  #           $ref: '#/components/schemas/Hash'
+  #     responses:
+  #       '200':
+  #         description: successful operation
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/AnyObject'
+  #       '400':
+  #         description: Invalid information supplied
+  #       '404':
+  #         description: Item not found
+components:
+  schemas:
+    # AnyObject:
+    #   type: object
+    #   description: Can be any object
+    Hash:
+      type: string
+      minLength: 64
+      maxLength: 64
+      examples:
+        - '002afb88f2d9d0d49e6d37c12f7cf88d26a7bdbcc024954ba80acb187206d1b0'
+    IsoDateTime:
+      type: string
+      format: date-time
+      examples:
+        - "2022-03-20T09:12:28Z"
+    # Item:
+    #   type: string
+    #   description: Common entities identified by a hash
+    #   examples:
+    #     - utxos
+    #   enum:
+    #     - block
+    #     - subtree
+    #     - tx
+    #     - header
+    #     - utxo
+    #     - utxos
+    #     - txmeta
+    SearchItem:
+      type: string
+      description: SearchItem is a subset of Item
+      examples:
+        - block
+      enum:
+        - block
+        - subtree
+        - tx
+    SearchItemDef:
+      type: object
+      required:
+        - item
+        - hash
+      properties:
+        item:
+          $ref: '#/components/schemas/SearchItem'
+        hash:
+          $ref: '#/components/schemas/Hash'
+        blockHash:
+          description: |-
+            Knowing the parent block hash is useful when returning some search items, like subtree.
+          $ref: '#/components/schemas/Hash'
+    Block:
+      type: object
+      required:
+        - height
+        - hash
+        - previousblockhash
+        - timestamp
+        - miner
+        - coinbaseValue
+        - transactionCount
+        - size
+      properties:
+        height:
+          type: integer
+          examples:
+            - 20308
+        hash:
+          $ref: '#/components/schemas/Hash'
+        previousblockhash:
+          $ref: '#/components/schemas/Hash'
+        timestamp:
+          type: string
+          examples:
+            - '2023-12-06T21:58:55.000Z'
+        miner:
+          type: string
+          examples:
+            - '/teranode/'
+        coinbaseValue:
+          type: integer
+          examples:
+            - 5000000000
+        transactionCount:
+          type: integer
+          examples:
+            - 2
+        size:
+          type: integer
+          examples:
+            - 17240
+    BlockDetail:
+      type: object
+      required:
+        - header
+        - coinbase_tx
+        - transaction_count
+        - size_in_bytes
+        - subtrees
+      properties:
+        header:
+          $ref: '#/components/schemas/Header'
+        coinbase_tx:
+          $ref: '#/components/schemas/TxDetail'
+        transaction_count:
+          type: integer
+        size_in_bytes:
+          type: integer
+        subtrees:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hash'
+    Header:
+      type: object
+      required:
+        - version
+        - hash_prev_block
+        - hash_merkle_root
+        - timestamp
+        - bits
+        - nonce
+      properties:
+        version:
+          type: integer
+        hash_prev_block:
+          $ref: '#/components/schemas/Hash'
+        hash_merkle_root:
+          $ref: '#/components/schemas/Hash'
+        timestamp:
+          type: integer
+        bits:
+          type: string
+        nonce:
+          type: integer
+    HeaderDetail:
+      type: object
+      required:
+        - hash
+        - version
+        - previousblockhash
+        - merkleroot
+        - time
+        - bits
+        - nonce
+        - height
+        - txCount
+        - sizeInBytes
+        - miner
+      properties:
+        hash:
+          $ref: '#/components/schemas/Hash'
+        version:
+          type: integer
+        previousblockhash:
+          $ref: '#/components/schemas/Hash'
+        merkleroot:
+          $ref: '#/components/schemas/Hash'
+        time:
+          type: integer
+        bits:
+          type: string
+        nonce:
+          type: integer
+        height:
+          type: integer
+        txCount:
+          type: integer
+        sizeInBytes:
+          type: integer
+        miner:
+          type: string
+    Tx:
+      type: object
+      required:
+        - txid
+        - fee
+        - size
+      properties:
+        txid:
+          $ref: '#/components/schemas/Hash'
+        fee:
+          type: integer
+        size:
+          type: integer
+    TxInput:
+      type: object
+      required:
+        - unlockingScript
+        - txid
+        - vout
+        - sequence
+      properties:
+        unlockingScript:
+          type: string
+        txid:
+          $ref: '#/components/schemas/Hash'
+        vout:
+          type: integer
+        sequence:
+          type: integer
+    TxOutput:
+      type: object
+      required:
+        - satoshis
+        - lockingScript
+      properties:
+        satoshis:
+          type: integer
+        lockingScript:
+          type: string
+    TxDetail:
+      type: object
+      required:
+        - txid
+        - hex
+        - inputs
+        - outputs
+        - version
+        - lockTime
+      properties:
+        txid:
+          $ref: '#/components/schemas/Hash'
+        hex:
+          type: string
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxInput'
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxOutput'
+        version:
+          type: integer
+        lockTime:
+          type: integer
+    Subtree:
+      type: object
+      required:
+        - Height
+        - Fees
+        - SizeInBytes
+        - FeeHash
+        - Nodes
+        - ConflictingNodes
+      properties:
+        Height:
+          type: integer
+          examples:
+            - 1
+        Fees:
+          type: integer
+          examples:
+            - 0
+        SizeInBytes:
+          type: integer
+          examples:
+            - 17159
+        FeeHash:
+          $ref: '#/components/schemas/Hash'
+        Nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tx'
+        ConflictingNodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hash'
+    TxMetaDetail:
+      type: object
+      required:
+        - blockHashes
+        - parentTxHashes
+        - fee
+        - sizeInBytes
+        - tx
+      properties:
+        blockHashes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hash'
+        parentTxHashes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hash'
+        fee:
+          type: integer
+        sizeInBytes:
+          type: integer
+        tx:
+          $ref: '#/components/schemas/TxDetail'
+    Stats:
+      type: object
+      required:
+        - tx_confirmed
+        - tx_mempool
+        - blocks_total
+        - block_latest_height
+        - avg_block_size
+        - avg_txs_per_block
+      properties:
+        tx_confirmed:
+          type: integer
+          description: Confirmed transactions
+        tx_mempool:
+          type: integer
+          description: Mempool transactions
+        blocks_total:
+          type: integer
+          description: Total number of blocks
+        block_latest_height:
+          type: integer
+          description: Latest block height
+        avg_block_size:
+          type: integer
+          description: Average block size
+        avg_txs_per_block:
+          type: integer
+          description: Average transactions per block
+    TxStat:
+      type: object
+      required:
+        - timestamp
+        - tx_count
+      properties:
+        timestamp:
+          $ref: '#/components/schemas/IsoDateTime'
+        tx_count:
+          type: integer
+    PaginationOffset:
+      description: |-
+        The number of records to skip before starting to collect the result set.
+        With a limit of 50, an offset of 50 implies viewing the 2nd logical page of data.
+      type: integer
+      default: 0
+      minimum: 0
+    PaginationLimit:
+      description: |-
+        The maximum number of records to return.
+        The value -1 represents no limit and signifies all records.
+      type: integer
+      default: 100
+    PaginationSortColumn:
+      description: The column (data field) that the dataset should be sorted on.
+      type: string
+      examples:
+        - '/miner/'
+    PaginationSortOrder:
+      description: Specifies whether to sort in ascending (asc) or descending (desc) order.
+      type: string
+      enum:
+        - asc
+        - desc
+      default: desc
+    PaginationFilters:
+      description: Defines the filters.
+      type: string
+    PaginationResponse:
+      type: object
+      required:
+        - offset
+        - limit
+        - totalRecords
+      properties:
+        offset:
+          $ref: '#/components/schemas/PaginationOffset'
+        limit:
+          $ref: '#/components/schemas/PaginationLimit'
+        totalRecords:
+          description: |-
+            Total number of records in the full data set without pagination.
+            This information is required to represent pagination properly on the consumer end.
+          type: integer
+          examples:
+            - 4895
+        sortColumn:
+          $ref: '#/components/schemas/PaginationSortColumn'
+        sortOrder:
+          $ref: '#/components/schemas/PaginationSortOrder'
+        filters:
+          $ref: '#/components/schemas/PaginationFilters'

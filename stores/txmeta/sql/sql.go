@@ -138,14 +138,9 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		return nil, err
 	}
 
-	var h *chainhash.Hash
-	parentTxHashes := make([]*chainhash.Hash, 0, len(parents)/chainhash.HashSize)
+	parentTxHashes := make([]chainhash.Hash, 0, len(parents)/chainhash.HashSize)
 	for i := 0; i < len(parents); i += chainhash.HashSize {
-		h, err = chainhash.NewHash(parents[i : i+chainhash.HashSize])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse parent hash: %+v", err)
-		}
-		parentTxHashes = append(parentTxHashes, h)
+		parentTxHashes = append(parentTxHashes, chainhash.Hash(parents[i:i+chainhash.HashSize]))
 	}
 
 	var blockIDs []uint32

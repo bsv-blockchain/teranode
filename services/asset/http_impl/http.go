@@ -75,8 +75,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	e.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
-	e.GET("/stream/subtree/:hash", h.GetSubtreeStream())
-	e.GET("/subtree/:hash", h.GetSubtreeAsReader)
+	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
 	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
@@ -91,6 +90,10 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	e.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	e.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	e.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+
+	e.GET("/search", h.Search)
+	e.GET("/blockstats", h.GetBlockStats)
+	e.GET("/blockgraphdata", h.GetBlockGraphData)
 
 	e.GET("/lastblocks", h.GetLastNBlocks)
 

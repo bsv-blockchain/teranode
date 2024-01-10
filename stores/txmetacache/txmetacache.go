@@ -96,7 +96,7 @@ func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) erro
 func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
 	// cachedBytes := make([]byte, 0, 20480)
 	cachedBytes := t.cache.Get(nil, hash[:])
-	if cachedBytes != nil && len(cachedBytes) > 0 {
+	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
 		txmetaData, err := txmeta.NewMetaDataFromBytes(cachedBytes)
 		if err != nil {
@@ -161,11 +161,12 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, erro
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
-	err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
-	if err != nil {
-		return err
-	}
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	// do not update the aerospike tx meta store, it kills the aerospike server
+	//err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
+	//if err != nil {
+	//	return err
+	//}
 
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)

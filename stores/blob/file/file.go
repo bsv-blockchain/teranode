@@ -122,10 +122,10 @@ func (s *File) ttlCleaner(ctx context.Context) {
 
 			for _, fileName := range filesToRemove {
 				if err := os.Remove(fileName); err != nil {
-					s.logger.Errorf("failed to remove file: %s", fileName)
+					s.logger.Warnf("failed to remove file: %s", fileName)
 				}
 				if err := os.Remove(fileName + ".ttl"); err != nil {
-					s.logger.Errorf("failed to remove ttl file: %s", fileName)
+					s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
 				}
 
 				s.fileTTLsMu.Lock()
@@ -218,6 +218,7 @@ func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
 	fileName := s.filename(hash)
 	file, err := os.Open(fileName)
+	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, options.ErrNotFound

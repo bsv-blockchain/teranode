@@ -3,25 +3,25 @@ This is just a very simple page with a button to throw an example error.
 Feel free to delete this file and the entire sentry route.
 -->
 
-<script>
-  import * as Sentry from '@sentry/sveltekit';
+<script lang="ts">
+  import * as Sentry from '@sentry/sveltekit'
 
   async function getSentryData() {
     const transaction = Sentry.startTransaction({
-      name: 'Example Frontend Transaction'
-    });
+      name: 'Example Frontend Transaction',
+    })
 
     Sentry.configureScope((scope) => {
-      scope.setSpan(transaction);
-    });
+      scope.setSpan(transaction)
+    })
 
     try {
-      const res = await fetch('/sentry-example');
+      const res = await fetch('/sentry-example')
       if (!res.ok) {
-        throw new Error('Sentry Example Frontend Error');
+        throw new Error('Sentry Example Frontend Error')
       }
     } finally {
-      transaction.finish();
+      transaction.finish()
     }
   }
 </script>
@@ -46,15 +46,13 @@ Feel free to delete this file and the entire sentry route.
     </p>
 
     <p>1. Send us a sample error:</p>
-    <button
-      type="button"
-      on:click={getSentryData}>
-      Throw error!
-    </button>
+    <button type="button" on:click={getSentryData}> Throw error! </button>
 
     <p>
       2. Look for the error on the
-      <a href="https://masagi-limited-cd21c228f.sentry.io/issues/?project=4505918315692032">Issues Page</a>.
+      <a href="https://masagi-limited-cd21c228f.sentry.io/issues/?project=4505918315692032"
+        >Issues Page</a
+      >.
     </p>
     <p style="margin-top: 24px;">
       For more information, take a look at the
@@ -91,7 +89,7 @@ Feel free to delete this file and the entire sentry route.
     color: white;
     font-size: 1em;
     margin: 1em;
-    transition: all 0.25s ease-in-out;
+    transition: all 0.25s linear;
   }
   button:hover {
     background-color: #8c5393;

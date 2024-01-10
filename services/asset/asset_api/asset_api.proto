@@ -6,11 +6,14 @@ package asset_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "model/model.proto";
 
 service AssetAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
+  rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
@@ -114,4 +117,9 @@ message SetSubtreeTTLRequest {
 // swagger:model SubscribeRequest
 message SubscribeRequest {
   string source = 1;
+}
+
+// swagger:model GetBlockGraphDataRequest
+message GetBlockGraphDataRequest {
+  uint64 period_millis = 1;
 }

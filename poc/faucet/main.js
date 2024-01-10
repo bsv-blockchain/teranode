@@ -52,7 +52,7 @@ app.post('/api/submit', (req, res) => {
   client.DistributeTransaction({ tx: Buffer.from(tx, 'hex') }, (error, response) => {
     if (error) {
       console.error(error)
-      res.status(500).json({ error: 'Failed to make gRPC request' })
+      res.status(500).json({ error: 'Failed to make gRPC request', response })
     } else {
       res.json(response)
     }

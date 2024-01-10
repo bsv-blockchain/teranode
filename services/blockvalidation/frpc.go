@@ -75,3 +75,34 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 		Ok: true,
 	}, nil
 }
+
+func (f *fRPC_BlockValidation) SetMinedMulti(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetMinedMultiRequest) (*blockvalidation_api.BlockvalidationApiSetMinedMultiResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	f.logger.Warnf("FRPC SetMinedMulti %d: %d", request.BlockId, len(request.Hashes))
+
+	prometheusBlockValidationSetMinedMultiFrpc.Inc()
+	go func(data [][]byte) {
+		hashes := make([]*chainhash.Hash, 0, len(data))
+		for _, hashBytes := range data {
+			if len(hashBytes) != 32 {
+				f.logger.Errorf("hash is not 32 bytes: %v", hashBytes)
+				return
+			}
+
+			hash := chainhash.Hash(hashBytes)
+			hashes = append(hashes, &hash)
+		}
+
+		if err := f.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId); err != nil {
+			f.logger.Errorf("failed to set mined multi via frpc: %v", err)
+		}
+	}(request.Hashes)
+
+	return &blockvalidation_api.BlockvalidationApiSetMinedMultiResponse{
+		Ok: true,
+	}, nil
+}

@@ -1,8 +1,12 @@
-<script>
+<script lang="ts">
+  import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
+  import { getDetailsUrl, DetailType, DetailTab } from '$internal/utils/urls'
+
   import { onMount } from 'svelte'
-  import { blocks, loadLastBlocks } from '@stores/chainStore.js'
+  import * as d3 from 'd3'
+  import { blocks, loadLastBlocks } from '$internal/stores/chainStore'
   import { goto } from '$app/navigation'
-  import JSONTree from '@components/JSONTree.svelte'
+  import JSONTree from '$internal/components/json-tree/index.svelte'
 
   let treeData = {}
 
@@ -20,7 +24,7 @@
     }
   }
 
-  function drawTree(blocks) {
+  function drawTree(blocks: any[]) {
     if (import.meta.env.SSR) return
 
     const width = 600
@@ -32,14 +36,10 @@
     // Remove previous SVG content
     d3.select('#tree').select('svg').remove()
 
-    const svg = window.d3
-      .select('#tree')
-      .append('svg')
-      .attr('width', '100%')
-      .attr('height', '100%')
+    const svg = d3.select('#tree').append('svg').attr('width', '100%').attr('height', '100%')
 
-    const root = d3.hierarchy(treeData)
-    const treeLayout = d3.tree().size([height - 200, width])
+    const root: d3.HierarchyNode<{}> = d3.hierarchy(treeData)
+    const treeLayout: d3.TreeLayout<any> = d3.tree().size([height - 200, width])
 
     treeLayout(root)
 
@@ -50,7 +50,7 @@
       .enter()
       .append('path')
       .attr('class', 'link')
-      .attr('d', (d) => {
+      .attr('d', (d: any) => {
         return (
           'M' +
           d.y +
@@ -76,33 +76,26 @@
       .data(root.descendants())
       .enter()
       .append('g')
-      .attr(
-        'class',
-        (d) => 'node' + (d.children ? ' node--internal' : ' node--leaf')
-      )
-      .attr('transform', (d) => 'translate(' + d.y + ',' + d.x + ')')
+      .attr('class', (d) => 'node' + (d.children ? ' node--internal' : ' node--leaf'))
+      .attr('transform', (d: any) => 'translate(' + d.y + ',' + d.x + ')')
 
     node.each(function (d, i) {
       if (i === 0) {
-        d3.select(this)
-          .append('rect')
-          .attr('width', 5)
-          .attr('height', 5)
-          .attr('fill', 'black')
+        d3.select(this).append('rect').attr('width', 5).attr('height', 5).attr('fill', 'black')
       } else {
         node
           .append('circle')
           .attr('r', 10)
-          .attr('fill', (d) => stringToColor(d.data.miner)) // add this line to derive color from the "miner" value
+          .attr('fill', (d: any) => stringToColor(d.data.miner)) // add this line to derive color from the "miner" value
           .append('title')
-          .text((d) => d.data.name + '\n' + d.data.miner)
+          .text((d: any) => d.data.name + '\n' + d.data.miner)
 
         node
           .append('text')
           .attr('dy', 30)
           .attr('x', -15)
           .style('text-anchor', 'start')
-          .text((d) => d.data.height)
+          .text((d: any) => d.data.height)
 
         node.on('click', (event, d) => {
           handleClick(d.data)
@@ -111,12 +104,12 @@
     })
   }
 
-  function handleClick(data) {
-    goto(`/viewer/block/${data.name}/json`)
+  function handleClick(data: any) {
+    goto(getDetailsUrl(DetailType.block, data.name, { tab: DetailTab.json }))
   }
 
-  function mapNamesToChildren(arr) {
-    const nodeMap = {}
+  function mapNamesToChildren(arr: any[]) {
+    const nodeMap: any = {}
 
     arr.forEach((item) => {
       // Create or get the current node
@@ -154,13 +147,13 @@
 
     // Find the actual root node (the node that isn't a child of any other node)
     const rootNode = Object.values(nodeMap).find(
-      (node) => !arr.some((item) => item.hash === node.name)
+      (node: any) => !arr.some((item) => item.hash === node.name),
     )
 
     return rootNode || {}
   }
 
-  function stringToColor(str) {
+  function stringToColor(str: string) {
     if (str === 'ROOT') return '#000000'
 
     const colors = [
@@ -191,21 +184,23 @@
   }
 </script>
 
-<section class="section">
-  <div class="full">
-    <div class="full" id="tree" />
-  </div>
+<PageWithMenu>
+  <section class="section">
+    <div class="full">
+      <div class="full" id="tree" />
+    </div>
 
-  <div>
-    <JSONTree data={treeData} />
-  </div>
+    <div>
+      <JSONTree data={treeData} />
+    </div>
 
-  <pre>
+    <pre>
     {#each $blocks as block (block.hash)}
-      {'\n' + block.height + ': ' + block.hash}
-    {/each}
+        {'\n' + block.height + ': ' + block.hash}
+      {/each}
   </pre>
-</section>
+  </section>
+</PageWithMenu>
 
 <style>
   .full {

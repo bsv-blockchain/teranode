@@ -75,8 +75,6 @@ The TX Meta Service / Store uses a number of different datastores, either in-mem
 5. **Redis**
 6. **SQL**
    * **Postgres**
-   * **SQLite**
-   * **SQLiteMemory**
 
 The TX Meta configuration implementation (datastore type) is consistent within a UBSV node (every service connects to the same specific implementation), and it is defined via settings (`txmeta_store`), as it can be seen in `main_stores.go` (`getTxMetaStore()` method).
 
@@ -269,17 +267,14 @@ The following datastores are supported (either in development / experimental or 
     - https://github.com/dgraph-io/badger.
 
 6. **SQL**:
-    - SQL-based relational database implementations like PostgreSQL, SQLite, or SQLite in-memory variant.
+    - SQL-based relational database implementations like PostgreSQL.
     - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
         - https://www.postgresql.org.
-    - SQLite: A lightweight, file-based database, useful for smaller workloads.
-        - https://www.sqlite.org/index.html.
-    - SQLite in-memory: Offers faster data access since the database resides entirely in memory, similar to the Memory store but with SQL capabilities.
 
 - The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
 - Memory-based stores (like in-memory and Redis) are typically faster but may require additional persistence mechanisms.
 - Databases like Aerospike, Badger, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
-- Nullstore and SQLite (especially in-memory) are more appropriate for testing, development, or lightweight applications.
+- Nullstore is more appropriate for testing, development, or lightweight applications.
 
 
 ### 5.3. Data Purging
@@ -385,11 +380,6 @@ txmeta_store.{ENVIRONMENT}=null:///
 - For an in-memory datastore:
 ```
 txmeta_store.{ENVIRONMENT}=memory://localhost:${TX_META_GRPC_PORT}
-```
-
-- For an SQLite datastore:
-```
-txmeta_store.{ENVIRONMENT}=sqlite:///metastore
 ```
 
 - For a PostgreSQL datastore:

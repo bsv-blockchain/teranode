@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -14,11 +15,15 @@ import (
 )
 
 func (h *HTTP) GetTransactions() func(c echo.Context) error {
+	nrTxAdded := 0
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
 			AssetStat.NewStat("GetTransactions_http").AddTime(start)
+			h.logger.Infof("[Asset_http] GetTransactions for %s: %d DONE in %s", c.Request().RemoteAddr, nrTxAdded, time.Since(start))
 		}()
+
+		h.logger.Infof("[Asset_http] GetTransactions for %s: %d", c.Request().RemoteAddr, c.Request().ContentLength)
 
 		body := c.Request().Body
 		defer body.Close()
@@ -26,8 +31,6 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
 
 		// Read the body into a 32 byte hashes one by one and stream the tx data back to the client
-		nrTxAdded := 0
-
 		g, gCtx := errgroup.WithContext(c.Request().Context())
 		g.SetLimit(1024)
 

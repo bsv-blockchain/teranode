@@ -408,7 +408,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 				}
 
 				for _, parentTxHash := range txMeta.ParentTxHashes {
-					parentTxIdx, ok := b.txMap.Get(*parentTxHash)
+					parentTxIdx, ok := b.txMap.Get(parentTxHash)
 					if ok {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
@@ -416,7 +416,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 						}
 					} else {
 						// check whether the parent is in a block on our chain
-						parentTxMeta, err := txMetaStore.Get(gCtx, parentTxHash)
+						parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
 						if err != nil && !errors.Is(err, txmetastore.ErrNotFound) {
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
@@ -485,26 +485,28 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-			if err != nil {
-				return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
-			}
+		if b.SubtreeSlices[i] == nil {
+			subtreeHash := subtreeHash
+			g.Go(func() error {
+				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				if err != nil {
+					return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
+				}
 
-			subtree := &util.Subtree{}
-			err = subtree.DeserializeFromReader(subtreeReader)
-			if err != nil {
-				return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
-			}
+				subtree := &util.Subtree{}
+				err = subtree.DeserializeFromReader(subtreeReader)
+				if err != nil {
+					return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+				}
 
-			b.SubtreeSlices[i] = subtree
+				b.SubtreeSlices[i] = subtree
 
-			sizeInBytes.Add(subtree.SizeInBytes)
-			txCount.Add(uint64(subtree.Length()))
+				sizeInBytes.Add(subtree.SizeInBytes)
+				txCount.Add(uint64(subtree.Length()))
 
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 
 	if err := g.Wait(); err != nil {

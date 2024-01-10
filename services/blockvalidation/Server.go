@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -53,11 +52,9 @@ type Server struct {
 	validatorClient  validator.Interface
 	statusClient     status.ClientI
 
-	blockFoundCh        chan processBlockFound
-	catchupCh           chan processBlockCatchup
-	blockValidation     *BlockValidation
-	processingSubtreeMu sync.Mutex
-	processingSubtree   map[chainhash.Hash]bool
+	blockFoundCh    chan processBlockFound
+	catchupCh       chan processBlockCatchup
+	blockValidation *BlockValidation
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -84,7 +81,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		statusClient:         statusClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
-		processingSubtree:    make(map[chainhash.Hash]bool),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 	}
 
@@ -535,13 +531,17 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		prometheusBlockValidationSubtreeFoundDuration.Observe(util.TimeSince(start))
 	}()
 
-	prometheusBlockValidationSubtreeFound.Inc()
-	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
-
 	subtreeHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	}
+
+	if req.GetBaseUrl() == "" {
+		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
+	}
+
+	prometheusBlockValidationSubtreeFound.Inc()
+	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", subtreeHash.String(), req.GetBaseUrl())
 
 	if u.processSubtreeNotify.Get(*subtreeHash) != nil {
 		u.logger.Warnf("[SubtreeFound][%s] already processing subtree", subtreeHash.String())
@@ -566,42 +566,31 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 		return nil, fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
 	}
 
-	goroutineStat := stat.NewStat("go routine")
-
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	setCtx = util.ContextWithStat(setCtx, stat)
+	goroutineStat := stat.NewStat("go routine")
 
 	// validate the subtree in the background
 	go func() {
-		// check if we are already processing this subtree
-		u.processingSubtreeMu.Lock()
-		processing, ok := u.processingSubtree[*subtreeHash]
-		if ok && processing {
-			u.processingSubtreeMu.Unlock()
-			u.logger.Warnf("[SubtreeFound][%s] subtree found that is already being processed", subtreeHash.String())
-			return
-		}
-
-		// add to processing map
-		u.processingSubtree[*subtreeHash] = true
-		u.processingSubtreeMu.Unlock()
-
 		// start a new span for the subtree validation
 		start = gocore.CurrentTime()
 		subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
 		defer func() {
 			goroutineStat.AddTime(start)
 			subtreeSpan.Finish()
+		}()
 
-			// remove from processing map when done
-			u.processingSubtreeMu.Lock()
-			delete(u.processingSubtree, *subtreeHash)
-			u.processingSubtreeMu.Unlock()
+		timeout, _ := gocore.Config().GetInt("blockvalidation_subtreeValidationTimeout", 60)
+		timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, time.Duration(timeout)*time.Second)
+		defer func() {
+			timeoutCancel()
+			u.processSubtreeNotify.Delete(*subtreeHash)
 		}()
 
 		subtreeSpan.LogKV("hash", subtreeHash.String())
-		err = u.blockValidation.validateSubtree(subtreeSpanCtx, subtreeHash, req.GetBaseUrl())
+		err = u.blockValidation.validateSubtree(timeoutCtx, subtreeHash, req.GetBaseUrl())
 		if err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 		}
@@ -611,6 +600,11 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "Get", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	subtree, err := u.subtreeStore.Get(ctx, request.Hash)
 	if err != nil {
 		return nil, err
@@ -645,6 +639,31 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 	}
 
 	return &blockvalidation_api.SetTxMetaResponse{
+		Ok: true,
+	}, nil
+}
+
+func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	u.logger.Warnf("GRPC SetMinedMulti %d: %d", request.BlockId, len(request.Hashes))
+
+	hashes := make([]*chainhash.Hash, 0, len(request.Hashes))
+	for _, hash := range request.Hashes {
+		hash32 := chainhash.Hash(hash)
+		hashes = append(hashes, &hash32)
+	}
+
+	prometheusBlockValidationSetMinedMulti.Inc()
+	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockvalidation_api.SetMinedMultiResponse{
 		Ok: true,
 	}, nil
 }

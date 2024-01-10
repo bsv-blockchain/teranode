@@ -1,125 +1,156 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte'
+  import { page } from '$app/stores'
+  import { SvelteToast } from '@zerodevx/svelte-toast'
+  import 'tippy.js/animations/perspective-subtle.css'
+  import { createTippy } from '$lib/actions/tooltip'
+  import { pageLinks, spinCount, contentLeft } from '$internal/stores/nav'
+  import { query } from '$lib/actions'
+  import {
+    mediaSize,
+    MediaSize,
+    theme,
+    themeNs,
+    injectedIcons,
+    injectedLogos,
+    i18n as i18nStore,
+    tippy,
+  } from '$lib/stores/media'
+  import { dark as darkTheme } from '$internal/styles/themes/dark'
+  import { sm, md, lg, xl } from '$lib/styles/breakpoints'
+  import GlobalStyle from '$lib/styles/GlobalStyle.svelte'
+  import Spinner from '$lib/components/spinner/index.svelte'
+  import i18n from '$internal/i18n'
+  import { icons } from '$internal/assets/icons'
+  import { logos } from '$internal/assets/logos'
 
-  import { connectToP2PServer } from '@stores/p2pStore.js'
-
-  let isActive = false
-
-  function toggleNavbar() {
-    isActive = !isActive
-  }
-
-  function handleNavbarItemClick() {
-    isActive = false
-  }
+  import { connectToP2PServer } from '$internal/stores/p2pStore'
 
   onMount(async () => {
     connectToP2PServer()
   })
+
+  // web fonts
+  import '$internal/assets/css/JetBrainsMono.css'
+  import '$internal/assets/css/Satoshi.css'
+
+  // tippy
+  import 'tippy.js/dist/tippy.css'
+  import 'tippy.js/animations/perspective-subtle.css'
+
+  $tippy = createTippy({
+    animation: 'perspective-subtle',
+    arrow: false,
+  })
+
+  $: {
+    $i18nStore = {
+      t: $i18n.t,
+      baseKey: '',
+    }
+  }
+
+  // inject assets
+  $injectedIcons = icons
+  $injectedLogos = logos
+
+  $theme = 'dark'
+  // $theme = 'light'
+
+  let customThemeProps = {}
+
+  $: {
+    switch ($theme) {
+      case 'dark':
+        customThemeProps = darkTheme
+        break
+      case 'light':
+        customThemeProps = {}
+        break
+      default:
+    }
+  }
+
+  $pageLinks = {
+    type: 'page-links',
+    variant: 'normal',
+    items: [
+      {
+        icon: 'icon-home-line',
+        iconSelected: 'icon-home-solid',
+        path: '/',
+        label: $i18n.t('page.home.menu-label'),
+      },
+      {
+        icon: 'icon-binoculars-line',
+        iconSelected: 'icon-binoculars-solid',
+        path: '/viewer',
+        label: $i18n.t('page.viewer.menu-label'),
+      },
+      {
+        icon: 'icon-p2p-line',
+        iconSelected: 'icon-p2p-solid',
+        path: '/p2p',
+        label: $i18n.t('page.p2p.menu-label'),
+      },
+      {
+        icon: 'icon-network-line',
+        iconSelected: 'icon-network-solid',
+        path: '/network',
+        label: $i18n.t('page.network.menu-label'),
+      },
+    ],
+  }
+
+  $: {
+    const pathname = $page.url.pathname
+
+    let items: any[] = []
+    if ($pageLinks) {
+      items = $pageLinks.items.map((route) => ({
+        ...route,
+        // selected: route.path === pathname || `${route.path}/` === pathname,
+        selected:
+          (pathname === '/' && route.path == '/') || pathname.indexOf(`${route.path}/`) === 0,
+      }))
+      $pageLinks.items = items
+    }
+  }
+
+  $: queryXl = query(xl)
+  $: queryLg = query(lg)
+  $: queryMd = query(md)
+  $: querySm = query(sm)
+
+  $: {
+    if ($queryXl) {
+      $mediaSize = MediaSize.xl
+    } else if ($queryLg) {
+      $mediaSize = MediaSize.lg
+    } else if ($queryMd) {
+      $mediaSize = MediaSize.md
+    } else if ($querySm) {
+      $mediaSize = MediaSize.sm
+    } else {
+      $mediaSize = MediaSize.xs
+    }
+  }
+
+  const toastOptions = {
+    duration: 3000, // duration of progress bar tween to the `next` value
+    pausable: true, // pause progress bar tween on mouse hover
+    dismissable: true, // allow dismiss with close button
+    reversed: false, // insert new toast to bottom of stack
+    intro: { y: 192 },
+  }
 </script>
 
-<svelte:head>
-  <!-- Include Bulma CSS for the entire app -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css"
-  />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap"
-    rel="stylesheet"
-  />
-  <link rel="preload" href="https://d3js.org/d3.v6.min.js" as="script" />
-  <script src="https://d3js.org/d3.v6.min.js" defer></script>
+<GlobalStyle theme={$theme} themeNs={$themeNs} {customThemeProps}>
+  <slot />
+</GlobalStyle>
 
-  <style>
-    body {
-      font-family: 'Roboto Mono', monospace;
-      background-color: #f4f4f4;
-      margin: 0;
-      padding: 0;
-      padding-top: 52px; /* Adjust for the height of the fixed navbar */
-    }
+{#if $spinCount > 0}
+  <Spinner offsetX={$contentLeft} coverColor="var(--app-cover-bg-color)" />
+{/if}
 
-    /* Custom darker blue color */
-    .navbar.is-primary {
-      background-color: #004466; /* Change this value to your preferred shade of dark blue */
-    }
-
-    /* Add more global styles as needed */
-  </style>
-</svelte:head>
-
-<nav class="navbar is-fixed-top is-dark" aria-label="main navigation">
-  <div class="navbar-brand">
-    <span class="navbar-item">
-      <a class="is-size-4 client centre no-highlight" href="/">
-        <img draggable="false" src="/teranode_shadow.png" alt="Teranode" />
-      </a>
-    </span>
-  </div>
-
-  <!-- svelte-ignore a11y-invalid-attribute -->
-  <a
-    role="button"
-    class="navbar-burger"
-    href="#"
-    aria-label="menu"
-    aria-expanded="false"
-    data-target="navbarBasicExample"
-    on:click={toggleNavbar}
-    class:is-active={isActive}
-  >
-    <span aria-hidden="true" />
-    <span aria-hidden="true" />
-    <span aria-hidden="true" />
-  </a>
-
-  <div id="navbarBasicExample" class="navbar-menu" class:is-active={isActive}>
-    <div class="navbar-start">
-      <a class="navbar-item" href="/viewer" on:click={handleNavbarItemClick}>
-        Viewer
-      </a>
-
-      <a class="navbar-item" href="/chain" on:click={handleNavbarItemClick}>
-        Chain
-      </a>
-      <a class="navbar-item" href="/metrics" on:click={handleNavbarItemClick}>
-        Metrics
-      </a>
-
-      <a class="navbar-item" href="/p2p" on:click={handleNavbarItemClick}>
-        P2P
-      </a>
-
-      <a class="navbar-item" href="/network" on:click={handleNavbarItemClick}>
-        Network
-      </a>
-
-      <a class="navbar-item" href="/status" on:click={handleNavbarItemClick}>
-        Status
-      </a>
-    </div>
-  </div>
-</nav>
-
-<slot />
-
-<style>
-  .client {
-    color: white;
-  }
-
-  .centre {
-    display: flex;
-    align-items: center;
-  }
-
-  .no-highlight {
-    user-select: none;
-    -webkit-user-select: none; /* Safari */
-    -moz-user-select: none; /* Firefox */
-    -ms-user-select: none; /* IE/Edge */
-  }
-</style>
+<SvelteToast options={toastOptions} />

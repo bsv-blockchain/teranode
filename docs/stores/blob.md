@@ -155,7 +155,7 @@ The Blob Server supports various backends, each suited to different storage requ
 
 - **SeaweedFS S3**: SeaweedFS with S3-compatible API support.
 
-- **SQL**: SQL-based stores include PostgreSQL, SQLite, and In-memory SQLite. [PostgreSQL Official](https://www.postgresql.org/), [SQLite Official](https://www.sqlite.org/index.html)
+- **SQL**: SQL-based stores include PostgreSQL. [PostgreSQL Official](https://www.postgresql.org/)
 
 **TODO** - which one is the production candidate?
 

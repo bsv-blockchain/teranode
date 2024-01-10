@@ -155,6 +155,16 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
 }
 
+func (c *Client) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	return c.client.GetBlockStats(ctx, &emptypb.Empty{})
+}
+
+func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	return c.client.GetBlockGraphData(ctx, &blockchain_api.GetBlockGraphDataRequest{
+		PeriodMillis: periodMillis,
+	})
+}
+
 func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
 		NumberOfBlocks: n,

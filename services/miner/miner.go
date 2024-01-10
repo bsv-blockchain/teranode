@@ -13,14 +13,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
-
-var ErrCancelled = ubsverrors.New("mining job cancelled")
 
 type Miner struct {
 	logger                           ulogger.Logger
@@ -115,10 +112,10 @@ func (m *Miner) Start(ctx context.Context) error {
 			go func(ctx context.Context) {
 				err := m.mine(ctx, m.waitSeconds)
 				if err != nil {
-					if errors.Is(err, ErrCancelled) {
-						m.logger.Infof("[Miner]: %v", err)
+					if errors.Is(err, context.Canceled) {
+						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
-						m.logger.Errorf("[Miner]: %v", err)
+						m.logger.Errorf("[Miner] %v", err)
 					}
 				} else {
 					// start the timer now, so we don't have to wait for the next tick
@@ -159,15 +156,17 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 	candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
 	if err != nil {
-		return fmt.Errorf("error getting mining candidate: %v", err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error getting mining candidate: %w", err)
 	}
-	m.logger.Debugf(candidate.Stringify())
+	m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
 
 	solution, err := cpuminer.Mine(ctx, candidate)
 	if err != nil {
-		return fmt.Errorf("error mining block on %s: %v", candidateId, err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error mining block on %s: %w", candidateId, err)
 	}
 
 	if solution == nil {
@@ -192,7 +191,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 		for {
 			select {
 			case <-ctx.Done():
-				return ErrCancelled
+				return context.Canceled
 			default:
 				time.Sleep(1 * time.Second)
 				randWait--
@@ -208,11 +207,12 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 	}
 
 	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
-	m.logger.Debugf(solution.Stringify())
+	m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
+		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error submitting mining solution for job %s: %w", candidateId, err)
 	}
 
 	prometheusBlockMined.Inc()
@@ -238,7 +238,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 		}
 		previousHash, _ = chainhash.NewHash(candidate.PreviousHash)
 
-		m.logger.Debugf(candidate.Stringify())
+		m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 		candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
 

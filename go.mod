@@ -8,6 +8,7 @@ require (
 	cloud.google.com/go/storage v1.31.0
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
+	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aerospike/aerospike-client-go/v6 v6.14.1
 	github.com/archdx/zerolog-sentry v1.7.0
 	github.com/aws/aws-sdk-go v1.44.235
@@ -34,7 +35,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.83
 	github.com/ordishs/go-utils v1.0.50
-	github.com/ordishs/gocore v1.0.54
+	github.com/ordishs/gocore v1.0.55
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
 	github.com/quic-go/quic-go v0.38.1
@@ -67,7 +68,6 @@ require (
 	cloud.google.com/go/compute v1.23.0 // indirect
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	cloud.google.com/go/iam v1.1.1 // indirect
-	github.com/VictoriaMetrics/fastcache v1.12.2 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 // indirect

@@ -231,8 +231,7 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	replicatedSubtree := subtree.Duplicate()
 	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
 
-	var calculatedMerkleRootHash *chainhash.Hash
-	calculatedMerkleRootHash = replicatedSubtree.RootHash()
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -328,9 +327,8 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 	replicatedSubtree := subtree.Duplicate()
 	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
 
-	var calculatedMerkleRootHash *chainhash.Hash
 	// if len(subtreeHashes) == 1 {
-	calculatedMerkleRootHash = replicatedSubtree.RootHash()
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 	// } else {
 	// 	calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes)
 	// 	require.NoError(t, err)
@@ -377,29 +375,29 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 }
 
 // copied from BigBlock_test
-func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
-	var calculatedMerkleRootHash *chainhash.Hash
-	if len(hashes) == 1 {
-		calculatedMerkleRootHash = hashes[0]
-	} else if len(hashes) > 0 {
-		// Create a new subtree with the hashes of the subtrees
-		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
-		if err != nil {
-			return nil, err
-		}
-		for _, hash := range hashes {
-			err := st.AddNode(*hash, 1, 0)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		calculatedMerkleRoot := st.RootHash()
-		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return calculatedMerkleRootHash, nil
-}
+//func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
+//	var calculatedMerkleRootHash *chainhash.Hash
+//	if len(hashes) == 1 {
+//		calculatedMerkleRootHash = hashes[0]
+//	} else if len(hashes) > 0 {
+//		// Create a new subtree with the hashes of the subtrees
+//		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+//		if err != nil {
+//			return nil, err
+//		}
+//		for _, hash := range hashes {
+//			err := st.AddNode(*hash, 1, 0)
+//			if err != nil {
+//				return nil, err
+//			}
+//		}
+//
+//		calculatedMerkleRoot := st.RootHash()
+//		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
+//		if err != nil {
+//			return nil, err
+//		}
+//	}
+//
+//	return calculatedMerkleRootHash, nil
+//}

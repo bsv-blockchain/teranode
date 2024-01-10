@@ -215,6 +215,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 
 	objectKey := g.getObjectKey(key)
 
+	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
+	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+
 	result, err := g.client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,

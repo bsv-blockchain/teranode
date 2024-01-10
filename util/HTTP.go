@@ -7,6 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/ordishs/gocore"
+)
+
+var (
+	httpRequestTimeout, _ = gocore.Config().GetInt("http_timeout", 60)
 )
 
 func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
@@ -40,6 +47,8 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 }
 
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	ctx, _ = context.WithTimeout(ctx, time.Duration(httpRequestTimeout)*time.Second) //nolint:govet
+
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

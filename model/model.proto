@@ -48,6 +48,15 @@ message BlockInfo {
   uint64 size = 8;
 }
 
+// swagger:model BlockStats
+message BlockStats {
+  uint64 block_count = 1;
+  uint64 tx_count = 2;
+  uint64 max_height = 3;
+  double avg_block_size = 4;
+  double avg_tx_count_per_block = 5;
+}
+
 // swagger:model AnnounceStatusRequest
 message AnnounceStatusRequest {
   google.protobuf.Timestamp timestamp = 1;
@@ -56,4 +65,14 @@ message AnnounceStatusRequest {
   string subtype = 4;
   string value = 5;
   google.protobuf.Timestamp expires_at = 6;
+}
+
+message DataPoint {
+  uint32 timestamp = 1;
+  uint64 tx_count = 2;
+}
+
+// swagger:model GetBlockGraphDataResponse
+message BlockDataPoints {
+  repeated DataPoint data_points = 1;
 }

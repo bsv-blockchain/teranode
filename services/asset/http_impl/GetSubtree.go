@@ -8,22 +8,41 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
+// calculateSpeed takes the duration of the transfer and the size of the data transferred (in bytes)
+// and returns the speed in kilobytes per second.
+func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
+	// Convert duration to seconds
+	seconds := duration.Seconds()
+
+	// Calculate speed in KB/s
+	speed := sizeInKB / seconds
+
+	return speed
+}
+
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
+		var b []byte
+
 		start := gocore.CurrentTime()
 		stat := AssetStat.NewStat("GetSubtree_http")
+
 		defer func() {
 			stat.AddTime(start)
+			duration := time.Since(start)
+			sizeInKB := float64(len(b)) / 1024
+
+			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
 		}()
 
-		h.logger.Debugf("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
 			return err
@@ -38,7 +57,8 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
-		stat.NewStat("Get Subtree from repository").AddTime(start2)
+
+		start2 = stat.NewStat("Get Subtree from repository").AddTime(start2)
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
@@ -51,10 +71,12 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		// If we did not serve JSON, we need to serialize the nodes into a byte slice.
 		// We use SerializeNodes() for this which does NOT include the fees and sizes.
-		b, err := subtree.SerializeNodes()
+		b, err = subtree.SerializeNodes()
 		if err != nil {
 			return err
 		}
+
+		stat.NewStat("Serialize Subtree").AddTime(start2)
 
 		switch mode {
 		case BINARY_STREAM:
@@ -150,15 +172,18 @@ func readFull(reader io.Reader, buf []byte) (int, error) {
 
 func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start := gocore.CurrentTime()
-	stat := AssetStat.NewStat("GetSubtree_http")
+	stat := AssetStat.NewStat("GetSubtreeAsReader_http")
 	defer func() {
 		stat.AddTime(start)
+		h.logger.Infof("[Asset_http] GetSubtree using reader for %s: %s DONE in %s", c.Request().RemoteAddr, c.Param("hash"), time.Since(start))
 	}()
 
 	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 	if err != nil {
 		return err
 	}
+
+	h.logger.Infof("[Asset_http] GetSubtree using reader for %s: %s", c.Request().RemoteAddr, c.Param("hash"))
 
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
@@ -179,56 +204,4 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	}
 
 	return c.Stream(200, echo.MIMEOctetStream, r)
-}
-
-func (h *HTTP) GetSubtreeStream() func(c echo.Context) error {
-	return func(c echo.Context) error {
-		start := gocore.CurrentTime()
-		defer func() {
-			AssetStat.NewStat("GetSubtreeStream_http").AddTime(start)
-		}()
-
-		h.logger.Debugf("[Asset_http] GetSubtreeStream for %s: %s", c.Request().RemoteAddr, c.Param("hash"))
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return err
-		}
-
-		subtreeBytes, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
-		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		subtree := &util.Subtree{}
-		nodeChan, errChan, err := subtree.DeserializeChan(subtreeBytes)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-
-		// Set response type
-		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
-		c.Response().WriteHeader(http.StatusOK)
-
-		for {
-			select {
-			case node, ok := <-nodeChan:
-				if !ok {
-					return nil // Channel closed, end of stream
-				}
-				if _, err := c.Response().Write(node.Hash[:]); err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError, "Failed to write to response")
-				}
-				c.Response().Flush()
-
-			case err := <-errChan:
-				if err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
-			}
-		}
-	}
 }

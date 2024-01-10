@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,9 +17,10 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
 			AssetStat.NewStat("GetBlock_http").AddTime(start)
+			h.logger.Infof("[Asset_http] GetBlockByHeight in %s for %s: %s DONE in %s", mode, c.Request().RemoteAddr, c.Param("height"), time.Since(start))
 		}()
 
-		h.logger.Debugf("[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
+		h.logger.Infof("[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height"))
 		height, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())

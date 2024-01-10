@@ -16,6 +16,16 @@ type fRPC_Validator struct {
 	v *Server
 }
 
+func (f *fRPC_Validator) GetBlockHeight(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiGetBlockHeightResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (f *fRPC_Validator) Subscribe(req *validator_api.ValidatorApiSubscribeRequest, srv *validator_api.SubscribeServer) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (f *fRPC_Validator) HealthGRPC(ctx context.Context, message *validator_api.ValidatorApiEmptyMessage) (*validator_api.ValidatorApiHealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {

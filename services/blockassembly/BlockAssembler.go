@@ -133,28 +133,28 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 						continue
 					}
-					b.logger.Infof("[BlockAssembler] new best block header: %d: %s", meta.Height, bestBlockchainBlockHeader.Hash())
+					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
-						b.logger.Infof("[BlockAssembler] best block header is the same as the current best block header: %s", b.bestBlockHeader.Hash())
+						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						// we already have this block, nothing to do
 						continue
 					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
-						b.logger.Infof("[BlockAssembler] best block header is not the same as the previous best block header, reorging: %s", b.bestBlockHeader.Hash())
+						b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
-							b.logger.Errorf("[BlockAssembler] error handling reorg: %v", err)
+							b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
 						}
 					} else {
-						b.logger.Infof("[BlockAssembler] best block header is the same as the previous best block header, moving up: %s", b.bestBlockHeader.Hash())
+						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
-							b.logger.Errorf("[BlockAssembler] error getting block from blockchain: %v", err)
+							b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
 						}
 
 						if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-							b.logger.Errorf("[BlockAssembler] error moveUpBlock in subtree processor: %v", err)
+							b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
 						}
 					}
@@ -164,13 +164,15 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					err = b.SetState(ctx)
 					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
+						b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 					}
 
 					err = b.setCurrentChain(ctx)
 					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
+						b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
 					}
+
+					b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 				}
 			}
 		}

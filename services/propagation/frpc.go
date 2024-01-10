@@ -12,6 +12,16 @@ type fRPC_Propagation struct {
 	ps *PropagationServer
 }
 
+func (f *fRPC_Propagation) ProcessTransactionHex(ctx context.Context, request *propagation_api.PropagationApiProcessTransactionHexRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (f *fRPC_Propagation) ProcessTransactionStream(srv *propagation_api.ProcessTransactionStreamServer) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (f *fRPC_Propagation) HealthGRPC(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {

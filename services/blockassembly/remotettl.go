@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"io"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ type WrapperInterface interface {
 	Get(ctx context.Context, key []byte) ([]byte, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
+	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 }
 
 type Wrapper struct {

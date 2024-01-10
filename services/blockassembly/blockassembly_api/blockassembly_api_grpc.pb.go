@@ -21,7 +21,6 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	BlockAssemblyAPI_HealthGRPC_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
-	BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/NewChaintipAndHeight"
 	BlockAssemblyAPI_AddTx_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/AddTx"
 	BlockAssemblyAPI_RemoveTx_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
 	BlockAssemblyAPI_AddTxBatch_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
@@ -35,7 +34,6 @@ const (
 type BlockAssemblyAPIClient interface {
 	// Health returns the health of the API.
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
-	NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
 	RemoveTx(ctx context.Context, in *RemoveTxRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
@@ -54,15 +52,6 @@ func NewBlockAssemblyAPIClient(cc grpc.ClientConnInterface) BlockAssemblyAPIClie
 func (c *blockAssemblyAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error) {
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_HealthGRPC_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockAssemblyAPIClient) NewChaintipAndHeight(ctx context.Context, in *NewChaintipAndHeightRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
-	out := new(EmptyMessage)
-	err := c.cc.Invoke(ctx, BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +109,6 @@ func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *S
 type BlockAssemblyAPIServer interface {
 	// Health returns the health of the API.
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
-	NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error)
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
 	RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error)
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
@@ -135,9 +123,6 @@ type UnimplementedBlockAssemblyAPIServer struct {
 
 func (UnimplementedBlockAssemblyAPIServer) HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
-}
-func (UnimplementedBlockAssemblyAPIServer) NewChaintipAndHeight(context.Context, *NewChaintipAndHeightRequest) (*EmptyMessage, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method NewChaintipAndHeight not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
@@ -181,24 +166,6 @@ func _BlockAssemblyAPI_HealthGRPC_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockAssemblyAPIServer).HealthGRPC(ctx, req.(*EmptyMessage))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockAssemblyAPI_NewChaintipAndHeight_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NewChaintipAndHeightRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockAssemblyAPIServer).NewChaintipAndHeight(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockAssemblyAPI_NewChaintipAndHeight_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockAssemblyAPIServer).NewChaintipAndHeight(ctx, req.(*NewChaintipAndHeightRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -303,10 +270,6 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HealthGRPC",
 			Handler:    _BlockAssemblyAPI_HealthGRPC_Handler,
-		},
-		{
-			MethodName: "NewChaintipAndHeight",
-			Handler:    _BlockAssemblyAPI_NewChaintipAndHeight_Handler,
 		},
 		{
 			MethodName: "AddTx",

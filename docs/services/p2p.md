@@ -377,7 +377,7 @@ To run the P2P Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the P2P Service locally.
 
 ## 7. Configuration options (settings flags)
 
