@@ -254,7 +254,7 @@ At a high level, the UBSV node performs the following functions:
 1. **Transaction Submission**: Transactions are submitted to the network via the Submission Service. UBSV nodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
 
 
-2. **Transaction Validation**: Transactions are validated by the TX Validation Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the TX Meta Store, indicating they have not been included in a block yet and are eligible for inclusion.
+2. **Transaction Validation**: Transactions are validated by the TX Validation Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the TX Status Store, indicating they have not been included in a block yet and are eligible for inclusion.
 
 
 3. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. "Subtrees" are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
@@ -347,11 +347,11 @@ Here is a breakdown of the components as shown:
 
 ### 4.3. Block Assembly Service
 
-The service is responsible for creating subtree and block templates for Miner Services to hash against. The Block Assembly will broadcast any newly created subtrees to the network.
+The service is responsible for creating subtrees, as well as mining candidates (blocks) for Miner Services to hash against. The Block Assembly will broadcast any newly created subtrees and blocks to the network.
 
 There are two distinct processes that the Block Assembly Service performs:
 
-1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [UBSV Data Model](#23-ubsv-data-model) section, subtrees are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transaction. Once a subtree is created, it is broadcast to all other nodes in the network.
+1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [UBSV Data Model](#23-ubsv-data-model) section, subtrees are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A UBSV subtree is designed to contain at least 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
 
 
 2. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
