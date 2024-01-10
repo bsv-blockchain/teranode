@@ -1,0 +1,39 @@
+@startuml
+participant "Client Code" as Client
+participant "BlockAssembly" as BA
+participant "Logger" as Logger
+participant "Stores" as Stores
+participant "BlockchainClient" as Blockchain
+entity "SubtreeProcessor" as SubtreeProc
+entity "JobStore" as JobStore
+entity "GRPCServer" as GRPC
+
+== New ==
+Client -> BA : New(logger, stores, blockchainClient...)
+activate BA
+BA -> Logger : Initialize logger
+BA -> Stores : Initialize stores (txStore, utxoStore, etc.)
+BA -> Blockchain : Initialize blockchain client
+BA -> SubtreeProc : Initialize subtree processor
+BA -> JobStore : Initialize job store
+BA --> Client : Return instance
+deactivate BA
+
+== Init ==
+Client -> BA : Init(ctx)
+activate BA
+BA -> BA : Setup internal channels
+BA -> SubtreeProc : Start subtree processor
+BA -> JobStore : Start job store
+BA --> Client : Initialization complete
+deactivate BA
+
+== Start ==
+Client -> BA : Start(ctx)
+activate BA
+BA -> GRPC : Start gRPC server
+GRPC -> BA : Register block assembly service
+BA -> BA : Start internal listeners (Kafka, gRPC, fRPC)
+BA --> Client : Start complete
+deactivate BA
+@enduml

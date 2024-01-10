@@ -1,0 +1,79 @@
+@startuml
+participant "Mining" as Miner
+participant "Block Assembly Client" as Client
+participant "Block Assembly Server" as Server
+participant "blockSubmissionCh" as SubmissionCh
+database "JobStore" as JobStore
+entity "Block" as Block
+entity "Model" as Model
+database "Transaction Store" as TxStore
+database "Transaction Meta Store" as TxMetaStore
+database "Subtree Store" as SubtreeStore
+participant "Blockchain Client" as BlockchainClient
+
+Miner -> Miner : Solve the mining challenge
+
+Miner -> Client : SubmitMiningSolution(ctx, solution)
+activate Client
+
+Client -> Server : SubmitMiningSolution(ctx, solution)
+activate Server
+
+Server -> SubmissionCh : Add block submission
+SubmissionCh -> Server : submitMiningSolution(ctx, blockSubmission)
+
+Server -> JobStore : jobItem = Get(*storeId)
+activate JobStore
+JobStore --> Server : return jobItem
+deactivate JobStore
+
+Server -> Server : Create new block with proof of work
+Server -> Block : block.Valid(cntxt, nil, nil, nil)
+activate Block
+Block --> Server : Validation result
+deactivate Block
+
+Server -> TxStore : Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+activate TxStore
+TxStore --> Server : Coinbase Transaction stored
+deactivate TxStore
+
+Server -> TxMetaStore : Create(cntxt, block.CoinbaseTx)
+activate TxMetaStore
+TxMetaStore --> Server : Coinbase Metadata stored
+deactivate TxMetaStore
+
+Server -> BlockchainClient : AddBlock(cntxt, block, "")
+activate BlockchainClient
+BlockchainClient --> Server : Block added to the local Blockchain
+deactivate BlockchainClient
+
+Server -> SubtreeStore : removeSubtreesTTL(gCtx, block)
+activate SubtreeStore
+loop for each subtree
+    SubtreeStore -> SubtreeStore : SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
+end
+SubtreeStore --> Server : Subtrees TTL updated
+deactivate SubtreeStore
+
+Server -> Model : UpdateTxMinedStatus(gCtx, logger, txMetaStore, subtreesInJob, block.Header)
+activate Model
+Model -> TxMetaStore: SetMinedMulti(gCtx, hashes, blockID)
+Model --> TxMetaStore : TX Status updated as mined (for all Txs in all Subtrees)
+deactivate Model
+
+Server -> JobStore : DeleteAll()
+JobStore --> Server : All jobs deleted
+
+alt If Error Occurs
+    Server -> BlockchainClient : InvalidateBlock(setCtx, block.Header.Hash())
+    activate BlockchainClient
+    BlockchainClient --> Server : Block invalidated
+    deactivate BlockchainClient
+end
+
+Server --> Client : Return result
+deactivate Server
+Client --> Miner : Return result
+deactivate Client
+@enduml

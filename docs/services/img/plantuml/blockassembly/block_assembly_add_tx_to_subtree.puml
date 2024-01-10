@@ -1,0 +1,41 @@
+@startuml
+participant "SubtreeProcessor" as SubtreeProc
+queue "Queue" as TxQueue
+entity "Current SubTree" as currentSubtree
+participant "Block Assembly Server" as Server
+participant "SubtreeStore" as Store
+participant "BlockchainClient" as Blockchain
+
+loop
+    TxQueue -> SubtreeProc : txReq = queue.dequeue()
+    SubtreeProc -> SubtreeProc : addNode(txReq, false)
+    activate SubtreeProc
+    SubtreeProc -> currentSubtree : AddSubtreeNode(txReq)
+    SubtreeProc -> currentSubtree : IsComplete()
+    currentSubtree --> SubtreeProc : true / false
+
+    alt if Subtree is Complete
+        SubtreeProc -> Server : Send currentSubtree through an internal channel
+        deactivate SubtreeProc
+        activate Server
+        Server -> Store : Exists(ctx, subtree.RootHash()[:])
+        activate Store
+        Store --> Server : Exists / not exists
+        deactivate Store
+
+        alt if Subtree does not exist
+            Server -> Store : Set(ctx, subtree.RootHash()[:], subtreeBytes, options.WithTTL(subtreeTTL))
+            activate Store
+            Store --> Server : Subtree stored
+            deactivate Store
+
+            Server -> Blockchain : SendNotification(ctx, &model.Notification{Type: NotificationType_Subtree, Hash: subtree.RootHash()})
+            activate Blockchain
+            Blockchain --> Server : Notification sent
+            deactivate Blockchain
+        end
+    end
+
+    deactivate Server
+end
+@enduml

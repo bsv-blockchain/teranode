@@ -1,0 +1,32 @@
+@startuml
+
+participant "Block Assembler" as BA
+participant "Blockchain Client" as BC
+participant "Subtree Processor" as STP
+database "Subtree Store" as SStore
+
+BA -> BC: GetBlock(ctx, bestBlockchainBlockHeader.Hash())
+activate BC
+BC --> BA: block / err
+deactivate BC
+BA -> STP: MoveUpBlock(block)
+activate STP
+
+STP -> STP: moveUpBlockChan <- moveBlockRequest
+STP -> STP: Process moveBlockRequest
+activate STP
+
+STP -> SStore: Get subtrees from store
+activate SStore
+SStore --> STP: Subtrees
+deactivate SStore
+
+STP -> STP: Process coinbase utxos
+STP -> STP: Create transaction map from block subtrees
+STP -> STP: Update current subtree with pending transactions
+
+STP --> BA: err / nil
+deactivate STP
+deactivate BA
+
+@enduml
