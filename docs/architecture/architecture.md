@@ -318,7 +318,7 @@ Note:
 
 The Transaction Validation Service is responsible for validating a transaction according to the rules of the Bitcoin network and then sending the approved transaction ID forwards to block assembly.
 
-The transactions that have passed the TX Validation Service are immediately marked as spent in the UTXO store.
+The transactions that have passed the TX Validation Service are immediately marked as spent in the UTXO ("Unspent Transaction Output (UTXO)" store.
 
 After the UTXOs have been marked as spent, the transaction metadata is stored in the TX Status store and sent onwards to the Block Assembly Service via a Message Broker.
 
@@ -531,7 +531,7 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ### 4.7. Asset Service
 
-The Asset Service serves acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
+The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
 - **Transactions (TX)**.
 
