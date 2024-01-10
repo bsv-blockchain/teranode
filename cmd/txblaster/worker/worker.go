@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ordishs/gocore"
 	"net"
 	"sync/atomic"
 	"time"
@@ -168,11 +169,13 @@ func NewWorker(
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
-	// clone the distributor so we create new connections for each worker
-	//txDistributor, err = txDistributor.Clone()
-	//if err != nil {
-	//	logger.Fatalf("error creating tx distributor: %v", err)
-	//}
+	// clone the distributor, so we create new connections for each worker
+	if gocore.Config().GetBool("txblaster_distributorClone", true) {
+		txDistributor, err = txDistributor.Clone()
+		if err != nil {
+			logger.Fatalf("error creating tx distributor: %v", err)
+		}
+	}
 
 	return &Worker{
 		logger:            logger,
