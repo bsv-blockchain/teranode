@@ -1,18 +1,18 @@
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: italic;
   font-weight: 900;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-blackitalic-webfont.woff2') format('woff2');
-}
+} */
 
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: normal;
   font-weight: 900;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-black-webfont.woff2') format('woff2');
-}
+} */
 
 @font-face {
   font-family: 'Satoshi';
@@ -30,37 +30,37 @@
   src: url('/fonts/satoshi/satoshi-bold-webfont.woff2') format('woff2');
 }
 
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: italic;
   font-weight: 500;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-mediumitalic-webfont.woff2') format('woff2');
-}
+} */
 
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-medium-webfont.woff2') format('woff2');
-}
+} */
 
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: italic;
   font-weight: 200;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-lightitalic-webfont.woff2') format('woff2');
-}
+} */
 
-@font-face {
+/* @font-face {
   font-family: 'Satoshi';
   font-style: normal;
   font-weight: 300;
   font-display: swap;
   src: url('/fonts/satoshi/satoshi-light-webfont.woff2') format('woff2');
-}
+} */
 
 @font-face {
   font-family: 'Satoshi';
