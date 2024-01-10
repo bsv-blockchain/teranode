@@ -266,7 +266,7 @@ At a high level, the UBSV node performs the following functions:
 
 
 
-5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. These templates are pre-blocks that the node miner service will use to create a full block. Once a hashing solution has been found, the block is broadcasted to all other nodes for validation.
+5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. These templates are pre-blocks that the node miner service will use to create a full block. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
 
 
 6. **Block Validation**: Once a node finds a valid hashing solution (a successful proof-of-work), the found block is sent to the Block Validation Service. This service checks the new block against the network's consensus rules. If the block is valid, the node will append it to their version of the blockchain.
@@ -296,7 +296,7 @@ Here is a breakdown of the components as shown:
 1. **TX Storage Service:** This is a datastore that holds all received transactions, either invalid or eligible for inclusion in the next block template.
 
 
-2. **Multicast Receiver Service (Multiple Instances):** These services are responsible for listening to transactions that are being broadcasted over the network. These services listen on IPV6 multicast network addresses reserved for Bitcoin transactions. There are multiple instances, each listening to a set of fixed IPV6 addresses, offering a horizontally scalable design that allows for handling more transactions by increasing the number of service instances. There can be an arbitrary number of these multicast receiver services operating, which is part of how the system achieves scalability.
+2. **Multicast Receiver Service (Multiple Instances):** These services are responsible for listening to transactions that are being broadcast over the network. These services listen on IPV6 multicast network addresses reserved for Bitcoin transactions. There are multiple instances, each listening to a set of fixed IPV6 addresses, offering a horizontally scalable design that allows for handling more transactions by increasing the number of service instances. There can be an arbitrary number of these multicast receiver services operating, which is part of how the system achieves scalability.
 
 
 3. **Message Broker:** This is the communication layer that the multicast receiver services use to forward the extended transactions to the Validation service. The use of a message broker introduces decoupling between the services, allowing for more scalable and maintainable systems.
@@ -351,10 +351,10 @@ The service is responsible for creating subtree and block templates for Miner Se
 
 There are two distinct processes that the Block Assembly Service performs:
 
-1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [UBSV Data Model](#23-ubsv-data-model) section, subtrees are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transaction. Once a subtree is created, it is broadcasted to all other nodes in the network.
+1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [UBSV Data Model](#23-ubsv-data-model) section, subtrees are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transaction. Once a subtree is created, it is broadcast to all other nodes in the network.
 
 
-2. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. Once a hashing solution has been found, the block is broadcasted to all other nodes for validation.
+2. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
 
 
 ![UBSV_Block_Assembly_MVP_Service_Overview.png](img%2FUBSV_Block_Assembly_MVP_Service_Overview.png)
