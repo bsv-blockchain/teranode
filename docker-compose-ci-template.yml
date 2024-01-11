@@ -243,6 +243,17 @@ services:
       - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
+  p2p-bootstrap-1:
+    build:
+      context: ./modules/p2pBootstrap
+      dockerfile: Dockerfile
+    environment:
+      P2P_BOOTSTRAP_PORT: 9901
+      SETTINGS_CONTEXT: "docker"
+    networks:
+      - ubsv-network
+    ports:
+      - "9901:9901"
   # ubsv-3:
   #   <<: *ubsv-base
   #   command: ["./ubsv", "-miner=0", "-coinbase=0"]
