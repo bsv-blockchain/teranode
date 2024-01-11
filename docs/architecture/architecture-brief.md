@@ -33,34 +33,28 @@ The diagram below shows all the different microservices, together with their int
 
 ## 2. Data Model and Propagation
 
-Let's examine the differences between the original Bitcoin data model and the UBSV data model.
+UBSV strictly adheres to the Bitcoin Whitepaper, while introducing ground-breaking enhancements.  Let's examine the differences between the original Bitcoin data model and the UBSV data model.
 
-### 2.1. Block Size
+### 2.1. Advantages of the UBSV Model
 
-- **Bitcoin**: Originally capped at 1MB, restricting transactions per block.
-- **BSV**: Expanded to 4GB, increasing transaction capacity.
-- **UBSV**: Removes size limit, enabling potentially limitless transactions per block.
-
-### 2.2. Bitcoin - Transaction and Block Data Model:
-
-Bitcoin uses a blockchain, a decentralized ledger, to record transactions.
-Transactions are grouped into blocks.
-Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain.
+| Feature                               | Bitcoin                                                                                                                                                                                        | UBSV                                                                                                                                                                                                                                                                   |
+|---------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Transactions**                      | Standard Bitcoin transaction model.                                                                                                                                                            | Adopts an extended format with extra metadata, improving processing efficiency.                                                                                                                                                                                        |
+| **SubTrees**                          | Not used.                                                                                                                                                                                      | A novel concept in UBSV, serving as an intermediary for holding transaction IDs and their Merkle roots.  </br></br> Each subtree contains 1 million transactions. Subtrees are broadcast every second. </br></br>Broadcast frequently for faster and continuous data propagation. |
+| **Blocks**                            | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | Differ from traditional Bitcoin blocks by containing subtree identifiers instead of direct transaction data, streamlining validation processes.                                                                                                                        |
+| **Block Size**                        | Originally capped at 1MB, restricting transactions per block.                                                                                                                                  | Current BSV expands to 4GB, increasing transaction capacity. <br/><br/>UBSV removes size limit, enabling limitless transactions per block.                                                                                                                             |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guaranteees a minimum of **1 million transactions per second** (this is more than 100,000 times the original bitcoin).                                                                                                                                                 |
 
 
-### 2.3. UBSV Data Model:
+&nbsp;
 
-- **Transactions**: Adopts an extended format with extra metadata (on top of the known Bitcoin transaction model), improving processing efficiency.
+### 2.2. Advantages of the UBSV Model
 
-- **SubTrees**: A novel concept in UBSV, serving as an intermediary for holding transaction IDs and their Merkle roots. They are broadcast frequently, enabling faster and continuous data propagation.
-
-- **Blocks**: Differ from traditional Bitcoin blocks by containing subtree identifiers instead of direct transaction data, streamlining validation processes.
-
-### 2.4. Advantages of the UBSV Model:
 Enhances validation speed and scalability. The continuous broadcasting of subtrees allows for more consistent and efficient data validation and network behavior.
 
-### 2.5. Network Behavior:
-Characterized by its proactive approach, with nodes broadcasting and validating subtrees regularly, leading to expedited block validation and higher transaction throughput.
+### 2.3. Network Behavior
+
+The UBSV network behaviour is characterized by its proactive approach, with nodes broadcasting and validating subtrees regularly, leading to expedited block validation and higher transaction throughput.
 
 ## 3. Node Workflow
 
