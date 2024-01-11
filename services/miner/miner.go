@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -112,7 +113,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			go func(ctx context.Context) {
 				err := m.mine(ctx, m.waitSeconds)
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
 						m.logger.Errorf("[Miner] %v", err)
