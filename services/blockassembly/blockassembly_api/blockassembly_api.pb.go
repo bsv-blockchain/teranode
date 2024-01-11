@@ -21,7 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// swagger:model EmptyMessage
+// An empty message used as a placeholder or a request with no data.
 type EmptyMessage struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -60,14 +60,14 @@ func (*EmptyMessage) Descriptor() ([]byte, []int) {
 	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{0}
 }
 
-// swagger:model HealthResponse
+// Contains the health status of the service. Includes an 'ok' flag indicating health status, details providing more context, and a timestamp.
 type HealthResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok        bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Details   string `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	Ok        bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`               // true if the service is healthy
+	Details   string `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`      // optional, human-readable details
 	Timestamp uint32 `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // unix timestamp
 }
 
@@ -124,14 +124,14 @@ func (x *HealthResponse) GetTimestamp() uint32 {
 	return 0
 }
 
-// swagger:model NewChaintipAndHeightRequest
+// Request for adding a new chaintip and height information.
 type NewChaintipAndHeightRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Chaintip []byte `protobuf:"bytes,1,opt,name=chaintip,proto3" json:"chaintip,omitempty"`
-	Height   uint32 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	Chaintip []byte `protobuf:"bytes,1,opt,name=chaintip,proto3" json:"chaintip,omitempty"` // the chaintip hash
+	Height   uint32 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`    // the height of the chaintip in the blockchain
 }
 
 func (x *NewChaintipAndHeightRequest) Reset() {
@@ -180,17 +180,17 @@ func (x *NewChaintipAndHeightRequest) GetHeight() uint32 {
 	return 0
 }
 
-// swagger:model AddTxRequest
+// Request for adding a new transaction to the mining candidate block.
 type AddTxRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Txid     []byte   `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
-	Fee      uint64   `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`
-	Size     uint64   `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
-	Locktime uint32   `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`
-	Utxos    [][]byte `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`
+	Txid     []byte   `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`          // the transaction id
+	Fee      uint64   `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`           // the transaction fee in satoshis
+	Size     uint64   `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`         // the size of the transaction in bytes
+	Locktime uint32   `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"` // the earliest time a transaction can be mined into a block
+	Utxos    [][]byte `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`        // the UTXOs consumed by this transaction
 }
 
 func (x *AddTxRequest) Reset() {
@@ -260,13 +260,13 @@ func (x *AddTxRequest) GetUtxos() [][]byte {
 	return nil
 }
 
-// swagger:model AddTxRequest
+// Request for adding a batch of transactions to the mining candidate block.
 type AddTxBatchRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	TxRequests []*AddTxRequest `protobuf:"bytes,1,rep,name=txRequests,proto3" json:"txRequests,omitempty"`
+	TxRequests []*AddTxRequest `protobuf:"bytes,1,rep,name=txRequests,proto3" json:"txRequests,omitempty"` // a batch of transaction requests
 }
 
 func (x *AddTxBatchRequest) Reset() {
@@ -308,13 +308,13 @@ func (x *AddTxBatchRequest) GetTxRequests() []*AddTxRequest {
 	return nil
 }
 
-// swagger:model RemoveTxRequest
+// Request for removing a transaction from the mining candidate block.
 type RemoveTxRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Txid []byte `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
+	Txid []byte `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"` // the transaction id to remove
 }
 
 func (x *RemoveTxRequest) Reset() {
@@ -356,13 +356,13 @@ func (x *RemoveTxRequest) GetTxid() []byte {
 	return nil
 }
 
-// swagger:model AddTxResponse
+// Response indicating whether the addition of a transaction was successful.
 type AddTxResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"` // true if the transaction was successfully added
 }
 
 func (x *AddTxResponse) Reset() {
@@ -404,14 +404,14 @@ func (x *AddTxResponse) GetOk() bool {
 	return false
 }
 
-// swagger:model AddTxResponse
+// Response indicating whether the addition of a batch of transactions was successful.
 type AddTxBatchResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok         bool     `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	TxIdErrors [][]byte `protobuf:"bytes,2,rep,name=txIdErrors,proto3" json:"txIdErrors,omitempty"`
+	Ok         bool     `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`                // true if the transactions were successfully added
+	TxIdErrors [][]byte `protobuf:"bytes,2,rep,name=txIdErrors,proto3" json:"txIdErrors,omitempty"` // list of transaction IDs that encountered errors
 }
 
 func (x *AddTxBatchResponse) Reset() {
@@ -460,17 +460,17 @@ func (x *AddTxBatchResponse) GetTxIdErrors() [][]byte {
 	return nil
 }
 
-// swagger:model SubmitMiningSolutionRequest
+// Request for submitting a mining solution to the blockchain.
 type SubmitMiningSolutionRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Id         []byte `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Nonce      uint32 `protobuf:"varint,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	CoinbaseTx []byte `protobuf:"bytes,3,opt,name=coinbase_tx,json=coinbaseTx,proto3" json:"coinbase_tx,omitempty"`
-	Time       uint32 `protobuf:"varint,4,opt,name=time,proto3" json:"time,omitempty"`
-	Version    uint32 `protobuf:"varint,5,opt,name=version,proto3" json:"version,omitempty"`
+	Id         []byte `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                   // the id of the mining candidate
+	Nonce      uint32 `protobuf:"varint,2,opt,name=nonce,proto3" json:"nonce,omitempty"`                            // the nonce value used for mining
+	CoinbaseTx []byte `protobuf:"bytes,3,opt,name=coinbase_tx,json=coinbaseTx,proto3" json:"coinbase_tx,omitempty"` // the coinbase transaction bytes
+	Time       uint32 `protobuf:"varint,4,opt,name=time,proto3" json:"time,omitempty"`                              // the timestamp of the block
+	Version    uint32 `protobuf:"varint,5,opt,name=version,proto3" json:"version,omitempty"`                        // the version of the block
 }
 
 func (x *SubmitMiningSolutionRequest) Reset() {
@@ -540,13 +540,13 @@ func (x *SubmitMiningSolutionRequest) GetVersion() uint32 {
 	return 0
 }
 
-// swagger:model SubmitMiningCandidateResponse
+// Response indicating whether the submission of a mining solution was successful.
 type SubmitMiningSolutionResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"` // true if the solution was successfully submitted
 }
 
 func (x *SubmitMiningSolutionResponse) Reset() {

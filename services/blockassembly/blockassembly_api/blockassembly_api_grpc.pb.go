@@ -34,10 +34,15 @@ const (
 type BlockAssemblyAPIClient interface {
 	// Health returns the health of the API.
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
+	// Adds a transaction to the list of transactions to be included in the next available Subtree.
 	AddTx(ctx context.Context, in *AddTxRequest, opts ...grpc.CallOption) (*AddTxResponse, error)
+	// Removes a transaction from the list of transactions to be included in the next available Subtree.
 	RemoveTx(ctx context.Context, in *RemoveTxRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// Adds a batch of transactions to the list of transactions to be included in the next available Subtree.
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
+	// Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*model.MiningCandidate, error)
+	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
 }
 
@@ -109,10 +114,15 @@ func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *S
 type BlockAssemblyAPIServer interface {
 	// Health returns the health of the API.
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
+	// Adds a transaction to the list of transactions to be included in the next available Subtree.
 	AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error)
+	// Removes a transaction from the list of transactions to be included in the next available Subtree.
 	RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error)
+	// Adds a batch of transactions to the list of transactions to be included in the next available Subtree.
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
+	// Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
+	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }

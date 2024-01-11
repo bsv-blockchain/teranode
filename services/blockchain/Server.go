@@ -278,6 +278,24 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 	}, nil
 }
 
+func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetSuitableBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainGetSuitableBlock.Inc()
+
+	blockInfo, err := b.store.GetSuitableBlock(ctx1, (*chainhash.Hash)(request.Hash))
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetSuitableBlockResponse{
+		Block: blockInfo,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockExists", stats)
 	defer func() {

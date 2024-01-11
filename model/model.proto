@@ -48,6 +48,14 @@ message BlockInfo {
   uint64 size = 8;
 }
 
+// swagger:model SuitableBlock
+message SuitableBlock {
+  bytes blockHash = 1;
+  uint32 height = 2;
+  bytes nBits = 3;
+  uint32 time = 4;
+}
+
 // swagger:model BlockStats
 message BlockStats {
   uint64 block_count = 1;

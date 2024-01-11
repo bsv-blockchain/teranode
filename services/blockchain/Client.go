@@ -177,6 +177,16 @@ func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool
 
 	return resp.Blocks, nil
 }
+func (c Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	resp, err := c.client.GetSuitableBlock(ctx, &blockchain_api.GetSuitableBlockRequest{
+		Hash: blockHash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Block, nil
+}
 
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{

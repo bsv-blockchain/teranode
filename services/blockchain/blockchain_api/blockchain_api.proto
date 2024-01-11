@@ -18,6 +18,7 @@ service BlockchainAPI {
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
+  rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
@@ -156,4 +157,14 @@ message GetLastNBlocksRequest {
 // swagger:model GetLastNBlocksResponse
 message GetLastNBlocksResponse {
   repeated model.BlockInfo blocks = 1;
+}
+
+// swagger:model GetSuitableBlockRequest
+message GetSuitableBlockRequest {
+  bytes hash = 1;
+}
+
+// swagger:model GetSuitableBlockResponse
+message GetSuitableBlockResponse {
+  model.SuitableBlock block = 1;
 }
