@@ -13,7 +13,7 @@ export function connectToP2PServer() {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
     url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
-    url.port = '9906'
+    url.port = url.protocol === 'http:' ? '9906' : '9904'
     url.pathname = '/ws'
 
     wsUrl.set(url)
