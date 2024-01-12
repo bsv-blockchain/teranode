@@ -50,10 +50,11 @@ message BlockInfo {
 
 // swagger:model SuitableBlock
 message SuitableBlock {
-  bytes blockHash = 1;
+  bytes hash = 1;
   uint32 height = 2;
   bytes nBits = 3;
   uint32 time = 4;
+  bytes chain_work = 5;
 }
 
 // swagger:model BlockStats

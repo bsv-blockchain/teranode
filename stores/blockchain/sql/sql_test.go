@@ -19,6 +19,10 @@ var (
 	block2PrevBlockHash, _  = chainhash.NewHashFromStr("00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048")
 	block2MerkleRootHash, _ = chainhash.NewHashFromStr("9b0fc92260312ce44e74ef369f5c66bbb85848f2eddd5a7a1cde251e54ccfdd5")
 	coinbaseTx2, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d010bffffffff0100f2052a010000004341047211a824f55b505228e4c3d5194c1fcfaa15a456abdf37f9b9d97a4040afc073dee6c89064984f03385237d92167c13e236446b417ab79a0fcae412ae3316b77ac00000000")
+	block3Hash, _           = chainhash.NewHashFromStr("0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449")
+	block3PrevBlockHash, _  = chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+	block3MerkleRootHash, _ = chainhash.NewHashFromStr("999e1c837c76a1b7fbb7e57baf87b309960f5ffefbf2a9b95dd890602272f644")
+	coinbaseTx3, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d010effffffff0100f2052a0100000043410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aaac00000000")
 	block1                  = &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
@@ -44,6 +48,22 @@ var (
 			Bits:           bits,
 		},
 		CoinbaseTx:       coinbaseTx2,
+		TransactionCount: 1,
+		Subtrees: []*chainhash.Hash{
+			subtree,
+		},
+	}
+
+	block3 = &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			Timestamp:      1231470173,
+			Nonce:          1844305925,
+			HashPrevBlock:  block3PrevBlockHash,
+			HashMerkleRoot: block3MerkleRootHash,
+			Bits:           bits,
+		},
+		CoinbaseTx:       coinbaseTx3,
 		TransactionCount: 1,
 		Subtrees: []*chainhash.Hash{
 			subtree,
