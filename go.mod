@@ -31,6 +31,7 @@ require (
 	github.com/loopholelabs/frisbee-go v0.7.2
 	github.com/loopholelabs/polyglot v1.1.3
 	github.com/minio/minio-go/v7 v7.0.52
+	github.com/multiformats/go-multiaddr v0.11.0
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.83
@@ -38,7 +39,7 @@ require (
 	github.com/ordishs/gocore v1.0.55
 	github.com/prometheus/client_golang v1.16.0
 	github.com/puzpuzpuz/xsync/v2 v2.4.0
-	github.com/quic-go/quic-go v0.38.1
+	github.com/quic-go/quic-go v0.38.2
 	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
@@ -180,7 +181,6 @@ require (
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr v0.11.0 // indirect
 	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
