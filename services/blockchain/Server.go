@@ -490,9 +490,20 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, err
 	}
 
+	// invalidate block will also invalidate all child blocks
 	err = b.store.InvalidateBlock(ctx1, blockHash)
 	if err != nil {
 		return nil, err
+	}
+
+	bestBlock, _, err := b.store.GetBestBlockHeader(ctx1)
+	if err != nil {
+		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
+	} else {
+		_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: bestBlock.Hash().CloneBytes(),
+		})
 	}
 
 	return &emptypb.Empty{}, nil

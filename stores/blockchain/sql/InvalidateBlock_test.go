@@ -137,20 +137,20 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 	})
 }
 
-func dumpDBData(t *testing.T, err error, s *SQL) error {
-	// get and print all the data in the db
-	rows, err := s.db.QueryContext(context.Background(), "SELECT id, hash, height, invalid FROM blocks")
-	require.NoError(t, err)
-	defer rows.Close()
-
-	for rows.Next() {
-		var id int
-		var hash []byte
-		var height uint32
-		var invalid bool
-		err = rows.Scan(&id, &hash, &height, &invalid)
-		require.NoError(t, err)
-		t.Logf("id: %d, hash: %x, height: %d, invalid: %t", id, hash, height, invalid)
-	}
-	return err
-}
+//func dumpDBData(t *testing.T, err error, s *SQL) error {
+//	// get and print all the data in the db
+//	rows, err := s.db.QueryContext(context.Background(), "SELECT id, hash, height, invalid FROM blocks")
+//	require.NoError(t, err)
+//	defer rows.Close()
+//
+//	for rows.Next() {
+//		var id int
+//		var hash []byte
+//		var height uint32
+//		var invalid bool
+//		err = rows.Scan(&id, &hash, &height, &invalid)
+//		require.NoError(t, err)
+//		t.Logf("id: %d, hash: %x, height: %d, invalid: %t", id, hash, height, invalid)
+//	}
+//	return err
+//}
