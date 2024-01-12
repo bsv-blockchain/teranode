@@ -100,6 +100,8 @@ brew install protobuf
 brew install protoc-gen-go
 brew install protoc-gen-go-grpc
 brew install libtool
+brew install autoconf
+brew install automake
 ```
 
 **Test Protocol Buffers Installation**:
