@@ -41,8 +41,7 @@
 
 ## 1. Overview
 
-
-The original design of the Bitcoin network imposed a constraint on block size to 1 megabyte. This size limit inherently restricts the network to a throughput of approximately **3.3 to 7 transactions per second**. As adoption has increased, this constraint has led to bottlenecks in transaction processing, resulting in delays and increased transaction fees, highlighting the need for a scalability solution.
+In the early stages of Bitcoin's development, a block size limit of 1 megabyte per block was introduced as a temporary measure. This limit effectively restricts the network's capacity to approximately 3.3 to 7 transactions per second. As Bitcoin's adoption has expanded, this constraint has increasingly led to transaction processing bottlenecks, causing delays and higher transaction fees. These issues have highlighted the critical need for scalable solutions within the Bitcoin network.
 
 **UBSV** (Unbounded Bitcoin Satoshi Vision) is a major component of the Teranode Project, being developed by the BSV Association. UBSV addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
 
