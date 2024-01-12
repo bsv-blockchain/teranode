@@ -29,7 +29,7 @@ require (
 	github.com/libsv/go-p2p v0.1.3
 	github.com/linxGnu/goseaweedfs v0.1.6
 	github.com/loopholelabs/frisbee-go v0.7.2
-	github.com/loopholelabs/polyglot v1.1.3
+	github.com/loopholelabs/polyglot v1.1.4
 	github.com/minio/minio-go/v7 v7.0.52
 	github.com/multiformats/go-multiaddr v0.11.0
 	github.com/olekukonko/tablewriter v0.0.5
