@@ -17,13 +17,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	grpc "google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-type coinbaseI interface {
-	GetBalance(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*coinbase_api.GetBalanceResponse, error)
-}
 
 type Repository struct {
 	logger           ulogger.Logger
@@ -32,7 +27,7 @@ type Repository struct {
 	TxMetaStore      txmeta.Store
 	SubtreeStore     blob.Store
 	BlockchainClient blockchain.ClientI
-	CoinbaseProvider coinbaseI
+	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
