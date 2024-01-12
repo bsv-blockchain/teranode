@@ -76,6 +76,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		panic("no aerospike_readPolicy setting found")
 	}
 
+	logger.Infof("[Aerospike] readPolicy url %s", readPolicyUrl)
 	readMaxRetries = getQueryInt(readPolicyUrl, "MaxRetries", aerospike.NewPolicy().MaxRetries, logger)
 	readTimeout = getQueryDuration(readPolicyUrl, "TotalTimeout", aerospike.NewPolicy().TotalTimeout, logger)
 	readSocketTimeout = getQueryDuration(readPolicyUrl, "SocketTimeout", aerospike.NewPolicy().SocketTimeout, logger)
@@ -91,6 +92,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		panic("no aerospike_writePolicy setting found")
 	}
 
+	logger.Infof("[Aerospike] writePolicy url %s", writePolicyUrl)
 	writeMaxRetries = getQueryInt(writePolicyUrl, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
 	writeTimeout = getQueryDuration(writePolicyUrl, "TotalTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
 	writeSocketTimeout = getQueryDuration(writePolicyUrl, "SocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
@@ -113,6 +115,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		panic("no aerospike_writePolicy setting found")
 	}
 
+	logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyUrl)
 	batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 	batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
 	concurrentNodes = getQueryInt(batchPolicyUrl, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
@@ -122,6 +125,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
+	logger.Infof("[Aerospike] base/connection policy url %s", url)
 	policy.LimitConnectionsToQueueSize = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 	policy.ConnectionQueueSize = getQueryInt(url, "ConnectionQueueSize", policy.ConnectionQueueSize, logger)
 	policy.MinConnectionsPerNode = getQueryInt(url, "MinConnectionsPerNode", policy.MinConnectionsPerNode, logger)
@@ -195,7 +199,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 	if err != nil {
 		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%t", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%t", key, valueBool)
 	return valueBool
 }
 
@@ -209,7 +213,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 	if err != nil {
 		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%d", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%d", key, valueInt)
 	return valueInt
 }
 
@@ -223,7 +227,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 	if err != nil {
 		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%s", key, defaultValue.String())
+	logger.Infof("[Aerospike] %s=%s", key, valueDuration.String())
 	return valueDuration
 }
 
@@ -237,7 +241,7 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 	if err != nil {
 		logger.Fatalf("[Aerospike] Invalid value %s=%v", key, value)
 	}
-	logger.Infof("[Aerospike] %s=%f", key, defaultValue)
+	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)
 	return valueFloat64
 }
 
