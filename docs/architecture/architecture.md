@@ -15,7 +15,7 @@
 1. [Overview](#1-overview)
 2. [Data Model and Propagation](#2-data-model-and-propagation)
 - [2.1. Block Size](#21-block-size)
-- [2.2. BTC Data Model](#22-btc-data-model)
+- [2.2. Bitcoin Data Model](#22-bitcoin-data-model)
 - [2.3. UBSV Data Model](#23-ubsv-data-model)
 - [2.4. Advantages of the UBSV Model](#24-advantages-of-the-ubsv-model)
 - [2.5. Network Behavior](#25-network-behavior)
@@ -44,9 +44,9 @@
 
 The original design of the Bitcoin network imposed a constraint on block size to 1 megabyte. This size limit inherently restricts the network to a throughput of approximately **3.3 to 7 transactions per second**. As adoption has increased, this constraint has led to bottlenecks in transaction processing, resulting in delays and increased transaction fees, highlighting the need for a scalability solution.
 
-**UBSV** (Unbounded Bitcoin Satoshi Vision) is a major component of the Teranode Project, being developed by the BSV Association. UBSV addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
+**UBSV** (Unbounded Bitcoin Satoshi Vision) is a major component of the Teranode Project, being developed by the BSV Association. UBSV addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
 
-UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
+UBSV provides a robust node processing system for Bitcoin that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of services that work together to provide a decentralized, scalable, and secure blockchain network. The node is designed to be modular, allowing for easy integration of new services and features.
 
 The diagram below shows all the different microservices, together with their interactions, that make up the UBSV node.
@@ -81,24 +81,22 @@ Various services and components are outlined to show their interactions and func
 
 ## 2. Data Model and Propagation
 
-The UBSV data model addresses scalability and efficiency issues found in BTC by changing the way data is organized and propagated across the network. Here's a summary of the key points and how they represent improvements over the BTC model:
+The UBSV data model addresses scalability and efficiency issues found in the original Bitcoin design by changing the way data is organized and propagated across the network. Here's a summary of the key points and how they represent improvements over the original Bitcoin design:
 
 ### 2.1. Block Size
 - **Bitcoin**: Fixed at 1MB, limiting the number of transactions per block.
 - **BSV**: Increased to 4GB, allowing significantly more transactions per block.
 - **UBSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees.
 
-We can then compare the data models of the BTC and UBSV to understand how the latter improves on the former.
+We can then compare the data models of Bitcoin and UBSV to understand how the latter improves on the former.
 
-### 2.2. BTC Data Model
+### 2.2. Bitcoin Data Model
 
-The BTC data model is as follows:
+The Bitcoin data model is as follows:
 
 ##### 2.2.1. Transactions
 
-
 Transactions are broadcast and included in blocks as they are found.
-
 
 _Current Transaction format:_
 
@@ -114,14 +112,11 @@ _Current Transaction format:_
 
 ##### 2.2.2. Blocks:
 
-
 Blocks contain all transaction data for the transactions included.
-
 
 ![Legacy_Bitcoin_Block.png](img%2FLegacy_Bitcoin_Block.png)
 
 Note how the Bitcoin block contains all transactions (including ALL transaction data) for each transaction it contains, not just the transaction Id. This means that the block size would be very large if many transactions were included. At scale, this is not practical, as the block size would be too large to propagate across the network in a timely manner.
-
 
 Let's see next how the UBSV data model addresses these issues.
 
@@ -177,11 +172,11 @@ The Extended Format is not backwards compatible, but has been designed in such a
 To know more about the Extended Transaction Format, please refer to the [Bitcoin Improvement Proposal 239 (09 November 2022)](https://github.com/bitcoin-sv/arc/blob/b6296d1f775e7f3568f915e13d8f03bfe8fd3c32/doc/BIP-239.md).
 
 
-##### 2.3.2. SubTrees:
+##### 2.3.2. Subtrees:
 
-The SubTrees are an innovation aimed at improving scalability and real-time processing capabilities of the blockchain system.
+The Subtrees are an innovation aimed at improving scalability and real-time processing capabilities of the blockchain system.
 
-_Unique to UBSV_: The concept of subtrees is a distinct feature not found in the BTC protocol or other derivatives.
+_Unique to UBSV_: The concept of subtrees is a distinct feature not found in the original Bitcoin design or other derivatives.
 
 1. A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root.
    - Note that the size of the subtree could be any number of transactions, just as long as it is a power of 2 (16, 32, 64...). The only requirement is that all subtrees in a block have to be the same size. At peak throughput, subtrees will contain millions of transaction Ids.
@@ -192,8 +187,7 @@ _Unique to UBSV_: The concept of subtrees is a distinct feature not found in the
 _Efficiency_: Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
 1. By broadcasting these subtrees at such a high frequency, receiving nodes can validate these batches quickly and continuously, having them "pre-approved" for inclusion in a block.
 
-
-2. This contrasts with the BTC protocol, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
+2. This contrasts with the original Bitcoin protocol design, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
 
 _Lightweight_: Subtrees only include transaction IDs, not the full transaction data, since all nodes already have the transactions, thus reducing the size of the data to propagate.
 1. Since all nodes participating in the network are assumed to already have the full transaction data (which they receive and store as transactions are created and spread through the network), it's unnecessary to rebroadcast the full details with every subtree.
@@ -226,7 +220,7 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 
 - **Block Propagation**: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree it is unaware of within a new block, it can request the details from the node that submitted the block.
 
-This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that the UBSV can scale effectively to meet high transaction demands without the bottlenecks experienced by the BTC.
+This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that the UBSV can scale effectively to meet high transaction demands.
 
 ---
 
@@ -263,7 +257,7 @@ At a high level, the UBSV node performs the following functions:
 
 ## 4. Services
 
-The node has been designed as a collection of microservices, each handling specific functionalities of the BSV network.
+The node has been designed as a collection of microservices, each handling specific functionalities of the Bitcoin network.
 
 ### 4.1. Transaction Propagation Service
 
@@ -503,14 +497,11 @@ Here is an explanation of the components and the process:
 
 4. **Block Validation Service**: This component is responsible for validating new blocks. It checks if a block complies with the network's consensus rules. After the blockchain server processes a block (Block Found), it will interact with this service to ensure that the block is valid before finalizing it in the blockchain.
 
-
-Note - The Block model described in the [UBSV Data Model](#ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the BTC format, which is the same as the historical BSV format.
+Note - The Block model described in the [UBSV Data Model](#ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the original Bitcoin format.
 
 The system is designed to maintain the blockchain's integrity by ensuring that all blocks are properly assembled, validated, and stored. It enables other services and participants in the network to interact with the blockchain, request data, and understand the current state of the network for further actions like mining.
 
-
 ---
-
 
 ### 4.7. Asset Service
 
@@ -518,32 +509,25 @@ The Asset Service acts as an interface ("Front" or "Facade") to various data sto
 
 - **Transactions (TX)**.
 
-
-- **SubTrees**.
-
+- **Subtrees**.
 
 - **Blocks and Block Headers**.
 
-
 - **Unspent Transaction Outputs (UTXO)**.
 
-
 - **Metadata for a Transaction (TXMeta)**.
-
 
 The server uses both HTTP and gRPC as communication protocols:
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
 
-
 - **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the UBSV distributed network.
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
-The various micro-services write directly to the data stores, but the asset service fronts them as a common interface.
+The various microservices write directly to the data stores, but the asset service fronts them as a common interface.
 
 ---
-
 
 ### 4.8. Coinbase Service
 
@@ -563,7 +547,6 @@ When a miner intends to spend one of their coins, they need to retrieve the corr
 In essence, the CON service operates as a straightforward Simplified Payment Verification (SPV) overlay node, custom-built to cater to the requirements of miners.
 
 ---
-
 
 ### 4.9. Bootstrap
 
@@ -590,7 +573,7 @@ This diagram describes the architecture and workflow of the legacy Peer-to-Peer 
 
 Here's the breakdown of the components and their functions:
 
-1. **P2P Network (IPv4)**: This refers to the historical BSV peer-to-peer network using the IPv4 internet protocol.
+1. **P2P Network (IPv4)**: This refers to the historical Bitcoin peer-to-peer network using the IPv4 internet protocol.
 
 
 2. **P2P Receiver Service**: These are the services (1 or more) that receive and send transactions from / to the P2P network.
@@ -601,16 +584,13 @@ Here's the breakdown of the components and their functions:
 
 4. **Multicast Group Tx Receive**: This indicates a multicast setup where transactions are broadcast to multiple nodes simultaneously. This is efficient for disseminating information quickly to many nodes in the network.
 
-
 ---
 
 ### 4.11. UTXO Store
 
 The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
-
 ---
-
 
 ### 4.12. Transaction Meta Store
 
@@ -626,17 +606,14 @@ The metadata in scope in this service refers to extra fields of interest during 
 | FirstSeen      | Timestamp of when the transaction was first seen        |
 | ParentTxHashes | List of hashes of the transaction's parent transactions |
 
-
 ---
-
 
 ### 4.13. Banlist Service
 
-BSV is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
+Bitcoin is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
 
 For example, any node trying to introduce a double spend will be banned. Equally, not pre-announcing a significant % of the subtrees before the block is found, or not broadcasting the block after it is found, will play against the consensus rules and will get a node banned.
 
 Once a node is banned, any transaction, subtree or block coming from that node will be rejected.
-
 
 ---
