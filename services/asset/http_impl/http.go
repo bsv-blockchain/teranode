@@ -103,6 +103,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	e.GET("/utxos/:hash/json", h.GetUTXOsByTXID(JSON))
 
+	e.GET("/balance", h.GetBalance)
+
 	e.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))

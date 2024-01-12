@@ -176,3 +176,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 
 	return resp, nil
 }
+
+func (s *Server) GetBalance(ctx context.Context, _ *emptypb.Empty) (*coinbase_api.GetBalanceResponse, error) {
+	return s.coinbase.getBalance(ctx)
+}

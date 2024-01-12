@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
+	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -883,4 +884,19 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	return nil
+}
+
+func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResponse, error) {
+	res := &coinbase_api.GetBalanceResponse{}
+
+	if err := c.db.QueryRowContext(ctx, `
+		SELECT
+		 COUNT(*)
+		,SUM(satoshis)
+		FROM spendable_utxos;
+	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }

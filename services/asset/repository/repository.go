@@ -9,13 +9,21 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
+	grpc "google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+type coinbaseI interface {
+	GetBalance(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*coinbase_api.GetBalanceResponse, error)
+}
 
 type Repository struct {
 	logger           ulogger.Logger
@@ -24,14 +32,32 @@ type Repository struct {
 	TxMetaStore      txmeta.Store
 	SubtreeStore     blob.Store
 	BlockchainClient blockchain.ClientI
+	CoinbaseProvider coinbaseI
 }
 
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
 	blockchainClient blockchain.ClientI, SubtreeStore blob.Store) (*Repository, error) {
 
+	// SAO - Loading the grpc client directly without using the coinbase.NewClient() method as it causes a circular dependency
+	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
+	if !ok {
+		return nil, fmt.Errorf("no coinbase_grpcAddress setting found")
+	}
+	baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cbc := coinbase_api.NewCoinbaseAPIClient(baConn)
+
 	return &Repository{
 		logger:           logger,
 		BlockchainClient: blockchainClient,
+		CoinbaseProvider: cbc,
 		UtxoStore:        utxoStore,
 		TxStore:          txStore,
 		TxMetaStore:      txMetaStore,
@@ -209,4 +235,13 @@ func (r *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader
 	}
 
 	return header, meta, nil
+}
+
+func (r *Repository) GetBalance(ctx context.Context) (uint64, uint64, error) {
+	res, err := r.CoinbaseProvider.GetBalance(ctx, &emptypb.Empty{})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return res.NumberOfUtxos, res.TotalSatoshis, nil
 }
