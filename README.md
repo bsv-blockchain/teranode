@@ -192,8 +192,6 @@ Read more on: https://go.dev/
 
 ### 7.2. gRPC
 
-Certainly, here's a more concise summary of gRPC:
-
 **gRPC** is an open-source framework for efficient and high-performance communication between services in distributed systems. Key features include:
 
 1. **Language Agnostic:** Use Protocol Buffers for language-agnostic service definitions.
