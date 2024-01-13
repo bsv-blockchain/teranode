@@ -260,7 +260,7 @@ services:
   p2p-bootstrap-1:
     build:
       context: ./modules/p2pBootstrap
-      dockerfile: Dockerfile
+      dockerfile: local.Dockerfile
     environment:
       P2P_BOOTSTRAP_PORT: 9901
       SETTINGS_CONTEXT: "docker"
