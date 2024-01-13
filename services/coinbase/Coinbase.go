@@ -95,6 +95,9 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
+	threshold, _ := gocore.Config().GetInt("coinbase_notification_threshold", 100_000)
+	go c.monitorSpendableUTXOs(uint64(threshold))
+
 	return c, nil
 }
 
@@ -899,4 +902,39 @@ func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResp
 	}
 
 	return res, nil
+}
+
+func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
+	ticker := time.NewTicker(1 * time.Minute)
+	alreadyNotified := false
+
+	channel, _ := gocore.Config().Get("slack_channel")
+
+	for {
+		select {
+		case <-ticker.C:
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				res, err := c.getBalance(ctx)
+				if err != nil {
+					c.logger.Errorf("could not get balance: %v", err)
+					return
+				}
+
+				availableUtxos := res.GetNumberOfUtxos()
+
+				if availableUtxos < threshold && !alreadyNotified {
+					c.logger.Warnf("Spendable utxos (%d) has fallen below threshold of %d", availableUtxos, threshold)
+					if channel != "" {
+						postMessageToSlack(channel, fmt.Sprintf("Spendable utxos (%d) has fallen below threshold of %d", availableUtxos, threshold))
+					}
+					alreadyNotified = true
+				} else if availableUtxos >= threshold && alreadyNotified {
+					alreadyNotified = false
+				}
+			}()
+		}
+	}
 }
