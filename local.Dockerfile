@@ -1,6 +1,6 @@
 # Set the base image
 FROM --platform=linux/amd64 golang:1.21.0-bullseye
-ARG GITHUB_SHA=8cf867a
+ARG GITHUB_SHA
 
 RUN apt update && apt install -y ca-certificates curl gnupg wget build-essential libsecp256k1-dev
 
