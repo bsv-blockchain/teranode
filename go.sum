@@ -355,6 +355,8 @@ github.com/jmespath/go-jmespath v0.4.0 h1:BEgLn5cpjn8UN1mAw4NjwDrS35OdebyEtFe+9Y
 github.com/jmespath/go-jmespath v0.4.0/go.mod h1:T8mJZnbsbmF+m6zOOFylbeCJqk5+pHWvzYPziyZiYoo=
 github.com/jmespath/go-jmespath/internal/testify v1.5.1 h1:shLQSRRSCCPj3f2gpwzGwWFoC7ycTf1rcQZHOlsJ6N8=
 github.com/jmespath/go-jmespath/internal/testify v1.5.1/go.mod h1:L3OGu8Wl2/fWfCI6z80xFu9LTZmf1ZRjMHUOPmWr69U=
+github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
+github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
 github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
 github.com/json-iterator/go v1.1.6/go.mod h1:+SdeFBvtyEkXs7REEP0seUULqWtbJapLOCVDaaPEHmU=
@@ -564,8 +566,8 @@ github.com/ordishs/go-bt/v2 v2.2.5 h1:PMty/zNK5pdgKDTfnnV9djH4eTwIqNZt+iSoGKCc/l
 github.com/ordishs/go-bt/v2 v2.2.5/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.50 h1:XVmyo3vsYSfFsc8Vue2bUHVznSdwnyI7Nh6LjEFaQpg=
 github.com/ordishs/go-utils v1.0.50/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.56 h1:ignmUzSAxNUyRJrG9TmVXukdWh+5XmMHcYogvGU8bYY=
-github.com/ordishs/gocore v1.0.56/go.mod h1:y/lDi3K2gNchpI6IQRDuU12sAGRSi4NdTbWGTWoPqbM=
+github.com/ordishs/gocore v1.0.57 h1:KJy3T97OVCZg8QJWw9ljTloSAGcAYiAitRhCExFiuxs=
+github.com/ordishs/gocore v1.0.57/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYTBVQrenQ=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
