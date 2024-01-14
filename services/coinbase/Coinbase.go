@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -909,6 +910,7 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 	alreadyNotified := false
 
 	channel, _ := gocore.Config().Get("slack_channel")
+	clientName, _ := gocore.Config().Get("asset_clientName")
 
 	for {
 		select {
@@ -926,9 +928,9 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 				availableUtxos := res.GetNumberOfUtxos()
 
 				if availableUtxos < threshold && !alreadyNotified {
-					c.logger.Warnf("Spendable utxos (%d) has fallen below threshold of %d", availableUtxos, threshold)
+					c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
 					if channel != "" {
-						postMessageToSlack(channel, fmt.Sprintf("Spendable utxos (%d) has fallen below threshold of %d", availableUtxos, threshold))
+						postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
 					}
 					alreadyNotified = true
 				} else if availableUtxos >= threshold && alreadyNotified {
@@ -937,4 +939,21 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 			}()
 		}
 	}
+}
+
+func comma(value uint64) string {
+	str := fmt.Sprintf("%d", value)
+	n := len(str)
+	if n <= 3 {
+		return str
+	}
+
+	var b strings.Builder
+	for i, c := range str {
+		if i > 0 && (n-i)%3 == 0 {
+			b.WriteRune(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
