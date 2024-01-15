@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"io"
 	"net"
 	"net/http"
@@ -51,7 +52,8 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 
 	// connect to aws s3 server
 	config := &aws.Config{
-		Region: aws.String(s3URL.Query().Get("region")),
+		Region:      aws.String(s3URL.Query().Get("region")),
+		Credentials: credentials.NewEnvCredentials(),
 	}
 
 	if s3URL.Host != "" {
@@ -148,7 +150,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(uploadInput)
+	_, err := g.uploader.UploadWithContext(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data from reader: %w", err)
@@ -182,7 +184,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(uploadInput)
+	_, err := g.uploader.UploadWithContext(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to set data: %w", err)
@@ -218,7 +220,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
-	result, err := g.client.GetObject(&s3.GetObjectInput{
+	result, err := g.client.GetObjectWithContext(traceSpan.Ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -251,7 +253,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	}
 
 	buf := aws.NewWriteAtBuffer([]byte{})
-	_, err := g.downloader.Download(buf,
+	_, err := g.downloader.DownloadWithContext(traceSpan.Ctx, buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
@@ -280,7 +282,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 		return true, nil
 	}
 
-	_, err := g.client.HeadObject(&s3.HeadObjectInput{
+	_, err := g.client.HeadObjectWithContext(traceSpan.Ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -314,7 +316,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 
 	cache.Delete(*objectKey)
 
-	_, err := g.client.DeleteObject(&s3.DeleteObjectInput{
+	_, err := g.client.DeleteObjectWithContext(traceSpan.Ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -323,7 +325,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 		return fmt.Errorf("unable to del data: %w", err)
 	}
 
-	err = g.client.WaitUntilObjectNotExists(&s3.HeadObjectInput{
+	err = g.client.WaitUntilObjectNotExistsWithContext(traceSpan.Ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})

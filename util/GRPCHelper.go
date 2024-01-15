@@ -132,13 +132,12 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
 
+	if connectionOptions.OpenTelemetry {
+		opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	}
+
 	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0)
 	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0)
-
-	if connectionOptions.OpenTelemetry {
-		unaryClientInterceptors = append(unaryClientInterceptors, otelgrpc.UnaryClientInterceptor())
-		streamClientInterceptors = append(streamClientInterceptors, otelgrpc.StreamClientInterceptor())
-	}
 
 	if connectionOptions.OpenTracing {
 		if opentracing.IsGlobalTracerRegistered() {
@@ -218,14 +217,13 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 		grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize),
 	)
 
+	if connectionOptions.OpenTelemetry {
+		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	}
+
 	// Interceptors.  The order may be important here.
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
 	streamInterceptors := make([]grpc.StreamServerInterceptor, 0)
-
-	if connectionOptions.OpenTelemetry {
-		unaryInterceptors = append(unaryInterceptors, otelgrpc.UnaryServerInterceptor())
-		streamInterceptors = append(streamInterceptors, otelgrpc.StreamServerInterceptor())
-	}
 
 	if connectionOptions.OpenTracing {
 		if opentracing.IsGlobalTracerRegistered() {

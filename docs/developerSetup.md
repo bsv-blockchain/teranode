@@ -19,7 +19,7 @@ This guide assists you in setting up the UBSV node project on your machine. The 
 
 ---
 
-Download and install the latest version of Go. As of November 2023, it's `1.21.3`.
+Download and install the latest version of Go. As of January 2024, it's `1.21.6`.
 
 [Go Installation Guide](https://go.dev/doc/install)
 
@@ -28,7 +28,7 @@ Open a new terminal and execute:
 ```bash
 go version
 ```
-It should display `go1.21.3`.
+It should display `go1.21.6`.
 
 ---
 
@@ -100,6 +100,8 @@ brew install protobuf
 brew install protoc-gen-go
 brew install protoc-gen-go-grpc
 brew install libtool
+brew install autoconf
+brew install automake
 ```
 
 **Test Protocol Buffers Installation**:

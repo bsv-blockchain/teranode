@@ -75,3 +75,12 @@ func (c *Client) RequestFunds(ctx context.Context, address string, disableDistri
 
 	return bt.NewTxFromBytes(res.Tx)
 }
+
+func (c *Client) GetBalance(ctx context.Context) (uint64, uint64, error) {
+	res, err := c.client.GetBalance(ctx, &emptypb.Empty{})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return res.NumberOfUtxos, res.TotalSatoshis, nil
+}

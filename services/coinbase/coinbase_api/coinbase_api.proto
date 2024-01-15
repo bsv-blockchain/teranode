@@ -12,6 +12,7 @@ service CoinbaseAPI {
   rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc RequestFunds(RequestFundsRequest) returns (RequestFundsResponse) {}
   rpc DistributeTransaction(DistributeTransactionRequest) returns (DistributeTransactionResponse) {}
+  rpc GetBalance(google.protobuf.Empty) returns (GetBalanceResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -50,4 +51,10 @@ message DistributeTransactionResponse {
   string txid = 1;
   google.protobuf.Timestamp timestamp = 2;
   repeated ResponseWrapper responses = 3;
+}
+
+// swagger:model GetBalanceResponse
+message GetBalanceResponse {
+  uint64 number_of_utxos = 1;
+  uint64 total_satoshis = 2;
 }

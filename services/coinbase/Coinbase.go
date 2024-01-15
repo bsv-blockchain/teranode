@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
+	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -93,6 +95,9 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		address:      coinbaseAddr.AddressString,
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
+
+	threshold, _ := gocore.Config().GetInt("coinbase_notification_threshold", 100_000)
+	go c.monitorSpendableUTXOs(uint64(threshold))
 
 	return c, nil
 }
@@ -883,4 +888,72 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	return nil
+}
+
+func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResponse, error) {
+	res := &coinbase_api.GetBalanceResponse{}
+
+	if err := c.db.QueryRowContext(ctx, `
+		SELECT
+		 COUNT(*)
+		,SUM(satoshis)
+		FROM spendable_utxos;
+	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
+	ticker := time.NewTicker(1 * time.Minute)
+	alreadyNotified := false
+
+	channel, _ := gocore.Config().Get("slack_channel")
+	clientName, _ := gocore.Config().Get("asset_clientName")
+
+	for {
+		select {
+		case <-ticker.C:
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				res, err := c.getBalance(ctx)
+				if err != nil {
+					c.logger.Errorf("could not get balance: %v", err)
+					return
+				}
+
+				availableUtxos := res.GetNumberOfUtxos()
+
+				if availableUtxos < threshold && !alreadyNotified {
+					c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
+					if channel != "" {
+						postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
+					}
+					alreadyNotified = true
+				} else if availableUtxos >= threshold && alreadyNotified {
+					alreadyNotified = false
+				}
+			}()
+		}
+	}
+}
+
+func comma(value uint64) string {
+	str := fmt.Sprintf("%d", value)
+	n := len(str)
+	if n <= 3 {
+		return str
+	}
+
+	var b strings.Builder
+	for i, c := range str {
+		if i > 0 && (n-i)%3 == 0 {
+			b.WriteRune(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }

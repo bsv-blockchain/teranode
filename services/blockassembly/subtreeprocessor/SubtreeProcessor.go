@@ -58,6 +58,7 @@ type SubtreeProcessor struct {
 	subtreeStore blob.Store
 	utxoStore    utxostore.Interface
 	logger       ulogger.Logger
+	stat         *gocore.Stat
 }
 
 var (
@@ -107,6 +108,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		subtreeStore:        subtreeStore,
 		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
 		logger:              logger,
+		stat:                gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 	}
 
 	for _, opts := range options {
@@ -247,6 +249,9 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
+	start := gocore.CurrentTime()
+	defer stp.stat.AddTime(start)
+
 	stp.queue.enqueue(&txIDAndFee{node: node})
 }
 

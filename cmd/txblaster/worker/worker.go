@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync/atomic"
 	"time"
@@ -110,7 +111,7 @@ type Worker struct {
 	rateLimiter       *rate.Limiter
 	iterations        int
 	coinbaseClient    *coinbase.Client
-	distributor       *distributor.Distributor
+	distributors      []*distributor.Distributor
 	kafkaProducer     sarama.SyncProducer
 	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
@@ -132,7 +133,7 @@ func NewWorker(
 	rateLimit float64,
 	iterations int,
 	coinbaseClient *coinbase.Client,
-	txDistributor *distributor.Distributor,
+	txDistributors []*distributor.Distributor,
 	kafkaProducer sarama.SyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
@@ -168,18 +169,12 @@ func NewWorker(
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
-	// clone the distributor so we create new connections for each worker
-	//txDistributor, err = txDistributor.Clone()
-	//if err != nil {
-	//	logger.Fatalf("error creating tx distributor: %v", err)
-	//}
-
 	return &Worker{
 		logger:            logger,
 		rateLimiter:       rateLimiter,
 		iterations:        iterations,
 		coinbaseClient:    coinbaseClient,
-		distributor:       txDistributor,
+		distributors:      txDistributors,
 		kafkaProducer:     kafkaProducer,
 		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,
@@ -206,7 +201,7 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 	}
 
 	w.sentTxCache.Add(tx.TxIDChainHash().String())
-	_, err = w.distributor.SendTransaction(ctx, tx)
+	_, err = w.distributors[0].SendTransaction(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 	}
@@ -376,7 +371,10 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	}
 
 	w.sentTxCache.Add(tx.TxIDChainHash().String())
-	if _, err = w.distributor.SendTransaction(ctx, tx); err != nil {
+
+	// select 1 distributor at random
+	d := w.distributors[rand.Intn(len(w.distributors))]
+	if _, err = d.SendTransaction(ctx, tx); err != nil {
 		// return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
 		utxoHash, _ := util.UTXOHashFromInput(tx.Inputs[0])
 		w.logger.Fatalf("error sending transaction: #%d txId: %s parentTxId: %s vout: %s hash: %s", counter.Load(), tx.TxIDChainHash().String(), utxo.TxIDHash.String(), utxo.Vout, utxoHash.String())

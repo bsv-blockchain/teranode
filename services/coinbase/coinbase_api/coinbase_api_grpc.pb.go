@@ -23,6 +23,7 @@ const (
 	CoinbaseAPI_HealthGRPC_FullMethodName            = "/coinbase_api.CoinbaseAPI/HealthGRPC"
 	CoinbaseAPI_RequestFunds_FullMethodName          = "/coinbase_api.CoinbaseAPI/RequestFunds"
 	CoinbaseAPI_DistributeTransaction_FullMethodName = "/coinbase_api.CoinbaseAPI/DistributeTransaction"
+	CoinbaseAPI_GetBalance_FullMethodName            = "/coinbase_api.CoinbaseAPI/GetBalance"
 )
 
 // CoinbaseAPIClient is the client API for CoinbaseAPI service.
@@ -33,6 +34,7 @@ type CoinbaseAPIClient interface {
 	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	RequestFunds(ctx context.Context, in *RequestFundsRequest, opts ...grpc.CallOption) (*RequestFundsResponse, error)
 	DistributeTransaction(ctx context.Context, in *DistributeTransactionRequest, opts ...grpc.CallOption) (*DistributeTransactionResponse, error)
+	GetBalance(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBalanceResponse, error)
 }
 
 type coinbaseAPIClient struct {
@@ -70,6 +72,15 @@ func (c *coinbaseAPIClient) DistributeTransaction(ctx context.Context, in *Distr
 	return out, nil
 }
 
+func (c *coinbaseAPIClient) GetBalance(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBalanceResponse, error) {
+	out := new(GetBalanceResponse)
+	err := c.cc.Invoke(ctx, CoinbaseAPI_GetBalance_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoinbaseAPIServer is the server API for CoinbaseAPI service.
 // All implementations must embed UnimplementedCoinbaseAPIServer
 // for forward compatibility
@@ -78,6 +89,7 @@ type CoinbaseAPIServer interface {
 	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	RequestFunds(context.Context, *RequestFundsRequest) (*RequestFundsResponse, error)
 	DistributeTransaction(context.Context, *DistributeTransactionRequest) (*DistributeTransactionResponse, error)
+	GetBalance(context.Context, *emptypb.Empty) (*GetBalanceResponse, error)
 	mustEmbedUnimplementedCoinbaseAPIServer()
 }
 
@@ -93,6 +105,9 @@ func (UnimplementedCoinbaseAPIServer) RequestFunds(context.Context, *RequestFund
 }
 func (UnimplementedCoinbaseAPIServer) DistributeTransaction(context.Context, *DistributeTransactionRequest) (*DistributeTransactionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DistributeTransaction not implemented")
+}
+func (UnimplementedCoinbaseAPIServer) GetBalance(context.Context, *emptypb.Empty) (*GetBalanceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBalance not implemented")
 }
 func (UnimplementedCoinbaseAPIServer) mustEmbedUnimplementedCoinbaseAPIServer() {}
 
@@ -161,6 +176,24 @@ func _CoinbaseAPI_DistributeTransaction_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoinbaseAPI_GetBalance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoinbaseAPIServer).GetBalance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoinbaseAPI_GetBalance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoinbaseAPIServer).GetBalance(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CoinbaseAPI_ServiceDesc is the grpc.ServiceDesc for CoinbaseAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -179,6 +212,10 @@ var CoinbaseAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DistributeTransaction",
 			Handler:    _CoinbaseAPI_DistributeTransaction_Handler,
+		},
+		{
+			MethodName: "GetBalance",
+			Handler:    _CoinbaseAPI_GetBalance_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

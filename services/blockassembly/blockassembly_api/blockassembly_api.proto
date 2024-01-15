@@ -12,70 +12,79 @@ import "model/model.proto";
 service BlockAssemblyAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+
+  // Adds a transaction to the list of transactions to be included in the next available Subtree.
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
+
+  // Removes a transaction from the list of transactions to be included in the next available Subtree.
   rpc RemoveTx (RemoveTxRequest) returns (EmptyMessage) {}
+
+  // Adds a batch of transactions to the list of transactions to be included in the next available Subtree.
   rpc AddTxBatch (AddTxBatchRequest) returns (AddTxBatchResponse) {}
+
+  // Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
   rpc GetMiningCandidate (EmptyMessage) returns (model.MiningCandidate) {}
+
+  // Submits a mining solution to the blockchain.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
 }
 
-// swagger:model EmptyMessage
+// An empty message used as a placeholder or a request with no data.
 message EmptyMessage {}
 
-// swagger:model HealthResponse
+// Contains the health status of the service. Includes an 'ok' flag indicating health status, details providing more context, and a timestamp.
 message HealthResponse {
-  bool ok = 1;
-  string details = 2;
+  bool ok = 1; // true if the service is healthy
+  string details = 2; // optional, human-readable details
   uint32 timestamp = 3; // unix timestamp
 }
 
-// swagger:model NewChaintipAndHeightRequest
+// Request for adding a new chaintip and height information.
 message NewChaintipAndHeightRequest {
-  bytes chaintip = 1;
-  uint32 height = 2;
+  bytes chaintip = 1; // the chaintip hash
+  uint32 height = 2; // the height of the chaintip in the blockchain
 }
 
-// swagger:model AddTxRequest
+// Request for adding a new transaction to the mining candidate block.
 message AddTxRequest {
-  bytes txid = 1;
-  uint64 fee = 3;
-  uint64 size = 4;
-  uint32 locktime = 2;
-  repeated bytes utxos = 5;
+  bytes txid = 1; // the transaction id
+  uint64 fee = 3; // the transaction fee in satoshis
+  uint64 size = 4; // the size of the transaction in bytes
+  uint32 locktime = 2; // the earliest time a transaction can be mined into a block
+  repeated bytes utxos = 5; // the UTXOs consumed by this transaction
 }
 
-// swagger:model AddTxRequest
+// Request for adding a batch of transactions to the mining candidate block.
 message AddTxBatchRequest {
-  repeated AddTxRequest txRequests = 1;
+  repeated AddTxRequest txRequests = 1; // a batch of transaction requests
 }
 
-// swagger:model RemoveTxRequest
+// Request for removing a transaction from the mining candidate block.
 message RemoveTxRequest {
-  bytes txid = 1;
+  bytes txid = 1; // the transaction id to remove
 }
 
-// swagger:model AddTxResponse
+// Response indicating whether the addition of a transaction was successful.
 message AddTxResponse {
-  bool ok = 1;
+  bool ok = 1; // true if the transaction was successfully added
 }
 
-// swagger:model AddTxResponse
+// Response indicating whether the addition of a batch of transactions was successful.
 message AddTxBatchResponse {
-  bool ok = 1;
-  repeated bytes txIdErrors = 2;
+  bool ok = 1; // true if the transactions were successfully added
+  repeated bytes txIdErrors = 2; // list of transaction IDs that encountered errors
 }
 
-
-// swagger:model SubmitMiningSolutionRequest
+// Request for submitting a mining solution to the blockchain.
 message SubmitMiningSolutionRequest {
-  bytes id = 1;
-  uint32 nonce = 2;
-  bytes coinbase_tx = 3;
-  uint32 time = 4;
-  uint32 version = 5;
+  bytes id = 1; // the id of the mining candidate
+  uint32 nonce = 2; // the nonce value used for mining
+  bytes coinbase_tx = 3; // the coinbase transaction bytes
+  uint32 time = 4; // the timestamp of the block
+  uint32 version = 5; // the version of the block
 }
 
-// swagger:model SubmitMiningCandidateResponse
+// Response indicating whether the submission of a mining solution was successful.
 message SubmitMiningSolutionResponse {
-  bool ok = 1;
+  bool ok = 1; // true if the solution was successfully submitted
 }

@@ -1,0 +1,42 @@
+@startuml
+participant "BlockAssembler" as BA
+participant "BlockchainClient" as BC
+participant "SubtreeProcessor" as STP
+database "SubtreeStore" as SStore
+entity "Block" as BlockEntity
+
+BA -> BC : GetBlockHeaders(ctx, header)
+activate BC
+BC --> BA : moveDownBlockHeaders, moveUpBlockHeaders
+deactivate BC
+
+loop For Each BlockHeader in moveUpBlockHeaders
+    BA -> BC : GetBlock(ctx, blockHeader.Hash())
+    activate BC
+    BC --> BA : block
+    deactivate BC
+end
+
+loop For Each BlockHeader in moveDownBlockHeaders
+    BA -> BC : GetBlock(ctx, blockHeader.Hash())
+    activate BC
+    BC --> BA : block
+    deactivate BC
+end
+
+BA -> STP : Reorg(moveDownBlocks, moveUpBlocks)
+activate STP
+
+loop For Each Block in moveDownBlocks
+    STP -> STP : moveDownBlock(ctx, block)
+end
+
+loop For Each Block in moveUpBlocks
+    STP -> STP : moveUpBlock(ctx, block, skipNotification)
+end
+
+STP --> BA : reorg completion
+deactivate STP
+
+BA -> BA : Update internal state
+@enduml

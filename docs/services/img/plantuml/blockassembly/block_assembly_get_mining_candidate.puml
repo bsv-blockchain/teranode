@@ -1,0 +1,44 @@
+@startuml
+participant "Miner" as Miner
+participant "BlockAssemblyClient" as Client
+participant "BlockAssemblyServer" as Server
+entity "BlockAssembler" as Assembler
+entity "SubtreeProcessor" as SubtreeProc
+database "JobStore" as JobStore
+participant "StatusClient" as StatusClient
+
+Miner -> Client : GetMiningCandidate(ctx)
+activate Client
+
+Client -> Server : GetMiningCandidate(ctx)
+activate Server
+
+Server -> Assembler : GetMiningCandidate(ctx)
+activate Assembler
+
+Assembler -> SubtreeProc : GetCompletedSubtreesForMiningCandidate()
+activate SubtreeProc
+
+SubtreeProc --> Assembler : return subtrees
+deactivate SubtreeProc
+
+Assembler -> Assembler : coinbaseValue = util.GetBlockSubsidyForHeight(b.bestBlockHeight + 1) + subtreeFees
+Assembler -> Assembler : Compute candidate merkle proof
+Assembler --> Server : return mining candidate with coinbase Tx, merkle proof, fees, list of subtrees
+deactivate Assembler
+
+Server --> Client : Return mining candidate
+deactivate Server
+
+Client --> Miner : Return mining candidate
+deactivate Client
+
+group Status Announcements
+    Assembler -> StatusClient : AnnounceStatus(ctx, "GetMiningCandidate", "Height", miningCandidate.Height)
+    Assembler -> StatusClient : AnnounceStatus(ctx, "GetMiningCandidate", "PreviousHash", miningCandidate.PreviousHash)
+end
+
+group Job Store Update
+    Assembler -> JobStore : Set(*id, &subtreeprocessor.Job{...}, jobTTL)
+end
+@enduml
