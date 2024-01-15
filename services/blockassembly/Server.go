@@ -709,10 +709,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
 	}
 
-	_, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
-	if err != nil {
-		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
-	}
+	// TODO why is this needed?
+	//_, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
+	//if err != nil {
+	//	ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
+	//}
 
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain

@@ -116,11 +116,11 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.get(ctx, hash, []string{"fee", "sizeInBytes"})
+	return s.get(ctx, hash, []string{"fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.get(ctx, hash, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockHashes"})
+	return s.get(ctx, hash, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
 }
 
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {

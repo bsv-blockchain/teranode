@@ -1,9 +1,10 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospikemap
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -78,10 +79,14 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	return s.Get(ctx, hash)
+	return s.get(ctx, hash, []string{"fee", "size", "parentTxHashes", "blockIDs"})
 }
 
-func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	return s.get(ctx, hash, []string{"tx", "fee", "size", "parentTxHashes", "blockIDs"})
+}
+
+func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 
 	// in the map implementation, we are using the utxo store for the data
@@ -93,7 +98,7 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 	var value *aerospike.Record
 
 	readPolicy := util.GetAerospikeReadPolicy()
-	value, aeroErr = s.client.Get(readPolicy, key)
+	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -102,47 +107,44 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 		return nil, nil
 	}
 
-	var err error
-
-	var parentTxHashes []*chainhash.Hash
+	var parentTxHashes []chainhash.Hash
 	if value.Bins["parentTxHashes"] != nil {
 		parentTxHashesInterface, ok := value.Bins["parentTxHashes"].([]interface{})
 		if ok {
-			parentTxHashes = make([]*chainhash.Hash, len(parentTxHashesInterface))
+			parentTxHashes = make([]chainhash.Hash, len(parentTxHashesInterface))
 			for i, v := range parentTxHashesInterface {
-				parentTxHashes[i], err = chainhash.NewHash(v.([]byte))
-				if err != nil {
-					return nil, err
+				if len(v.([]byte)) != 32 {
+					return nil, fmt.Errorf("invalid parentTxHashes length")
 				}
+				parentTxHashes[i] = chainhash.Hash(v.([]byte))
 			}
 		}
 	}
 
-	var blockHashes []*chainhash.Hash
-	if value.Bins["blockHashes"] != nil {
-		blockHashesInterface := value.Bins["blockHashes"].([]interface{})
-		blockHashes = make([]*chainhash.Hash, len(blockHashesInterface))
-		for i, v := range blockHashesInterface {
-			blockHashes[i], err = chainhash.NewHash(v.([]byte))
-			if err != nil {
-				return nil, err
-			}
+	var blockIDs []uint32
+	if value.Bins["blockIDs"] != nil {
+		// convert from []interface{} to []uint32
+		for _, v := range value.Bins["blockIDs"].([]interface{}) {
+			blockIDs = append(blockIDs, uint32(v.(int)))
 		}
 	}
 
-	var nFirstSeen uint32
-	if value.Bins["firstSeen"] != nil {
-		nFirstSeen = uint32(value.Bins["firstSeen"].(int))
+	var tx *bt.Tx
+	var err error
+	if value.Bins["tx"] != nil {
+		tx, err = bt.NewTxFromBytes(value.Bins["tx"].([]byte))
+		if err != nil {
+			return nil, fmt.Errorf("invalid tx: %w", err)
+		}
 	}
 
 	// transform the aerospike interface{} into the correct types
 	status := &txmeta.Data{
-		Tx:             value.Bins["tx"].(*bt.Tx),
+		Tx:             tx,
 		Fee:            uint64(value.Bins["fee"].(int)),
-		SizeInBytes:    uint64(value.Bins["sizeInBytes"].(int)),
+		SizeInBytes:    uint64(value.Bins["size"].(int)),
 		ParentTxHashes: parentTxHashes,
-		BlockHashes:    blockHashes,
-		FirstSeen:      nFirstSeen,
+		BlockIDs:       blockIDs,
 	}
 
 	return status, nil
@@ -151,13 +153,14 @@ func (s *Store) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, erro
 func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	prometheusTxMetaSet.Inc()
 
-	// this is a no-op for the map implementation - it is created in the utxo store
+	// this is a no-op for the txmeta map implementation - it is created in the utxo store
+	// we need to return it for performance reasons in the validator
 	return s.Get(ctx, tx.TxIDChainHash())
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockHash *chainhash.Hash) (err error) {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	for _, hash := range hashes {
-		if err = s.SetMined(ctx, hash, blockHash); err != nil {
+		if err = s.SetMined(ctx, hash, blockID); err != nil {
 			return err
 		}
 	}
@@ -165,7 +168,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	return nil
 }
 
-func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *chainhash.Hash) error {
+func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	//policy.Expiration = uint32(time.Now().Add(24 * time.Hour).Unix())
@@ -176,18 +179,18 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockHash *cha
 	}
 
 	readPolicy := util.GetAerospikeReadPolicy()
-	record, err := s.client.Get(readPolicy, key, "blockHashes")
+	record, err := s.client.Get(readPolicy, key, "blockIDs")
 	if err != nil {
 		return err
 	}
 
-	blockHashes, ok := record.Bins["blockHashes"].([]interface{})
+	blockIDs, ok := record.Bins["blockIDs"].([]interface{})
 	if !ok {
-		blockHashes = make([]interface{}, 0)
+		blockIDs = make([]interface{}, 0)
 	}
-	blockHashes = append(blockHashes, *blockHash)
+	blockIDs = append(blockIDs, blockID)
 
-	bin := aerospike.NewBin("blockHashes", blockHashes)
+	bin := aerospike.NewBin("blockIDs", blockIDs)
 
 	err = s.client.PutBins(policy, key, bin)
 	if err != nil {
