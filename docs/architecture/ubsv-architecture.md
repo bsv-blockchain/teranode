@@ -21,11 +21,11 @@
 - [2.5. Network Behavior](#25-network-behavior)
 3. [Node Workflow](#3-node-workflow)
 4. [Services](#4-services)
-- [4.1. Transaction Propagation Service](#41-transaction-propagation-service)
+- [4.1. Propagation Service](#41-transaction-propagation-service)
 - [4.2. Transaction Validator](#42-transaction-validator)
 - [4.3. Block Assembly Service](#43-block-assembly-service)
 - [4.4. Miner / Hasher](#44-miner--hasher)
-- [4.5. Subtree and Block Validator](#45-subtree-and-block-validator)
+- [4.5. Subtree and Block Validation](#45-subtree-and-block-validator)
   - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
   - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
   - [4.5.3. Block Validation Details:](#453-block-validation-details)
@@ -55,17 +55,17 @@ The diagram below shows all the different microservices, together with their int
 Various services and components are outlined to show their interactions and functions within the system:
 
 1. **UBSV Node Core Services**:
-  - **Propagation Service**: Responsible for receiving transactions (from other nodes) and propagating transactions (to other nodes).
+  - **Propagation Service**: Receives new transactions and sends them to the validator service.
   - **TX Validation Service**: Checks transactions for correctness and adherence to network rules.
-  - **Block Assembly Service**: Assembles blocks for the blockchain.
-  - **Blockchain Service**: Responsible for managing the block headers and list of subtrees in a block.
+  - **Block Assembly Service**: Assembles blocks to be included blockchain.
+  - **Blockchain Service**: Manages the block headers and list of subtrees in a block.
   - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
 
 2. **Overlay Services**:
   - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (UBSV) nodes, this service acts as a bridge between the two types of nodes.
   - **Peer Service**: This service handles node discovery, managing connections with peer nodes in the network.
   - **Coinbase Overlay Node**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
-  - **TX / TXO Lookup Service**: This is used for querying "in scope" transaction and transaction ouput data.
+  - **TX / TXO Lookup Service**: Queries "in scope" transaction and transaction ouput data.
   - **TX Submission (ARC)**: Manages the submission of  transactions to the network on behalf of the propagation service.
   - **Banlist Service**: Maintains and verifies against a list of banned entities or nodes.
   - **UTXO Lookup Service**:
@@ -80,16 +80,17 @@ Various services and components are outlined to show their interactions and func
 
 ## 2. Data Model and Propagation
 
-The UBSV data model addresses scalability and efficiency issues found in the original Bitcoin design by changing the way data is organized and propagated across the network. Here's a summary of the key points and how they represent improvements over the original Bitcoin design:
+The UBSV data model addresses scalability and efficiency issues found in the BTC design by introducing data abstractions that make propagation across the network more optimal. This section provides a summary of the key points and how they represent improvements over the BTC design:
 
 ### 2.1. Block Size
 - **Bitcoin**: Fixed at 1MB, limiting the number of transactions per block.
 - **BSV**: Increased to 4GB, allowing significantly more transactions per block.
 - **UBSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees.
 
-We can then compare the data models of Bitcoin and UBSV to understand how the latter improves on the former.
 
 ### 2.2. Bitcoin Data Model
+
+A comparison of the BTC and UBSV Data Model helps to understand how the latter improves on the former.
 
 The Bitcoin data model is as follows:
 
@@ -123,7 +124,9 @@ Let's see next how the UBSV data model addresses these issues.
 
 ##### 2.3.1. Transactions:
 
-UBSV Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur. UBSV works with extended transactions only, and legacy transactions are not supported. A wallet will be required to create transactions in extended format in order to communicate with UBSV.
+UBSV Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur.
+
+UBSV is expected to receive new transactions using the extended format only, with the legacy format not supported. A wallet will be required to create new transactions in extended format in order to communicate with UBSV.
 
 The Extended Format adds a marker to the transaction format:
 
@@ -175,7 +178,7 @@ To know more about the Extended Transaction Format, please refer to the [Bitcoin
 
 The Subtrees are an innovation aimed at improving scalability and real-time processing capabilities of the blockchain system.
 
-_Unique to UBSV_: The concept of subtrees is a distinct feature not found in the original Bitcoin design or other derivatives.
+_Unique to UBSV_: The concept of subtrees is a distinct feature not found in the BTC design.
 
 1. A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root.
    - Note that the size of the subtree could be any number of transactions, just as long as it is a power of 2 (16, 32, 64...). The only requirement is that all subtrees in a block have to be the same size. At peak throughput, subtrees will contain millions of transaction Ids.
@@ -183,10 +186,11 @@ _Unique to UBSV_: The concept of subtrees is a distinct feature not found in the
 
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
 
-_Efficiency_: Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes.
+_Efficiency_: Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes. Notice that blocks are still created every 10 minutes, but the subtrees are broadcast every second.
+
 1. By broadcasting these subtrees at such a high frequency, receiving nodes can validate these batches quickly and continuously, having them "pre-approved" for inclusion in a block.
 
-2. This contrasts with the original Bitcoin protocol design, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
+2. This contrasts with the BTC design, where a new block, and hence a new batch of transactions, is broadcast approximately every ten minutes after being confirmed by miners.
 
 _Lightweight_: Subtrees only include transaction IDs, not the full transaction data, since all nodes already have the transactions, thus reducing the size of the data to propagate.
 1. Since all nodes participating in the network are assumed to already have the full transaction data (which they receive and store as transactions are created and spread through the network), it's unnecessary to rebroadcast the full details with every subtree.
@@ -198,9 +202,11 @@ _Lightweight_: Subtrees only include transaction IDs, not the full transaction d
 
 ##### 2.3.3. Blocks:
 
-Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, allowing for quick validation of blocks.
+Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, this allows for quick validation of blocks.
 
 ![UBSV_Block.png](img%2FUBSV_Block.png)
+
+Please note that the use of subtrees within blocks represents a data abstraction for a more optimal propagation of transactions. The data model is still the same as Bitcoin, with blocks containing transactions. The subtrees are used to optimize the propagation of transactions and blocks.
 
 ### 2.4. Advantages of the UBSV Model
 
@@ -217,9 +223,9 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 - **Subtrees**: Nodes broadcast subtrees to indicate prepared batches of transactions for block inclusion, allowing other nodes to perform preliminary validations.
 
 
-- **Block Propagation**: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree it is unaware of within a new block, it can request the details from the node that submitted the block.
+- **Block Propagation**: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree within a new block that it is unaware of, it can request the details from the node that submitted the block.
 
-This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that the UBSV can scale effectively to meet high transaction demands.
+This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that the UBSV can scale effectively to meet high transaction demands without the bottlenecks experienced by the BTC network.
 
 ---
 
@@ -227,7 +233,7 @@ This proactive approach with subtrees enables the network to handle a significan
 
 At a high level, the UBSV node performs the following functions:
 
-1. **Transaction Submission**: Transactions are submitted to the network via the Submission Service. UBSV nodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
+1. **Transaction Submission**: UBSV nodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
 
 
 2. **Transaction Validation**: Transactions are validated by the TX Validation Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the TX Status Store, indicating they have not been included in a block yet and are eligible for inclusion.
@@ -237,7 +243,7 @@ At a high level, the UBSV node performs the following functions:
    * Note - nodes are expected to arrive to similar or equal subtree compositions. All nodes should have the same transactions in their subtrees, but the order of the transactions may differ. As they build their subtrees, nodes will broadcast these subtrees to each other.
 
 
-4. **Subtree Validation**: The Block Validation Service validates the subtrees it receives. This involves checking the transactions within the subtree against the network's rules and ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of the subtree is updated, marking it as eligible for inclusion in a block.
+4. **Subtree Validation**: The Block Validation Service validates the subtrees it receives. This involves checking the transactions within the subtree are known and eligible for inclusion in a subtree. Once validated, the status of the subtree is updated, marking it as eligible for inclusion in a block.
    * Note - If a subtree is not valid, it is discarded and not included in the block. If a subtree is valid, it will be stored in the Subtree Store, and later used by both block validation and block assembly.
 
 
@@ -245,7 +251,7 @@ At a high level, the UBSV node performs the following functions:
 5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. These templates are pre-blocks that the node miner service will use to create a full block. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
 
 
-6. **Block Validation**: Once a node finds a valid hashing solution (a successful proof-of-work), the found block is sent to the Block Validation Service. This service checks the new block against the network's consensus rules. If the block is valid, the node will append it to their version of the blockchain.
+6. **Block Validation**: Once a node finds a valid hashing solution (a successful proof-of-work), the found block is sent to the Block Validation Service. This service checks the new block against the network's consensus rules. If the block is valid, the node will append it to the blockchain. Each node maintains a local copy of the blockchain, which is updated as new blocks are added.
 
 
 ![ValidationSequenceDiagram.svg](img%2FValidationSequenceDiagram.svg)
@@ -258,13 +264,9 @@ At a high level, the UBSV node performs the following functions:
 
 The node has been designed as a collection of microservices, each handling specific functionalities of the Bitcoin network.
 
-### 4.1. Transaction Propagation Service
+### 4.1. Propagation Service
 
-The Propagation service is responsible for:
-
-* Receiving transactions from other nodes and forwarding them to the Validator service.
-
-* Propagating transactions to other nodes.
+The Propagation service is responsible for receiving transactions from other nodes and forwarding them to the Validation service.
 
 
 Here is a breakdown of the components as shown:
@@ -290,9 +292,9 @@ Note:
 
 ---
 
-### 4.2. Transaction Validator
+### 4.2. Transaction Validation
 
-The Transaction Validation Service is responsible for validating a transaction according to the rules of the Bitcoin network and then sending the approved transaction ID forwards to block assembly.
+The TX Validation Service is responsible for validating a transaction according to the rules of the Bitcoin network and then sending the approved transaction ID forwards to block assembly.
 
 The transactions that have passed the TX Validation Service are immediately marked as spent in the UTXO ("Unspent Transaction Output (UTXO)" store.
 
@@ -306,7 +308,7 @@ Here is a breakdown of the components as shown:
 1. **Message Broker:** Communication layers that facilitate message passing between the Propagation Service and the Validation Service, and between the Validation Service and the Block Assembly.
 
 
-2. **Transaction Validation Service (Multiple Instances):** Multiple instances of the service can be initiated, allowing to validate transactions in parallel, which will help to increase throughput and scalability.
+2. **TX Validation Service (Multiple Instances):** Multiple instances of the service can be initiated, allowing to validate transactions in parallel, which will help to increase throughput and scalability.
 
 
 4. **TX ids:** After validation, transaction identifiers (ids) are passed to the Block Assembly service.
@@ -315,7 +317,7 @@ Here is a breakdown of the components as shown:
 5. **UTXO Service:** Datastore of UTXOs (the outputs from transactions that have not been spent and can be used as inputs in new transactions).
 
 
-6. **TX Status:** Datastore managing the statuses of transactions. If validated and not mined, they will be eligible for inclusion in a block.
+6. **TX Status Store:** Datastore managing the statuses of transactions. If transactions are validated and not yet mined, they will be eligible for inclusion in a block.
 
 
 ---
@@ -323,7 +325,7 @@ Here is a breakdown of the components as shown:
 
 ### 4.3. Block Assembly Service
 
-The service is responsible for creating subtrees, as well as mining candidates (blocks) for Miner Services to hash against. The Block Assembly will broadcast any newly created subtrees and blocks to the network.
+This service is responsible for creating subtrees, as well as creating mining candidates (blocks) for Miner Services to hash against. The Block Assembly Service will broadcast any newly created subtrees and blocks to the network.
 
 There are two distinct processes that the Block Assembly Service performs:
 
@@ -336,7 +338,7 @@ There are two distinct processes that the Block Assembly Service performs:
 ![UBSV_Block_Assembly_MVP_Service_Overview.png](img%2FUBSV_Block_Assembly_MVP_Service_Overview.png)
 
 
-Here’s an explanation of the relevant components and their interactions:
+The relevant components and their interactions are described below:
 
 1. **Subtree Storage**: This stores blocks and their corresponding Merkle subtrees.
 
@@ -347,7 +349,7 @@ Here’s an explanation of the relevant components and their interactions:
 3. **Block Assembly Controller**: This component orchestrates the process of creating new subtrees and new blocks. It receives transaction IDs from the Message Broker, performs necessary checks, and assembles subtrees and blocks.
 
 
-4. **TX Status Database**: This stores the status of transactions. Before a transaction ID is included in a subtree or block template, the Block Assembly Service checks this database to ensure that the transaction has not been previously included in another subtree / block (i.e., it is not yet seen in a block).
+4. **TX Status Database**: This stores the status of transactions. Before a transaction ID is included in a subtree or block template, the Block Assembly Service checks this database to ensure that the transaction has not been previously included in another subtree / block.
 
 
 5. **Subtrees**: Completed subtrees are announced on the network, so other nodes can incorporate them into their blocks.
@@ -356,15 +358,15 @@ Here’s an explanation of the relevant components and their interactions:
 6. **Hashers / Miners**: After the block template (including all eligible subtrees of transactions) is prepared, it is sent to entities called Miners, which are responsible for performing the computational work (hashing) needed to find a valid block.
 
 
-7. **Announcement**: All new subtrees that are completed are announced on the IPV6 multicast block subtree network address(es).
+7. **Announcement**: All new subtrees that are completed are announced on the IPV6 multicast block subtree network address(es), or any other alternative broadcast service.
 
 
 ---
 
 
-### 4.4. Miner / Hasher
+### 4.4. Miner
 
-The Miner service is responsible for mining blocks. It solves a hashing proof of work for the current set of transactions and subtrees on behalf of a Block Assembly Service, consistently with the Blockchain Whitepaper rules.
+The Miner (also called Hasher) service is responsible for mining blocks. It solves a hashing Proof of Work for the current set of transactions and subtrees on behalf of a Block Assembly Service, consistently with the Blockchain Whitepaper rules.
 
 Upon successful mining of a block, the miner is rewarded with a block reward (newly minted coins) and the transaction fees from the transactions included in the block.
 
@@ -378,14 +380,14 @@ Challenges and Considerations:
 ---
 
 
-### 4.5. Subtree and Block Validator
+### 4.5. Subtree and Block Validation
 
 
-The Validator service is a critical component designed to ensure the integrity and consistency of the blockchain.
+The Block Validation Service is a critical component designed to ensure the integrity and consistency of the blockchain.
 
 Its responsibilities can be broadly categorized into two main areas: **SubTree validation** and **Block validation**.
 
-In addition, the Validator service plays a key role in maintaining the Unspent Transaction Outputs (UTXO) set, which is essential for determining the ownership of coins.
+In addition, the Block Validation Service plays a key role in maintaining the Unspent Transaction Outputs (UTXO) set, which is essential for determining the ownership of coins.
 
 
 ![UBSV_Block_Validation_MVP_Service.png](img%2FUBSV_Block_Validation_MVP_Service.png)
@@ -405,7 +407,7 @@ In addition, the Validator service plays a key role in maintaining the Unspent T
 4. **UTXO Service:** Manages the list of all unspent transaction outputs, which represent potential inputs for new transactions.
 
 
-5. **TX Status:** Keeps track of the validation status of individual transactions.
+5. **TX Status Store:** Keeps track of the validation status of individual transactions.
 
 
 6. **Multicast Subtree Announcement Network:** This network's role is to broadcast Merkle subtree announcements to the network. Multicast allows for efficient distribution of information to nodes interested in receiving these announcements.
@@ -416,7 +418,7 @@ In addition, the Validator service plays a key role in maintaining the Unspent T
 
 #### 4.5.2. SubTree Validation Details:
 
-- **Real-Time Validation**: As subtrees are received, which may occur as frequently as every second, the Validator service immediately checks their integrity. This involves verifying that each transaction ID listed within a subTree is valid and that the corresponding transactions exist and are themselves valid within the network's consensus rules. If a transaction is missing, we must request it from the miner that sent the subtree. If a transaction is invalid, the subtree is rejected.
+- **Real-Time Validation**: As subtrees are received, which may occur as frequently as every second, the Block Validation service immediately checks their integrity. This involves verifying that each transaction ID listed within a subTree is valid and that the corresponding transactions exist and are themselves valid within the network's consensus rules. If a transaction is missing, we must request it from the miner that sent the subtree. If a transaction is invalid, the subtree is rejected.
 
 
 - **UTXO Validation**: Part of the validation process includes ensuring that the transactions within a subTree correctly reference and spend UTXOs.
@@ -425,7 +427,7 @@ In addition, the Validator service plays a key role in maintaining the Unspent T
 - **Efficiency and Scalability**: By validating subtrees in real-time, the system can efficiently manage a high throughput of transactions, reducing bottlenecks that would otherwise arise during block validation.
 
 
-- **Handling Unvalidated Transactions**: If a subtree contains a transaction that hasn't been previously validated or "blessed," the Validator service must retrieve and validate that transaction. If the transaction is valid, it is added to the block assembly process. If it is invalid due to issues like missing inputs, the transaction and its subtree are not accepted ("blessed").
+- **Handling Unvalidated Transactions**: If a subtree contains a transaction that hasn't been previously validated or "blessed," the Validation service must retrieve and validate that transaction. If the transaction is valid, it is added to the block assembly process. If it is invalid due to issues like missing inputs, the transaction and its subtree are not accepted ("blessed").
 
 
 #### 4.5.3. Block Validation Details:
@@ -496,7 +498,7 @@ Here is an explanation of the components and the process:
 
 4. **Block Validation Service**: This component is responsible for validating new blocks. It checks if a block complies with the network's consensus rules. After the blockchain server processes a block (Block Found), it will interact with this service to ensure that the block is valid before finalizing it in the blockchain.
 
-Note - The Block model described in the [UBSV Data Model](#ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the original Bitcoin format.
+Note - The Block model described in the [UBSV Data Model](#23-ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the standard Bitcoin format.
 
 The system is designed to maintain the blockchain's integrity by ensuring that all blocks are properly assembled, validated, and stored. It enables other services and participants in the network to interact with the blockchain, request data, and understand the current state of the network for further actions like mining.
 
@@ -560,7 +562,7 @@ The current version uses Google's RPC framework for setting up the server and ha
 
 ### 4.10. P2P Legacy Service
 
-The P2P service is responsible for managing communications between legacy and UBSV nodes, effectively translating between the old (Legacy Bitcoin) and the new (UBSV) data model. This makes possible to run legacy and UBSV nodes side by side, allowing for a gradual rollout of UBSV.
+The P2P service is responsible for managing communications between BSV and U-BSV nodes, effectively translating between the historical BSV and the new (UBSV) data abstractions. This makes possible to run historical and UBSV nodes side by side, allowing for a gradual rollout of UBSV.
 
 This legacy P2P network is to be phased out as transaction volumes increase, forcing an eventual migration towards a more scalable and feature-rich system.
 
