@@ -27,6 +27,7 @@ import (
 
 type blockValidationTxMetaClient interface {
 	SetTxMeta(context.Context, []*txmeta.Data) error
+	DelTxMeta(context.Context, *chainhash.Hash) error
 }
 
 type Validator struct {
@@ -167,8 +168,8 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
 
-		if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
-			err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
+		if err = v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
+			err = errors.Join(err, fmt.Errorf("error reversing tx meta utxoStore: %v", err))
 		}
 
 		setSpan.RecordError(err)
@@ -217,6 +218,20 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	}
 
 	return nil
+}
+
+func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Hash) (err error) {
+	if metaErr := v.txMetaStore.Delete(setSpan.Ctx, txID); metaErr != nil {
+		err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", txID.String(), metaErr))
+	}
+
+	if v.blockValidationClient != nil {
+		if bvErr := v.blockValidationClient.DelTxMeta(setSpan.Ctx, txID); bvErr != nil {
+			err = errors.Join(err, fmt.Errorf("error deleting tx %s from block validation cache: %v", txID.String(), bvErr))
+		}
+	}
+
+	return err
 }
 
 func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {

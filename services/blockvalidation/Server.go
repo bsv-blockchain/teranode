@@ -642,6 +642,26 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 		Ok: true,
 	}, nil
 }
+func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockValidationSetTXMetaCacheDel.Inc()
+	hash, err := chainhash.NewHash(request.Hash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hash from bytes: %v", err)
+	}
+
+	if err = u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
+		u.logger.Errorf("failed to delete tx meta data: %v", err)
+	}
+
+	return &blockvalidation_api.DelTxMetaResponse{
+		Ok: true,
+	}, nil
+}
 
 func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", stats)

@@ -2,7 +2,6 @@ package txmetacache
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -217,8 +216,10 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	return nil
 }
 
-func (t *TxMetaCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
-	return fmt.Errorf("not implemented")
+func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+	return nil
 }
 
 func (t *TxMetaCache) Length() int {
