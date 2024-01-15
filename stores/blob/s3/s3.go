@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"io"
 	"net"
 	"net/http"
@@ -51,7 +52,8 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 
 	// connect to aws s3 server
 	config := &aws.Config{
-		Region: aws.String(s3URL.Query().Get("region")),
+		Region:      aws.String(s3URL.Query().Get("region")),
+		Credentials: credentials.NewEnvCredentials(),
 	}
 
 	if s3URL.Host != "" {
