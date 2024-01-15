@@ -22,10 +22,6 @@ type DumbPropagationServer struct {
 	logger ulogger.Logger
 }
 
-type DumbPropagationServerFrpc struct {
-	propagation_api.PropagationAPI
-}
-
 // NewDumbPropagationServer will return a server instance with the logger stored within it
 func NewDumbPropagationServer() *DumbPropagationServer {
 	initPrometheusMetrics()
@@ -57,56 +53,12 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
-	if ok {
-		err = ps.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
-
 	// this will block
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *DumbPropagationServer) frpcServer(ctx context.Context, frpcAddress string) error {
-	ps.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	fps := &DumbPropagationServerFrpc{}
-
-	s, err := propagation_api.NewServer(fps, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("propagation_frpcConcurrency")
-	if ok {
-		ps.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err = s.Start(frpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err = s.Shutdown()
-		if err != nil {
-			ps.logger.Errorf("failed to shutdown frpc server: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -127,20 +79,6 @@ func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *pr
 	prometheusProcessedTransactions.Inc()
 
 	return &propagation_api.EmptyMessage{}, nil
-}
-
-func (ps *DumbPropagationServerFrpc) Health(_ context.Context, _ *propagation_api.PropagationApiEmptyMessage) (*propagation_api.PropagationApiHealthResponse, error) {
-	prometheusHealth.Inc()
-	return &propagation_api.PropagationApiHealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
-}
-
-func (ps *DumbPropagationServerFrpc) ProcessTransaction(ctx context.Context, req *propagation_api.PropagationApiProcessTransactionRequest) (*propagation_api.PropagationApiEmptyMessage, error) {
-	prometheusProcessedTransactions.Inc()
-
-	return &propagation_api.PropagationApiEmptyMessage{}, nil
 }
 
 func (ps *DumbPropagationServer) ProcessTransactionStream(srv propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {

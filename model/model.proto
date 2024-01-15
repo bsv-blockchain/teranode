@@ -66,22 +66,13 @@ message BlockStats {
   double avg_tx_count_per_block = 5;
 }
 
-// swagger:model AnnounceStatusRequest
-message AnnounceStatusRequest {
-  google.protobuf.Timestamp timestamp = 1;
-  string cluster_name = 2;
-  string type = 3;
-  string subtype = 4;
-  string value = 5;
-  google.protobuf.Timestamp expires_at = 6;
-}
-
+// swagger:model DataPoint
 message DataPoint {
   uint32 timestamp = 1;
   uint64 tx_count = 2;
 }
 
-// swagger:model GetBlockGraphDataResponse
+// swagger:model BlockDataPoints
 message BlockDataPoints {
   repeated DataPoint data_points = 1;
 }

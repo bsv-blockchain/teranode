@@ -89,15 +89,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}
 	}
 
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("propagation_frpcListenAddress")
-	if ok {
-		err = ps.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
-
 	// Experimental QUIC server - to test throughput at scale
 	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
 	if ok {
@@ -133,43 +124,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ps *PropagationServer) frpcServer(ctx context.Context, frpcAddress string) error {
-	ps.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	frpcBa := &fRPC_Propagation{
-		ps: ps,
-	}
-
-	s, err := propagation_api.NewServer(frpcBa, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("propagation_frpcConcurrency")
-	if ok {
-		ps.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err = s.Start(frpcAddress)
-		if err != nil {
-			ps.logger.Errorf("failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err = s.Shutdown()
-		if err != nil {
-			ps.logger.Errorf("failed to shutdown frpc server: %v", err)
-		}
-	}()
 
 	return nil
 }
