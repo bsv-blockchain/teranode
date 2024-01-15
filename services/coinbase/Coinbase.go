@@ -912,32 +912,29 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 	channel, _ := gocore.Config().Get("slack_channel")
 	clientName, _ := gocore.Config().Get("asset_clientName")
 
-	for {
-		select {
-		case <-ticker.C:
-			func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
+	for range ticker.C {
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-				res, err := c.getBalance(ctx)
-				if err != nil {
-					c.logger.Errorf("could not get balance: %v", err)
-					return
+			res, err := c.getBalance(ctx)
+			if err != nil {
+				c.logger.Errorf("could not get balance: %v", err)
+				return
+			}
+
+			availableUtxos := res.GetNumberOfUtxos()
+
+			if availableUtxos < threshold && !alreadyNotified {
+				c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
+				if channel != "" {
+					_ = postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
 				}
-
-				availableUtxos := res.GetNumberOfUtxos()
-
-				if availableUtxos < threshold && !alreadyNotified {
-					c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
-					if channel != "" {
-						postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
-					}
-					alreadyNotified = true
-				} else if availableUtxos >= threshold && alreadyNotified {
-					alreadyNotified = false
-				}
-			}()
-		}
+				alreadyNotified = true
+			} else if availableUtxos >= threshold && alreadyNotified {
+				alreadyNotified = false
+			}
+		}()
 	}
 }
 
