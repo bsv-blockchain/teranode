@@ -214,7 +214,7 @@ services:
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      propagation_quicAddresses: http://ubsv-1:${PROPAGATION_QUIC_PORT}
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384
     # pass arguments to the command
     command: ["./blaster.run", "-workers=2", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "-e2e", "-iterations=5"]
     networks:
@@ -248,7 +248,7 @@ services:
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      propagation_quicAddresses: http://ubsv-1:${PROPAGATION_QUIC_PORT}
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384
     # pass arguments to the command
     command: ["./blaster.run", "-workers=2", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "-e2e", "-iterations=5"]
     networks:
