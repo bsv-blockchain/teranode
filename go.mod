@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.0
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.2.1
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/jarcoal/httpmock v1.3.1
