@@ -28,9 +28,9 @@ func New(logger ulogger.Logger, timeoutStr string, addr string, port int, namesp
 	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 	// todo optimize read policies
 	// todo optimize write policies
-	policy.MinConnectionsPerNode = 10240
+	policy.MinConnectionsPerNode = 128
 	// policy.LimitConnectionsToQueueSize = true
-	policy.ConnectionQueueSize = 10240
+	policy.ConnectionQueueSize = 128
 	// policy.MaxErrorRate = 0
 
 	host := &aerospike.Host{
@@ -46,6 +46,8 @@ func New(logger ulogger.Logger, timeoutStr string, addr string, port int, namesp
 	if err != nil {
 		panic(err)
 	}
+
+	_, _ = client.WarmUp(0)
 
 	var timeout time.Duration
 	if timeoutStr != "" {

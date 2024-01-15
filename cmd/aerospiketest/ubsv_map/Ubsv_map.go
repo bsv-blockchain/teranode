@@ -1,43 +1,44 @@
-package ubsv
+package ubsv_map
 
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospikemap"
 	"github.com/bitcoin-sv/ubsv/util"
 	"net/url"
 	"sync"
 
 	// "github.com/aerospike/aerospike-client-go/v6"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-type Ubsv struct {
+type UbsvMap struct {
 	logger ulogger.Logger
 	store  utxostore.Interface
 }
 
-func New(logger ulogger.Logger, timeout string, addr string, port int, namespace string) *Ubsv {
-	urlStr := fmt.Sprintf("aerospike://%s:%d/%s", addr, port, namespace)
+func New(logger ulogger.Logger, timeout string, addr string, port int, namespace string) *UbsvMap {
+	urlStr := fmt.Sprintf("aerospikemap://%s:%d/%s", addr, port, namespace)
 	if timeout != "" {
 		urlStr += "?timeout=" + timeout
 	}
 	storeUrl, _ := url.Parse(urlStr)
-	store, err := aerospike.New(logger, storeUrl)
+
+	store, err := aerospikemap.New(logger, storeUrl)
 	if err != nil {
 		panic(err)
 	}
 
-	return &Ubsv{
+	return &UbsvMap{
 		store:  store,
 		logger: logger,
 	}
 }
 
-func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int) {
+func (s *UbsvMap) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGroup, spenderCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {
@@ -82,7 +83,7 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 
 }
 
-func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int) {
+func (s *UbsvMap) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *bt.Tx, deleterCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	spendingTxHash, err := chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
@@ -115,7 +116,6 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 					SpendingTxID: spendingTxHash,
 				})
 			}
-
 			err = s.store.Spend(ctx, spends)
 			if err != nil {
 				s.logger.Warnf("spend failed: %v\n", err)
@@ -128,7 +128,7 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 	}()
 }
 
-func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int) {
+func (s *UbsvMap) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *bt.Tx, counterCh chan int) {
 	wg.Add(1)
 
 	go func() {

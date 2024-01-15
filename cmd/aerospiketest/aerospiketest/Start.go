@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv"
+	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/ubsv_map"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
@@ -59,7 +60,7 @@ func Start() {
 	flag.IntVar(&repeat, "repeat", 1, "number of time to repeat the test [1]")
 	flag.StringVar(&timeoutStr, "timeout", "", "timeout for aerospike")
 	flag.BoolVar(&aslLogger, "asl_logger", false, "enable aerospike logger")
-	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, direct, simple, nothing]")
+	flag.StringVar(&strategyStr, "strategy", "direct", "strategy to use [ubsv, ubsv_map, direct, simple, nothing]")
 	flag.StringVar(&aerospikeHost, "aerospike_host", "", "aerospike host")
 	flag.IntVar(&aerospikePort, "aerospike_port", 3000, "aerospike port")
 	flag.StringVar(&aerospikeNamespace, "aerospike_namespace", "utxostore", "aerospike namespace [utxostore]")
@@ -94,6 +95,8 @@ func Start() {
 		strategy = nothing.New(logger)
 	case "ubsv":
 		strategy = ubsv.New(logger, timeoutStr, aerospikeHost, aerospikePort, aerospikeNamespace)
+	case "ubsv_map":
+		strategy = ubsv_map.New(logger, timeoutStr, aerospikeHost, aerospikePort, aerospikeNamespace)
 	default:
 		logger.Fatalf("unknown strategy")
 	}
