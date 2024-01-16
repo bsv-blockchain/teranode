@@ -107,22 +107,3 @@ func escapeJSON(input string) (string, error) {
 	// Return the escaped string.
 	return escapedString, nil
 }
-
-func (a *AnnounceStatusRequest) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`
-		{
-			"timestamp": "%s",
-			"clusterName": "%s",
-			"type": "%s",
-			"subtype": "%s",
-			"value": "%s",
-			"expiresAt": "%s"
-		}`,
-		a.Timestamp.AsTime().Format(dateFormat),
-		a.ClusterName,
-		a.Type,
-		a.Subtype,
-		a.Value,
-		a.ExpiresAt.AsTime().Format(dateFormat),
-	)), nil
-}

@@ -11,6 +11,7 @@ service BlockValidationAPI {
   rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
   rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
+  rpc DelTxMeta (DelTxMetaRequest) returns (DelTxMetaResponse) {}
   rpc SetMinedMulti (SetMinedMultiRequest) returns (SetMinedMultiResponse) {}
 }
 
@@ -53,6 +54,16 @@ message SetTxMetaRequest {
 
 // swagger:model SetTxMetaResponse
 message SetTxMetaResponse {
+  bool ok = 1;
+}
+
+// swagger:model DelTxMetaRequest
+message DelTxMetaRequest {
+  bytes hash = 1;
+}
+
+// swagger:model DelTxMetaResponse
+message DelTxMetaResponse {
   bool ok = 1;
 }
 

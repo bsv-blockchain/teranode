@@ -24,6 +24,7 @@ const (
 	BlockValidationAPI_SubtreeFound_FullMethodName  = "/blockvalidation_api.BlockValidationAPI/SubtreeFound"
 	BlockValidationAPI_Get_FullMethodName           = "/blockvalidation_api.BlockValidationAPI/Get"
 	BlockValidationAPI_SetTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/SetTxMeta"
+	BlockValidationAPI_DelTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/DelTxMeta"
 	BlockValidationAPI_SetMinedMulti_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SetMinedMulti"
 )
 
@@ -37,6 +38,7 @@ type BlockValidationAPIClient interface {
 	SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
 	SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error)
+	DelTxMeta(ctx context.Context, in *DelTxMetaRequest, opts ...grpc.CallOption) (*DelTxMetaResponse, error)
 	SetMinedMulti(ctx context.Context, in *SetMinedMultiRequest, opts ...grpc.CallOption) (*SetMinedMultiResponse, error)
 }
 
@@ -93,6 +95,15 @@ func (c *blockValidationAPIClient) SetTxMeta(ctx context.Context, in *SetTxMetaR
 	return out, nil
 }
 
+func (c *blockValidationAPIClient) DelTxMeta(ctx context.Context, in *DelTxMetaRequest, opts ...grpc.CallOption) (*DelTxMetaResponse, error) {
+	out := new(DelTxMetaResponse)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_DelTxMeta_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockValidationAPIClient) SetMinedMulti(ctx context.Context, in *SetMinedMultiRequest, opts ...grpc.CallOption) (*SetMinedMultiResponse, error) {
 	out := new(SetMinedMultiResponse)
 	err := c.cc.Invoke(ctx, BlockValidationAPI_SetMinedMulti_FullMethodName, in, out, opts...)
@@ -112,6 +123,7 @@ type BlockValidationAPIServer interface {
 	SubtreeFound(context.Context, *SubtreeFoundRequest) (*EmptyMessage, error)
 	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
 	SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error)
+	DelTxMeta(context.Context, *DelTxMetaRequest) (*DelTxMetaResponse, error)
 	SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
@@ -134,6 +146,9 @@ func (UnimplementedBlockValidationAPIServer) Get(context.Context, *GetSubtreeReq
 }
 func (UnimplementedBlockValidationAPIServer) SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetTxMeta not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) DelTxMeta(context.Context, *DelTxMetaRequest) (*DelTxMetaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DelTxMeta not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetMinedMulti not implemented")
@@ -241,6 +256,24 @@ func _BlockValidationAPI_SetTxMeta_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockValidationAPI_DelTxMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelTxMetaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).DelTxMeta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_DelTxMeta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).DelTxMeta(ctx, req.(*DelTxMetaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockValidationAPI_SetMinedMulti_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetMinedMultiRequest)
 	if err := dec(in); err != nil {
@@ -285,6 +318,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetTxMeta",
 			Handler:    _BlockValidationAPI_SetTxMeta_Handler,
+		},
+		{
+			MethodName: "DelTxMeta",
+			Handler:    _BlockValidationAPI_DelTxMeta_Handler,
 		},
 		{
 			MethodName: "SetMinedMulti",

@@ -10,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
-	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -50,11 +49,9 @@ type Server struct {
 	txStore          blob.Store
 	txMetaStore      txmeta_store.Store
 	validatorClient  validator.Interface
-	statusClient     status.ClientI
-
-	blockFoundCh    chan processBlockFound
-	catchupCh       chan processBlockCatchup
-	blockValidation *BlockValidation
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	blockValidation  *BlockValidation
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -68,7 +65,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient validator.Interface, statusClient status.ClientI) *Server {
+	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
 
 	initPrometheusMetrics()
 
@@ -78,7 +75,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
 		validatorClient:      validatorClient,
-		statusClient:         statusClient,
 		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
 		catchupCh:            make(chan processBlockCatchup, 10),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
@@ -297,24 +293,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	if err != nil {
 		return nil, err
 	}
-
-	// if u.statusClient != nil {
-	// 	u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-	// 		Timestamp: timestamppb.Now(),
-	// 		Type:      "BlockValidation",
-	// 		Subtype:   "BlockFound (start)",
-	// 		Value:     hash.String(),
-	// 	})
-
-	// 	defer func() {
-	// 		u.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-	// 			Timestamp: timestamppb.Now(),
-	// 			Type:      "BlockValidation",
-	// 			Subtype:   "BlockFound (end)",
-	// 			Value:     hash.String(),
-	// 		})
-	// 	}()
-	// }
 
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
@@ -639,6 +617,26 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 	}
 
 	return &blockvalidation_api.SetTxMetaResponse{
+		Ok: true,
+	}, nil
+}
+func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockValidationSetTXMetaCacheDel.Inc()
+	hash, err := chainhash.NewHash(request.Hash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hash from bytes: %v", err)
+	}
+
+	if err = u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
+		u.logger.Errorf("failed to delete tx meta data: %v", err)
+	}
+
+	return &blockvalidation_api.DelTxMetaResponse{
 		Ok: true,
 	}, nil
 }

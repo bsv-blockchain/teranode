@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
@@ -72,6 +73,28 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 	}(request.Data)
 
 	return &blockvalidation_api.BlockvalidationApiSetTxMetaResponse{
+		Ok: true,
+	}, nil
+}
+
+func (f *fRPC_BlockValidation) DelTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiDelTxMetaRequest) (*blockvalidation_api.BlockvalidationApiDelTxMetaResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "DelTxMeta", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockValidationSetTXMetaCacheDelFrpc.Inc()
+
+	hash, err := chainhash.NewHash(request.Hash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hash from bytes: %v", err)
+	}
+
+	if err = f.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
+		f.logger.Errorf("failed to delete tx meta data: %v", err)
+	}
+
+	return &blockvalidation_api.BlockvalidationApiDelTxMetaResponse{
 		Ok: true,
 	}, nil
 }

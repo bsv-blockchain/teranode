@@ -25,10 +25,12 @@ var (
 	prometheusBlockValidationBlessMissingTransactionDuration prometheus.Histogram
 
 	// tx meta cache stats
-	prometheusBlockValidationSetTXMetaCache     prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheFrpc prometheus.Counter
-	prometheusBlockValidationSetMinedMulti      prometheus.Counter
-	prometheusBlockValidationSetMinedMultiFrpc  prometheus.Counter
+	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
+	prometheusBlockValidationSetMinedMulti         prometheus.Counter
+	prometheusBlockValidationSetMinedMultiFrpc     prometheus.Counter
 )
 
 var prometheusMetricsInitialised = false
@@ -186,6 +188,22 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "set_tx_meta_cache_frpc",
 			Help:      "Number of tx meta cache sets with frpc",
+		},
+	)
+
+	prometheusBlockValidationSetTXMetaCacheDel = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "del_tx_meta_cache",
+			Help:      "Number of tx meta cache deletes",
+		},
+	)
+
+	prometheusBlockValidationSetTXMetaCacheDelFrpc = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "del_tx_meta_cache_frpc",
+			Help:      "Number of tx meta cache deletes with frpc",
 		},
 	)
 

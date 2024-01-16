@@ -120,8 +120,8 @@ var (
 		"size",
 		"locktime",
 		"utxos",
-		"parentTxIds",
-		"blockIds",
+		"parentTxHashes",
+		"blockIDs",
 	}
 )
 
@@ -363,7 +363,6 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 	}
 
 	policy.FilterExpression = aerospike.ExpAnd(
-		// lock time check
 		aerospike.ExpOr(
 			// anything below the block height is spendable, including 0
 			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
@@ -377,7 +376,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			),
 		),
 
-		// spent check
+		// spent check - value of utxo hash in map should be nil
 		aerospike.ExpEq(aerospike.ExpMapGetByKey(
 			aerospike.MapReturnType.VALUE,
 			aerospike.ExpTypeNIL,
@@ -542,7 +541,7 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospi
 		}
 	}
 
-	parentTxIDs := make([][]byte, 0, len(tx.Inputs))
+	parentTxHashes := make([][]byte, 0, len(tx.Inputs))
 	for i, input := range tx.Inputs {
 		select {
 		case <-ctx.Done():
@@ -551,21 +550,20 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) ([]*aerospi
 			}
 			return nil, fmt.Errorf("context cancelled getBinsToStore#2 %d of %d utxos", i, len(tx.Inputs))
 		default:
-			parentTxIDs = append(parentTxIDs, input.PreviousTxIDChainHash().CloneBytes())
+			parentTxHashes = append(parentTxHashes, input.PreviousTxIDChainHash().CloneBytes())
 		}
 	}
 
-	blockIds := make([][]byte, 0)
+	blockIDs := make([]uint32, 0)
 
 	bins := []*aerospike.Bin{
-		aerospike.NewBin("tx", tx),
+		aerospike.NewBin("tx", tx.ExtendedBytes()),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("size", aerospike.NewIntegerValue(tx.Size())),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(lockTime))),
 		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),
-		aerospike.NewBin("parentTxIds", parentTxIDs),
-		aerospike.NewBin("blockIds", blockIds),
-		aerospike.NewBin("firstSeen", aerospike.NewIntegerValue(0)),
+		aerospike.NewBin("parentTxHashes", parentTxHashes),
+		aerospike.NewBin("blockIDs", blockIDs),
 	}
 
 	return bins, nil

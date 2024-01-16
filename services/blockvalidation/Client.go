@@ -214,6 +214,27 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 	return nil
 }
 
+func (s *Client) DelTxMeta(ctx context.Context, hash *chainhash.Hash) error {
+	if s.frpcClient != nil {
+		_, err := s.frpcClient.BlockValidationAPI.DelTxMeta(ctx, &blockvalidation_api.BlockvalidationApiDelTxMetaRequest{
+			Hash: hash.CloneBytes(),
+		})
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
+	_, err := s.apiClient.DelTxMeta(ctx, &blockvalidation_api.DelTxMetaRequest{
+		Hash: hash.CloneBytes(),
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	req := &blockvalidation_api.SetMinedMultiRequest{
 		Hashes:  make([][]byte, 0, len(hashes)),

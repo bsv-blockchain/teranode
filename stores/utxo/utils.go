@@ -32,15 +32,17 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 // GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
 // It will return an error if the context is cancelled.
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	if !tx.IsExtended() {
+	if !tx.IsExtended() && !tx.IsCoinbase() {
 		return 0, nil, fmt.Errorf("tx is not extended")
 	}
 
 	var fees uint64
 	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
 
-	for _, input := range tx.Inputs {
-		fees += input.PreviousTxSatoshis
+	if !tx.IsCoinbase() {
+		for _, input := range tx.Inputs {
+			fees += input.PreviousTxSatoshis
+		}
 	}
 
 	for i, output := range tx.Outputs {

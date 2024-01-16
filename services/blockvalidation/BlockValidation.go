@@ -75,7 +75,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 
 func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
-		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCache")
 		defer func() {
 			span.Finish()
 		}()
@@ -88,7 +88,7 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 
 func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
-		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
 		defer func() {
 			span.Finish()
 		}()
@@ -101,12 +101,25 @@ func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes [
 
 func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, hashes map[chainhash.Hash]*txmeta.Data) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
-		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMeta")
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMulti")
 		defer func() {
 			span.Finish()
 		}()
 
 		return cache.SetCacheMulti(hashes)
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCacheMulti")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.Delete(ctx, hash)
 	}
 
 	return nil

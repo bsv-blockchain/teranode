@@ -33,7 +33,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/seeder"
-	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -126,7 +125,6 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
-	startStatus := shouldStart("Status")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -182,16 +180,6 @@ func main() {
 	sm, ctx := servicemanager.NewServiceManager(logger)
 
 	var blockchainService *blockchain.Blockchain
-
-	// status server
-	if startStatus {
-		if err := sm.AddService("Status", status.New(
-			logger.New("Status"),
-		)); err != nil {
-			panic(err)
-		}
-		time.Sleep(1 * time.Second) // wait for grpc server to start
-	}
 
 	// blockchain service
 	if startBlockchain {
@@ -277,11 +265,6 @@ func main() {
 				panic(err)
 			}
 
-			// statusClient, err := status.NewClient(ctx, logger)
-			// if err != nil {
-			// 	logger.Fatalf("could not create status client [%v]", err)
-			// }
-
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
 				getTxStore(logger),
@@ -291,7 +274,6 @@ func main() {
 				blockchainClient,
 				assetClient,
 				blockValidationClient,
-				nil,
 			)); err != nil {
 				panic(err)
 			}
@@ -312,11 +294,6 @@ func main() {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
 
-			// statusClient, err := status.NewClient(ctx, logger)
-			// if err != nil {
-			// 	logger.Fatalf("could not create status client [%v]", err)
-			// }
-
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
 				getUtxoStore(ctx, logger),
@@ -324,7 +301,6 @@ func main() {
 				getTxStore(logger),
 				getTxMetaStore(logger),
 				validatorClient,
-				nil,
 			)); err != nil {
 				panic(err)
 			}

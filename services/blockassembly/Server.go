@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/status"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -53,7 +52,6 @@ type BlockAssembly struct {
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
 	assetClient           WrapperInterface
-	statusClient          status.ClientI
 	blockValidationClient WrapperInterface
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
@@ -73,7 +71,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
-	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface, statusClient status.ClientI) *BlockAssembly {
+	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
@@ -91,7 +89,6 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		subtreeTTL:            subtreeTTL,
 		assetClient:           AssetClient,
 		blockValidationClient: blockValidationClient,
-		statusClient:          statusClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
@@ -545,26 +542,6 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		return nil, err
 	}
 
-	// if ba.statusClient != nil {
-	// 	now := time.Now()
-
-	// 	ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-	// 		Timestamp: timestamppb.New(now),
-	// 		Type:      "GetMiningCandidate",
-	// 		Subtype:   "Height",
-	// 		Value:     fmt.Sprintf("%d", miningCandidate.Height),
-	// 		ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-	// 	})
-
-	// 	ba.statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-	// 		Timestamp: timestamppb.New(now),
-	// 		Type:      "GetMiningCandidate",
-	// 		Subtype:   "PreviousHash",
-	// 		Value:     utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash),
-	// 		ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-	// 	})
-	// }
-
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 	ba.jobStore.Set(*id, &subtreeprocessor.Job{
 		ID:              id,
@@ -732,10 +709,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
 	}
 
-	_, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
-	if err != nil {
-		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
-	}
+	// TODO why is this needed?
+	//_, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
+	//if err != nil {
+	//	ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
+	//}
 
 	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
 	// add block to the blockchain

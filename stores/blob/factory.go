@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/gcs"
-	"github.com/bitcoin-sv/ubsv/stores/blob/kinesiss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
@@ -19,7 +18,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
-	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfss3"
 	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
@@ -67,20 +65,10 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
 		}
-	case "kinesiss3":
-		store, err = kinesiss3.New(logger, storeUrl)
-		if err != nil {
-			return nil, fmt.Errorf("error creating kinesiss3 blob store: %v", err)
-		}
 	case "seaweedfs":
 		store, err = seaweedfs.New(logger, storeUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating seaweedfs blob store: %v", err)
-		}
-	case "seaweedfss3":
-		store, err = seaweedfss3.New(logger, storeUrl)
-		if err != nil {
-			return nil, fmt.Errorf("error creating seaweedfss3 blob store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)

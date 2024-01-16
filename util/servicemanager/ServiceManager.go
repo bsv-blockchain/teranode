@@ -119,12 +119,6 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 			return err
 		}
 
-		// sm.statusClient.AnnounceStatus(sm.ctx, &model.AnnounceStatusRequest{
-		// 	Timestamp: timestamppb.Now(),
-		// 	Type:      name,
-		// 	Subtype:   "STARTED",
-		// 	json.Valid(data []byte)
-		// })
 		return nil
 	})
 

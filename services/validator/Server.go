@@ -165,15 +165,6 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
-	if ok {
-		err := v.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
-
 	go func() {
 		for {
 			select {
