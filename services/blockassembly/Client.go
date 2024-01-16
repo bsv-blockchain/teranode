@@ -139,7 +139,6 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	}()
 
 	s.frpcConnected = true
-
 }
 
 func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error) {
