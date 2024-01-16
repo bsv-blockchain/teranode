@@ -21,23 +21,24 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockchainAPI_HealthGRPC_FullMethodName         = "/blockchain_api.BlockchainAPI/HealthGRPC"
-	BlockchainAPI_AddBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/AddBlock"
-	BlockchainAPI_GetBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlock"
-	BlockchainAPI_GetBlockStats_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlockStats"
-	BlockchainAPI_GetBlockGraphData_FullMethodName  = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
-	BlockchainAPI_GetLastNBlocks_FullMethodName     = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
-	BlockchainAPI_GetSuitableBlock_FullMethodName   = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
-	BlockchainAPI_GetBlockExists_FullMethodName     = "/blockchain_api.BlockchainAPI/GetBlockExists"
-	BlockchainAPI_GetBlockHeaders_FullMethodName    = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
-	BlockchainAPI_GetBlockHeaderIDs_FullMethodName  = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
-	BlockchainAPI_GetBestBlockHeader_FullMethodName = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
-	BlockchainAPI_GetBlockHeader_FullMethodName     = "/blockchain_api.BlockchainAPI/GetBlockHeader"
-	BlockchainAPI_InvalidateBlock_FullMethodName    = "/blockchain_api.BlockchainAPI/InvalidateBlock"
-	BlockchainAPI_Subscribe_FullMethodName          = "/blockchain_api.BlockchainAPI/Subscribe"
-	BlockchainAPI_SendNotification_FullMethodName   = "/blockchain_api.BlockchainAPI/SendNotification"
-	BlockchainAPI_GetState_FullMethodName           = "/blockchain_api.BlockchainAPI/GetState"
-	BlockchainAPI_SetState_FullMethodName           = "/blockchain_api.BlockchainAPI/SetState"
+	BlockchainAPI_HealthGRPC_FullMethodName             = "/blockchain_api.BlockchainAPI/HealthGRPC"
+	BlockchainAPI_AddBlock_FullMethodName               = "/blockchain_api.BlockchainAPI/AddBlock"
+	BlockchainAPI_GetBlock_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlock"
+	BlockchainAPI_GetBlockStats_FullMethodName          = "/blockchain_api.BlockchainAPI/GetBlockStats"
+	BlockchainAPI_GetBlockGraphData_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
+	BlockchainAPI_GetLastNBlocks_FullMethodName         = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
+	BlockchainAPI_GetSuitableBlock_FullMethodName       = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
+	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
+	BlockchainAPI_GetBlockExists_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockExists"
+	BlockchainAPI_GetBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetBlockHeaderIDs_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_GetBestBlockHeader_FullMethodName     = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
+	BlockchainAPI_GetBlockHeader_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeader"
+	BlockchainAPI_InvalidateBlock_FullMethodName        = "/blockchain_api.BlockchainAPI/InvalidateBlock"
+	BlockchainAPI_Subscribe_FullMethodName              = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_SendNotification_FullMethodName       = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetState_FullMethodName               = "/blockchain_api.BlockchainAPI/GetState"
+	BlockchainAPI_SetState_FullMethodName               = "/blockchain_api.BlockchainAPI/SetState"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -53,6 +54,7 @@ type BlockchainAPIClient interface {
 	GetBlockGraphData(ctx context.Context, in *GetBlockGraphDataRequest, opts ...grpc.CallOption) (*model.BlockDataPoints, error)
 	GetLastNBlocks(ctx context.Context, in *GetLastNBlocksRequest, opts ...grpc.CallOption) (*GetLastNBlocksResponse, error)
 	GetSuitableBlock(ctx context.Context, in *GetSuitableBlockRequest, opts ...grpc.CallOption) (*GetSuitableBlockResponse, error)
+	GetHashOfAncestorBlock(ctx context.Context, in *GetHashOfAncestorBlockRequest, opts ...grpc.CallOption) (*GetHashOfAncestorBlockResponse, error)
 	GetBlockExists(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
@@ -130,6 +132,15 @@ func (c *blockchainAPIClient) GetLastNBlocks(ctx context.Context, in *GetLastNBl
 func (c *blockchainAPIClient) GetSuitableBlock(ctx context.Context, in *GetSuitableBlockRequest, opts ...grpc.CallOption) (*GetSuitableBlockResponse, error) {
 	out := new(GetSuitableBlockResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetSuitableBlock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetHashOfAncestorBlock(ctx context.Context, in *GetHashOfAncestorBlockRequest, opts ...grpc.CallOption) (*GetHashOfAncestorBlockResponse, error) {
+	out := new(GetHashOfAncestorBlockResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetHashOfAncestorBlock_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +273,7 @@ type BlockchainAPIServer interface {
 	GetBlockGraphData(context.Context, *GetBlockGraphDataRequest) (*model.BlockDataPoints, error)
 	GetLastNBlocks(context.Context, *GetLastNBlocksRequest) (*GetLastNBlocksResponse, error)
 	GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error)
+	GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error)
 	GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
@@ -299,6 +311,9 @@ func (UnimplementedBlockchainAPIServer) GetLastNBlocks(context.Context, *GetLast
 }
 func (UnimplementedBlockchainAPIServer) GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSuitableBlock not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetHashOfAncestorBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockExists not implemented")
@@ -465,6 +480,24 @@ func _BlockchainAPI_GetSuitableBlock_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetSuitableBlock(ctx, req.(*GetSuitableBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetHashOfAncestorBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetHashOfAncestorBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetHashOfAncestorBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetHashOfAncestorBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetHashOfAncestorBlock(ctx, req.(*GetHashOfAncestorBlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -686,6 +719,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSuitableBlock",
 			Handler:    _BlockchainAPI_GetSuitableBlock_Handler,
+		},
+		{
+			MethodName: "GetHashOfAncestorBlock",
+			Handler:    _BlockchainAPI_GetHashOfAncestorBlock_Handler,
 		},
 		{
 			MethodName: "GetBlockExists",

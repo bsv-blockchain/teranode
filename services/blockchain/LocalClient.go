@@ -54,6 +54,12 @@ func (c LocalClient) GetBlockGraphData(ctx context.Context, periodMillis uint64)
 func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	return c.store.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
 }
+func (c LocalClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	return c.store.GetSuitableBlock(ctx, blockHash)
+}
+func (c LocalClient) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, num int) (*chainhash.Hash, error) {
+	return c.store.GetHashOfAncestorBlock(ctx, blockHash, num)
+}
 
 func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
