@@ -180,7 +180,9 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 	if err != nil {
 		return nil, err
 	}
-	cnxNum, err := client.WarmUp(0)
+
+	warmUp := getQueryInt(url, "WarmUp", 0, logger)
+	cnxNum, err := client.WarmUp(warmUp)
 	logger.Infof("Warmed up %d aerospike connections", cnxNum)
 	if err != nil {
 		return nil, err
