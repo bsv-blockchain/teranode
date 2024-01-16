@@ -64,7 +64,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	time.Sleep(10 * time.Second)
 
 	blockvalidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
-	if ok {
+	if ok && blockvalidationFRPCAddress != "" {
 		maxRetries := 5
 		retryInterval := 5 * time.Second
 

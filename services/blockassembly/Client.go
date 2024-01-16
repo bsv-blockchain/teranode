@@ -104,7 +104,7 @@ func (s *Client) connectFRPC() {
 	}()
 
 	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
-	if ok {
+	if ok && blockAssemblyFRPCAddress != "" {
 		maxRetries := 5
 		retryInterval := 5 * time.Second
 
