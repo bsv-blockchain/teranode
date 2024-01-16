@@ -40,7 +40,6 @@ var (
 	workerCount                     int
 	grpcClient                      propagation_api.PropagationAPIClient
 	// streamClient                    *propagation.StreamingClient
-	frpcClient        *propagation_api.Client
 	broadcastProtocol string
 	httpUrl           *url.URL
 	// errorCh                         chan error
@@ -92,7 +91,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http|frpc)")
+	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http)")
 	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
 	flag.Parse()
 
@@ -120,21 +119,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
-
-	case "frpc":
-		if propagationFrpcAddress, ok := gocore.Config().Get("propagation_frpcAddress"); ok {
-			client, err := propagation_api.NewClient(nil, nil)
-			if err != nil {
-				panic(err)
-			}
-
-			err = client.Connect(propagationFrpcAddress)
-			if err != nil {
-				panic(err)
-			} else {
-				frpcClient = client
-			}
-		}
 	}
 
 	var err error
@@ -164,8 +148,6 @@ func Start() {
 		log.Printf("Starting %d stream worker(s)", workerCount)
 	case "http":
 		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
-	case "frpc":
-		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
 		panic("Unknown broadcast protocol")
 	}
@@ -257,15 +239,6 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 		})
 
 		return err
-
-	case "frpc":
-
-		_, err := frpcClient.PropagationAPI.ProcessTransactionDebug(ctx, &propagation_api.PropagationApiProcessTransactionRequest{
-			Tx: txExtendedBytes,
-		})
-
-		return err
-
 	}
 
 	return nil

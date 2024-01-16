@@ -182,14 +182,6 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/status/status_api/status_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
 	services/bootstrap/bootstrap_api/bootstrap_api.proto
 
 	protoc \
@@ -226,14 +218,6 @@ gen-frpc:
 	--go_opt=paths=source_relative \
 	--go-frpc_out=. \
 	--go-frpc_opt=paths=source_relative \
-	services/propagation/propagation_api/propagation_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-frpc_out=. \
-	--go-frpc_opt=paths=source_relative \
 	services/validator/validator_api/validator_api.proto
 
 .PHONY: clean_gen
@@ -249,7 +233,6 @@ clean_gen:
 	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
-	rm -f ./services/status/status_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go
 

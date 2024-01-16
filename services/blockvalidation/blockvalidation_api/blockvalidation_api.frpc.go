@@ -512,6 +512,122 @@ func (x *BlockvalidationApiSetTxMetaResponse) decode(d *polyglot.Decoder) error 
 	return nil
 }
 
+type BlockvalidationApiDelTxMetaRequest struct {
+	error error
+	flags uint8
+
+	Hash []byte
+}
+
+func NewBlockvalidationApiDelTxMetaRequest() *BlockvalidationApiDelTxMetaRequest {
+	return &BlockvalidationApiDelTxMetaRequest{}
+}
+
+func (x *BlockvalidationApiDelTxMetaRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiDelTxMetaRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bytes(x.Hash)
+	}
+}
+
+func (x *BlockvalidationApiDelTxMetaRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiDelTxMetaRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Hash, err = d.Bytes(nil)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type BlockvalidationApiDelTxMetaResponse struct {
+	error error
+	flags uint8
+
+	Ok bool
+}
+
+func NewBlockvalidationApiDelTxMetaResponse() *BlockvalidationApiDelTxMetaResponse {
+	return &BlockvalidationApiDelTxMetaResponse{}
+}
+
+func (x *BlockvalidationApiDelTxMetaResponse) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiDelTxMetaResponse) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bool(x.Ok)
+	}
+}
+
+func (x *BlockvalidationApiDelTxMetaResponse) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiDelTxMetaResponse) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Ok, err = d.Bool()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type BlockvalidationApiSetMinedMultiRequest struct {
 	error error
 	flags uint8
@@ -653,6 +769,7 @@ type BlockValidationAPI interface {
 	SubtreeFound(context.Context, *BlockvalidationApiSubtreeFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	Get(context.Context, *BlockvalidationApiGetSubtreeRequest) (*BlockvalidationApiGetSubtreeResponse, error)
 	SetTxMeta(context.Context, *BlockvalidationApiSetTxMetaRequest) (*BlockvalidationApiSetTxMetaResponse, error)
+	DelTxMeta(context.Context, *BlockvalidationApiDelTxMetaRequest) (*BlockvalidationApiDelTxMetaResponse, error)
 	SetMinedMulti(context.Context, *BlockvalidationApiSetMinedMultiRequest) (*BlockvalidationApiSetMinedMultiResponse, error)
 }
 
@@ -777,6 +894,26 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 		return
 	}
 	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewBlockvalidationApiDelTxMetaRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *BlockvalidationApiDelTxMetaResponse
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = blockValidationAPI.DelTxMeta(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
+	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockvalidationApiSetMinedMultiRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -855,6 +992,10 @@ type subBlockValidationAPIClient struct {
 	nextSetTxMetaMu         sync.RWMutex
 	inflightSetTxMeta       map[uint16]chan *BlockvalidationApiSetTxMetaResponse
 	inflightSetTxMetaMu     sync.RWMutex
+	nextDelTxMeta           uint16
+	nextDelTxMetaMu         sync.RWMutex
+	inflightDelTxMeta       map[uint16]chan *BlockvalidationApiDelTxMetaResponse
+	inflightDelTxMetaMu     sync.RWMutex
 	nextSetMinedMulti       uint16
 	nextSetMinedMultiMu     sync.RWMutex
 	inflightSetMinedMulti   map[uint16]chan *BlockvalidationApiSetMinedMultiResponse
@@ -932,6 +1073,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		return
 	}
 	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.BlockValidationAPI.inflightDelTxMetaMu.RLock()
+		if ch, ok := c.BlockValidationAPI.inflightDelTxMeta[incoming.Metadata.Id]; ok {
+			c.BlockValidationAPI.inflightDelTxMetaMu.RUnlock()
+			res := NewBlockvalidationApiDelTxMetaResponse()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.BlockValidationAPI.inflightDelTxMetaMu.RUnlock()
+		}
+		return
+	}
+	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockValidationAPI.inflightSetMinedMultiMu.RLock()
 		if ch, ok := c.BlockValidationAPI.inflightSetMinedMulti[incoming.Metadata.Id]; ok {
 			c.BlockValidationAPI.inflightSetMinedMultiMu.RUnlock()
@@ -978,6 +1131,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.BlockValidationAPI.nextSetTxMeta = 0
 	c.BlockValidationAPI.nextSetTxMetaMu.Unlock()
 	c.BlockValidationAPI.inflightSetTxMeta = make(map[uint16]chan *BlockvalidationApiSetTxMetaResponse)
+	c.BlockValidationAPI.nextDelTxMetaMu.Lock()
+	c.BlockValidationAPI.nextDelTxMeta = 0
+	c.BlockValidationAPI.nextDelTxMetaMu.Unlock()
+	c.BlockValidationAPI.inflightDelTxMeta = make(map[uint16]chan *BlockvalidationApiDelTxMetaResponse)
 	c.BlockValidationAPI.nextSetMinedMultiMu.Lock()
 	c.BlockValidationAPI.nextSetMinedMulti = 0
 	c.BlockValidationAPI.nextSetMinedMultiMu.Unlock()
@@ -1163,10 +1320,44 @@ func (c *subBlockValidationAPIClient) SetTxMeta(ctx context.Context, req *Blockv
 	return
 }
 
+func (c *subBlockValidationAPIClient) DelTxMeta(ctx context.Context, req *BlockvalidationApiDelTxMetaRequest) (res *BlockvalidationApiDelTxMetaResponse, err error) {
+	ch := make(chan *BlockvalidationApiDelTxMetaResponse, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 15
+
+	c.nextDelTxMetaMu.Lock()
+	c.nextDelTxMeta += 1
+	id := c.nextDelTxMeta
+	c.nextDelTxMetaMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightDelTxMetaMu.Lock()
+	c.inflightDelTxMeta[id] = ch
+	c.inflightDelTxMetaMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightDelTxMetaMu.Lock()
+	delete(c.inflightDelTxMeta, id)
+	c.inflightDelTxMetaMu.Unlock()
+	packet.Put(p)
+	return
+}
+
 func (c *subBlockValidationAPIClient) SetMinedMulti(ctx context.Context, req *BlockvalidationApiSetMinedMultiRequest) (res *BlockvalidationApiSetMinedMultiResponse, err error) {
 	ch := make(chan *BlockvalidationApiSetMinedMultiResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 15
+	p.Metadata.Operation = 16
 
 	c.nextSetMinedMultiMu.Lock()
 	c.nextSetMinedMulti += 1

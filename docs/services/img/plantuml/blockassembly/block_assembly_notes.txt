@@ -30,20 +30,6 @@ Hash: subtree.RootHash(),
   --> blockAssembler.GetMiningCandidate(ctx) --> subtreeProcessor.GetCompletedSubtreesForMiningCandidate() -->    blockAssembler  coinbaseValue = util.GetBlockSubsidyForHeight(b.bestBlockHeight + 1) + subtreeFees
   -->blockAssembler   compute coinbase Tx merkle proof --> return mining candidate with coinbase Tx and merkle proof and fees and list of subtrees composing the candidate block
 
-              --> statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-                  Timestamp: timestamppb.New(now),
-                    Type:      "GetMiningCandidate",
-                    Subtype:   "Height",
-                    Value:     fmt.Sprintf("%d", miningCandidate.Height),
-                    ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-                  })
-              --> statusClient.AnnounceStatus(ctx, &model.AnnounceStatusRequest{
-                    Timestamp: timestamppb.New(now),
-                    Type:      "GetMiningCandidate",
-                    Subtype:   "PreviousHash",
-                    Value:     utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash),
-                    ExpiresAt: timestamppb.New(now.Add(30 * time.Second)),
-              })
               --> 	ba.jobStore.Set(*id, &subtreeprocessor.Job{
                           ID:              id,
                           Subtrees:        subtrees,
