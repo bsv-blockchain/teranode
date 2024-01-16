@@ -328,22 +328,6 @@ func (g *S3) generateKey(key []byte) *string {
 	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
 }
 
-func getQueryParamString(url *url.URL, key string, defaultValue string) string {
-	value := url.Query().Get(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-func getQueryParamBool(url *url.URL, key string, defaultValue string) bool {
-	value := url.Query().Get(key)
-	if value == "" {
-		return defaultValue == "true"
-	}
-	return value == "true"
-}
-
 func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
 	value := url.Query().Get(key)
 	if value == "" {
