@@ -43,26 +43,14 @@ var (
 func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
 	logger = logger.New("s3")
 
-	// scheme := getQueryParamString(s3URL, "scheme", "http")
-	// s3ForcePathStyle := getQueryParamBool(s3URL, "S3ForcePathStyle", "false")
 	maxIdleConns := getQueryParamInt(s3URL, "MaxIdleConns", 100)
 	maxIdleConnsPerHost := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
 	idleConnTimeout := time.Duration(getQueryParamInt(s3URL, "IdleConnTimeoutSeconds", 100)) * time.Second
 	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
 	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
-	// region := getQueryParamString(s3URL, "region", "eu-west-1")
 
 	config, _ := config.LoadDefaultConfig(context.Background())
 	client := s3.NewFromConfig(config)
-
-	// if s3URL.Host != "" {
-	// 	serverURL := url.URL{
-	// 		Scheme: scheme,
-	// 		Host:   s3URL.Host,
-	// 	}
-	// 	config.Endpoint = aws.String(serverURL.String())
-	// 	config.S3ForcePathStyle = aws.Bool(s3ForcePathStyle) // Required when using a non-AWS S3 service
-	// }
 
 	config.HTTPClient = &http.Client{
 		Transport: &http.Transport{
@@ -74,21 +62,6 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 				KeepAlive: keepAlive,
 			}).DialContext},
 	}
-
-	// sess, err := session.NewSession(config)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// client := s3.New(sess)
-
-	// Setup the S3 Upload Manager. Also see the SDK doc for the Upload Manager
-	// for more information on configuring part size, and concurrency.
-	//
-	// http://docs.aws.amazon.com/sdk-for-go/api/service/s3/s3manager/#NewUploader
-	// uploader := s3manager.NewUploader(sess)
-
-	// downloader := s3manager.NewDownloader(sess)
 
 	s := &S3{
 		client:     client,
@@ -325,6 +298,7 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 		return fmt.Errorf("unable to del data: %w", err)
 	}
 
+	// do we need to wait until we can be sure that the object is deleted?
 	// err = g.client.WaitUntilObjectNotExists(traceSpan.Ctx, &s3.HeadObjectInput{
 	// 	Bucket: aws.String(g.bucket),
 	// 	Key:    objectKey,
