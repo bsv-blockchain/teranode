@@ -16,10 +16,11 @@ import (
 )
 
 type Client struct {
-	apiClient   blockvalidation_api.BlockValidationAPIClient
-	frpcClient  *blockvalidation_api.Client
-	httpAddress string
-	logger      ulogger.Logger
+	apiClient     blockvalidation_api.BlockValidationAPIClient
+	frpcClient    *blockvalidation_api.Client
+	frpcConnected bool
+	httpAddress   string
+	logger        ulogger.Logger
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -41,6 +42,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 		logger:    logger,
 	}
 
+	client.NewFRPCClient()
+
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
 	if ok {
 		client.httpAddress = httpAddress
@@ -49,18 +52,27 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
-func (s *Client) connectFRPC(ctx context.Context) {
-	if s.frpcClient != nil {
-		return
-	}
-
-	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
+func (s *Client) NewFRPCClient() {
+	_, ok := gocore.Config().Get("blockvalidation_frpcAddress")
 	if !ok {
 		return
 	}
 	frpcClient, err := blockvalidation_api.NewClient(nil, nil)
 	if err != nil {
 		s.logger.Fatalf("Error creating new fRPC client in blockvalidation: %s", err)
+	}
+	s.frpcClient = frpcClient
+	s.frpcConnected = false
+}
+
+func (s *Client) connectFRPC(ctx context.Context) {
+	if s.frpcConnected {
+		return
+	}
+
+	blockValidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
+	if !ok {
+		return
 	}
 
 	connected := false
@@ -70,7 +82,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	for i := 0; i < maxRetries; i++ {
 		s.logger.Infof("attempting to create fRPC connection to blockvalidation, attempt %d", i+1)
 
-		err := s.frpcClient.Connect(blockAssemblyFRPCAddress)
+		err := s.frpcClient.Connect(blockValidationFRPCAddress)
 		if err != nil {
 			s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
 			if i+1 == maxRetries {
@@ -89,14 +101,14 @@ func (s *Client) connectFRPC(ctx context.Context) {
 		s.logger.Fatalf("failed to connect to blockvalidation fRPC server after %d attempts", maxRetries)
 	}
 
-	s.frpcClient = frpcClient
+	s.frpcConnected = true
 
 	/* listen for close channel and reconnect */
 	s.logger.Infof("Listening for close channel on fRPC client")
 	go func() {
 		<-s.frpcClient.CloseChannel()
 		s.logger.Infof("fRPC client close channel received, reconnecting...")
-		s.connectFRPC(ctx)
+		s.NewFRPCClient()
 	}()
 }
 

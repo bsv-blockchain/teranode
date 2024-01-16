@@ -14,12 +14,13 @@ import (
 )
 
 type Client struct {
-	client     blockassembly_api.BlockAssemblyAPIClient
-	frpcClient *blockassembly_api.Client
-	logger     ulogger.Logger
-	batchSize  int
-	batchCh    chan []*blockassembly_api.AddTxRequest
-	batcher    batcher.Batcher[blockassembly_api.AddTxRequest]
+	client        blockassembly_api.BlockAssemblyAPIClient
+	frpcClient    *blockassembly_api.Client
+	frpcConnected bool
+	logger        ulogger.Logger
+	batchSize     int
+	batchCh       chan []*blockassembly_api.AddTxRequest
+	batcher       batcher.Batcher[blockassembly_api.AddTxRequest]
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -65,6 +66,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 		batcher:   batcherInstance,
 	}
 
+	client.NewFRPCClient()
+
 	if batchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
 			go client.batchWorker(ctx, sendBatchRPCTimeout)
@@ -74,18 +77,27 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
-func (s *Client) connectFRPC(ctx context.Context) {
-	if s.frpcClient != nil {
-		return
-	}
-
-	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
+func (s *Client) NewFRPCClient() {
+	_, ok := gocore.Config().Get("blockassembly_frpcAddress")
 	if !ok {
 		return
 	}
 	frpcClient, err := blockassembly_api.NewClient(nil, nil)
 	if err != nil {
 		s.logger.Fatalf("Error creating new fRPC client in blockassembly: %s", err)
+	}
+	s.frpcClient = frpcClient
+	s.frpcConnected = false
+}
+
+func (s *Client) connectFRPC(ctx context.Context) {
+	if s.frpcConnected {
+		return
+	}
+
+	blockAssemblyFRPCAddress, ok := gocore.Config().Get("blockassembly_frpcAddress")
+	if !ok {
+		return
 	}
 
 	connected := false
@@ -95,7 +107,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	for i := 0; i < maxRetries; i++ {
 		s.logger.Infof("Attempting to create fRPC connection to blockassembly, attempt %d", i+1)
 
-		err := frpcClient.Connect(blockAssemblyFRPCAddress)
+		err := s.frpcClient.Connect(blockAssemblyFRPCAddress)
 		if err != nil {
 			s.logger.Infof("Error connecting to fRPC server in blockassembly: %s", err)
 			if i+1 == maxRetries {
@@ -114,14 +126,14 @@ func (s *Client) connectFRPC(ctx context.Context) {
 		s.logger.Fatalf("Failed to connect to blockassembly fRPC server after %d attempts", maxRetries)
 	}
 
-	s.frpcClient = frpcClient
+	s.frpcConnected = true
 
 	/* listen for close channel and reconnect */
 	s.logger.Infof("Listening for close channel on fRPC client")
 	go func() {
 		<-s.frpcClient.CloseChannel()
 		s.logger.Infof("fRPC client close channel received, reconnecting...")
-		s.connectFRPC(ctx)
+		s.NewFRPCClient()
 	}()
 }
 
