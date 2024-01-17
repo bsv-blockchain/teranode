@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
@@ -27,15 +26,7 @@ func getTxMetaStore(logger ulogger.Logger) txmetastore.Store {
 	if txMetaStore != nil {
 		return txMetaStore
 	}
-	// append the serviceName to the key so that you can a tweaked setting for each service if need be.
-	// if not found it reverts to the non-appended key. nice
-	// used for asset_service so that it has a connection to aerospike but doesn't set min connections to 512 (only needs a handful)
-	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
-	key := fmt.Sprintf("txmeta_store_%s", serviceName)
-	txMetaStoreURL, err, found := gocore.Config().GetURL(key)
-	if err != nil {
-		txMetaStoreURL, err, found = gocore.Config().GetURL("txmeta_store")
-	}
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
 		panic(err)
 	}
