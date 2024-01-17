@@ -3,7 +3,7 @@
 ## Index
 
 1. [Description](#1-description)
-2. [Functionality ](#2-functionality-)
+2. [Functionality ](#2-functionality)
 - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
 - [2.1.1. Creating a new P2P Server](#211-creating-a-new-p2p-server)
    - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
@@ -213,25 +213,7 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
 
 Nodes will broadcast rejected transaction notifications to the network. This is done by publishing a message to the relevant topic. The message is then received by all peers subscribed to that topic.
 
-```plantuml
-@startuml
-
-participant "Node 1" as Node1
-participant "PubSub System" as PubSub
-participant "Node 2" as Node2
-
-Node1 -> Node1: validatorSubscriptionListener(ctx)
-activate Node1
-Node1 -> PubSub: s.topics[rejectedTxTopicName].Publish(ctx, rejectedTxMessageBytes)
-deactivate Node1
-
-PubSub -> Node2: s.subscriptions[rejectedTxTopicName]
-activate Node2
-Node2 -> Node2: Handle rejected transaction notification
-deactivate Node2
-
-@enduml
-```
+![p2p_tx_validator_messages.svg](img%2Fplantuml%2Fp2p%2Fp2p_tx_validator_messages.svg)
 
  - The Node 1 listens for validator subscription events.
  - When a new rejected transaction notification is detected, the Node 1 publishes this message to the PubSub System using the topic name `rejectedTxTopicName`, forwarding it to any subscribers of the `rejectedTxTopicName` topic.
@@ -311,7 +293,7 @@ As a sequence:
 
 ## 4. Data Model
 
-Please refer to the [Architecture Overview](../architecture/architecture.md) document for a detailed description of the Block and Subtree data model.
+Please refer to the [Architecture Overview](../architecture/ubsv-architecture.md) document for a detailed description of the Block and Subtree data model.
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
