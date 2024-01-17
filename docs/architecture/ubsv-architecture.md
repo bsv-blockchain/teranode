@@ -9,9 +9,10 @@
 
 # UBSV (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
 
-[Last Modified - 16-January-2024]
+[Last Modified - 17-January-2024]
 
 ## Index
+
 
 1. [Overview](#1-overview)
 2. [Data Model and Propagation](#2-data-model-and-propagation)
@@ -22,23 +23,25 @@
 - [2.5. Network Behavior](#25-network-behavior)
 3. [Node Workflow](#3-node-workflow)
 4. [Services](#4-services)
-- [4.1. Propagation Service](#41-transaction-propagation-service)
+- [4.1. Propagation Service](#41-propagation-service)
 - [4.2. Transaction Validator](#42-transaction-validator)
 - [4.3. Block Assembly Service](#43-block-assembly-service)
-- [4.4. Miner / Hasher](#44-miner--hasher)
-- [4.5. Subtree and Block Validation](#45-subtree-and-block-validator)
-  - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
-  - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
-  - [4.5.3. Block Validation Details:](#453-block-validation-details)
-  - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
-- [4.6. Blockchain Service](#46-blockchain-service)
-- [4.7. Asset Service](#47-asset-service)
-- [4.8. Coinbase Service](#48-coinbase-service)
-- [4.9. Bootstrap](#49-bootstrap)
-- [4.10. P2P Legacy Service](#410-p2p-legacy-service)
-- [4.11. UTXO Store](#411-utxo-store)
-- [4.12. Transaction Meta Store](#412-transaction-meta-store)
-- [4.13. Banlist Service](#413-banlist-service)
+- [4.4. Miner](#44-miner)
+- [4.5. Subtree and Block Validation Service](#45-subtree-and-block-validation-service)
+    - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
+    - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
+    - [4.5.3. Block Validation Details:](#453-block-validation-details)
+    - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
+- [4.6. P2P Service](#46-p2p-service)
+- [4.7. Blockchain Service](#47-blockchain-service)
+- [4.8. Asset Service](#48-asset-service)
+- [4.9. Coinbase Service](#49-coinbase-service)
+- [4.10. Bootstrap](#410-bootstrap)
+- [4.11. P2P Legacy Service](#411-p2p-legacy-service)
+- [4.12. UTXO Store](#412-utxo-store)
+- [4.13. Transaction Meta Store](#413-transaction-meta-store)
+- [4.14. Banlist Service](#414-banlist-service)
+
 
 ## 1. Overview
 
