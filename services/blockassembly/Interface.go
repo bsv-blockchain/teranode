@@ -8,4 +8,5 @@ import (
 
 type Store interface {
 	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error)
+	RemoveTx(ctx context.Context, hash *chainhash.Hash) error
 }

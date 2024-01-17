@@ -341,11 +341,23 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 		}
 	}
 
-	// TODO Should we be doing this in a batch?
 	err = v.utxoStore.Spend(ctx, spends)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return nil, fmt.Errorf("validator: UTXO Store spend failed: %v", err)
+
+		// check whether this is a double spend error
+		var spentErr *utxostore.ErrSpent
+		ok := errors.As(err, &spentErr)
+		if ok {
+			// remove the spending tx from the block assembly and freeze it
+			// TODO implement freezing in utxo store
+			err = v.blockAssembler.RemoveTx(ctx, spentErr.SpendingTxID)
+			if err != nil {
+				v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
+			}
+		}
+
+		return nil, errors.Join(fmt.Errorf("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String()), err)
 	}
 
 	return spends, nil

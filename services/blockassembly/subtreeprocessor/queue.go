@@ -14,18 +14,16 @@ type LockFreeQueue struct {
 	tail         *txIDAndFee
 	previousTail *txIDAndFee
 	queueLength  atomic.Int64
-	timeDelay    time.Duration
 }
 
 // NewLockFreeQueue creates and initializes a LockFreeQueue
-func NewLockFreeQueue(timeDelay time.Duration) *LockFreeQueue {
+func NewLockFreeQueue() *LockFreeQueue {
 	firstTail := &txIDAndFee{}
 	lf := &LockFreeQueue{
 		head:         atomic.Pointer[txIDAndFee]{},
 		tail:         firstTail,
 		previousTail: firstTail,
 		queueLength:  atomic.Int64{},
-		timeDelay:    timeDelay,
 	}
 
 	lf.head.Store(nil)
@@ -52,20 +50,14 @@ func (q *LockFreeQueue) enqueue(v *txIDAndFee) {
 
 // Dequeue removes a Request from the queue
 // dequeue is not thread safe, it should only be called from a single thread !!!
-func (q *LockFreeQueue) dequeue() *txIDAndFee {
+func (q *LockFreeQueue) dequeue(validFromMillis int64) *txIDAndFee {
 	next := q.tail.next.Load()
 
 	if next == nil || next == q.previousTail {
 		return nil
 	}
 
-	validTime := true
-	if q.timeDelay > 0 {
-		validTimeMillis := time.Now().Add(-1 * q.timeDelay).UnixMilli()
-		validTime = next.time <= validTimeMillis
-	}
-
-	if !validTime {
+	if validFromMillis > 0 && next.time >= validFromMillis {
 		return nil
 	}
 
