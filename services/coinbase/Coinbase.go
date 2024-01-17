@@ -896,7 +896,7 @@ func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResp
 	if err := c.db.QueryRowContext(ctx, `
 		SELECT
 		 COUNT(*)
-		,SUM(satoshis)
+		,COALESCE(SUM(satoshis), 0)
 		FROM spendable_utxos;
 	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
 		return nil, err
