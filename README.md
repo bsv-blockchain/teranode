@@ -120,7 +120,7 @@ Additional logs can be produced when the node is run with the following environm
 
 ---
 
-Please check the [Architecture Documentation](docs/architecture/architecture.md) for an introduction to the overall architecture of the node.
+Please check the [Architecture Documentation](docs/architecture/ubsv-architecture.md) for an introduction to the overall architecture of the node.
 
 
 ---
@@ -153,7 +153,8 @@ Store Documentation:
 
 Overlay Service documentation:
 
-+ [P2P](docs/services/p2p.md)
++ [P2P Service](docs/services/p2p.md)
++ [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
 
