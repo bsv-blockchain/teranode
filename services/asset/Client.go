@@ -33,7 +33,7 @@ type BestBlockHeader struct {
 func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Client, error) {
 	var err error
 	var blobConn *grpc.ClientConn
-	var blobClient asset_api.AssetAPIClient
+	var assetClient asset_api.AssetAPIClient
 
 	// retry a few times to connect to the blob service
 	maxRetries, _ := gocore.Config().GetInt("asset_maxRetries", 3)
@@ -50,25 +50,25 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
 		}
 
-		blobClient = asset_api.NewAssetAPIClient(blobConn)
+		assetClient = asset_api.NewAssetAPIClient(blobConn)
 
-		_, err = blobClient.HealthGRPC(ctx, &emptypb.Empty{})
+		_, err = assetClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
 			if retries < maxRetries {
 				retries++
-				logger.Warnf("failed to connect to blob service, retrying %d: %v", retries, err)
+				logger.Warnf("failed to connect to asset service, retrying %d: %v", retries, err)
 				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
 				continue
 			}
 
-			logger.Errorf("failed to connect to blob service, retried %d times: %v", maxRetries, err)
+			logger.Errorf("failed to connect to asset service, retried %d times: %v", maxRetries, err)
 			return nil, err
 		}
 		break
 	}
 
 	return &Client{
-		client:  blobClient,
+		client:  assetClient,
 		logger:  logger,
 		running: true,
 		conn:    blobConn,
