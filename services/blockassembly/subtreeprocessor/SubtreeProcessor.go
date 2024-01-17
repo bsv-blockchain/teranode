@@ -255,9 +255,6 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
-	start := gocore.CurrentTime()
-	defer stp.stat.AddTime(start)
-
 	stp.queue.enqueue(&txIDAndFee{node: node})
 }
 
