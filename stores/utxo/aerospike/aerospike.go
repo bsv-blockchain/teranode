@@ -184,6 +184,8 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		filterEnabled: filterEnabled,
 	}
 
+	s.logger.Infof("[UTXO] filter expressions enabled: %t", filterEnabled)
+
 	go func() {
 		defer func() {
 			s.logger.Infof("[UTXO] stopping storeRetryCh utxo goroutine")
