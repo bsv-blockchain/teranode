@@ -184,7 +184,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		filterEnabled: filterEnabled,
 	}
 
-	s.logger.Infof("[UTXO] filter expressions enabled: %t", filterEnabled)
+	s.logger.Infof("[UTXO] filter expressions enabled: %t", s.filterEnabled)
 
 	go func() {
 		defer func() {
@@ -522,6 +522,8 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 				),
 			),
 		)
+	} else {
+		s.logger.Warnf("[UTXO] filter expressions disabled")
 	}
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
