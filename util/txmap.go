@@ -76,6 +76,9 @@ func (s *SwissMap) Delete(hash [32]byte) error {
 }
 
 func (s *SwissMap) Length() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.length
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"os"
 	"runtime/pprof"
 	"sync"
@@ -488,6 +489,9 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	wg.Add(8) // we are expecting 4 subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
+
+	timeStart := time.Now()
+
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
 	// new items per file is 65536 so there should be 8 subtrees in the chain
@@ -500,6 +504,8 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	})
 	wg.Wait()
+	fmt.Printf("moveUpBlock took %s\n", time.Since(timeStart))
+
 	time.Sleep(1 * time.Second)
 
 	require.NoError(t, err)
@@ -1008,4 +1014,81 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		wg.Wait()
 		t.Logf("Time taken to read: %s\n", time.Since(start))
 	})
+}
+
+func Test_AddNode_Benchmark(t *testing.T) {
+	//util.SkipVeryLongTests(t)
+
+	g, stp, txHashes := initTestAddNodeBenchmark(t)
+
+	startTime := time.Now()
+
+	for i, txHash := range txHashes {
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+	}
+
+	err := g.Wait()
+	require.NoError(t, err)
+
+	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+}
+
+func Test_AddNodeWithMap_Benchmark(t *testing.T) {
+	//util.SkipVeryLongTests(t)
+
+	g, stp, txHashes := initTestAddNodeBenchmark(t)
+
+	_ = stp.Remove(txHashes[1000])
+	_ = stp.Remove(txHashes[2000])
+	_ = stp.Remove(txHashes[3000])
+	_ = stp.Remove(txHashes[4000])
+
+	for i := 0; i < 4; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		txHashes = append(txHashes, txHash)
+	}
+
+	startTime := time.Now()
+
+	for i, txHash := range txHashes {
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+	}
+
+	err := g.Wait()
+	require.NoError(t, err)
+
+	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+}
+
+func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+	_ = os.Setenv("initial_merkle_items_per_subtree", "1048576")
+	_ = os.Setenv("double_spend_window_millis", "0")
+
+	newSubtreeChan := make(chan *util.Subtree)
+	g := errgroup.Group{}
+	nrSubtreesExpected := 10
+	n := 0
+	g.Go(func() error {
+		for {
+			<-newSubtreeChan
+			n++
+
+			if n == nrSubtreesExpected {
+				return nil
+			}
+		}
+	})
+
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
+
+	nrTxs := 1_048_576
+	txHashes := make([]chainhash.Hash, 10*nrTxs)
+	for i := 0; i < (10*nrTxs)-1; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		txHashes[i] = txHash
+	}
+
+	return &g, stp, txHashes
 }

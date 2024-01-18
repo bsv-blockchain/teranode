@@ -165,15 +165,6 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
-	if ok {
-		err := v.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
-
 	go func() {
 		for {
 			select {
@@ -366,43 +357,6 @@ func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage
 	return &validator_api.GetBlockHeightResponse{
 		Height: blockHeight,
 	}, nil
-}
-
-func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
-	v.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	frpcValidator := &fRPC_Validator{
-		v: v,
-	}
-
-	s, err := validator_api.NewServer(frpcValidator, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("validator_frpcConcurrency")
-	if ok {
-		v.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err = s.Start(frpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err = s.Shutdown()
-		if err != nil {
-			v.logger.Errorf("failed to shutdown frpc server: %v", err)
-		}
-	}()
-
-	return nil
 }
 
 func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {

@@ -472,6 +472,14 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	// 	addTxBatchGrpc.AddTime(start)
 	// }()
 
+	defer func() {
+		//traceSpan.Finish()
+		// stat.AddTime(startTime)
+		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+	}()
+
 	requests := batch.GetTxRequests()
 	if len(requests) == 0 {
 		return nil, fmt.Errorf("no tx requests in batch")
@@ -481,8 +489,11 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	var err error
 	txIdErrors := make([][]byte, 0, len(requests))
 	for _, req := range requests {
+		startTxTime := time.Now()
 		// create the subtree node
 		if !ba.blockAssemblyDisabled {
+			prometheusBlockAssemblyAddTx.Inc()
+
 			if err = ba.blockAssembler.AddTx(util.SubtreeNode{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
@@ -491,6 +502,8 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 				batchError = err
 				txIdErrors = append(txIdErrors, req.Txid)
 			}
+
+			prometheusBlockAssemblyAddTxDuration.Observe(util.TimeSince(startTxTime))
 		}
 	}
 	return &blockassembly_api.AddTxBatchResponse{

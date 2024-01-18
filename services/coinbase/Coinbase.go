@@ -896,7 +896,7 @@ func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResp
 	if err := c.db.QueryRowContext(ctx, `
 		SELECT
 		 COUNT(*)
-		,SUM(satoshis)
+		,COALESCE(SUM(satoshis), 0)
 		FROM spendable_utxos;
 	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
 		return nil, err
@@ -928,7 +928,9 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 			if availableUtxos < threshold && !alreadyNotified {
 				c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
 				if channel != "" {
-					_ = postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
+					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))); err != nil {
+						c.logger.Warnf("could not post to slack: %v", err)
+					}
 				}
 				alreadyNotified = true
 			} else if availableUtxos >= threshold && alreadyNotified {

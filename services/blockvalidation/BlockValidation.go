@@ -158,12 +158,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 	// Add the coinbase transaction to the metaTxStore
-	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
-	err = u.storeCoinbaseTx(spanCtx, block)
-	if err != nil {
-		return err
-	}
-	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
+	// TODO why is this needed?
+	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
+	//err = u.storeCoinbaseTx(spanCtx, block)
+	//if err != nil {
+	//	return err
+	//}
+	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {

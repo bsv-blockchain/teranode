@@ -37,13 +37,20 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(maxMinedRoutines)
 
-	for _, subtree := range subtrees {
+	for subtreeIdx, subtree := range subtrees {
+		subtreeIdx := subtreeIdx
 		subtree := subtree
 		g.Go(func() error {
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx, node := range subtree.Nodes {
 				idx := idx
 				node := node
+
+				// Skip the first node in the first subtree, as it is the coinbase tx
+				if subtreeIdx == 0 && idx == 0 {
+					continue
+				}
+
 				hashes = append(hashes, &node.Hash)
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Infof("SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockID)

@@ -296,6 +296,24 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 	}, nil
 }
 
+func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockchain_api.GetHashOfAncestorBlockRequest) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetHashOfAncestorBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainGetHashOfAncestorBlock.Inc()
+
+	hash, err := b.store.GetHashOfAncestorBlock(ctx1, (*chainhash.Hash)(request.Hash), int(request.Depth))
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.GetHashOfAncestorBlockResponse{
+		Hash: hash[:],
+	}, nil
+}
+
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockExists", stats)
 	defer func() {

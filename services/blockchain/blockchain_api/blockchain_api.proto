@@ -19,6 +19,7 @@ service BlockchainAPI {
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
   rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
+  rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
@@ -167,4 +168,15 @@ message GetSuitableBlockRequest {
 // swagger:model GetSuitableBlockResponse
 message GetSuitableBlockResponse {
   model.SuitableBlock block = 1;
+}
+
+// swagger:model GetHashOfAncestorBlockRequest
+message GetHashOfAncestorBlockRequest {
+  bytes hash = 1;
+  uint32 depth =2;
+}
+
+// swagger:model GetHashOfAncestorBlockResponse
+message GetHashOfAncestorBlockResponse {
+  bytes hash = 1;
 }

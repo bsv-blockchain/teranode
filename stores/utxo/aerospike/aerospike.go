@@ -135,14 +135,15 @@ type storeUtxo struct {
 }
 
 type Store struct {
-	u            *url.URL
-	client       *uaerospike.Client
-	namespace    string
-	logger       ulogger.Logger
-	blockHeight  uint32
-	expiration   uint32
-	dbTimeout    time.Duration
-	storeRetryCh chan *storeUtxo
+	u             *url.URL
+	client        *uaerospike.Client
+	namespace     string
+	logger        ulogger.Logger
+	blockHeight   uint32
+	expiration    uint32
+	dbTimeout     time.Duration
+	storeRetryCh  chan *storeUtxo
+	filterEnabled bool
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -169,17 +170,21 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	}
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
+	filterEnabled := gocore.Config().GetBool("utxostore_filterEnabled", true)
 
 	s := &Store{
-		u:            u,
-		client:       client,
-		namespace:    namespace,
-		logger:       logger,
-		blockHeight:  0,
-		expiration:   expiration,
-		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		storeRetryCh: make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
+		u:             u,
+		client:        client,
+		namespace:     namespace,
+		logger:        logger,
+		blockHeight:   0,
+		expiration:    expiration,
+		dbTimeout:     time.Duration(dbTimeoutMillis) * time.Millisecond,
+		storeRetryCh:  make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
+		filterEnabled: filterEnabled,
 	}
+
+	s.logger.Infof("[UTXO] filter expressions enabled: %t", s.filterEnabled)
 
 	go func() {
 		defer func() {
@@ -499,23 +504,27 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	policy := util.GetAerospikeWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
-	policy.FilterExpression = aerospike.ExpAnd(
-		// check whether txid has been set = spent
-		aerospike.ExpNot(aerospike.ExpBinExists("txid")),
+	if s.filterEnabled {
+		policy.FilterExpression = aerospike.ExpAnd(
+			// check whether txid has been set = spent
+			aerospike.ExpNot(aerospike.ExpBinExists("txid")),
 
-		aerospike.ExpOr(
-			// anything below the block height is spendable, including 0
-			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+			aerospike.ExpOr(
+				// anything below the block height is spendable, including 0
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
 
-			aerospike.ExpAnd(
-				aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
-				// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
-				// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
-				// and not the block time itself.
-				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				aerospike.ExpAnd(
+					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+					// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+					// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+					// and not the block time itself.
+					aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				),
 			),
-		),
-	)
+		)
+	} else {
+		s.logger.Warnf("[UTXO] filter expressions disabled")
+	}
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 
