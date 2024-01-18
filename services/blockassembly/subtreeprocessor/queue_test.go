@@ -14,13 +14,13 @@ import (
 )
 
 func Test_queue(t *testing.T) {
-	q := NewLockFreeQueue(0)
+	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 1, 10)
 
 	items := 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
@@ -35,7 +35,7 @@ func Test_queue(t *testing.T) {
 
 	items = 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
@@ -48,23 +48,26 @@ func Test_queue(t *testing.T) {
 }
 
 func Test_queueWithTime(t *testing.T) {
-	q := NewLockFreeQueue(100 * time.Millisecond)
+	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 1, 10)
 
-	item := q.dequeue()
+	validFromMillis := time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	item := q.dequeue(validFromMillis)
 	require.Nil(t, item)
 
 	time.Sleep(50 * time.Millisecond)
 
-	item = q.dequeue()
+	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	item = q.dequeue(validFromMillis)
 	require.Nil(t, item)
 
 	time.Sleep(100 * time.Millisecond)
 
 	items := 0
+	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 	for {
-		item = q.dequeue()
+		item = q.dequeue(validFromMillis)
 		if item == nil {
 			break
 		}
@@ -77,19 +80,22 @@ func Test_queueWithTime(t *testing.T) {
 
 	enqueueItems(t, q, 1, 10)
 
-	item = q.dequeue()
+	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	item = q.dequeue(validFromMillis)
 	require.Nil(t, item)
 
 	time.Sleep(50 * time.Millisecond)
 
-	item = q.dequeue()
+	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	item = q.dequeue(validFromMillis)
 	require.Nil(t, item)
 
 	time.Sleep(100 * time.Millisecond)
 
 	items = 0
+	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 	for {
-		item = q.dequeue()
+		item = q.dequeue(validFromMillis)
 		if item == nil {
 			break
 		}
@@ -102,13 +108,13 @@ func Test_queueWithTime(t *testing.T) {
 }
 
 func Test_queue2Threads(t *testing.T) {
-	q := NewLockFreeQueue(0)
+	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 2, 10)
 
 	items := 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
@@ -122,7 +128,7 @@ func Test_queue2Threads(t *testing.T) {
 
 	items = 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
@@ -135,14 +141,14 @@ func Test_queue2Threads(t *testing.T) {
 
 func Test_queueLarge(t *testing.T) {
 	runtime.GC()
-	q := NewLockFreeQueue(0)
+	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 10_000, 1_000)
 
 	startTime := time.Now()
 	items := 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
@@ -161,7 +167,7 @@ func Test_queueLarge(t *testing.T) {
 	startTime = time.Now()
 	items = 0
 	for {
-		item := q.dequeue()
+		item := q.dequeue(0)
 		if item == nil {
 			break
 		}

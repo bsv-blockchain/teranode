@@ -150,12 +150,17 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	prometheusTxMetaSet.Inc()
 
 	// this is a no-op for the txmeta map implementation - it is created in the utxo store
 	// we need to return it for performance reasons in the validator
-	return s.Get(ctx, tx.TxIDChainHash())
+	txMeta, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return txMeta, nil
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {

@@ -62,6 +62,7 @@ export function connectToP2PServer() {
           })
 
           miningNodes.set(sorted)
+          console.log('miningNodes', sorted)
         }
 
         let m: any = get(messages)

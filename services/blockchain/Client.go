@@ -187,6 +187,20 @@ func (c Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash)
 
 	return resp.Block, nil
 }
+func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
+		Hash:  blockHash[:],
+		Depth: uint32(depth),
+	})
+	if err != nil {
+		return nil, err
+	}
+	hash, err := chainhash.NewHash(resp.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return hash, nil
+}
 
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{

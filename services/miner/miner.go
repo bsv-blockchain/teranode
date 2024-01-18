@@ -268,7 +268,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 	maxBackoff := 10 * time.Second
 	currentBackoff := minBackoff
 
-	maxRetries := 5
+	maxRetries := 10
 	retryCount := 0
 
 	for {

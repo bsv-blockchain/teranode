@@ -38,7 +38,6 @@ func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.Blo
 	startTime := time.Now()
 	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
-		// blockAssemblyStat.NewStat("AddTx_frpc").AddTime(startTime)
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblerQueuedTransactions.Set(float64(f.ba.blockAssembler.QueueLength()))
 		prometheusBlockAssemblerSubtrees.Set(float64(f.ba.blockAssembler.SubtreeCount()))
@@ -59,28 +58,33 @@ func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.Blo
 		}, err
 	}
 
-	//if err = f.ba.frpcStoreUtxos(ctx, req); err != nil {
-	//	return nil, err
-	//}
-
 	return &blockassembly_api.BlockassemblyApiAddTxResponse{
 		Ok: true,
 	}, nil
 }
 
-func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {
-	// start := gocore.CurrentTime()
-	// defer func() {
-	// 	blockAssemblyStat.NewStat("AddTxBatch_frpc").AddTime(start)
-	// }()
+func (f *fRPC_BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
+		prometheusBlockAssemblerQueuedTransactions.Set(float64(f.ba.blockAssembler.QueueLength()))
+		prometheusBlockAssemblerSubtrees.Set(float64(f.ba.blockAssembler.SubtreeCount()))
+	}()
 
 	var req *blockassembly_api.BlockassemblyApiAddTxRequest
 	var txIdErrors [][]byte
 	for _, req = range batch.TxRequests {
-		_, err = f.AddTx(ctx, req)
-		if err != nil {
+		prometheusBlockAssemblyAddTx.Inc()
+
+		if err = f.ba.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        chainhash.Hash(req.Txid),
+			Fee:         req.Fee,
+			SizeInBytes: req.Size,
+		}); err != nil {
 			txIdErrors = append(txIdErrors, req.Txid)
 		}
+
+		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
 	}
 
 	return &blockassembly_api.BlockassemblyApiAddTxBatchResponse{

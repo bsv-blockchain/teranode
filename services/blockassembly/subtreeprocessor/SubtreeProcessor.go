@@ -51,14 +51,15 @@ type SubtreeProcessor struct {
 	currentSubtree      *util.Subtree
 	currentBlockHeader  *model.BlockHeader
 	sync.Mutex
-	txCount      atomic.Uint64
-	batcher      *txIDAndFeeBatch
-	queue        *LockFreeQueue
-	removeMap    *util.SwissMap
-	subtreeStore blob.Store
-	utxoStore    utxostore.Interface
-	logger       ulogger.Logger
-	stat         *gocore.Stat
+	txCount                   atomic.Uint64
+	batcher                   *txIDAndFeeBatch
+	queue                     *LockFreeQueue
+	removeMap                 *util.SwissMap
+	doubleSpendWindowDuration time.Duration
+	subtreeStore              blob.Store
+	utxoStore                 utxostore.Interface
+	logger                    ulogger.Logger
+	stat                      *gocore.Stat
 }
 
 var (
@@ -91,24 +92,27 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		batcherSize = settingsBufferSize
 	}
 
-	queue := NewLockFreeQueue(0)
+	doubleSpendWindowMillis, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+
+	queue := NewLockFreeQueue()
 
 	stp := &SubtreeProcessor{
-		currentItemsPerFile: initialItemsPerFile,
-		txChan:              make(chan *[]txIDAndFee, txChanBufferSize),
-		getSubtreesChan:     make(chan chan []*util.Subtree),
-		moveUpBlockChan:     make(chan moveBlockRequest),
-		reorgBlockChan:      make(chan reorgBlocksRequest),
-		newSubtreeChan:      newSubtreeChan,
-		chainedSubtrees:     make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
-		currentSubtree:      firstSubtree,
-		batcher:             newTxIDAndFeeBatch(batcherSize),
-		queue:               queue,
-		removeMap:           util.NewSwissMap(0),
-		subtreeStore:        subtreeStore,
-		utxoStore:           utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
-		logger:              logger,
-		stat:                gocore.NewStat("subtreeProcessor").NewStat("Add", false),
+		currentItemsPerFile:       initialItemsPerFile,
+		txChan:                    make(chan *[]txIDAndFee, txChanBufferSize),
+		getSubtreesChan:           make(chan chan []*util.Subtree),
+		moveUpBlockChan:           make(chan moveBlockRequest),
+		reorgBlockChan:            make(chan reorgBlocksRequest),
+		newSubtreeChan:            newSubtreeChan,
+		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
+		currentSubtree:            firstSubtree,
+		batcher:                   newTxIDAndFeeBatch(batcherSize),
+		queue:                     queue,
+		removeMap:                 util.NewSwissMap(0),
+		doubleSpendWindowDuration: time.Duration(doubleSpendWindowMillis) * time.Millisecond,
+		subtreeStore:              subtreeStore,
+		utxoStore:                 utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
+		logger:                    logger,
+		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 	}
 
 	for _, opts := range options {
@@ -163,22 +167,24 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 			default:
 				nrProcessed := 0
+				mapLength := stp.removeMap.Length()
+				// set the validFromMillis to the current time minus the double spend window - so in the past
+				validFromMillis := time.Now().Add(-1 * stp.doubleSpendWindowDuration).UnixMilli()
 				for {
-					txReq = stp.queue.dequeue()
+					txReq = stp.queue.dequeue(validFromMillis)
 					if txReq == nil {
 						time.Sleep(1 * time.Millisecond)
 						break
 					}
 
 					// check if the tx needs to be removed
-					// TODO turn this on, turned off for now to not influence performance
-					//if stp.removeMap.Exists(txReq.node.Hash) {
-					//	// remove from the map
-					//	if err = stp.removeMap.Delete(txReq.node.Hash); err != nil {
-					//		stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
-					//	}
-					//	continue
-					//}
+					if mapLength > 0 && stp.removeMap.Exists(txReq.node.Hash) {
+						// remove from the map
+						if err = stp.removeMap.Delete(txReq.node.Hash); err != nil {
+							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+						}
+						continue
+					}
 
 					err = stp.addNode(txReq.node, false)
 					if err != nil {
@@ -249,9 +255,6 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
-	start := gocore.CurrentTime()
-	defer stp.stat.AddTime(start)
-
 	stp.queue.enqueue(&txIDAndFee{node: node})
 }
 
@@ -546,12 +549,19 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	} else {
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
+		removeMapLength := stp.removeMap.Length()
 		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				// TODO is all this needed? This adds a lot to the processing time
 				if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 					if !coinbaseId.Equal(node.Hash) {
-						_ = stp.addNode(node, skipNotification)
+						if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+							if err = stp.removeMap.Delete(node.Hash); err != nil {
+								stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+							}
+						} else {
+							_ = stp.addNode(node, skipNotification)
+						}
 					}
 				}
 			}
@@ -560,7 +570,13 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 			// TODO is all this needed? This adds a lot to the processing time
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 				if !coinbaseId.Equal(node.Hash) {
-					_ = stp.addNode(node, skipNotification)
+					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+						if err = stp.removeMap.Delete(node.Hash); err != nil {
+							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+						}
+					} else {
+						_ = stp.addNode(node, skipNotification)
+					}
 				}
 			}
 		}
@@ -582,9 +598,10 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err 
 		stp.logger.Infof("processing queue while moveUpBlock: %d", queueLength)
 
 		nrProcessed := int64(0)
+		validFromMillis := time.Now().Add(-1 * stp.doubleSpendWindowDuration).UnixMilli()
 		for {
 			// TODO make sure to add the time delay here when activated
-			item := stp.queue.dequeue()
+			item := stp.queue.dequeue(validFromMillis)
 			if item == nil {
 				break
 			}
@@ -661,13 +678,20 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		return fmt.Errorf("error getting remainder tx difference: %s", err.Error())
 	}
 
+	removeMapLength := stp.removeMap.Length()
+
 	// add all found tx hashes to the final list, in order
 	remainderSubtreeNodes := make([]util.SubtreeNode, 0, hashCount.Load())
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
-			// TODO is this needed? This adds a lot to the processing time
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
-				_ = stp.addNode(node, skipNotification)
+				if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+					if err := stp.removeMap.Delete(node.Hash); err != nil {
+						stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+					}
+				} else {
+					_ = stp.addNode(node, skipNotification)
+				}
 			}
 		}
 	}

@@ -6,19 +6,20 @@ import (
 )
 
 var (
-	prometheusBlockchainHealth             prometheus.Counter
-	prometheusBlockchainAddBlock           prometheus.Counter
-	prometheusBlockchainGetBlock           prometheus.Counter
-	prometheusBlockchainGetLastNBlocks     prometheus.Counter
-	prometheusBlockchainGetSuitableBlock   prometheus.Counter
-	prometheusBlockchainGetBlockExists     prometheus.Counter
-	prometheusBlockchainGetBestBlockHeader prometheus.Counter
-	prometheusBlockchainGetBlockHeader     prometheus.Counter
-	prometheusBlockchainGetBlockHeaders    prometheus.Counter
-	prometheusBlockchainSubscribe          prometheus.Counter
-	prometheusBlockchainGetState           prometheus.Counter
-	prometheusBlockchainSetState           prometheus.Counter
-	prometheusBlockchainSendNotification   prometheus.Counter
+	prometheusBlockchainHealth                 prometheus.Counter
+	prometheusBlockchainAddBlock               prometheus.Counter
+	prometheusBlockchainGetBlock               prometheus.Counter
+	prometheusBlockchainGetLastNBlocks         prometheus.Counter
+	prometheusBlockchainGetSuitableBlock       prometheus.Counter
+	prometheusBlockchainGetHashOfAncestorBlock prometheus.Counter
+	prometheusBlockchainGetBlockExists         prometheus.Counter
+	prometheusBlockchainGetBestBlockHeader     prometheus.Counter
+	prometheusBlockchainGetBlockHeader         prometheus.Counter
+	prometheusBlockchainGetBlockHeaders        prometheus.Counter
+	prometheusBlockchainSubscribe              prometheus.Counter
+	prometheusBlockchainGetState               prometheus.Counter
+	prometheusBlockchainSetState               prometheus.Counter
+	prometheusBlockchainSendNotification       prometheus.Counter
 )
 
 var prometheusMetricsInitialized = false
@@ -65,6 +66,13 @@ func initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "get_suitable_block",
 			Help:      "Number of GetSuitableBlock calls to the blockchain service",
+		},
+	)
+	prometheusBlockchainGetHashOfAncestorBlock = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockchain",
+			Name:      "get_hash_of_ancestor_block",
+			Help:      "Number of GetHashOfAncestorBlock calls to the blockchain service",
 		},
 	)
 
