@@ -41,15 +41,16 @@ type reorgBlocksRequest struct {
 }
 
 type SubtreeProcessor struct {
-	currentItemsPerFile int
-	txChan              chan *[]txIDAndFee
-	getSubtreesChan     chan chan []*util.Subtree
-	moveUpBlockChan     chan moveBlockRequest
-	reorgBlockChan      chan reorgBlocksRequest
-	newSubtreeChan      chan *util.Subtree // used to notify of a new subtree
-	chainedSubtrees     []*util.Subtree
-	currentSubtree      *util.Subtree
-	currentBlockHeader  *model.BlockHeader
+	currentItemsPerFile       int
+	txChan                    chan *[]txIDAndFee
+	getSubtreesChan           chan chan []*util.Subtree
+	moveUpBlockChan           chan moveBlockRequest
+	reorgBlockChan            chan reorgBlocksRequest
+	deDuplicateTransactionsCh chan struct{}
+	newSubtreeChan            chan *util.Subtree // used to notify of a new subtree
+	chainedSubtrees           []*util.Subtree
+	currentSubtree            *util.Subtree
+	currentBlockHeader        *model.BlockHeader
 	sync.Mutex
 	txCount                   atomic.Uint64
 	batcher                   *txIDAndFeeBatch
@@ -102,6 +103,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		getSubtreesChan:           make(chan chan []*util.Subtree),
 		moveUpBlockChan:           make(chan moveBlockRequest),
 		reorgBlockChan:            make(chan reorgBlocksRequest),
+		deDuplicateTransactionsCh: make(chan struct{}),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:            firstSubtree,
@@ -164,6 +166,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				}
 				moveUpReq.errChan <- err
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor DONE", moveUpReq.block.String())
+
+			case <-stp.deDuplicateTransactionsCh:
+				stp.deDuplicateTransactions()
 
 			default:
 				nrProcessed := 0
@@ -621,6 +626,10 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err 
 }
 
 func (stp *SubtreeProcessor) DeDuplicateTransactions() {
+	stp.deDuplicateTransactionsCh <- struct{}{}
+}
+
+func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	var err error
 
 	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions")
