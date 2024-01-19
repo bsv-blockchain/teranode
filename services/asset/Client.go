@@ -230,6 +230,17 @@ func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	return response.Subtree, nil
 }
 
+func (c Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
+	response, err := c.client.Exists(ctx, &asset_api.ExistsSubtreeRequest{
+		Hash: subtreeHash,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return response.Exists, nil
+}
+
 func (c Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
 	return nil, fmt.Errorf("not implemented")
 }

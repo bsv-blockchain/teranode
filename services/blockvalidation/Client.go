@@ -172,6 +172,19 @@ func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	return response.Subtree, nil
 }
 
+func (s *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
+	req := &blockvalidation_api.ExistsSubtreeRequest{
+		Hash: subtreeHash,
+	}
+
+	response, err := s.apiClient.Exists(ctx, req)
+	if err != nil {
+		return false, err
+	}
+
+	return response.Exists, nil
+}
+
 func (s *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	return fmt.Errorf("not implemented")
 }

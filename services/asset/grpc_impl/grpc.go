@@ -397,6 +397,27 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 	}, nil
 }
 
+func (g *GRPC) Exists(ctx context.Context, request *asset_api.ExistsSubtreeRequest) (*asset_api.ExistsSubtreeResponse, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("Exists").AddTime(start)
+	}()
+
+	hash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := g.repository.SubtreeStore.Exists(ctx, hash[:])
+	if err != nil {
+		return nil, err
+	}
+
+	return &asset_api.ExistsSubtreeResponse{
+		Exists: exists,
+	}, nil
+}
+
 func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*emptypb.Empty, error) {
 	start := gocore.CurrentTime()
 	defer func() {

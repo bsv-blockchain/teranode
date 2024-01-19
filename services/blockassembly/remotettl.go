@@ -20,6 +20,7 @@ import (
 
 type WrapperInterface interface {
 	Get(ctx context.Context, key []byte) ([]byte, error)
+	Exists(ctx context.Context, key []byte) (bool, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
@@ -65,7 +66,17 @@ func (r Wrapper) Health(ctx context.Context) (int, string, error) {
 }
 
 func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
-	return r.store.Exists(ctx, key)
+	ok, err := r.store.Exists(ctx, key)
+	if err != nil {
+		r.logger.Errorf("failed to check if key %s exists in store: %v", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	okAsset, err := r.AssetClient.Exists(ctx, key)
+	if err != nil {
+		r.logger.Errorf("failed to check if key %s exists in asset client: %v", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	return ok && okAsset, nil
 }
 
 func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {

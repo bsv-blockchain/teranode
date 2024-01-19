@@ -243,7 +243,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 
-func (u *BlockValidation) storeCoinbaseTx(spanCtx context.Context, block *model.Block) (err error) {
+// storeCoinbaseTx
+func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err error) {
 	childSpan, childSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidation:storeCoinbaseTx")
 	defer func() {
 		childSpan.Finish()

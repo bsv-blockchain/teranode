@@ -39,6 +39,11 @@ func (f *fRPC_BlockValidation) Get(ctx context.Context, request *blockvalidation
 	panic("implement me")
 }
 
+func (f *fRPC_BlockValidation) Exists(ctx context.Context, request *blockvalidation_api.BlockvalidationApiExistsSubtreeRequest) (*blockvalidation_api.BlockvalidationApiExistsSubtreeResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetTxMetaRequest) (*blockvalidation_api.BlockvalidationApiSetTxMetaResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {

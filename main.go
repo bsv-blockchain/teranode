@@ -273,7 +273,7 @@ func main() {
 				getSubtreeStore(logger),
 				blockchainClient,
 				assetClient,
-				blockValidationClient,
+				blockValidationClient, // TODO replace with getSubtreeStore(logger) when running block assembly and block validation on the same node
 			)); err != nil {
 				panic(err)
 			}

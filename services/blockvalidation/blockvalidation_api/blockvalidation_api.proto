@@ -10,6 +10,7 @@ service BlockValidationAPI {
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
+  rpc Exists (ExistsSubtreeRequest) returns (ExistsSubtreeResponse) {}
   rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
   rpc DelTxMeta (DelTxMetaRequest) returns (DelTxMetaResponse) {}
   rpc SetMinedMulti (SetMinedMultiRequest) returns (SetMinedMultiResponse) {}
@@ -45,6 +46,16 @@ message GetSubtreeRequest {
 // swagger:model GetSubtreeResponse
 message GetSubtreeResponse {
   bytes subtree = 1;
+}
+
+// swagger:model ExistsSubtreeRequest
+message ExistsSubtreeRequest {
+  bytes hash = 1;
+}
+
+// swagger:model ExistsSubtreeResponse
+message ExistsSubtreeResponse {
+  bool exists = 1;
 }
 
 // swagger:model SetTxMetaRequest

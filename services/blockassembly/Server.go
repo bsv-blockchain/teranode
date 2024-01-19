@@ -753,28 +753,30 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		g, gCtx := errgroup.WithContext(setCtx)
 
 		g.Go(func() error {
-			ba.logger.Infof("[BlockAssembly] remove subtrees TTL: %s", block.Header.Hash())
+			ba.logger.Infof("[BlockAssembly][%s] remove subtrees TTL", block.Header.Hash())
 			if err = ba.removeSubtreesTTL(gCtx, block); err != nil {
-				ba.logger.Errorf("failed to remove subtrees TTL: %w", err)
+				// TODO retry
+				ba.logger.Errorf("[BlockAssembly][%s] failed to remove subtrees TTL: %v", block.Header.Hash(), err)
 			}
 			return nil
 		})
 
 		g.Go(func() error {
 			// add the transactions in this block to the txMeta block hashes
-			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
+			ba.logger.Infof("[BlockAssembly][%s] update tx mined status", block.Header.Hash())
 
 			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
-				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+				// TODO retry
+				ba.logger.Errorf("[BlockAssembly][%s] error updating tx mined status: %v", block.Header.Hash(), err)
 			}
 			return nil
 		})
 
 		if err = g.Wait(); err != nil {
 			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
-				ba.logger.Errorf("[BlockAssembly] failed to invalidate block: %s", err)
+				ba.logger.Errorf("[BlockAssembly][%s] failed to invalidate block: %s", block.Header.Hash(), err)
 			}
-			ba.logger.Errorf("[BlockAssembly] error updating status: %s", err)
+			ba.logger.Errorf("[BlockAssembly][%s] error updating status: %s", block.Header.Hash(), err)
 		}
 	}()
 
@@ -809,11 +811,13 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	// update the subtree TTLs
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHashBytes := subtreeHash.CloneBytes()
+		subtreeHash := subtreeHash
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
 			err = ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0)
 			if err != nil {
-				ba.logger.Warnf("failed to update subtree TTL: %v", err)
+				// TODO should this retry? We are in a bad state when this happens
+				ba.logger.Warnf("[removeSubtreesTTL][%s] failed to update subtree TTL: %v", subtreeHash.String(), err)
 			}
 
 			return nil

@@ -593,6 +593,22 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 	}, nil
 }
 
+func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "Exists", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	exists, err := u.subtreeStore.Exists(ctx, request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockvalidation_api.ExistsSubtreeResponse{
+		Exists: exists,
+	}, nil
+}
+
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
