@@ -25,6 +25,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var (
+	ErrBadRequest = errors.New("VALIDATOR_BAD_REQUEST")
+	ErrInternal   = errors.New("VALIDATOR_INTERNAL")
+)
+
 type blockValidationTxMetaClient interface {
 	SetTxMeta(context.Context, []*txmeta.Data) error
 	DelTxMeta(context.Context, *chainhash.Hash) error
@@ -140,18 +145,18 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	}(&spentUtxos)
 
 	if tx.IsCoinbase() {
-		return fmt.Errorf("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
+		return errors.Join(ErrBadRequest, fmt.Errorf("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String()))
 	}
 
 	if err = v.validateTransaction(traceSpan, tx); err != nil {
-		return fmt.Errorf("[Validate][%s] error validating transaction: %v", tx.TxID(), err)
+		return errors.Join(ErrBadRequest, fmt.Errorf("[Validate][%s] error validating transaction: %v", tx.TxID(), err))
 	}
 
 	// this will reverse the spends if there is an error
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(traceSpan, tx); err != nil {
-		return fmt.Errorf("[Validate][%s] error spending utxos: %v", tx.TxID(), err)
+		return errors.Join(ErrInternal, fmt.Errorf("[Validate][%s] error spending utxos: %v", tx.TxID(), err))
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
@@ -165,11 +170,11 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	err = v.storeUtxos(setSpan.Ctx, tx)
 	if err != nil {
 		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
+			err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
 
 		if err = v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
-			err = errors.Join(err, fmt.Errorf("error reversing tx meta utxoStore: %v", err))
+			err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing tx meta utxoStore: %v", err))
 		}
 
 		setSpan.RecordError(err)
@@ -187,7 +192,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
-		return fmt.Errorf("error registering tx in meta utxoStore: %v", err)
+		return errors.Join(ErrInternal, fmt.Errorf("error registering tx in meta utxoStore: %v", err))
 	}
 
 	if !v.blockAssemblyDisabled {
@@ -198,7 +203,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			Size:          uint64(tx.Size()),
 			LockTime:      tx.LockTime,
 		}, spentUtxos); err != nil {
-			err = fmt.Errorf("error sending tx to block assembler: %v", err)
+			err = errors.Join(ErrInternal, fmt.Errorf("error sending tx to block assembler: %v", err))
 
 			if reverseErr := v.reverseStores(setSpan, tx); reverseErr != nil {
 				err = errors.Join(err, fmt.Errorf("error reversing utxo stores: %v", reverseErr))
