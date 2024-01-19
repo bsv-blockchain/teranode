@@ -35,6 +35,12 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.Body != nil {
+			b, _ := io.ReadAll(resp.Body)
+			if b != nil {
+				return nil, errors.Join(fmt.Errorf("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b)), err)
+			}
+		}
 		return nil, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
