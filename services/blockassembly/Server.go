@@ -711,14 +711,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 
 	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(cntxt, ba.subtreeStore, nil, nil, nil); !ok {
+	if ok, err := block.Valid(cntxt, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
-
-		go func() {
-			// make sure there are no duplicates in the block assembler
-			ba.blockAssembler.DeDuplicateTransactions()
-		}()
-
 		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
 	}
 

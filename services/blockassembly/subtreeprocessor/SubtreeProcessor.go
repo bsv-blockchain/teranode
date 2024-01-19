@@ -677,6 +677,8 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 			}
 		}
 	}
+
+	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions DONE")
 }
 
 func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
