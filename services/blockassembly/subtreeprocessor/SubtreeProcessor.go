@@ -531,6 +531,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees", block.String())
 
+	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load()))
+
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
 
@@ -550,8 +552,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
 		removeMapLength := stp.removeMap.Length()
-		for _, subtree := range chainedSubtrees {
-			for _, node := range subtree.Nodes {
+		for subtreeIdx, subtree := range chainedSubtrees {
+			for nodeIdx, node := range subtree.Nodes {
 				// TODO is all this needed? This adds a lot to the processing time
 				if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 					if !coinbaseId.Equal(node.Hash) {
@@ -560,13 +562,17 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 								stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
 							}
 						} else {
-							_ = stp.addNode(node, skipNotification)
+							if err = deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*subtree.Size()+nodeIdx)); err != nil {
+								stp.logger.Errorf("[SubtreeProcessor] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
+							} else {
+								_ = stp.addNode(node, skipNotification)
+							}
 						}
 					}
 				}
 			}
 		}
-		for _, node := range currentSubtree.Nodes {
+		for nodeIdx, node := range currentSubtree.Nodes {
 			// TODO is all this needed? This adds a lot to the processing time
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 				if !coinbaseId.Equal(node.Hash) {
@@ -575,12 +581,19 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
 						}
 					} else {
-						_ = stp.addNode(node, skipNotification)
+						if err = deDuplicationMap.Put(node.Hash, uint64(nodeIdx)); err != nil {
+							stp.logger.Errorf("[SubtreeProcessor] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
+						} else {
+							_ = stp.addNode(node, skipNotification)
+						}
 					}
 				}
 			}
 		}
 	}
+
+	// unset the deDuplicationMap
+	deDuplicationMap = nil
 
 	stp.setTxCount()
 
@@ -680,17 +693,23 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	removeMapLength := stp.removeMap.Length()
 
+	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load()))
+
 	// add all found tx hashes to the final list, in order
 	remainderSubtreeNodes := make([]util.SubtreeNode, 0, hashCount.Load())
-	for _, subtreeNodes := range remainderSubtrees {
-		for _, node := range subtreeNodes {
+	for subtreeIdx, subtreeNodes := range remainderSubtrees {
+		for nodeIdx, node := range subtreeNodes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 				if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 					if err := stp.removeMap.Delete(node.Hash); err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
 					}
 				} else {
-					_ = stp.addNode(node, skipNotification)
+					if err := deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*len(subtreeNodes)+nodeIdx)); err != nil {
+						stp.logger.Errorf("[SubtreeProcessor] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
+					} else {
+						_ = stp.addNode(node, skipNotification)
+					}
 				}
 			}
 		}
