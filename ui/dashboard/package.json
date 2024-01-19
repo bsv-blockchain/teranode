@@ -16,7 +16,8 @@
     "test:unit": "vitest",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "perf": "cd perf && lighthouse http://localhost:5173/ --output html --output json --view && cd .."
+    "perf:dev": "cd perf/dev && lighthouse http://localhost:5173/ --output html --output json --view && cd ../..",
+    "perf": "cd perf/preview && lighthouse http://localhost:4173/ --output html --output json --view && cd ../.."
   },
   "devDependencies": {
     "@fontsource/fira-mono": "^4.5.10",
