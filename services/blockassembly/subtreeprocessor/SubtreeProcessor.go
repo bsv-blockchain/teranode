@@ -633,6 +633,56 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err 
 	return nil
 }
 
+func (stp *SubtreeProcessor) DeDuplicateTransactions() {
+	var err error
+
+	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions")
+
+	currentSubtree := stp.currentSubtree
+	chainedSubtrees := stp.chainedSubtrees
+
+	// reset the current subtree
+	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	if err != nil {
+		stp.logger.Errorf("[DeDuplicateTransactions] error creating new subtree in de-duplication: %s", err.Error())
+		return
+	}
+
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+
+	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load()))
+	removeMapLength := stp.removeMap.Length()
+
+	for subtreeIdx, subtree := range chainedSubtrees {
+		for nodeIdx, node := range subtree.Nodes {
+			if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+				if err = stp.removeMap.Delete(node.Hash); err != nil {
+					stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
+				}
+			} else {
+				if err = deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*subtree.Size()+nodeIdx)); err != nil {
+					stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
+				} else {
+					_ = stp.addNode(node, false)
+				}
+			}
+		}
+	}
+	for nodeIdx, node := range currentSubtree.Nodes {
+		if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+			if err = stp.removeMap.Delete(node.Hash); err != nil {
+				stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
+			}
+		} else {
+			if err = deDuplicationMap.Put(node.Hash, uint64(nodeIdx)); err != nil {
+				stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
+			} else {
+				_ = stp.addNode(node, false)
+			}
+		}
+	}
+}
+
 func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
 	startTime := time.Now()
 	prometheusSubtreeProcessorProcessCoinbaseTx.Inc()

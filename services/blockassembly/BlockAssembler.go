@@ -35,16 +35,17 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh        chan chan *miningCandidateResponse
-	bestBlockHeader          *model.BlockHeader
-	bestBlockHeight          uint32
-	currentChain             []*model.BlockHeader
-	currentChainMap          map[chainhash.Hash]uint32
-	currentChainMapIDs       map[uint32]struct{}
-	currentChainMapMu        sync.RWMutex
-	blockchainSubscriptionCh chan *model.Notification
-	maxBlockReorgRollback    int
-	maxBlockReorgCatchup     int
+	miningCandidateCh         chan chan *miningCandidateResponse
+	deDuplicateTransactionsCh chan struct{}
+	bestBlockHeader           *model.BlockHeader
+	bestBlockHeight           uint32
+	currentChain              []*model.BlockHeader
+	currentChainMap           map[chainhash.Hash]uint32
+	currentChainMapIDs        map[uint32]struct{}
+	currentChainMapMu         sync.RWMutex
+	blockchainSubscriptionCh  chan *model.Notification
+	maxBlockReorgRollback     int
+	maxBlockReorgCatchup      int
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
@@ -54,16 +55,17 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)
 
 	b := &BlockAssembler{
-		logger:                logger,
-		utxoStore:             utxoStore,
-		subtreeStore:          subtreeStore,
-		blockchainClient:      blockchainClient,
-		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
-		miningCandidateCh:     make(chan chan *miningCandidateResponse),
-		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
-		currentChainMapIDs:    make(map[uint32]struct{}, maxBlockReorgCatchup),
-		maxBlockReorgRollback: maxBlockReorgRollback,
-		maxBlockReorgCatchup:  maxBlockReorgCatchup,
+		logger:                    logger,
+		utxoStore:                 utxoStore,
+		subtreeStore:              subtreeStore,
+		blockchainClient:          blockchainClient,
+		subtreeProcessor:          subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
+		miningCandidateCh:         make(chan chan *miningCandidateResponse),
+		deDuplicateTransactionsCh: make(chan struct{}),
+		currentChainMap:           make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
+		currentChainMapIDs:        make(map[uint32]struct{}, maxBlockReorgCatchup),
+		maxBlockReorgRollback:     maxBlockReorgRollback,
+		maxBlockReorgCatchup:      maxBlockReorgCatchup,
 	}
 
 	return b
@@ -113,6 +115,9 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
 				return
+
+			case <-b.deDuplicateTransactionsCh:
+				b.deDuplicateTransactions()
 
 			case responseCh := <-b.miningCandidateCh:
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
@@ -302,6 +307,14 @@ func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
 
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 	return b.subtreeProcessor.Remove(hash)
+}
+
+func (b *BlockAssembler) DeDuplicateTransactions() {
+	b.deDuplicateTransactionsCh <- struct{}{}
+}
+
+func (b *BlockAssembler) deDuplicateTransactions() {
+	b.subtreeProcessor.DeDuplicateTransactions()
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
