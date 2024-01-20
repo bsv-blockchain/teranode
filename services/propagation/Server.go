@@ -390,17 +390,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.Join(ErrBadRequest, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %s", err.Error()))
+		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.Join(ErrBadRequest, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID()))
+		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	if !btTx.IsExtended() {
-		return nil, errors.Join(ErrBadRequest, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended", btTx.TxID()))
+		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -410,16 +410,16 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.Go(func() error {
 		if err := ps.storeTransaction(gCtx, btTx); err != nil {
-			return errors.Join(ErrInternal, fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v", btTx.TxIDChainHash(), err))
+			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
 		}
 		return nil
 	})
 
 	if err := ps.validator.Validate(ctx, btTx); err != nil {
 		if errors.Is(err, validator.ErrInternal) {
-			err = errors.Join(ErrInternal, err)
+			err = fmt.Errorf("%v: %w", err, ErrInternal)
 		} else if errors.Is(err, validator.ErrBadRequest) {
-			err = errors.Join(err, ErrBadRequest)
+			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
 		}
 
 		// TODO send REJECT message to peers if invalid tx
