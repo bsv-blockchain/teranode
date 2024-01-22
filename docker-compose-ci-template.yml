@@ -66,7 +66,7 @@ services:
       blockvalidation_httpAddress: "http://localhost:8088"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
-      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084
+      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     # volumes:
@@ -103,7 +103,7 @@ services:
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     # volumes:
@@ -142,7 +142,7 @@ services:
       blockvalidation_httpAddress: "http://localhost:8088"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       # p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
@@ -180,7 +180,7 @@ services:
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
@@ -203,7 +203,7 @@ services:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
       asset_httpAddress: "http://ubsv-1:8090"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       coinbase_grpcAddress: ubsv-1-coinbase:8093
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -214,7 +214,7 @@ services:
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
     command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=true"]
     networks:
@@ -237,7 +237,7 @@ services:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
       asset_httpAddress: "http://ubsv-2:8090"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       coinbase_grpcAddress: ubsv-2-coinbase:8093
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -248,7 +248,110 @@ services:
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
+    # pass arguments to the command
+    command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=true"]
+    networks:
+      - ubsv-network
+    volumes:
+      - ./data/txblaster2:/app/data
+      # - ./data/txblaster.log:/app/data/txblaster.log
+
+  ubsv-3:
+    <<: *ubsv-base
+    command: ["./ubsv", "-miner=0", "-coinbase=0"]
+    environment:
+      SETTINGS_CONTEXT: "docker.ci.ubsv3"
+      startCoinbase: false
+      asset_httpAddress: "http://ubsv-3:8090"
+      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
+      startTxMetaStore: "true"
+      startTxStore: "true"
+      txstore: file:///data/ubsv3/txstore
+      subtreestore: file:///data/ubsv3/subtreestore
+      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
+      coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
+      startBootstrap: false
+      feature_bootstrap: false
+      startP2P: true
+      feature_libP2P: true
+      mine_initial_blocks: false
+      securityLevelGRPC: 0
+      securityLevelHTTP: 0
+      blockchain_grpcAddress: "ubsv-3:8087"
+      blockvalidation_httpAddress: "http://localhost:8088"
+      coinbase_should_wait: true
+      coinbase_wait_until_block: 200
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
+    volumes:
+      - ./data/ubsv3/txstore:/data/ubsv3/txstore
+      - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
+    ports:
+      - "38081-38089:8081-8089"
+      - "38090-38092:8090-8092"
+
+  ubsv-3-coinbase:
+    <<: *ubsv-base
+    command: ["./ubsv", "-miner=1", "-coinbase=1"]
+    environment:
+      SETTINGS_CONTEXT: "docker.ci.ubsv3"
+      asset_httpAddress: "http://ubsv-3:8090"
+      startBlockValidation: false
+      startBlockAssembly: false
+      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
+      startTxMetaStore: "false"
+      startTxStore: "false"
+      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
+      coinbase_wallet_private_key: "L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
+      startBootstrap: false
+      startP2P: false
+      feature_libP2P: false
+      feature_bootstrap: false
+      securityLevelGRPC: 0
+      securityLevelHTTP: 0
+      blockchain_grpcAddress: "ubsv-3:8087"
+      coinbase_should_wait: true
+      coinbase_wait_until_block: 200
+      coinbase_grpcAddress: localhost:8093
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
+    volumes:
+      - ./data/ubsv3/txstore:/data/ubsv3/txstore
+      - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
+    ports:
+      - "38093-38093:8093-8093"
+
+  tx-blaster-3:
+    container_name: tx-blaster-3
+    image: taal/blaster:latest
+    depends_on:
+      - postgres
+      - ubsv-1
+      - ubsv-2
+    build:
+      context: .
+      dockerfile: local.txblaster.Dockerfile
+    environment:
+      SETTINGS_CONTEXT: "docker.ci"
+      tx_blaster_profilerAddr: ":9092"
+      asset_httpAddress: "http://ubsv-3:8090"
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
+      coinbase_grpcAddress: ubsv-3-coinbase:8093
+      coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
+      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      coinbase_assetGrpcAddress: ubsv-3:8091
+      securityLevelGRPC: 0
+      securityLevelHTTP: 0
+      BLASTER_ARGS: "-workers=2"
+      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
     command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=true"]
     networks:
@@ -268,38 +371,6 @@ services:
       - ubsv-network
     ports:
       - "9901:9901"
-  # ubsv-3:
-  #   <<: *ubsv-base
-  #   command: ["./ubsv", "-miner=0", "-coinbase=0"]
-  #   environment:
-  #     SETTINGS_CONTEXT: "docker.ci.ubsv3"
-  #     startCoinbase: false
-  #     asset_httpAddress: "http://ubsv-3:8090"
-  #     utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
-  #     txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
-  #     blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
-  #     coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-  #     startTxMetaStore: "false"
-  #     startTxStore: "false"
-  #     txstore: badger:///data/ubsv2/txstore
-  #     subtreestore: badger:///data/ubsv2/subtreestore
-  #     coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
-  #     startBootstrap: false
-  #     feature_bootstrap: false
-  #     startP2P: true
-  #     feature_libP2P: true
-  #     mine_initial_blocks: false
-  #     securityLevelGRPC: 0
-  #     securityLevelHTTP: 0
-  #     blockchain_grpcAddress: "ubsv-2:8087"
-  #     coinbase_should_wait: true
-  #     coinbase_wait_until_block: 210
-  #   volumes:
-  #     - ./data/ubsv2/txstore:/data/ubsv2/txstore
-  #     - ./data/ubsv2/subtreestore:/data/ubsv2/subtreestore
-  #   ports:
-  #     - "28081-28089:8081-8089"
-  #     - "28090-28092:8090-8092"
 
 
 # Add more ubsv nodes as needed
