@@ -42,7 +42,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	m.mu.Unlock()
 
 	if !ok {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.ErrNotFound(hash.String())
 	}
 
 	return &status, nil
@@ -60,7 +60,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	_, ok := m.txStatus[*tx.TxIDChainHash()]
 	if ok {
-		return s, txmeta.ErrAlreadyExists
+		return s, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())
 	}
 
 	m.txStatus[*tx.TxIDChainHash()] = *s

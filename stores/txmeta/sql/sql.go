@@ -128,7 +128,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &fee, &sizeInBytes, &parents, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.ErrNotFound(hash.String())
 		}
 		return nil, fmt.Errorf("failed to get txmeta: %+v", err)
 	}
@@ -186,7 +186,7 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		postgresErr := "duplicate key value violates unique constraint"
 		sqLiteErr := "UNIQUE constraint failed"
 		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
-			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.ErrAlreadyExists)
+			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.ErrAlreadyExists(hash.String()))
 		}
 		return data, errors.Join(errors.New("failed to insert tx meta"), err)
 	}

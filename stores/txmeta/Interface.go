@@ -8,10 +8,14 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-var (
-	ErrNotFound      = fmt.Errorf("not found")
-	ErrAlreadyExists = fmt.Errorf("already exists")
-)
+// Error functions
+func ErrNotFound(key string) error {
+	return fmt.Errorf("key '%s' not found", key)
+}
+
+func ErrAlreadyExists(key string) error {
+	return fmt.Errorf("key '%s' already exists", key)
+}
 
 type Store interface {
 	Get(ctx context.Context, hash *chainhash.Hash) (*Data, error)

@@ -138,7 +138,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.ErrNotFound(hash.String())
 		}
 		return nil, fmt.Errorf("aerospike get error (time taken: %s) : %w", time.Since(start).String(), aeroErr)
 	}
@@ -248,7 +248,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		}
 
 		if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
-			return txMeta, txmeta.ErrAlreadyExists
+			return txMeta, txmeta.ErrAlreadyExists(hash.String())
 		}
 		switch aeroErr.ResultCode {
 		case types.NETWORK_ERROR, types.TIMEOUT, types.MAX_ERROR_RATE, types.COMMAND_REJECTED, types.INVALID_NODE_ERROR, types.MAX_RETRIES_EXCEEDED, types.SERVER_ERROR, types.SERVER_NOT_AVAILABLE, types.LOST_CONFLICT:

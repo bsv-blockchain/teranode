@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ordishs/gocore"
 	"io"
 	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ordishs/gocore"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -423,7 +424,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 					} else {
 						// check whether the parent is in a block on our chain
 						parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
-						if err != nil && !errors.Is(err, txmetastore.ErrNotFound) {
+						if err != nil && !errors.Is(err, txmetastore.ErrNotFound(parentTxHash.String())) {
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
 						if parentTxMeta != nil {

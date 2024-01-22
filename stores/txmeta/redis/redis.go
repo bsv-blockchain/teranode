@@ -131,13 +131,13 @@ func (r *Redis) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 
 	if res.Err() != nil {
 		if res.Err() == redis.Nil {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.ErrNotFound(hash.String())
 		}
 		return nil, res.Err()
 	}
 
 	if res.Val() == string(redis.Nil) {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.ErrNotFound(hash.String())
 	}
 
 	d, err := txmeta.NewDataFromBytes([]byte(res.Val()))
@@ -153,13 +153,13 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 
 	if res.Err() != nil {
 		if res.Err() == redis.Nil {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.ErrNotFound(hash.String())
 		}
 		return nil, res.Err()
 	}
 
 	if res.Val() == string(redis.Nil) {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.ErrNotFound(hash.String())
 	}
 
 	d, err := txmeta.NewMetaDataFromBytes([]byte(res.Val()))
@@ -181,7 +181,7 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return nil, res.Err()
 	}
 	if !res.Val() {
-		return data, txmeta.ErrAlreadyExists
+		return data, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())
 	}
 
 	return data, nil
