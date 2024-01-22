@@ -12,6 +12,7 @@ var (
 	prometheusBlockchainGetLastNBlocks         prometheus.Counter
 	prometheusBlockchainGetSuitableBlock       prometheus.Counter
 	prometheusBlockchainGetHashOfAncestorBlock prometheus.Counter
+	prometheusBlockchainGetNextWorkRequired    prometheus.Counter
 	prometheusBlockchainGetBlockExists         prometheus.Counter
 	prometheusBlockchainGetBestBlockHeader     prometheus.Counter
 	prometheusBlockchainGetBlockHeader         prometheus.Counter
@@ -73,6 +74,13 @@ func initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "get_hash_of_ancestor_block",
 			Help:      "Number of GetHashOfAncestorBlock calls to the blockchain service",
+		},
+	)
+	prometheusBlockchainGetNextWorkRequired = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockchain",
+			Name:      "get_next_work_required",
+			Help:      "Number of GetNextWorkRequired calls to the blockchain service",
 		},
 	)
 

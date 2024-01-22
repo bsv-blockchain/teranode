@@ -39,6 +39,7 @@ type Blockchain struct {
 	newBlock            chan struct{}
 	subscriptionCtx     context.Context
 	cancelSubscriptions context.CancelFunc
+	difficulty          *Difficulty
 }
 
 func Enabled() bool {
@@ -65,6 +66,13 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 
 	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
+	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
+	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
+	d, err := NewDifficulty(s, logger, targetTimePerBlock, difficultyAdjustmentWindow)
+	if err != nil {
+		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
+	}
 	return &Blockchain{
 		store:               s,
 		logger:              logger,
@@ -76,6 +84,7 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 		newBlock:            make(chan struct{}, 10),
 		subscriptionCtx:     subscriptionCtx,
 		cancelSubscriptions: cancelSubscriptions,
+		difficulty:          d,
 	}, nil
 }
 
@@ -293,6 +302,46 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 
 	return &blockchain_api.GetSuitableBlockResponse{
 		Block: blockInfo,
+	}, nil
+}
+
+func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchain_api.GetNextWorkRequiredRequest) (*blockchain_api.GetNextWorkRequiredResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetNextWorkRequired", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+	var nBits model.NBit
+
+	prometheusBlockchainGetNextWorkRequired.Inc()
+	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
+
+	if b.difficulty == nil {
+		b.logger.Debugf("difficulty is null")
+		nBits = model.NewNBitFromString(nBitsString)
+	} else {
+
+		hash, err := chainhash.NewHash(request.BlockHash)
+		if err != nil {
+			return nil, err
+		}
+
+		blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
+		if err != nil {
+			return nil, err
+		}
+
+		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx1, blockHeader, meta.Height)
+		if err == nil {
+			nBits = *nBitsp
+		} else {
+			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
+			nBits = model.NewNBitFromString(nBitsString)
+		}
+
+		b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())
+	}
+	return &blockchain_api.GetNextWorkRequiredResponse{
+		Bits: nBits.CloneBytes(),
 	}, nil
 }
 

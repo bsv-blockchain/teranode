@@ -28,21 +28,30 @@ type Miner struct {
 	MineBlocksNImmediatelyChan       chan int
 	MineBlocksNImmediatelyCancelChan chan bool
 	isMiningImmediately              bool
+	candidateRequestInterval         time.Duration
+	difficultyAdjustment             bool
 }
 
 const (
-	// The number of seconds to wait before requesting a new mining candidate
-	candidateRequestInterval = 10
 
 	// The number of seconds to wait before submitting a mining solution
 	blockFoundInterval = 100
 )
 
+var generateBlocks = false
+
 func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	initPrometheusMetrics()
+
+	// The number of seconds to wait before requesting a new mining candidate
+	candidateRequestInterval, _ := gocore.Config().GetInt("mine_candidate_request_interval", 10)
+	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
+
 	return &Miner{
-		logger:              logger,
-		blockAssemblyClient: blockassembly.NewClient(ctx, logger),
+		logger:                   logger,
+		blockAssemblyClient:      blockassembly.NewClient(ctx, logger),
+		candidateRequestInterval: time.Duration(candidateRequestInterval),
+		difficultyAdjustment:     difficultyAdjustment,
 	}
 }
 
@@ -76,7 +85,7 @@ func (m *Miner) Start(ctx context.Context) error {
 	// wait is simulating a high difficulty
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
-	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
+	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc
@@ -100,7 +109,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			m.logger.Infof("[Miner] Mining %d blocks immediately - DONE", blocks)
 
 		case <-m.candidateTimer.C:
-			m.candidateTimer.Reset(candidateRequestInterval * time.Second)
+			m.candidateTimer.Reset(m.candidateRequestInterval * time.Second)
 
 			// cancel the previous mining context and start a new one
 			if cancel != nil {
@@ -177,10 +186,13 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
 
 	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < uint32(initialBlockCount) {
-		waitSeconds = 0
+
+		generateBlocks = true
+	} else {
+		generateBlocks = false
 	}
 
-	if waitSeconds > 0 { // SAO - Mine the first <initialBlockCount> blocks without delay
+	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
 
