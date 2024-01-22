@@ -1,6 +1,7 @@
 import { handleErrorWithSentry, Replay } from '@sentry/sveltekit'
 import * as Sentry from '@sentry/sveltekit'
 
+// See: https://docs.sentry.io/platforms/javascript/#lazy-loading-sentry
 Sentry.init({
   dsn: 'https://90ee6fb8fad41f5cf02f16e6913d5069@o4505918315626496.ingest.sentry.io/4505918315692032',
   tracesSampleRate: 1.0,

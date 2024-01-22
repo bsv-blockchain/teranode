@@ -1,8 +1,10 @@
 import { sentrySvelteKit } from '@sentry/sveltekit'
 import { sveltekit } from '@sveltejs/kit/vite'
-import { defineConfig } from 'vitest/config'
-import type { UserConfigExport } from 'vitest/config'
+import { defineConfig, type UserConfigExport } from 'vite'
 
+// See:
+// - https://github.com/getsentry/sentry-javascript/tree/master/packages/sveltekit
+// - https://github.com/getsentry/sentry-javascript/tree/master/packages/sveltekit#uploading-source-maps
 export default defineConfig({
   build: {
     sourcemap: true,
