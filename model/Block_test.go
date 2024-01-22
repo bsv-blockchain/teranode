@@ -269,6 +269,7 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 		SubtreeSlices: []*util.Subtree{subtree},
 	}
 	err = b.checkDuplicateTransactions(context.Background())
+	_ = err // To stop lint warning
 	// TODO reactivate this test when we have a way to check for duplicate transactions
 	// require.Error(t, err)
 }
