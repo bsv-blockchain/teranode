@@ -113,6 +113,7 @@ message InvalidateBlockRequest {
   bytes blockHash = 1;
 }
 
+// swagger:model GetBlockHeaderResponse
 message GetBlockHeaderResponse {
   bytes blockHeader = 1;
   uint32 height = 2;

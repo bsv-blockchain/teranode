@@ -424,7 +424,7 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 					} else {
 						// check whether the parent is in a block on our chain
 						parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
-						if err != nil && !errors.Is(err, txmetastore.ErrNotFound(parentTxHash.String())) {
+						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
 						if parentTxMeta != nil {

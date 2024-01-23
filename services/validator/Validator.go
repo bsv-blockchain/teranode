@@ -183,7 +183,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 
 	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
 	if err != nil {
-		if errors.Is(err, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())) {
+		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
 			v.logger.Debugf("[Validate][%s] tx already exists in meta utxoStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
 			return nil
@@ -274,9 +274,9 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 
 	data, err := v.txMetaStore.Create(ctx, tx)
 	if err != nil {
-		if errors.Is(err, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())) {
+		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// this does not need to be a warning, it's just a duplicate validation request
-			return nil, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())
+			return nil, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())
 		}
 
 		if reverseErr := v.reverseSpends(txMetaSpan, spentUtxos); reverseErr != nil {

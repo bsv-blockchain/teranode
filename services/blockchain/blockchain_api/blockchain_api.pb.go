@@ -767,6 +767,7 @@ func (x *InvalidateBlockRequest) GetBlockHash() []byte {
 	return nil
 }
 
+// swagger:model GetBlockHeaderResponse
 type GetBlockHeaderResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
