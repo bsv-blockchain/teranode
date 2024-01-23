@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -233,7 +234,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 
 	block, height, err := b.store.GetBlock(ctx1, blockHash)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))
@@ -257,7 +258,8 @@ func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*mode
 		stat.AddTime(start)
 	}()
 
-	return b.store.GetBlockStats(ctx1)
+	resp, err := b.store.GetBlockStats(ctx1)
+	return resp, ubsverrors.WrapGRPC(err)
 }
 
 func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
@@ -266,7 +268,8 @@ func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.
 		stat.AddTime(start)
 	}()
 
-	return b.store.GetBlockGraphData(ctx1, req.PeriodMillis)
+	resp, err := b.store.GetBlockGraphData(ctx1, req.PeriodMillis)
+	return resp, ubsverrors.WrapGRPC(err)
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
@@ -279,7 +282,8 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 
 	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
+
 	}
 
 	return &blockchain_api.GetLastNBlocksResponse{
@@ -297,7 +301,7 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 
 	blockInfo, err := b.store.GetSuitableBlock(ctx1, (*chainhash.Hash)(request.Hash))
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetSuitableBlockResponse{
@@ -355,7 +359,7 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 
 	hash, err := b.store.GetHashOfAncestorBlock(ctx1, (*chainhash.Hash)(request.Hash), int(request.Depth))
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetHashOfAncestorBlockResponse{
@@ -378,7 +382,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 
 	exists, err := b.store.GetBlockExists(ctx1, blockHash)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetBlockExistsResponse{
@@ -396,7 +400,7 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 
 	chainTip, meta, err := b.store.GetBestBlockHeader(ctx1)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
@@ -423,7 +427,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 
 	blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
@@ -450,7 +454,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 
 	blockHeaders, heights, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	blockHeaderBytes := make([][]byte, len(blockHeaders))
@@ -504,7 +508,7 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 
 	data, err := b.store.GetState(ctx1, req.Key)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.StateResponse{
@@ -536,7 +540,7 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 
 	ids, err := b.store.GetBlockHeaderIDs(ctx, startHash, request.NumberOfHeaders)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.GetBlockHeaderIDsResponse{
@@ -560,7 +564,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// invalidate block will also invalidate all child blocks
 	err = b.store.InvalidateBlock(ctx1, blockHash)
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	bestBlock, _, err := b.store.GetBestBlockHeader(ctx1)

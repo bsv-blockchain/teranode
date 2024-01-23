@@ -51,7 +51,7 @@ func (m *SwissMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 	defer m.mu.Unlock()
 
 	if utxo, ok := m.m.Get(*spend.Hash); ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			return &utxostore.Response{
 				Status:   int(utxostore_api.Status_OK),
 				LockTime: utxo.LockTime,
@@ -60,7 +60,7 @@ func (m *SwissMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 
 		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: utxo.Hash,
+			SpendingTxID: utxo.SpendingTxID,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
@@ -101,8 +101,8 @@ func (m *SwissMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 				return utxostore.ErrAlreadyExists
 			} else {
 				m.m.Put(*hash, UTXO{
-					Hash:     nil,
-					LockTime: storeLockTime,
+					SpendingTxID: nil,
+					LockTime:     storeLockTime,
 				})
 			}
 		}
@@ -130,14 +130,14 @@ func (m *SwissMap) Spend(ctx context.Context, spends []*utxostore.Spend) error {
 
 func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 	if utxo, ok := m.m.Get(*hash); ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
 				if m.DeleteSpentUtxos {
 					m.m.Delete(*hash)
 				} else {
 					m.m.Put(*hash, UTXO{
-						Hash:     txID,
-						LockTime: utxo.LockTime,
+						SpendingTxID: txID,
+						LockTime:     utxo.LockTime,
 					})
 				}
 			} else {
@@ -146,10 +146,10 @@ func (m *SwissMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 
 			return nil
 		} else {
-			if utxo.Hash == nil {
+			if utxo.SpendingTxID == nil {
 				return nil
 			} else {
-				return utxostore.NewErrSpent(utxo.Hash)
+				return utxostore.NewErrSpent(utxo.SpendingTxID)
 			}
 		}
 	}
@@ -172,8 +172,8 @@ func (m *SwissMap) unSpend(spend *utxostore.Spend) {
 	utxo, ok := m.m.Get(*spend.Hash)
 	if ok {
 		m.m.Put(*spend.Hash, UTXO{
-			Hash:     nil,
-			LockTime: utxo.LockTime,
+			SpendingTxID: nil,
+			LockTime:     utxo.LockTime,
 		})
 	}
 }

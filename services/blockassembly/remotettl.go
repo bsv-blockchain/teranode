@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -84,7 +86,7 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	if r.localTTLCache != nil {
 		subtreeReader, err := r.localTTLCache.GetIoReader(ctx, key)
 		if err != nil {
-			if !errors.Is(err, options.ErrNotFound) {
+			if !errors.Is(err, ubsverrors.ErrNotFound) {
 				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
 			}
 		}
@@ -136,7 +138,7 @@ func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if r.localTTLCache != nil {
 		subtreeBytes, err := r.localTTLCache.Get(ctx, key)
 		if err != nil {
-			if !errors.Is(err, options.ErrNotFound) {
+			if !errors.Is(err, ubsverrors.ErrNotFound) {
 				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
 			}
 		}

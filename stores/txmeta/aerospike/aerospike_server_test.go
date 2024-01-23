@@ -194,7 +194,7 @@ func TestAerospike(t *testing.T) {
 		time.Sleep(2 * time.Second)
 
 		_, err = db.Get(context.Background(), hash)
-		require.ErrorIs(t, err, txmeta.ErrNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
 	})
 
 	t.Run("aerospike set mined multi", func(t *testing.T) {
@@ -230,7 +230,7 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
 
 		value, err = db.Get(context.Background(), blockHash)
-		require.ErrorIs(t, err, txmeta.ErrNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
 	})
 
 }

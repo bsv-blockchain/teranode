@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
@@ -49,7 +50,7 @@ func (as *AuxiliaryStore) GetIoReader(ctx context.Context, key []byte) (io.ReadC
 	if err == nil && reader != nil {
 		return reader, nil
 	}
-	if err != nil && !errors.Is(err, options.ErrNotFound) {
+	if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) {
 		as.logger.Warnf("error reading from auxiliary store: %s", err)
 	}
 
@@ -61,7 +62,7 @@ func (as *AuxiliaryStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if err == nil && data != nil {
 		return data, nil
 	}
-	if err != nil && !errors.Is(err, options.ErrNotFound) {
+	if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) {
 		as.logger.Warnf("error reading from auxiliary store: %s", err)
 	}
 

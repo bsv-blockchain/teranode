@@ -122,7 +122,7 @@ func (b *Badger) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return nil
 	})
 	if exists {
-		return data, txmeta.ErrAlreadyExists(tx.TxIDChainHash().String())
+		return data, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())
 	}
 
 	if err = b.store.Update(func(badgerTx *badger.Txn) error {
