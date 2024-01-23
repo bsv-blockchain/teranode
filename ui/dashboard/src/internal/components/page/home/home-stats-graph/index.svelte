@@ -49,7 +49,7 @@
     <RangeToggle bind:value={rangeMillis} />
   </div>
   {#if graphObj?.graphOptions}
-    <ChartContainer bind:renderKey height="500px">
+    <ChartContainer bind:renderKey height="530px">
       <Chart options={graphObj?.graphOptions} {renderKey} />
     </ChartContainer>
   {/if}
