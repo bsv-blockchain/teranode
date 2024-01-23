@@ -108,6 +108,12 @@ gen:
 	--proto_path=. \
 	--go_out=. \
 	--go_opt=paths=source_relative \
+	ubsverrors/error.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	services/validator/validator_api/validator_api.proto
@@ -235,6 +241,7 @@ clean_gen:
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./cmd/blockassembly_blaster
 	rm -f ./model/*.pb.go
+	rm -f ./ubsverrors/*.pb.go
 
 .PHONY: clean
 clean:
