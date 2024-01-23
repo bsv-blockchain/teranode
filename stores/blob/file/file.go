@@ -90,7 +90,7 @@ func (s *File) loadTTLs() error {
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
 			if err != nil {
-				s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+				s.logger.Warnf("failed to parse ttl from %s: %v", fileName, err)
 				continue
 			}
 

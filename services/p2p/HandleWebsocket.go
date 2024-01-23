@@ -61,7 +61,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 					Type:      asset_api.Type_PING.String(),
 				}, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %w", err)
+					s.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 
@@ -76,7 +76,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 
 				data, err := json.MarshalIndent(notification, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %w", err)
+					s.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 

@@ -231,7 +231,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		// what are the consequences of this failing?
 		err = u.finalizeBlockValidation(setCtx, block)
 		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
 	}()
@@ -303,7 +303,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 		if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, subtrees, blockID); err != nil {
 			// TODO this should be a fatal error, but for now we just log it
 			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %v", block.Hash().String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
 
