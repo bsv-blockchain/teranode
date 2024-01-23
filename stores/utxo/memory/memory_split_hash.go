@@ -50,7 +50,7 @@ func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore
 	memMap := m.m[[1]byte{spend.Hash[0]}]
 
 	if utxo, ok := memMap.Get(spend.Hash); ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			return &utxostore.Response{
 				Status:   int(utxostore_api.Status_OK),
 				LockTime: utxo.LockTime,
@@ -58,7 +58,7 @@ func (m *SplitByHash) Get(_ context.Context, spend *utxostore.Spend) (*utxostore
 		}
 		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: utxo.Hash,
+			SpendingTxID: utxo.SpendingTxID,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}

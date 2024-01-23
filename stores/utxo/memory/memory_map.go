@@ -47,7 +47,7 @@ func (mm *MapWithLocking) Set(hash *chainhash.Hash, txID *chainhash.Hash) {
 	defer mm.mu.Unlock()
 
 	mm.m[*hash] = UTXO{
-		Hash: txID,
+		SpendingTxID: txID,
 	}
 }
 
@@ -63,14 +63,14 @@ func (mm *MapWithLocking) Store(hash *chainhash.Hash, nLockTime uint32) (int, er
 	defer mm.mu.Unlock()
 
 	if utxo, ok := mm.m[*hash]; ok {
-		if utxo.Hash != nil {
+		if utxo.SpendingTxID != nil {
 			return int(utxostore_api.Status_SPENT), nil
 		}
 	}
 
 	mm.m[*hash] = UTXO{
-		Hash:     nil,
-		LockTime: nLockTime,
+		SpendingTxID: nil,
+		LockTime:     nLockTime,
 	}
 
 	return int(utxostore_api.Status_OK), nil
@@ -82,11 +82,11 @@ func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int
 
 	if utxo, ok := mm.m[*hash]; ok {
 		// if utxo exists, it has not been spent yet
-		if utxo.Hash != nil {
-			if utxo.Hash.IsEqual(txID) {
-				return int(utxostore_api.Status_OK), utxo.LockTime, utxo.Hash, nil
+		if utxo.SpendingTxID != nil {
+			if utxo.SpendingTxID.IsEqual(txID) {
+				return int(utxostore_api.Status_OK), utxo.LockTime, utxo.SpendingTxID, nil
 			} else {
-				return int(utxostore_api.Status_SPENT), utxo.LockTime, utxo.Hash, nil
+				return int(utxostore_api.Status_SPENT), utxo.LockTime, utxo.SpendingTxID, nil
 			}
 		}
 
@@ -95,8 +95,8 @@ func (mm *MapWithLocking) Spend(hash *chainhash.Hash, txID *chainhash.Hash) (int
 				delete(mm.m, *hash)
 			} else {
 				mm.m[*hash] = UTXO{
-					Hash:     txID,
-					LockTime: utxo.LockTime,
+					SpendingTxID: txID,
+					LockTime:     utxo.LockTime,
 				}
 			}
 		} else {

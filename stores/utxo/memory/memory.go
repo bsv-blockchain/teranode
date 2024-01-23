@@ -17,8 +17,8 @@ import (
 // )
 
 type UTXO struct {
-	Hash     *chainhash.Hash
-	LockTime uint32
+	SpendingTxID *chainhash.Hash
+	LockTime     uint32
 }
 
 type Memory struct {
@@ -55,7 +55,7 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 	defer m.mu.Unlock()
 
 	if utxo, ok := m.m[*spend.Hash]; ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			return &utxostore.Response{
 				Status:   int(utxostore_api.Status_OK),
 				LockTime: utxo.LockTime,
@@ -63,7 +63,7 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 		}
 		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: utxo.Hash,
+			SpendingTxID: utxo.SpendingTxID,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
@@ -102,8 +102,8 @@ func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 		}
 
 		m.m[*hash] = UTXO{
-			Hash:     nil,
-			LockTime: storeLockTime,
+			SpendingTxID: nil,
+			LockTime:     storeLockTime,
 		}
 	}
 
@@ -132,14 +132,14 @@ func (m *Memory) Spend(_ context.Context, spends []*utxostore.Spend) (err error)
 
 func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 	if utxo, found := m.m[*spend.Hash]; found {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
 				if m.DeleteSpentUtxos {
 					delete(m.m, *spend.Hash)
 				} else {
 					m.m[*spend.Hash] = UTXO{
-						Hash:     spend.SpendingTxID,
-						LockTime: utxo.LockTime,
+						SpendingTxID: spend.SpendingTxID,
+						LockTime:     utxo.LockTime,
 					}
 				}
 				return nil
@@ -147,11 +147,11 @@ func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 
 			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 		} else {
-			if utxo.Hash.IsEqual(spend.SpendingTxID) {
+			if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
 				return nil
 			}
 
-			return utxostore.NewErrSpent(utxo.Hash)
+			return utxostore.NewErrSpent(utxo.SpendingTxID)
 		}
 	}
 
@@ -178,7 +178,7 @@ func (m *Memory) unSpend(spend *utxostore.Spend) error {
 		return utxostore.ErrNotFound
 	}
 
-	utxo.Hash = nil
+	utxo.SpendingTxID = nil
 	m.m[*spend.Hash] = utxo
 
 	return nil

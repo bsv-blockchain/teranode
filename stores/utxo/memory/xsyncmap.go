@@ -59,7 +59,7 @@ func (m *XsyncMap) Health(_ context.Context) (int, string, error) {
 
 func (m *XsyncMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	if utxo, ok := m.m.Load(*spend.Hash); ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			return &utxostore.Response{
 				Status:   int(utxostore_api.Status_OK),
 				LockTime: utxo.LockTime,
@@ -68,7 +68,7 @@ func (m *XsyncMap) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Re
 
 		return &utxostore.Response{
 			Status:       int(utxostore_api.Status_SPENT),
-			SpendingTxID: utxo.Hash,
+			SpendingTxID: utxo.SpendingTxID,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
@@ -103,15 +103,15 @@ func (m *XsyncMap) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) err
 			return fmt.Errorf("timeout storing %d of %d xsyncmap utxos", i, len(utxoHashes))
 		default:
 			if utxo, ok := m.m.Load(*hash); ok {
-				if utxo.Hash != nil {
-					return utxostore.NewErrSpent(utxo.Hash)
+				if utxo.SpendingTxID != nil {
+					return utxostore.NewErrSpent(utxo.SpendingTxID)
 				} else {
 					return utxostore.ErrAlreadyExists
 				}
 			} else {
 				m.m.Store(*hash, UTXO{
-					Hash:     nil,
-					LockTime: storeLockTime,
+					SpendingTxID: nil,
+					LockTime:     storeLockTime,
 				})
 			}
 		}
@@ -139,21 +139,21 @@ func (m *XsyncMap) Spend(ctx context.Context, spends []*utxostore.Spend) (err er
 
 func (m *XsyncMap) spendUtxo(hash *chainhash.Hash, txID *chainhash.Hash) error {
 	if utxo, ok := m.m.Load(*hash); ok {
-		if utxo.Hash == nil {
+		if utxo.SpendingTxID == nil {
 			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
 				m.m.Store(*hash, UTXO{
-					Hash:     txID,
-					LockTime: utxo.LockTime,
+					SpendingTxID: txID,
+					LockTime:     utxo.LockTime,
 				})
 				return nil
 			}
 
 			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
 		} else {
-			if utxo.Hash.IsEqual(txID) {
+			if utxo.SpendingTxID.IsEqual(txID) {
 				return nil
 			} else {
-				return utxostore.NewErrSpent(utxo.Hash)
+				return utxostore.NewErrSpent(utxo.SpendingTxID)
 			}
 		}
 	}
@@ -179,8 +179,8 @@ func (m *XsyncMap) unSpend(spend *utxostore.Spend) error {
 	}
 
 	m.m.Store(*spend.Hash, UTXO{
-		Hash:     nil,
-		LockTime: utxo.LockTime,
+		SpendingTxID: nil,
+		LockTime:     utxo.LockTime,
 	})
 
 	return nil
