@@ -128,7 +128,7 @@ func init() {
 
 type storeUtxo struct {
 	idx        int
-	hash       *chainhash.Hash
+	utxoHash   *chainhash.Hash
 	txHash     *chainhash.Hash
 	lockTime   uint32
 	retryCount int
@@ -203,7 +203,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				aerospike.NewBin("locktime", storeRetryUtxo.lockTime),
 			}
 
-			key, err := aerospike.NewKey(s.namespace, "utxo", storeRetryUtxo.hash[:])
+			key, err := aerospike.NewKey(s.namespace, "utxo", storeRetryUtxo.utxoHash[:])
 			if err != nil {
 				s.logger.Errorf("[UTXO] failed to init new aerospike key in storeRetryCh: %v", err)
 				continue
@@ -216,7 +216,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				}
 				prometheusUtxoRetryStoreFail.Inc()
 
-				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
+				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
 
 				// requeue for retry
 				storeRetryUtxo.retryCount++
@@ -226,7 +226,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 					s.storeRetryCh <- storeRetryUtxo
 				}
 			} else {
-				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
+				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
 			}
 		}
 	}()
@@ -394,21 +394,21 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		batchRecords[idx] = record
 	}
 
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
-	if err != nil {
+	errAS := s.client.BatchOperate(batchPolicy, batchRecords)
+	if errAS != nil {
 		s.logger.Warnf("[BATCH_ERR] Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
 
 		for idx, batchRecord := range batchRecords {
-			err = batchRecord.BatchRec().Err
-			if err != nil {
-				s.logger.Warnf("[BATCH_ERR] error in aerospike utxo store BatchOperate batchRecord %d of %d (will retry): %s - %w", idx, len(batchRecords), utxoHashes[idx].String(), err)
+			errRecord := batchRecord.BatchRec().Err
+			if errRecord != nil {
+				s.logger.Warnf("[BATCH_ERR] error in aerospike utxo store BatchOperate batchRecord %d of %d (will retry): %s - %v", idx+1, len(batchRecords), utxoHashes[idx].String(), err)
 			}
 		}
 
 		for idx, hash := range utxoHashes {
 			s.storeRetryCh <- &storeUtxo{
 				idx:      idx,
-				hash:     hash,
+				utxoHash: hash,
 				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
@@ -437,7 +437,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 			s.storeRetryCh <- &storeUtxo{
 				idx:      idx,
-				hash:     utxoHashes[idx],
+				utxoHash: utxoHashes[idx],
 				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
@@ -475,7 +475,7 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 
 		s.storeRetryCh <- &storeUtxo{
 			idx:      0,
-			hash:     hash,
+			utxoHash: hash,
 			txHash:   hash,
 			lockTime: nLockTime,
 		}
