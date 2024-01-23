@@ -107,8 +107,8 @@
   }
 
   .tui-menu-item.collapsed {
-    justify-content: center;
-    padding: 0;
+    /* justify-content: center; */
+    padding: 0 10px;
   }
 
   .tui-menu-item .icon,
