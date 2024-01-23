@@ -201,6 +201,19 @@ func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash
 	}
 	return hash, nil
 }
+func (c Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
+	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+	bits := model.NewNBitFromSlice(resp.Bits)
+	if err != nil {
+		return nil, err
+	}
+	return &bits, nil
+}
 
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
