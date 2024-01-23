@@ -354,18 +354,19 @@ func (stp *SubtreeProcessor) setTxCount() {
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) (err error) {
 	if block == nil {
-		return errors.New("you must pass in a block to moveDownBlock")
+		return errors.New("[moveDownBlock] you must pass in a block to moveDownBlock")
 	}
+
 	startTime := time.Now()
 	prometheusSubtreeProcessorMoveDownBlock.Inc()
 
 	// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees", block.String(), len(block.Subtrees))
+	stp.logger.Infof("[moveDownBlock][%s] with %d subtrees", block.String(), len(block.Subtrees))
 	defer func() {
-		stp.logger.Infof("DONE moveDownBlock with block %s", block.String())
+		stp.logger.Infof("[moveDownBlock][%s] with %d subtrees DONE in %s", block.String(), len(block.Subtrees), time.Since(startTime).String())
 		err := recover()
 		if err != nil {
-			stp.logger.Errorf("moveDownBlock with block %s: %s", block.String(), err)
+			stp.logger.Errorf("[moveDownBlock] with block %s: %s", block.String(), err)
 		}
 	}()
 
@@ -377,7 +378,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// reset the subtree processor
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
-		return fmt.Errorf("error creating new subtree: %s", err.Error())
+		return fmt.Errorf("[moveDownBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
@@ -395,13 +396,13 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		g.Go(func() error {
 			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 			if err != nil {
-				return fmt.Errorf("error getting subtree %s: %s", subtreeHash.String(), err.Error())
+				return fmt.Errorf("[moveDownBlock][%s] error getting subtree %s: %s", block.String(), subtreeHash.String(), err.Error())
 			}
 
 			subtree := &util.Subtree{}
 			err = subtree.DeserializeFromReader(subtreeReader)
 			if err != nil {
-				return fmt.Errorf("error deserializing subtree: %s", err.Error())
+				return fmt.Errorf("[moveDownBlock][%s] error deserializing subtree: %s", block.String(), err.Error())
 			}
 
 			subtreesNodes[idx] = subtree.Nodes
@@ -412,7 +413,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("error getting subtrees: %s", err.Error())
+		return fmt.Errorf("[moveDownBlock][%s] error getting subtrees: %s", block.String(), err.Error())
 	}
 	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: get subtrees DONE", block.String(), len(block.Subtrees))
 
@@ -421,8 +422,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	for idx, subtreeNode := range subtreesNodes {
 		if idx == 0 {
 			// process coinbase utxos
-			if err := stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
-				return fmt.Errorf("error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error())
+			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
+				return fmt.Errorf("[moveDownBlock][%s] error deleting utxos for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
 			}
 
 			// skip the first transaction of the first subtree (coinbase)
@@ -465,18 +466,21 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 // given. It is akin moving up the blockchain to the next block.
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block, skipNotification bool) error {
+	if block == nil {
+		return errors.New("[moveUpBlock] you must pass in a block to moveUpBlock")
+	}
+
+	startTime := time.Now()
 	defer func() {
-		stp.logger.Infof("[moveUpBlock][%s] with block DONE", block.String())
+		prometheusSubtreeProcessorMoveUpBlockDuration.Observe(time.Since(startTime).Seconds())
+		stp.logger.Infof("[moveUpBlock][%s] with block DONE in %s", block.String(), time.Since(startTime).String())
+
 		err := recover()
 		if err != nil {
 			stp.logger.Errorf("[moveUpBlock][%s] with block: %s", block.String(), err)
 		}
 	}()
 
-	if block == nil {
-		return errors.New("you must pass in a block to moveUpBlock")
-	}
-	startTime := time.Now()
 	prometheusSubtreeProcessorMoveUpBlock.Inc()
 
 	// TODO reactivate and test
@@ -490,7 +494,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	coinbaseId := block.CoinbaseTx.TxIDChainHash()
 	err := stp.processCoinbaseUtxos(ctx, block)
 	if err != nil {
-		return err
+		return fmt.Errorf("[moveUpBlock][%s] error processing coinbase utxos: %s", block.String(), err.Error())
 	}
 
 	// create a reverse lookup map of all the subtrees in the block
@@ -517,23 +521,27 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// clear the transaction ids from all the subtrees of the block that are left over
 	var transactionMap util.TxMap
 	if len(blockSubtreesMap) > 0 {
+		mapStartTime := time.Now()
+		stp.logger.Infof("[moveUpBlock][%s] processing subtrees into transaction map", block.String())
 		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
 			// TODO revert the created utxos
-			return fmt.Errorf("error creating transaction map: %s", err.Error())
+			return fmt.Errorf("[moveUpBlock][%s] error creating transaction map: %s", block.String(), err.Error())
 		}
+		stp.logger.Infof("[moveUpBlock][%s] processing subtrees into transaction map DONE in %s: %d", block.String(), time.Since(mapStartTime).String(), transactionMap.Length())
 	}
 
 	// reset the current subtree
 	currentSubtree := stp.currentSubtree
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
-		return fmt.Errorf("error creating new subtree: %s", err.Error())
+		return fmt.Errorf("[moveUpBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
 
+	remainderStartTime := time.Now()
 	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees", block.String())
 
 	if transactionMap != nil && transactionMap.Length() > 0 {
@@ -542,15 +550,22 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		remainderSubtrees = append(remainderSubtrees, chainedSubtrees...)
 		remainderSubtrees = append(remainderSubtrees, currentSubtree)
 
+		remainderTxHashesStartTime := time.Now()
+		stp.logger.Infof("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees", block.String(), len(chainedSubtrees))
 		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, skipNotification); err != nil {
-			return fmt.Errorf("error getting remainder tx hashes: %s", err.Error())
+			return fmt.Errorf("[moveUpBlock][%s] error getting remainder tx hashes: %s", block.String(), err.Error())
 		}
+		stp.logger.Infof("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees DONE in %s", block.String(), len(chainedSubtrees), time.Since(remainderTxHashesStartTime).String())
 
 		// empty the queue to make sure we have all the transactions that could be in the block
+		// we only have to do this when we have a transaction map, because otherwise we would be processing our own block
+		dequeueStartTime := time.Now()
+		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock: %d", block.String(), stp.queue.length())
 		err = stp.moveUpBlockDeQueue(transactionMap)
 		if err != nil {
-			return fmt.Errorf("error moving up block deQueue: %s", err.Error())
+			return fmt.Errorf("[moveUpBlock][%s] error moving up block deQueue: %s", block.String(), err.Error())
 		}
+		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock DONE in %s", block.String(), time.Since(dequeueStartTime).String())
 	} else {
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
@@ -562,7 +577,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 					if !coinbaseId.Equal(node.Hash) {
 						if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 							if err = stp.removeMap.Delete(node.Hash); err != nil {
-								stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+								stp.logger.Errorf("[moveUpBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
 							}
 						} else {
 							_ = stp.addNode(node, skipNotification)
@@ -577,7 +592,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 				if !coinbaseId.Equal(node.Hash) {
 					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 						if err = stp.removeMap.Delete(node.Hash); err != nil {
-							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+							stp.logger.Errorf("[moveUpBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
 						}
 					} else {
 						_ = stp.addNode(node, skipNotification)
@@ -587,12 +602,12 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		}
 	}
 
+	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees DONE in %s", block.String(), time.Since(remainderStartTime).String())
+
 	stp.setTxCount()
 
 	// set the current block header
 	stp.currentBlockHeader = block.Header
-
-	prometheusSubtreeProcessorMoveUpBlockDuration.Observe(time.Since(startTime).Seconds())
 
 	return nil
 }
@@ -600,8 +615,6 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
-		stp.logger.Infof("processing queue while moveUpBlock: %d", queueLength)
-
 		nrProcessed := int64(0)
 		validFromMillis := time.Now().Add(-1 * stp.doubleSpendWindowDuration).UnixMilli()
 		for {
@@ -709,8 +722,6 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree, transactionMap util.TxMap, skipNotification bool) error {
 	var hashCount atomic.Int64
 
-	stp.logger.Infof("processRemainderTxHashes with %d subtrees", len(chainedSubtrees))
-
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	g, _ := errgroup.WithContext(ctx)
@@ -721,15 +732,12 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		idx := idx
 		st := subtree
 		g.Go(func() error {
-			remainingTransactions, err := st.Difference(transactionMap)
+			var err error
+			remainderSubtrees[idx], err = st.Difference(transactionMap)
 			if err != nil {
 				return fmt.Errorf("error calculating difference: %s", err.Error())
 			}
-
-			for _, txHash := range remainingTransactions {
-				remainderSubtrees[idx] = append(remainderSubtrees[idx], txHash)
-				hashCount.Add(1)
-			}
+			hashCount.Add(int64(len(remainderSubtrees[idx])))
 
 			return nil
 		})
@@ -742,7 +750,6 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	removeMapLength := stp.removeMap.Length()
 
 	// add all found tx hashes to the final list, in order
-	remainderSubtreeNodes := make([]util.SubtreeNode, 0, hashCount.Load())
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
@@ -756,8 +763,6 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 			}
 		}
 	}
-
-	stp.logger.Infof("processRemainderTxHashes with %d subtrees DONE: %d", len(chainedSubtrees), len(remainderSubtreeNodes))
 
 	return nil
 }
