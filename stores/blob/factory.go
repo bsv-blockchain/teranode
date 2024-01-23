@@ -3,6 +3,7 @@ package blob
 import (
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/blob/shared"
 	"net/url"
 	"strconv"
 	"strings"
@@ -112,6 +113,15 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create badger store"), err)
+			}
+		} else if ttlStoreType == "shared" {
+			persist := storeUrl.Query().Get("persist")
+			if persist == "" {
+				return nil, errors.New("shared store requires persist path")
+			}
+			ttlStore, err = shared.New(logger, localTTLStorePath, persist, localTTLStorePaths)
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to create shared store"), err)
 			}
 		} else {
 			// default is file store
