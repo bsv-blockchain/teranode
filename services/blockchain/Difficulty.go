@@ -24,6 +24,7 @@ var (
 	// oneLsh256 is 1 shifted left 256 bits.  It is defined here to avoid
 	// the overhead of creating it multiple times.
 	oneLsh256 = new(big.Int).Lsh(bigOne, 256)
+	_         = oneLsh256
 )
 
 type Difficulty struct {
