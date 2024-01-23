@@ -39,6 +39,7 @@ type BlockValidation struct {
 	validatorClient     validator.Interface
 	subtreeDeDuplicator *deduplicator.DeDuplicator
 	optimisticMining    bool
+	localSetMined       bool
 }
 
 type missingTx struct {
@@ -68,9 +69,77 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		validatorClient:     validatorClient,
 		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 		optimisticMining:    optimisticMining,
+		localSetMined:       gocore.Config().GetBool("blockvalidation_localSetMined", false),
+	}
+
+	if bv.localSetMined {
+		// start a blockchain listener and process all the blocks that are mined into the txmetastore
+		// this should only be done when shared storage is available, and the block validation has access to all subtrees locally
+		ctx := context.Background()
+		go func() {
+			for {
+				blockchainSubscription, err := bv.blockchainClient.Subscribe(ctx, "blockvalidation")
+				if err != nil {
+					logger.Errorf("[BlockValidation:localSetMined] failed to subscribe to blockchain: %s", err)
+
+					// backoff for 5 seconds and try again
+					time.Sleep(5 * time.Second)
+					continue
+				}
+
+				for notification := range blockchainSubscription {
+					if notification == nil {
+						continue
+					}
+
+					if notification.Type == model.NotificationType_Block {
+						logger.Infof("[BlockValidation:localSetMined] block mined: %s", notification.Hash.String())
+						err = bv.localSetTxMined(ctx, notification.Hash)
+						if err != nil {
+							logger.Errorf("[BlockValidation][%s] failed to set tx mined: %s", notification.Hash.String(), err)
+						}
+
+					}
+				}
+			}
+		}()
 	}
 
 	return bv
+}
+
+func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
+	var block *model.Block
+	var ids []uint32
+	var blockSubtrees []*util.Subtree
+
+	// get the block from the blockchain
+	block, err = u.blockchainClient.GetBlock(ctx, blockHash)
+	if err != nil {
+		return fmt.Errorf("[localSetMined][%s] failed to get block from blockchain: %v", blockHash.String(), err)
+	}
+
+	ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1)
+	if err != nil {
+		return fmt.Errorf("[localSetMined][%s] failed to get block header ids: %v", blockHash.String(), err)
+	}
+
+	if len(ids) != 1 {
+		return fmt.Errorf("[localSetMined][%s] failed to get block header id: %v", blockHash.String(), err)
+	}
+
+	blockSubtrees, err = block.GetSubtrees(u.subtreeStore)
+	if err != nil {
+		return fmt.Errorf("[localSetMined][%s] failed to get subtrees from block: %v", blockHash.String(), err)
+	}
+
+	// add the transactions in this block to the txMeta block hashes
+	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
+	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
+		return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
+	}
+
+	return nil
 }
 
 func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
@@ -268,7 +337,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 
 	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
 	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
-	subtrees, err := block.GetSubtrees(u.subtreeStore)
+	blockSubtrees, err := block.GetSubtrees(u.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
@@ -297,18 +366,21 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 		return nil
 	})
 
-	g.Go(func() error {
-		// add the transactions in this block to the txMeta block hashes
-		u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
-		if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, subtrees, blockID); err != nil {
-			// TODO this should be a fatal error, but for now we just log it
-			//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-			u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %v", block.Hash().String(), err)
-		}
-		u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
+	if !u.localSetMined {
+		// update the txMeta block hashes, if we are not doing it locally in the background
+		g.Go(func() error {
+			// add the transactions in this block to the txMeta block hashes
+			u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
+			if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, blockSubtrees, blockID); err != nil {
+				// TODO this should be a fatal error, but for now we just log it
+				//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+				u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
+			}
+			u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
 
-		return nil
-	})
+			return nil
+		})
+	}
 
 	if err = g.Wait(); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
