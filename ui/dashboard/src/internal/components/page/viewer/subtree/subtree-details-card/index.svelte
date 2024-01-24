@@ -70,22 +70,6 @@
       <Icon name="icon-reeverse-line" size={15} />
     </div>
   </div>
-  <!-- <div class="btns" slot="header-tools">
-    <Button
-      size="small"
-      icon="icon-chevron-left-line"
-      ico={true}
-      disabled={true}
-      on:click={() => navToSubtree(null)}
-    />
-    <Button
-      size="small"
-      icon="icon-chevron-right-line"
-      ico={true}
-      disabled={true}
-      on:click={() => navToSubtree(null)}
-    />
-  </div> -->
   <div class="content">
     <div class="tabs">
       <Button
@@ -171,10 +155,6 @@
 </Card>
 
 <style>
-  .btns {
-    display: flex;
-  }
-
   .content {
     display: flex;
     flex-direction: column;

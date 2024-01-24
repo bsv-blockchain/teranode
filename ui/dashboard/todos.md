@@ -11,6 +11,6 @@
 - [x] Fix Safari Teranode logo
 - [x] Fix search input
 - [x] Don't let sidebar icons jump on open/close
-- [ ] Fix refresh button
+- [x] Fix refresh button
 - [ ] Cleanup [In progress]
 - [ ] Documentation

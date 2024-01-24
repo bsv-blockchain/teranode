@@ -335,7 +335,8 @@
     "copy-to-clipboard": "Copy to clipboard",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
-    "next-block": "Next block"
+    "next-block": "Next block",
+    "refresh": "Refresh"
   },
   "graph": {
     "series": {

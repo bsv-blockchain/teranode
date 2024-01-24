@@ -3,12 +3,10 @@
   import { addNumCommas } from '$lib/utils/format'
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
-  import { Icon } from '$lib/components'
+  import { Button, Icon } from '$lib/components'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { sock as p2pSock } from '$internal/stores/p2pStore'
-  import { getCoordinateSystemDimensions } from 'echarts'
-  import Error from '../../../../../routes/+error.svelte'
   //   import { sock as nodeSock } from '$internal/stores/nodeStore'
   ///   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
 
@@ -90,15 +88,21 @@
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
-  <div slot="header-tools">
+  <svelte:fragment slot="header-tools">
     <div class="live">
-      <button on:click={getData}>Refresh</button>
       <div class="live-icon" class:connected>
         <Icon name="icon-status-light-glow-solid" size={14} />
       </div>
       <div class="live-label">{t(`${baseKey}.live`)}</div>
     </div>
-  </div>
+    <Button
+      size="small"
+      ico={true}
+      icon="icon-refresh-line"
+      tooltip={t('tooltip.refresh')}
+      on:click={getData}
+    />
+  </svelte:fragment>
   <div class="content" style:--grid-template-columns={`repeat(${colCount}, 1fr)`}>
     {#if loading}
       <div class="block">

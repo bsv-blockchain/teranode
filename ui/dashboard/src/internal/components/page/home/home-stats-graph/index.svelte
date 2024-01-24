@@ -45,9 +45,9 @@
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={true} headerPadding="20px 24px 10px 24px">
-  <div slot="header-tools">
+  <svelte:fragment slot="header-tools">
     <RangeToggle bind:value={rangeMillis} />
-  </div>
+  </svelte:fragment>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="530px">
       <Chart options={graphObj?.graphOptions} {renderKey} />

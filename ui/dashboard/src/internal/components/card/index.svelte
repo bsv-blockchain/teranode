@@ -93,7 +93,7 @@
     align-items: center;
     justify-content: flex-end;
     flex-wrap: wrap;
-    gap: 20px;
+    gap: 8px;
     flex: 1 0;
   }
 
