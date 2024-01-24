@@ -50,8 +50,9 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, targetTi
 	// can have for the test network. It is the value 2^224 - 1.eee3e
 	// d.powLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
 	// make it easier
+	powLimitExp, _ := gocore.Config().GetInt("difficulty_pow_limit", 224)
 
-	d.powLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 234), bigOne)
+	d.powLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, uint(powLimitExp)), bigOne)
 
 	d.logger = logger
 	d.store = store
