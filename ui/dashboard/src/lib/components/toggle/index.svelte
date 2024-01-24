@@ -138,6 +138,7 @@
     on:keydown={onKeyDown}
     role="listbox"
     tabindex={tabindex === -99 ? 0 : tabindex}
+    aria-label={name}
   >
     {#each items as item, i (item.value)}
       <div
