@@ -68,9 +68,8 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
-	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
 
-	d, err := NewDifficulty(s, logger, targetTimePerBlock, difficultyAdjustmentWindow)
+	d, err := NewDifficulty(s, logger, difficultyAdjustmentWindow)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}

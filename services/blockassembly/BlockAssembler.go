@@ -51,7 +51,6 @@ type BlockAssembler struct {
 	difficultyAdjustment       bool
 	currentDifficulty          *model.NBit
 	defaultMiningNBits         *model.NBit
-	targetTimePerBlock         int
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
@@ -62,7 +61,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
-	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
 	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
 	defaultMiningBits := model.NewNBitFromString(nBitsString)
 	b := &BlockAssembler{
@@ -78,7 +77,6 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		maxBlockReorgCatchup:       maxBlockReorgCatchup,
 		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
 		difficultyAdjustment:       difficultyAdjustment,
-		targetTimePerBlock:         targetTimePerBlock,
 		defaultMiningNBits:         &defaultMiningBits,
 	}
 
@@ -525,7 +523,9 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 
 	now := time.Now()
-	thresholdSeconds := 2 * uint32(b.targetTimePerBlock)
+	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
+	thresholdSeconds := 2 * uint32(targetTimePerBlock)
 	randomOffset := rand.Int31n(21) - 10
 
 	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Timestamp

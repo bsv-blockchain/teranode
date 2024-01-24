@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -38,7 +39,9 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	expectedNbits := model.NewNBitFromString("1809dd97")
 	// expectedNbits := model.NewNBitFromString("180a1de9") // this is the actual nBit value in block 826224
 
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600, 144)
+	os.Setenv("difficulty_target_time_per_block", "144")
+
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600)
 	require.NoError(t, err)
 
 	nbits, err := d.ComputeTarget(firstBlockHeader, lastBlockHeader)
@@ -72,7 +75,9 @@ func TestCalculateDifficulty(t *testing.T) {
 		// expected    180783a0
 	}
 
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600, 144)
+	os.Setenv("difficulty_target_time_per_block", "144")
+
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600)
 	require.NoError(t, err)
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -97,7 +102,9 @@ func TestCalcNextRequiredDifficulty_fastBlocks(t *testing.T) {
 	// as the timestapms are too close together difficulty should be the last difficulty
 	expectedNbits := model.NewNBitFromString("180a097a")
 
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600, 144)
+	os.Setenv("difficulty_target_time_per_block", "144")
+
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600)
 	require.NoError(t, err)
 	nbits, err := d.ComputeTarget(firstBlockHeader, lastBlockHeader)
 	require.NoError(t, err)

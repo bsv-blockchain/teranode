@@ -30,7 +30,6 @@ var (
 type Difficulty struct {
 	difficultyAdjustment       bool
 	difficultyAdjustmentWindow int
-	targetTimePerBlock         int
 	nBitsString                string
 	powLimit                   *big.Int
 	lastSlowBlockHash          *chainhash.Hash
@@ -38,12 +37,11 @@ type Difficulty struct {
 	store                      blockchain_store.Store
 }
 
-func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, targetTimePerBlock int, difficultyAdjustmentWindow int) (*Difficulty, error) {
+func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, difficultyAdjustmentWindow int) (*Difficulty, error) {
 	d := &Difficulty{}
 	d.difficultyAdjustment = gocore.Config().GetBool("difficulty_adjustment", false)
 	d.difficultyAdjustmentWindow = difficultyAdjustmentWindow
 
-	d.targetTimePerBlock = targetTimePerBlock
 	d.nBitsString, _ = gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
 
 	// powLimit is the highest proof of work value a Bitcoin block
@@ -75,7 +73,9 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 	// If the new block's timestamp is more than 2* 10 minutes then allow
 	// mining of a min-difficulty block.
 	now := time.Now()
-	thresholdSeconds := 2 * uint32(d.targetTimePerBlock)
+	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
+	thresholdSeconds := 2 * uint32(targetTimePerBlock)
 	randomOffset := rand.Int31n(21) - 10
 
 	timeDifference := uint32(now.Unix()) - bestBlockHeader.Timestamp
@@ -140,20 +140,22 @@ func (d *Difficulty) ComputeTarget(firstBlock *model.BlockHeader, lastBlock *mod
 		return &lastBlock.Bits, nil
 	}
 
+	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
 	// Calculate the actual duration (in seconds) taken to mine the blocks between the first and last blocks
 	duration := int64(lastBlock.Timestamp - firstBlock.Timestamp)
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustement we are going to do.
-	if duration > int64(2*d.difficultyAdjustmentWindow)*int64(d.targetTimePerBlock) {
-		duration = int64(2*d.difficultyAdjustmentWindow) * int64(d.targetTimePerBlock)
-	} else if duration < int64(d.difficultyAdjustmentWindow/2)*int64(d.targetTimePerBlock) {
-		duration = int64(d.difficultyAdjustmentWindow/2) * int64(d.targetTimePerBlock)
+	if duration > int64(2*d.difficultyAdjustmentWindow)*int64(targetTimePerBlock) {
+		duration = int64(2*d.difficultyAdjustmentWindow) * int64(targetTimePerBlock)
+	} else if duration < int64(d.difficultyAdjustmentWindow/2)*int64(targetTimePerBlock) {
+		duration = int64(d.difficultyAdjustmentWindow/2) * int64(targetTimePerBlock)
 	}
 
 	// Calculate the new target based on the ratio of actual to expected duration
 	actualDuration := big.NewInt(duration)
 	// Calculate the expected duration for mining the blocks in the difficulty adjustment window
-	expectedDuration := big.NewInt(int64(d.targetTimePerBlock * d.difficultyAdjustmentWindow))
+	expectedDuration := big.NewInt(int64(targetTimePerBlock * d.difficultyAdjustmentWindow))
 
 	// Calculate the new target by multiplying the last block's target with the ratio of actual to expected duration
 	newTarget := new(big.Int).Mul(lastBlock.Bits.CalculateTarget(), actualDuration)
