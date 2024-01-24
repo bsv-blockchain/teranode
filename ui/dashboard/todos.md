@@ -1,6 +1,11 @@
 # Todos
 
-- [ ] Improve Time to Interactive: https://web.dev/articles/tti [In progress]
+- [ ] Improve Time To Interactive (TTI) [In progress]
+  - https://web.dev/articles/tti
+  - https://developer.chrome.com/docs/lighthouse/overview/#cli
+- [ ] Improve accessinility (A11y) [In progress]
+  - https://svelte.dev/docs/accessibility-warnings
+  - https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA
 - [ ] Fix duplicate entries on p2p page [TODO: verify]
 - [x] Fix Safari Teranode logo
 - [x] Fix search input
