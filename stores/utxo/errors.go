@@ -30,7 +30,7 @@ func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
 		SpendingTxID: spendingTxID,
 	}
 
-	e := ubsverrors.New(0, errSpent.Error())
+	e := ubsverrors.New(0, errSpent.Error(), ErrTypeSpent)
 	return e
 }
 
@@ -52,7 +52,7 @@ func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) 
 		blockHeight: blockHeight,
 	}
 
-	return ubsverrors.New(0, errLockTime.Error())
+	return ubsverrors.New(0, errLockTime.Error(), ErrTypeLockTime)
 }
 func (e *ErrLockTime) Error() string {
 	if e.lockTime == 0 {
