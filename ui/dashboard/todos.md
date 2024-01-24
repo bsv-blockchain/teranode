@@ -6,6 +6,7 @@
 - [ ] Improve accessinility (A11y) [In progress]
   - https://svelte.dev/docs/accessibility-warnings
   - https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA
+- [x] Improve SEO
 - [ ] Fix duplicate entries on p2p page [TODO: verify]
 - [x] Fix Safari Teranode logo
 - [x] Fix search input
