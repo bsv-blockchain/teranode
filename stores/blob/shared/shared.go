@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"os"
 	"path/filepath"
@@ -134,7 +135,7 @@ func (s *Shared) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, err
 			file, err = os.Open(s.getFileNameForPersist(fileName))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					return nil, options.ErrNotFound
+					return nil, ubsverrors.ErrNotFound
 				}
 				return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 			}
@@ -157,7 +158,7 @@ func (s *Shared) Get(_ context.Context, hash []byte) ([]byte, error) {
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					return nil, options.ErrNotFound
+					return nil, ubsverrors.ErrNotFound
 				}
 				return nil, fmt.Errorf("failed to read data from file: %w", err)
 			}
