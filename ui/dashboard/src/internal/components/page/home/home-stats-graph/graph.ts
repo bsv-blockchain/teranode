@@ -1,7 +1,35 @@
-import * as echarts from 'echarts'
-
 import { formatDate, addNumCommas } from '$lib/utils/format'
 import { timeSeriesTooltipFormatter } from '$internal/utils/graph'
+
+// See:
+// - https://apache.github.io/echarts-handbook/en/basics/import/
+// - https://echarts.apache.org/handbook/en/basics/release-note/v5-upgrade-guide/
+// import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  DatasetComponent,
+  TransformComponent,
+  LegendComponent,
+} from 'echarts/components'
+import { LabelLayout, UniversalTransition } from 'echarts/features'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([
+  LineChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  DatasetComponent,
+  TransformComponent,
+  LegendComponent,
+  LabelLayout,
+  UniversalTransition,
+  CanvasRenderer,
+])
 
 export const getGraphObj = (t, data, smooth = true) => {
   // graph data
@@ -84,8 +112,8 @@ export const getGraphObj = (t, data, smooth = true) => {
           name: seriesName,
           type: 'line',
           smooth,
-          symbol: 'circle',    // Add this line to set the symbol shape
-          symbolSize: 10,       // And this line to set the symbol size
+          symbol: 'circle', // Add this line to set the symbol shape
+          symbolSize: 10, // And this line to set the symbol size
           yAxisIndex: mapper?.yAxisIndex ? mapper.yAxisIndex : 0,
           itemStyle: mapper?.itemStyle ? mapper.itemStyle : null,
           areaStyle: mapper?.areaStyle ? mapper.areaStyle : null,
