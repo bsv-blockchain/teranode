@@ -6,23 +6,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
 
-func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) utxostore_api.Status {
-	status := utxostore_api.Status_OK
+func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) Status {
+	status := Status_OK
 	if spendingTxId != nil {
-		status = utxostore_api.Status_SPENT
+		status = Status_SPENT
 	} else if lockTime > 0 {
 		if lockTime < 500000000 && lockTime > blockHeight {
-			status = utxostore_api.Status_LOCKED
+			status = Status_LOCKED
 		} else if lockTime >= 500000000 && lockTime > uint32(time.Now().Unix()) {
 			// TODO this should be a check for the median time past for the last 11 blocks
-			status = utxostore_api.Status_LOCKED
+			status = Status_LOCKED
 		}
 	}
 

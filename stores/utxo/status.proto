@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option go_package = "github.com/bitcoin-sv/ubsv/stores/utxo";
+
+package utxo;
+
+// swagger:enum Status
+enum Status {
+  OK = 0;
+  SPENT = 1;
+  LOCKED = 2;
+  NOT_FOUND = 3;
+  ALREADY_EXISTS = 4;
+}

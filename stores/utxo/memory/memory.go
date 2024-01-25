@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -57,19 +56,19 @@ func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Resp
 	if utxo, ok := m.m[*spend.Hash]; ok {
 		if utxo.SpendingTxID == nil {
 			return &utxostore.Response{
-				Status:   int(utxostore_api.Status_OK),
+				Status:   int(utxostore.Status_OK),
 				LockTime: utxo.LockTime,
 			}, nil
 		}
 		return &utxostore.Response{
-			Status:       int(utxostore_api.Status_SPENT),
+			Status:       int(utxostore.Status_SPENT),
 			SpendingTxID: utxo.SpendingTxID,
 			LockTime:     utxo.LockTime,
 		}, nil
 	}
 
 	return &utxostore.Response{
-		Status: int(utxostore_api.Status_NOT_FOUND),
+		Status: int(utxostore.Status_NOT_FOUND),
 	}, nil
 }
 

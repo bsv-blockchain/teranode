@@ -10,7 +10,6 @@ import (
 	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
@@ -68,25 +67,6 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 	}
 
 	return utxoStore
-}
-
-func getUtxoMemoryStore() utxostore.Interface {
-	utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if utxoStoreURL.Scheme != "memory" {
-		panic("utxo grpc server only supports memory store")
-	}
-
-	var s utxostore.Interface
-	switch utxoStoreURL.Path {
-	case "/splitbyhash":
-		s = memory.NewSplitByHash(true)
-	default:
-		s = memory.New(true)
-	}
-	return s
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

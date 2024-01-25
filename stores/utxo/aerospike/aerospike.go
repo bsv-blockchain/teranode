@@ -14,7 +14,6 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/aerospike/aerospike-client-go/v6/types"
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -317,7 +316,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxostore.Response{
-				Status: int(utxostore_api.Status_NOT_FOUND),
+				Status: int(utxostore.Status_NOT_FOUND),
 			}, utxostore.ErrNotFound
 		}
 
