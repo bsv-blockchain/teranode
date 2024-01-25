@@ -18,6 +18,28 @@ import {
 import { LabelLayout, UniversalTransition } from 'echarts/features'
 import { CanvasRenderer } from 'echarts/renderers'
 
+import type {
+  // The series option types are defined with the SeriesOption suffix
+  LineSeriesOption,
+} from 'echarts/charts'
+import type {
+  // The component option types are defined with the ComponentOption suffix
+  TitleComponentOption,
+  TooltipComponentOption,
+  GridComponentOption,
+  DatasetComponentOption,
+} from 'echarts/components'
+import type { ComposeOption } from 'echarts/core'
+
+// Create an Option type with only the required components and charts via ComposeOption
+export type ECOption = ComposeOption<
+  | LineSeriesOption
+  | TitleComponentOption
+  | TooltipComponentOption
+  | GridComponentOption
+  | DatasetComponentOption
+>
+
 echarts.use([
   LineChart,
   TitleComponent,
@@ -68,7 +90,7 @@ export const getGraphObj = (t, data, smooth = true) => {
     },
   ]
   // graph options
-  let graphOptions: any = null
+  let graphOptions: ECOption | null = null
   if (graphData?.length) {
     const seriesNames = [t('graph.series.tx_count')]
     graphOptions = {
@@ -77,20 +99,22 @@ export const getGraphObj = (t, data, smooth = true) => {
         source: graphData,
         dimensions: [t('graph.series.date')].concat(seriesNames),
       },
-      xAxis: {
-        type: 'time',
-        boundaryGap: false,
-        axisLine: { onZero: true },
-        axisLabel: {
-          formatter: (value) => ' ' + formatDate(parseInt(value), false, false),
-          padding: [0, 5, 0, 5],
-          hideOverlap: true,
+      xAxis: [
+        {
+          type: 'time',
+          // boundaryGap: false,
+          axisLine: { onZero: true },
+          axisLabel: {
+            formatter: (value) => ' ' + formatDate(parseInt(value.toString()), false, false),
+            padding: [0, 5, 0, 5],
+            hideOverlap: true,
+          },
+          alignTicks: true,
+          axisTick: {
+            //   interval: 1,
+          },
         },
-        alignTicks: true,
-        axisTick: {
-          //   interval: 1,
-        },
-      },
+      ],
       yAxis: [
         {
           type: 'value',
@@ -130,14 +154,16 @@ export const getGraphObj = (t, data, smooth = true) => {
         lineHeight: 24,
         color: '#8F8D94',
       },
-      tooltip: {
-        trigger: 'axis',
-        formatter: timeSeriesTooltipFormatter.bind(null, graphMappers),
-        textStyle: {
-          fontWeight: 500,
-          color: '#282933',
+      tooltip: [
+        {
+          trigger: 'axis',
+          formatter: timeSeriesTooltipFormatter.bind(null, graphMappers) as any,
+          textStyle: {
+            fontWeight: 500,
+            color: '#282933',
+          },
         },
-      },
+      ],
       legend: {
         data: seriesNames,
         bottom: 0,
