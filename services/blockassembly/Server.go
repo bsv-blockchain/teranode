@@ -56,6 +56,7 @@ type BlockAssembly struct {
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
 	blockAssemblyDisabled bool
+	localSetMined         bool
 }
 
 type subtreeRetrySend struct {
@@ -92,6 +93,7 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
+		localSetMined:         gocore.Config().GetBool("blockvalidation_localSetMined", false),
 	}
 
 	go ba.jobStore.Start()
@@ -768,21 +770,23 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 			return nil
 		})
 
-		g.Go(func() error {
-			timeStart := time.Now()
-			// add the transactions in this block to the txMeta block hashes
-			ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
+		if !ba.localSetMined {
+			g.Go(func() error {
+				timeStart := time.Now()
+				// add the transactions in this block to the txMeta block hashes
+				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
 
-			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
-				// TODO retry
-				ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
-			}
+				if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
+					// TODO retry
+					ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
+				}
 
-			ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
+				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
 
-			return nil
-		})
-		
+				return nil
+			})
+		}
+
 		if err = g.Wait(); err != nil {
 			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
 				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to invalidate block: %s", jobID, block.Header.Hash(), err)
