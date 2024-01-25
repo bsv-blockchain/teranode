@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
-	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -32,7 +31,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
-	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -112,7 +110,6 @@ func main() {
 	startBlockAssembly := shouldStart("BlockAssembly")
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
-	startTxMetaStore := shouldStart("TxMetaStore")
 	startPropagation := shouldStart("Propagation")
 	startMiner := shouldStart("Miner")
 	startAsset := shouldStart("Asset")
@@ -199,26 +196,6 @@ func main() {
 	}
 
 	var err error
-
-	// txmeta store
-	if startTxMetaStore {
-		txMetaStoreURL, _, found := gocore.Config().GetURL("txmeta_store")
-		if !found {
-			panic("no txmeta_store setting found")
-		}
-
-		if txMetaStoreURL.Scheme != "memory" {
-			logger.Warnf("txmeta grpc server only supports memory store, changing to memory store")
-			txMetaStoreURL, _ = url.ParseRequestURI("memory:///")
-		}
-
-		if err := sm.AddService("TxMetaStore", txmeta.New(
-			logger.New("txsts"),
-			txMetaStoreURL,
-		)); err != nil {
-			panic(err)
-		}
-	}
 
 	// asset service
 	if startAsset {

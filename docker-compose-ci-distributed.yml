@@ -51,7 +51,6 @@ services:
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "false"
       txstore: badger:///data/ubsv1/txstore
       subtreestore: badger:///data/ubsv1/subtreestore
     expose:
@@ -79,7 +78,6 @@ services:
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "false"
       txstore: badger:///data/ubsv2/txstore
       subtreestore: badger:///data/ubsv2/subtreestore
     expose:

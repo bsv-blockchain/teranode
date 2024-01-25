@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -33,17 +32,9 @@ func getTxMetaStore(logger ulogger.Logger) txmetastore.Store {
 		panic("no txmeta_store setting found")
 	}
 
-	if txMetaStoreURL.Scheme == "memory" {
-		// the memory store is reached through a grpc client
-		txMetaStore, err = txmeta.NewClient(context.Background(), logger)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		txMetaStore, err = txmetafactory.New(logger, txMetaStoreURL)
-		if err != nil {
-			panic(err)
-		}
+	txMetaStore, err = txmetafactory.New(logger, txMetaStoreURL)
+	if err != nil {
+		panic(err)
 	}
 
 	return txMetaStore

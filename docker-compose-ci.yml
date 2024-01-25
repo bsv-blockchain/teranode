@@ -61,7 +61,6 @@ services:
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "false"
       mine_initial_blocks: "true"
       startCoinbase: "true"
       coinbase_should_wait: "false"
