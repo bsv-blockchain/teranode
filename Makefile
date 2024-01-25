@@ -36,7 +36,7 @@ dev-dashboard:
 build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
-build-ubsv: build-dashboard set_debug_flags
+build-ubsv: set_debug_flags
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-chainintegrity

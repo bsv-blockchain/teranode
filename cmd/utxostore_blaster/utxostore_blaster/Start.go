@@ -15,7 +15,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -92,7 +91,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|null)")
 	flag.Parse()
 
 	logger := ulogger.New("utxostore_blaster")
@@ -100,27 +99,7 @@ func Start() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	password, _ := gocore.Config().Get("redis_password", "TfocK5PCg7")
-
 	switch storeType {
-	case "redis":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisClient(logger, u, password)
-		}
-		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-ring":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisRing(logger, u)
-		}
-		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-cluster":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisCluster(logger, u)
-		}
-		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
 	case "memory":
 		storeFn = func() (utxo.Interface, error) {
 			return memory.New(false), nil
