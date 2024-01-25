@@ -1,70 +1,71 @@
-package shared
+package lustre
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
-type Shared struct {
+type s3Store interface {
+	Get(ctx context.Context, key []byte) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
+}
+
+type Lustre struct {
 	paths         []string
 	logger        ulogger.Logger
 	persistSubDir string
+	s3Client      s3Store
 }
 
-func New(logger ulogger.Logger, dir string, persistDir string, multiDirs ...[]string) (*Shared, error) {
-	logger = logger.New("file")
+func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string) (*Lustre, error) {
+	logger = logger.New("lustre")
 
-	sharedStore := &Shared{
+	s3Client, err := s3.New(logger, s3Url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create s3 client: %w", err)
+	}
+
+	lustreStore := &Lustre{
 		paths:         []string{dir},
 		logger:        logger,
 		persistSubDir: filepath.Clean(persistDir) + "/",
+		s3Client:      s3Client,
 	}
 
-	if len(multiDirs) > 0 {
-		sharedStore.paths = multiDirs[0]
-		// create the directories if they don't exist
-		for _, d := range multiDirs[0] {
-			if err := os.MkdirAll(d, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create directory: %w", err)
-			}
-			if err := os.MkdirAll(filepath.Clean(d+"/"+persistDir), 0755); err != nil {
-				return nil, fmt.Errorf("failed to create directory: %w", err)
-			}
-		}
-	} else {
-		// create directory if not exists
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create directory: %w", err)
-		}
-		if err := os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
-			return nil, fmt.Errorf("failed to create directory: %w", err)
-		}
+	// create directory if not exists
+	if err = os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+	if err = os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	return sharedStore, nil
+	return lustreStore, nil
 }
 
-func (s *Shared) Health(_ context.Context) (int, string, error) {
-	return 0, "Shared blob Store", nil
+func (s *Lustre) Health(_ context.Context) (int, string, error) {
+	return 0, "Lustre blob Store", nil
 }
 
-func (s *Shared) Close(_ context.Context) error {
+func (s *Lustre) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *Shared) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
 	defer reader.Close()
 
@@ -87,7 +88,7 @@ func (s *Shared) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	return nil
 }
 
-func (s *Shared) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
+func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	fileName, err := s.getFileNameForSet(hash, opts)
@@ -103,7 +104,7 @@ func (s *Shared) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	return nil
 }
 
-func (s *Shared) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
+func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
 	filename := s.filename(hash)
 	persistedFilename := s.getFileNameForPersist(filename)
 	if ttl <= 0 {
@@ -121,7 +122,7 @@ func (s *Shared) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error
 	return os.Rename(persistedFilename, filename)
 }
 
-func (s *Shared) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
+func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, error) {
 	fileName := s.filename(hash)
 
 	file, err := os.Open(fileName)
@@ -131,7 +132,15 @@ func (s *Shared) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, err
 			file, err = os.Open(s.getFileNameForPersist(fileName))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					return nil, ubsverrors.ErrNotFound
+					// check s3
+					fileReader, err := s.s3Client.GetIoReader(ctx, hash)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return nil, ubsverrors.ErrNotFound
+						}
+						return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+					}
+					return fileReader, nil
 				}
 				return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 			}
@@ -143,7 +152,7 @@ func (s *Shared) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, err
 	return file, nil
 }
 
-func (s *Shared) Get(_ context.Context, hash []byte) ([]byte, error) {
+func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
@@ -154,11 +163,19 @@ func (s *Shared) Get(_ context.Context, hash []byte) ([]byte, error) {
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					return nil, ubsverrors.ErrNotFound
+					// check s3
+					bytes, err = s.s3Client.Get(ctx, hash)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return nil, ubsverrors.ErrNotFound
+						}
+						return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+					}
+					return bytes, nil
 				}
 				return nil, fmt.Errorf("failed to read data from file: %w", err)
 			}
-			return bytes, err
+			return bytes, nil
 		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}
@@ -166,7 +183,7 @@ func (s *Shared) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
-func (s *Shared) Exists(_ context.Context, hash []byte) (bool, error) {
+func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
@@ -189,7 +206,7 @@ func (s *Shared) Exists(_ context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *Shared) Del(_ context.Context, hash []byte) error {
+func (s *Lustre) Del(_ context.Context, hash []byte) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
@@ -204,13 +221,13 @@ func (s *Shared) Del(_ context.Context, hash []byte) error {
 	return nil
 }
 
-func (s *Shared) filename(hash []byte) string {
+func (s *Lustre) filename(hash []byte) string {
 	// determine path to use, based on the first byte of the hash and the number of paths
 	path := s.paths[hash[0]%byte(len(s.paths))]
 	return fmt.Sprintf("%s/%x", path, bt.ReverseBytes(hash))
 }
 
-func (s *Shared) getFileNameForPersist(filename string) string {
+func (s *Lustre) getFileNameForPersist(filename string) string {
 	// persisted files are stored in a subdirectory
 	// add the persist dir before the file in the filepath
 	fileParts := strings.Split(filename, string(os.PathSeparator))
@@ -220,7 +237,7 @@ func (s *Shared) getFileNameForPersist(filename string) string {
 	return filepath.Clean("/" + filepath.Join(fileParts...))
 }
 
-func (s *Shared) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
+func (s *Lustre) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
 	fileOptions := options.NewSetOptions(opts...)

@@ -3,11 +3,10 @@ package blob
 import (
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/bitcoin-sv/ubsv/stores/blob/shared"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
@@ -45,6 +44,15 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store, err = s3.New(logger, storeUrl, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
+		}
+	case "lustre":
+		// storeUrl is an s3 url
+		// lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3
+		dir := storeUrl.Query().Get("localDir")
+		persistDir := storeUrl.Query().Get("localPersist")
+		store, err = lustre.New(logger, storeUrl, dir, persistDir)
+		if err != nil {
+			return nil, fmt.Errorf("error creating lustre blob store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
@@ -88,15 +96,6 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
 				return nil, errors.Join(errors.New("failed to create badger store"), err)
-			}
-		} else if ttlStoreType == "shared" {
-			persist := storeUrl.Query().Get("persist")
-			if persist == "" {
-				return nil, errors.New("shared store requires persist path")
-			}
-			ttlStore, err = shared.New(logger, localTTLStorePath, persist, localTTLStorePaths)
-			if err != nil {
-				return nil, errors.Join(errors.New("failed to create shared store"), err)
 			}
 		} else {
 			// default is file store
