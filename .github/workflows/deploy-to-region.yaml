@@ -24,7 +24,7 @@ on:
 jobs:
   deploy-to-region:
     name: Deploy to EKS
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 

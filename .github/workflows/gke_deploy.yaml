@@ -17,7 +17,7 @@ env:
 jobs:
   send_msg:
     name: Deploy EKS
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: tag
         run: echo "Image repo/tag is ${{ env.ECR_URL }}/${{ inputs.repo }}:${{ inputs.tag }}"
