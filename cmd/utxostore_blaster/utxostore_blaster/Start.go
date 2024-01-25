@@ -8,6 +8,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,7 @@ var (
 	workerCount                      int
 	storeType                        string
 	storeFn                          func() (utxo.Interface, error)
+	once                             sync.Once
 )
 
 func Init() {
@@ -112,8 +114,16 @@ func Start() {
 		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
 	case "aerospike":
 		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return aerospike.New(logger, u)
+			var store *aerospike.Store
+			var err error
+
+			once.Do(func() {
+				u, _, _ := gocore.Config().GetURL("utxostore")
+				store, err = aerospike.New(logger, u)
+			})
+
+			return store, err
+
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
 	default:
