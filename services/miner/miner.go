@@ -125,7 +125,7 @@ func (m *Miner) Start(ctx context.Context) error {
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
-						m.logger.Errorf("[Miner] %v", err)
+						m.logger.Warnf("[Miner] %v", err)
 					}
 				} else {
 					// start the timer now, so we don't have to wait for the next tick
