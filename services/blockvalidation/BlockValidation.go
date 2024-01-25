@@ -93,12 +93,13 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 					}
 
 					if notification.Type == model.NotificationType_Block {
-						logger.Infof("[BlockValidation:localSetMined] block mined: %s", notification.Hash.String())
+						startTime := time.Now()
+						logger.Infof("[BlockValidation:localSetMined][%s] block localSetTxMined", notification.Hash.String())
 						err = bv.localSetTxMined(ctx, notification.Hash)
 						if err != nil {
-							logger.Errorf("[BlockValidation][%s] failed to set tx mined: %s", notification.Hash.String(), err)
+							logger.Errorf("[BlockValidation][%s] failed localSetTxMined: %s", notification.Hash.String(), err)
 						}
-
+						logger.Infof("[BlockValidation:localSetMined][%s] block localSetTxMined DONE in %s", notification.Hash.String(), time.Since(startTime))
 					}
 				}
 			}
@@ -128,16 +129,21 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 		return fmt.Errorf("[localSetMined][%s] failed to get block header id: %v", blockHash.String(), err)
 	}
 
+	startTime := time.Now()
+	u.logger.Infof("[localSetMined][%s] get subtrees", blockHash.String())
 	blockSubtrees, err = block.GetSubtrees(u.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("[localSetMined][%s] failed to get subtrees from block: %v", blockHash.String(), err)
 	}
+	u.logger.Infof("[localSetMined][%s] get subtrees DONE in %s", blockHash.String(), time.Since(startTime))
 
 	// add the transactions in this block to the txMeta block hashes
+	startTime = time.Now()
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
 	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
 		return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
 	}
+	u.logger.Infof("[localSetMined][%s] update tx mined for block DONE in %s", blockHash.String(), time.Since(startTime))
 
 	return nil
 }
