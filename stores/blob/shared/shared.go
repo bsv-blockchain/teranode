@@ -109,11 +109,7 @@ func (s *Shared) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error
 	if ttl <= 0 {
 		// check whether the persisted file exists
 		_, err := os.Stat(persistedFilename)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// nothing to do
-				return nil
-			}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("unable to stat file %q, %v", persistedFilename, err)
 		}
 
