@@ -1,4 +1,4 @@
-package store
+package _factory
 
 import (
 	"fmt"

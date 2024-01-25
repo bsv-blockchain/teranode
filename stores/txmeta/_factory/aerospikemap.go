@@ -1,6 +1,6 @@
 // //go:build aerospike
 
-package store
+package _factory
 
 import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/aerospikemap"

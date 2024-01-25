@@ -1,6 +1,6 @@
 // //go:build aerospike
 
-package store
+package _factory
 
 import (
 	"net/url"

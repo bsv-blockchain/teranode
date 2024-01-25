@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/services/txmeta"
-	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
@@ -41,7 +41,7 @@ func getTxMetaStore(logger ulogger.Logger) txmetastore.Store {
 			panic(err)
 		}
 	} else {
-		txMetaStore, err = store.New(logger, txMetaStoreURL)
+		txMetaStore, err = txmetafactory.New(logger, txMetaStoreURL)
 		if err != nil {
 			panic(err)
 		}
@@ -62,7 +62,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 	if !found {
 		panic("no utxostore setting found")
 	}
-	utxoStore, err = utxo_factory.NewStore(ctx, logger, utxoStoreURL, "main")
+	utxoStore, err = utxofactory.NewStore(ctx, logger, utxoStoreURL, "main")
 	if err != nil {
 		panic(err)
 	}

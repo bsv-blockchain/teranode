@@ -5,9 +5,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/txmeta/store"
 	"github.com/bitcoin-sv/ubsv/services/txmeta/txmeta_api"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -39,7 +39,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (u *Server) Init(_ context.Context) (err error) {
-	u.store, err = store.New(u.logger, u.txMetaStoreURL)
+	u.store, err = _factory.New(u.logger, u.txMetaStoreURL)
 	if err != nil {
 		return err
 	}
