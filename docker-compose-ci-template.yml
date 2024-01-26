@@ -37,6 +37,42 @@ services:
       retries: 5
 
   # Define node-specific configurations as extensions
+  p2p-bootstrap-1:
+    build:
+      context: ./modules/p2pBootstrap
+      dockerfile: local.Dockerfile
+    environment:
+      P2P_BOOTSTRAP_PORT: 9901
+      SETTINGS_CONTEXT: "docker"
+    networks:
+      - ubsv-network
+    ports:
+      - "9901:9901"
+
+  p2p-bootstrap-2:
+    build:
+      context: ./modules/p2pBootstrap
+      dockerfile: local.Dockerfile
+    environment:
+      P2P_BOOTSTRAP_PORT: 9901
+      SETTINGS_CONTEXT: "docker"
+    networks:
+      - ubsv-network
+    ports:
+      - "9901:9901"
+
+  p2p-bootstrap-3:
+    build:
+      context: ./modules/p2pBootstrap
+      dockerfile: local.Dockerfile
+    environment:
+      P2P_BOOTSTRAP_PORT: 9901
+      SETTINGS_CONTEXT: "docker"
+    networks:
+      - ubsv-network
+    ports:
+      - "9901:9901"
+
   ubsv-1:
     <<: *ubsv-base
     command: ["./ubsv", "-miner=1", "-coinbase=0"]
@@ -359,18 +395,6 @@ services:
     volumes:
       - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
-
-  p2p-bootstrap-1:
-    build:
-      context: ./modules/p2pBootstrap
-      dockerfile: local.Dockerfile
-    environment:
-      P2P_BOOTSTRAP_PORT: 9901
-      SETTINGS_CONTEXT: "docker"
-    networks:
-      - ubsv-network
-    ports:
-      - "9901:9901"
 
 
 # Add more ubsv nodes as needed
