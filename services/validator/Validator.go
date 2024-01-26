@@ -53,6 +53,8 @@ type Validator struct {
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store, blockValidationClient blockValidationTxMetaClient) (Interface, error) {
+	initPrometheusMetrics()
+
 	ba := blockassembly.NewClient(ctx, logger)
 	enabled := gocore.Config().GetBool("blockvalidation_txMetaCacheBatcherEnabled", true)
 
