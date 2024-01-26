@@ -72,7 +72,7 @@
   <Table
     name="nodes"
     {variant}
-    idField="height"
+    idField="base_url"
     {colDefs}
     {data}
     pagination={{

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { Chart, ChartContainer } from '$lib/components/chart'
   import Card from '$internal/components/card/index.svelte'
   import RangeToggle from '$internal/components/range-toggle/index.svelte'
@@ -43,20 +42,14 @@
   $: if (data) {
     graphObj = getGraphObj(t, data)
   }
-
-  onMount(() => {
-    let from = new Date().getTime() - rangeMillis
-
-    getData(from)
-  })
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={true} headerPadding="20px 24px 10px 24px">
-  <div slot="header-tools">
+  <svelte:fragment slot="header-tools">
     <RangeToggle bind:value={rangeMillis} />
-  </div>
+  </svelte:fragment>
   {#if graphObj?.graphOptions}
-    <ChartContainer bind:renderKey height="500px">
+    <ChartContainer bind:renderKey height="530px">
       <Chart options={graphObj?.graphOptions} {renderKey} />
     </ChartContainer>
   {/if}

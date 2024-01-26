@@ -51,7 +51,7 @@
       style="--input-size-md-border-radius:8px"
       autocomplete="off"
       bind:value={searchValue}
-      width={273}
+      width={330}
       focusWidth={570}
       icon={searchValue === lastSearchCalled ? 'icon-search-line' : 'icon-search-solid'}
       placeholder={$i18n.t('comp.toolbar.placeholder')}

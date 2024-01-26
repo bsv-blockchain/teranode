@@ -37,7 +37,7 @@ export const input = {
     weight: fontWeight.regular,
   },
   placeholder: {
-    color: 'rgba(255, 255, 255, 0.3)',
+    color: '#CACACA',
   },
   size: {
     ...sizes.reduce(

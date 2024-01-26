@@ -102,6 +102,7 @@
 <FootnoteContainer {footnote} {error} {disabled} stretch={false}>
   <LabelContainer
     variant="body"
+    {name}
     {size}
     {disabled}
     {label}
@@ -131,6 +132,7 @@
             {checked}
             on:focus={() => onFocusAction('focus')}
             on:blur={() => onFocusAction('blur')}
+            aria-labelledby={`${name}_label`}
           />
           <Icon
             class="icon"

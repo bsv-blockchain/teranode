@@ -164,6 +164,7 @@
 <style>
   .btns {
     display: flex;
+    gap: 4px;
   }
 
   .content {

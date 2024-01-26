@@ -1,7 +1,7 @@
 <script lang="ts" context="module">
-  import * as echarts from 'echarts'
+  import * as echarts from 'echarts/core'
 
-  export type EChartsOptions = echarts.EChartsOption
+  export type EChartsOptions = any //echarts.EChartsOption
   export type EChartsTheme = string | object
   export type EChartsRenderer = 'canvas' | 'svg'
 
@@ -51,7 +51,7 @@
 </script>
 
 <script lang="ts">
-  export let options: echarts.EChartsOption
+  export let options: EChartsOptions //echarts.EChartsOption
   export let { theme, renderer } = DEFAULT_OPTIONS
   export let renderKey = ''
 </script>

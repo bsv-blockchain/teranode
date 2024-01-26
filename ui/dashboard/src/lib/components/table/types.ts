@@ -3,3 +3,10 @@ export interface ColDef {
   name?: string
   props: any
 }
+
+export enum TableVariant {
+  div = 'div',
+  standard = 'standard',
+}
+
+export type TableVariantType = `${TableVariant}`

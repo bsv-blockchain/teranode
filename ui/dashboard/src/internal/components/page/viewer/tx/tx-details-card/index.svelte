@@ -62,22 +62,6 @@
       <Icon name="icon-reeverse-line" size={15} />
     </div>
   </div>
-  <!-- <div class="btns" slot="header-tools">
-    <Button
-      size="small"
-      icon="icon-chevron-left-line"
-      ico={true}
-      disabled={!d?.previousblockhash}
-      on:click={() => navToTx(d.previousblockhash)}
-    />
-    <Button
-      size="small"
-      icon="icon-chevron-right-line"
-      ico={true}
-      disabled={!d?.nextblockhash}
-      on:click={() => navToTx(d.nextblockhash)}
-    />
-  </div> -->
   <div class="content">
     <div class="tabs">
       <Button
@@ -98,15 +82,6 @@
     {#if isOverview}
       <div class="fields" class:collapse>
         <div>
-          <!-- <div class="entry">
-            <div class="label">{t(`${fieldKey}.txid`)}</div>
-            <div class="value copy-link">
-              <a href={`/viewer/tx/${d?.txid}/`}>{d?.txid}</a>
-              <div class="icon" on:click={() => onCopyHash(d?.txid)}>
-                <Icon name="icon-duplicate-line" size={18} />
-              </div>
-            </div>
-          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.block`)} FIX</div>
             <div class="value copy-link">
@@ -156,10 +131,6 @@
 </Card>
 
 <style>
-  .btns {
-    display: flex;
-  }
-
   .content {
     display: flex;
     flex-direction: column;
