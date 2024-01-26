@@ -68,7 +68,11 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
 		sendBatch := func(batch []*txmeta.Data) {
-			defer blockValidationStat.AddTime(gocore.CurrentTime())
+			startTime := gocore.CurrentTime()
+			defer func() {
+				blockValidationStat.AddTime(startTime)
+				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()))
+			}()
 
 			// add data to block validation cache
 			if err := validator.blockValidationClient.SetTxMeta(ctx, batch); err != nil {

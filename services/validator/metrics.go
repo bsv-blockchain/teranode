@@ -6,11 +6,12 @@ import (
 )
 
 var (
-	prometheusHealth                prometheus.Counter
-	prometheusProcessedTransactions prometheus.Counter
-	prometheusInvalidTransactions   prometheus.Counter
-	prometheusTransactionDuration   prometheus.Histogram
-	prometheusTransactionSize       prometheus.Histogram
+	prometheusHealth                  prometheus.Counter
+	prometheusProcessedTransactions   prometheus.Counter
+	prometheusInvalidTransactions     prometheus.Counter
+	prometheusTransactionDuration     prometheus.Histogram
+	prometheusTransactionSize         prometheus.Histogram
+	prometheusValidatorSetTxMetaCache prometheus.Histogram
 )
 
 var prometheusMetricsInitialised = false
@@ -53,6 +54,13 @@ func initPrometheusMetrics() {
 			Namespace: "validator",
 			Name:      "transactions_size",
 			Help:      "Size of transactions processed by the validator service",
+		},
+	)
+	prometheusValidatorSetTxMetaCache = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "validator",
+			Name:      "validator_set_tx_meta_cache",
+			Help:      "Duration of validator set tx meta cache",
 		},
 	)
 
