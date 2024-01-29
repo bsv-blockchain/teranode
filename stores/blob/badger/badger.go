@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
@@ -198,7 +199,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 		data, err := tx.Get(hash)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return fmt.Errorf("key not found: %w", err)
+				return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "badger key not found: %w", err)
 			}
 			traceSpan.RecordError(err)
 			return err

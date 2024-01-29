@@ -53,7 +53,7 @@ func New(logger utils.Logger) *FolderManager {
 		path := filepath.Join(binsPath, fmt.Sprintf("%x", i))
 
 		if err := os.MkdirAll(path, os.ModePerm); err != nil {
-			logger.Fatalf("Failed to create folder %q: %w", path, err)
+			logger.Fatalf("Failed to create folder %q: %v", path, err)
 		}
 
 		f := &folder{
@@ -102,7 +102,7 @@ func (f *folder) ttl() {
 			// Get all .ttl file in path
 			files, err := findFilesByExtension(f.path, ".ttl")
 			if err != nil {
-				f.logger.Warnf("Could not get TTL files: %w", err)
+				f.logger.Warnf("Could not get TTL files: %v", err)
 				continue
 			}
 
@@ -114,7 +114,7 @@ func (f *folder) ttl() {
 				for _, file := range files {
 					b, err := os.ReadFile(file)
 					if err != nil {
-						f.logger.Warnf("Could not read TTL file %q: %w", file, err)
+						f.logger.Warnf("Could not read TTL file %q: %v", file, err)
 						continue
 					}
 
@@ -123,7 +123,7 @@ func (f *folder) ttl() {
 					if expiry <= nowMillis {
 						filename := file[:len(file)-4]
 						if err := f.expireFiles(filename); err != nil {
-							f.logger.Warnf("Could not expire files for %q: %w", filename, err)
+							f.logger.Warnf("Could not expire files for %q: %v", filename, err)
 							continue
 						}
 					}
@@ -172,7 +172,7 @@ func (f *folder) expireFiles(filename string) error {
 				if errors.Is(err, os.ErrNotExist) {
 					f.logger.Debugf("Removed %s - not found", newName)
 				} else {
-					f.logger.Warnf("could not remove %q: %w", newName, err)
+					f.logger.Warnf("could not remove %q: %v", newName, err)
 					return
 				}
 			}

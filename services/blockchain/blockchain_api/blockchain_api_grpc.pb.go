@@ -29,6 +29,7 @@ const (
 	BlockchainAPI_GetLastNBlocks_FullMethodName         = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
 	BlockchainAPI_GetSuitableBlock_FullMethodName       = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
 	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
+	BlockchainAPI_GetNextWorkRequired_FullMethodName    = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
 	BlockchainAPI_GetBlockExists_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockExists"
 	BlockchainAPI_GetBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
@@ -55,6 +56,7 @@ type BlockchainAPIClient interface {
 	GetLastNBlocks(ctx context.Context, in *GetLastNBlocksRequest, opts ...grpc.CallOption) (*GetLastNBlocksResponse, error)
 	GetSuitableBlock(ctx context.Context, in *GetSuitableBlockRequest, opts ...grpc.CallOption) (*GetSuitableBlockResponse, error)
 	GetHashOfAncestorBlock(ctx context.Context, in *GetHashOfAncestorBlockRequest, opts ...grpc.CallOption) (*GetHashOfAncestorBlockResponse, error)
+	GetNextWorkRequired(ctx context.Context, in *GetNextWorkRequiredRequest, opts ...grpc.CallOption) (*GetNextWorkRequiredResponse, error)
 	GetBlockExists(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
@@ -141,6 +143,15 @@ func (c *blockchainAPIClient) GetSuitableBlock(ctx context.Context, in *GetSuita
 func (c *blockchainAPIClient) GetHashOfAncestorBlock(ctx context.Context, in *GetHashOfAncestorBlockRequest, opts ...grpc.CallOption) (*GetHashOfAncestorBlockResponse, error) {
 	out := new(GetHashOfAncestorBlockResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetHashOfAncestorBlock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetNextWorkRequired(ctx context.Context, in *GetNextWorkRequiredRequest, opts ...grpc.CallOption) (*GetNextWorkRequiredResponse, error) {
+	out := new(GetNextWorkRequiredResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetNextWorkRequired_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +285,7 @@ type BlockchainAPIServer interface {
 	GetLastNBlocks(context.Context, *GetLastNBlocksRequest) (*GetLastNBlocksResponse, error)
 	GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error)
 	GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error)
+	GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error)
 	GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
@@ -314,6 +326,9 @@ func (UnimplementedBlockchainAPIServer) GetSuitableBlock(context.Context, *GetSu
 }
 func (UnimplementedBlockchainAPIServer) GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetHashOfAncestorBlock not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNextWorkRequired not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockExists not implemented")
@@ -498,6 +513,24 @@ func _BlockchainAPI_GetHashOfAncestorBlock_Handler(srv interface{}, ctx context.
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetHashOfAncestorBlock(ctx, req.(*GetHashOfAncestorBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetNextWorkRequired_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNextWorkRequiredRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetNextWorkRequired(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetNextWorkRequired_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetNextWorkRequired(ctx, req.(*GetNextWorkRequiredRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -723,6 +756,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHashOfAncestorBlock",
 			Handler:    _BlockchainAPI_GetHashOfAncestorBlock_Handler,
+		},
+		{
+			MethodName: "GetNextWorkRequired",
+			Handler:    _BlockchainAPI_GetNextWorkRequired_Handler,
 		},
 		{
 			MethodName: "GetBlockExists",

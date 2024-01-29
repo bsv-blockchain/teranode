@@ -131,7 +131,7 @@ func (v *Server) Start(ctx context.Context) error {
 		g.Go(func() error {
 			err := v.grpcServer.Start(ctx, v.grpcAddr)
 			if err != nil {
-				v.logger.Errorf("[Asset] error in grpc server: %w", err)
+				v.logger.Errorf("[Asset] error in grpc server: %v", err)
 			}
 			return err
 		})
@@ -227,7 +227,7 @@ func (v *Server) Start(ctx context.Context) error {
 		g.Go(func() error {
 			err := v.httpServer.Start(ctx, v.httpAddr)
 			if err != nil {
-				v.logger.Errorf("[Asset] error in http server: %w", err)
+				v.logger.Errorf("[Asset] error in http server: %v", err)
 			}
 			return err
 		})

@@ -61,7 +61,6 @@ services:
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      startTxMetaStore: "false"
     expose:
       - 8081-8093
     ports:
@@ -83,7 +82,6 @@ services:
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      startTxMetaStore: "false"
 
     expose:
       - 8081-8093
@@ -106,7 +104,6 @@ services:
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
-      startTxMetaStore: "false"
     expose:
       - 8081-8093
     ports:

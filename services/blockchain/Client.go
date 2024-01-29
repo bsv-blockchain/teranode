@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -130,7 +131,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 		Hash: blockHash[:],
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.Header)
@@ -156,13 +157,16 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 }
 
 func (c *Client) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	return c.client.GetBlockStats(ctx, &emptypb.Empty{})
+	resp, err := c.client.GetBlockStats(ctx, &emptypb.Empty{})
+	return resp, ubsverrors.UnwrapGRPC(err)
 }
 
 func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	return c.client.GetBlockGraphData(ctx, &blockchain_api.GetBlockGraphDataRequest{
+	resp, err := c.client.GetBlockGraphData(ctx, &blockchain_api.GetBlockGraphDataRequest{
 		PeriodMillis: periodMillis,
 	})
+
+	return resp, ubsverrors.UnwrapGRPC(err)
 }
 
 func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -172,7 +176,7 @@ func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool
 		FromHeight:     fromHeight,
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	return resp.Blocks, nil
@@ -182,7 +186,7 @@ func (c Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash)
 		Hash: blockHash[:],
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	return resp.Block, nil
@@ -193,7 +197,7 @@ func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash
 		Depth: uint32(depth),
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 	hash, err := chainhash.NewHash(resp.Hash)
 	if err != nil {
@@ -201,13 +205,26 @@ func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash
 	}
 	return hash, nil
 }
+func (c Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
+	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return nil, err
+	}
+	bits := model.NewNBitFromSlice(resp.Bits)
+	if err != nil {
+		return nil, err
+	}
+	return &bits, nil
+}
 
 func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
 	})
 	if err != nil {
-		return false, err
+		return false, ubsverrors.UnwrapGRPC(err)
 	}
 
 	return resp.Exists, nil
@@ -216,7 +233,7 @@ func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (
 func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
@@ -238,8 +255,9 @@ func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
+
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
@@ -263,7 +281,7 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 		NumberOfHeaders: numberOfHeaders,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
@@ -283,7 +301,7 @@ func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) 
 		BlockHash: blockHash.CloneBytes(),
 	})
 
-	return err
+	return ubsverrors.UnwrapGRPC(err)
 }
 
 func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
@@ -292,7 +310,7 @@ func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash
 		NumberOfHeaders: numberOfHeaders,
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	return resp.Ids, nil
@@ -369,7 +387,7 @@ func (c Client) GetState(ctx context.Context, key string) ([]byte, error) {
 		Key: key,
 	})
 	if err != nil {
-		return nil, err
+		return nil, ubsverrors.UnwrapGRPC(err)
 	}
 
 	return resp.Data, nil

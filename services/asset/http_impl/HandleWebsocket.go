@@ -56,7 +56,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 					Type:      asset_api.Type_PING.String(),
 				}, "", "  ")
 				if err != nil {
-					h.logger.Errorf("Error marshaling notification: %w", err)
+					h.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 
@@ -78,7 +78,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 					BaseURL:   notification.BaseUrl,
 				}, "", "  ")
 				if err != nil {
-					h.logger.Errorf("Error marshaling notification: %w", err)
+					h.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 

@@ -20,6 +20,9 @@ const (
 
 func main() {
 
+	stats := gocore.Config().Stats()
+	fmt.Printf("STATS\n%s\n", stats)
+
 	dhtProtocolIdStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
 	if !ok {
 		panic(fmt.Errorf("error getting p2p_dht_protocol_id"))

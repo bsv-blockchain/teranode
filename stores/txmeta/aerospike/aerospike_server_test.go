@@ -10,6 +10,7 @@ import (
 
 	aero "github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -35,7 +36,7 @@ func TestAerospike(t *testing.T) {
 
 	// ubsv db client
 	var db *Store
-	db, err = New(aeroURL)
+	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
 	parentTx := bt.NewTx()
@@ -194,7 +195,7 @@ func TestAerospike(t *testing.T) {
 		time.Sleep(2 * time.Second)
 
 		_, err = db.Get(context.Background(), hash)
-		require.ErrorIs(t, err, txmeta.ErrNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
 	})
 
 	t.Run("aerospike set mined multi", func(t *testing.T) {
@@ -230,7 +231,7 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
 
 		value, err = db.Get(context.Background(), blockHash)
-		require.ErrorIs(t, err, txmeta.ErrNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
 	})
 
 }

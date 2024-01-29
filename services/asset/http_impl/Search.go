@@ -4,16 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
-
-const NOT_FOUND = "not found"
 
 type res struct {
 	Type string `json:"type"`
@@ -42,7 +40,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if the hash is a block...
 		header, _, err := h.repository.GetBlockHeader(c.Request().Context(), hash)
-		if err != nil && !strings.Contains(err.Error(), NOT_FOUND) {
+		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) { // We return an error except if it's a not found error
 			return sendError(c, http.StatusBadRequest, 3, fmt.Errorf("error searching for block: %w", err))
 		}
 
@@ -53,7 +51,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if it's a subtree
 		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
-		if err != nil && !strings.Contains(err.Error(), NOT_FOUND) {
+		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) {
 			return sendError(c, http.StatusBadRequest, 4, fmt.Errorf("error searching for subtree: %w", err))
 		}
 
@@ -64,7 +62,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
-		if err != nil && !errors.Is(err, txmeta.ErrNotFound) {
+		if err != nil && !errors.Is(err, txmeta.NewErrTxmetaNotFound(hash)) {
 			return sendError(c, http.StatusBadRequest, 5, fmt.Errorf("error searching for tx: %w", err))
 		}
 
@@ -81,10 +79,10 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		if u != nil {
 			// It's a utxo
-			return c.JSONPretty(200, &res{"utxo", hash.String()}, "  ")
+			return c.JSONPretty(http.StatusOK, &res{"utxo", hash.String()}, "  ")
 		}
 
-		return c.String(404, "not found")
+		return c.String(http.StatusNotFound, "not found")
 	}
 
 	// TODO: Check if it's a block height (number)

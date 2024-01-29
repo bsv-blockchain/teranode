@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -99,12 +99,12 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 					UtxoHash:      utxoHash,
 				}
 
-				if utxoRes != nil && utxoRes.Status != int(utxostore_api.Status_NOT_FOUND) {
-					utxoItem.Status = utxostore_api.Status(utxoRes.Status).String()
+				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
+					utxoItem.Status = utxo.Status(utxoRes.Status).String()
 					utxoItem.SpendingTxID = utxoRes.SpendingTxID
 					utxoItem.LockTime = utxoRes.LockTime
 				} else {
-					utxoItem.Status = utxostore_api.Status_NOT_FOUND.String()
+					utxoItem.Status = utxo.Status_NOT_FOUND.String()
 				}
 
 				// Send the UTXO to the channel.

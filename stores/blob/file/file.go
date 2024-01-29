@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -90,7 +91,7 @@ func (s *File) loadTTLs() error {
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
 			if err != nil {
-				s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+				s.logger.Warnf("failed to parse ttl from %s: %v", fileName, err)
 				continue
 			}
 
@@ -221,7 +222,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error
 	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, options.ErrNotFound
+			return nil, ubsverrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 	}
@@ -236,7 +237,7 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, options.ErrNotFound
+			return nil, ubsverrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	aero "github.com/aerospike/aerospike-client-go/v6"
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -79,7 +78,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+		assert.Equal(t, int(utxostore.Status_OK), resp.Status)
 		assert.Equal(t, uint32(0), resp.LockTime)
 
 		err = db.Spend(context.Background(), spends)
@@ -87,7 +86,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		assert.Equal(t, int(utxostore.Status_SPENT), resp.Status)
 		assert.Equal(t, uint32(0), resp.LockTime)
 		assert.Equal(t, hash, resp.SpendingTxID)
 	})
@@ -108,7 +107,7 @@ func TestAerospike(t *testing.T) {
 		}
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxostore_api.Status_LOCKED), resp.Status)
+		assert.Equal(t, int(utxostore.Status_LOCKED), resp.Status)
 		assert.Equal(t, uint32(123), resp.LockTime)
 	})
 
@@ -157,7 +156,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
 		require.Equal(t, hash, resp.SpendingTxID)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
@@ -182,7 +181,7 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
 		require.Equal(t, hash, resp.SpendingTxID)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)

@@ -84,7 +84,6 @@ services:
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
       startTxStore: "true"
       txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
@@ -124,7 +123,6 @@ services:
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      startTxMetaStore: "false"
       startTxStore: "false"
       mine_initial_blocks_count: 200
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -161,7 +159,6 @@ services:
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
       startTxStore: "true"
       txstore: file:///data/ubsv2/txstore
       subtreestore: file:///data/ubsv2/subtreestore
@@ -200,7 +197,6 @@ services:
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      startTxMetaStore: "false"
       startTxStore: "false"
       # txstore: badger:///data/ubsv2/txstore
       # subtreestore: badger:///data/ubsv2/subtreestore

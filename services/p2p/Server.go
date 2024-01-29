@@ -563,18 +563,18 @@ func (s *Server) discoverPeers(ctx context.Context, tn []string, usePrivateDht b
 		for _, ba := range bootstrapAddresses {
 			bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 			if err != nil {
-				panic(err)
+				panic(fmt.Sprintf("failed to create bootstrap multiaddress %s: %v", ba, err))
 			}
 
 			peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
 			if err != nil {
-				panic(err)
+				panic(fmt.Sprintf("failed to get peerInfo from  %s: %v", ba, err))
 			}
 
 			// Connect to the bootstrap node.
 			err = s.host.Connect(ctx, *peerInfo)
 			if err != nil {
-				panic(err)
+				panic(fmt.Sprintf("failed to connect to bootstrap address %s: %v", ba, err))
 			}
 		}
 		dhtProtocolID := protocol.ID(dhtProtocolIdStr)

@@ -3,18 +3,18 @@ package blockchain
 import (
 	"context"
 	"database/sql"
-	"errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (
-	ErrNotFound = errors.New("not found")
+	ErrNotFound = ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "not found")
 
 	// ErrBlockNotFound is returned when a block is not found
-	ErrBlockNotFound = errors.New("block not found")
+	ErrBlockNotFound = ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "block not found")
 )
 
 type Store interface {

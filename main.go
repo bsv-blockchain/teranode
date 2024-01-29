@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
-	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -32,11 +31,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
-	"github.com/bitcoin-sv/ubsv/services/seeder"
-	"github.com/bitcoin-sv/ubsv/services/txmeta"
-	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -115,10 +110,7 @@ func main() {
 	startBlockAssembly := shouldStart("BlockAssembly")
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
-	startUtxoStore := shouldStart("UtxoStore")
-	startTxMetaStore := shouldStart("TxMetaStore")
 	startPropagation := shouldStart("Propagation")
-	startSeeder := shouldStart("Seeder")
 	startMiner := shouldStart("Miner")
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
@@ -205,26 +197,6 @@ func main() {
 
 	var err error
 
-	// txmeta store
-	if startTxMetaStore {
-		txMetaStoreURL, _, found := gocore.Config().GetURL("txmeta_store")
-		if !found {
-			panic("no txmeta_store setting found")
-		}
-
-		if txMetaStoreURL.Scheme != "memory" {
-			logger.Warnf("txmeta grpc server only supports memory store, changing to memory store")
-			txMetaStoreURL, _ = url.ParseRequestURI("memory:///")
-		}
-
-		if err := sm.AddService("TxMetaStore", txmeta.New(
-			logger.New("txsts"),
-			txMetaStoreURL,
-		)); err != nil {
-			panic(err)
-		}
-	}
-
 	// asset service
 	if startAsset {
 		if err := sm.AddService("Asset", asset.NewServer(
@@ -273,7 +245,7 @@ func main() {
 				getSubtreeStore(logger),
 				blockchainClient,
 				assetClient,
-				blockValidationClient,
+				blockValidationClient, // TODO replace with getSubtreeStore(logger) when running block assembly and block validation on the same node
 			)); err != nil {
 				panic(err)
 			}
@@ -315,38 +287,6 @@ func main() {
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
 				blockValidationClient,
-			)); err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	// utxo store server
-	if startUtxoStore {
-		utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
-		if err != nil {
-			panic(err)
-		}
-		var store utxostore.Interface
-		if utxoStoreURL.Scheme != "memory" {
-			store = getUtxoStore(ctx, logger)
-		} else {
-			store = getUtxoMemoryStore()
-		}
-		if err = sm.AddService("UTXOStoreServer", utxo.New(
-			logger.New("utxo"),
-			store,
-		)); err != nil {
-			panic(err)
-		}
-	}
-
-	// seeder
-	if startSeeder {
-		_, found := gocore.Config().Get("seeder_grpcListenAddress")
-		if found {
-			if err = sm.AddService("Seeder", seeder.NewServer(
-				logger.New("seed"),
 			)); err != nil {
 				panic(err)
 			}

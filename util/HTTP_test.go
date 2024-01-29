@@ -92,3 +92,24 @@ func get(ctx context.Context) (*http.Response, error) {
 
 	return httpClient.Do(req)
 }
+
+func TestHTTPGet(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := DoHTTPRequest(ctx, "http://www.google.com")
+	require.NoError(t, err)
+}
+
+func TestHTTPGetReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body, err := DoHTTPRequestBodyReader(ctx, "http://www.google.com")
+	require.NoError(t, err)
+
+	defer body.Close()
+
+	_, err = io.ReadAll(body)
+	require.NoError(t, err)
+}

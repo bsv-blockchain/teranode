@@ -20,6 +20,7 @@ service BlockchainAPI {
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
   rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
   rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
+  rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
@@ -112,6 +113,7 @@ message InvalidateBlockRequest {
   bytes blockHash = 1;
 }
 
+// swagger:model GetBlockHeaderResponse
 message GetBlockHeaderResponse {
   bytes blockHeader = 1;
   uint32 height = 2;
@@ -179,4 +181,14 @@ message GetHashOfAncestorBlockRequest {
 // swagger:model GetHashOfAncestorBlockResponse
 message GetHashOfAncestorBlockResponse {
   bytes hash = 1;
+}
+
+// swagger:model GGetNextWorkRequiredRequest
+message GetNextWorkRequiredRequest {
+  bytes blockHash = 1;
+}
+
+// swagger:model GGetNextWorkRequiredResponse
+message GetNextWorkRequiredResponse {
+  bytes bits = 1;
 }

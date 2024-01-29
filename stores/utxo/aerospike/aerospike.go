@@ -9,11 +9,11 @@ import (
 	"math"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/aerospike/aerospike-client-go/v6/types"
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -128,21 +128,23 @@ func init() {
 
 type storeUtxo struct {
 	idx        int
-	hash       *chainhash.Hash
+	utxoHash   *chainhash.Hash
 	txHash     *chainhash.Hash
 	lockTime   uint32
 	retryCount int
 }
 
 type Store struct {
-	u            *url.URL
-	client       *uaerospike.Client
-	namespace    string
-	logger       ulogger.Logger
-	blockHeight  uint32
-	expiration   uint32
-	dbTimeout    time.Duration
-	storeRetryCh chan *storeUtxo
+	u             *url.URL
+	client        *uaerospike.Client
+	namespace     string
+	logger        ulogger.Logger
+	blockHeight   uint32
+	expiration    uint32
+	dbTimeout     time.Duration
+	storeRetryCh  chan *storeUtxo
+	filterEnabled bool
+	batchId       atomic.Uint64
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -169,17 +171,21 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	}
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
+	filterEnabled := gocore.Config().GetBool("utxostore_filterEnabled", true)
 
 	s := &Store{
-		u:            u,
-		client:       client,
-		namespace:    namespace,
-		logger:       logger,
-		blockHeight:  0,
-		expiration:   expiration,
-		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		storeRetryCh: make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
+		u:             u,
+		client:        client,
+		namespace:     namespace,
+		logger:        logger,
+		blockHeight:   0,
+		expiration:    expiration,
+		dbTimeout:     time.Duration(dbTimeoutMillis) * time.Millisecond,
+		storeRetryCh:  make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
+		filterEnabled: filterEnabled,
 	}
+
+	s.logger.Infof("[UTXO] filter expressions enabled: %t", s.filterEnabled)
 
 	go func() {
 		defer func() {
@@ -198,7 +204,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				aerospike.NewBin("locktime", storeRetryUtxo.lockTime),
 			}
 
-			key, err := aerospike.NewKey(s.namespace, "utxo", storeRetryUtxo.hash[:])
+			key, err := aerospike.NewKey(s.namespace, "utxo", storeRetryUtxo.utxoHash[:])
 			if err != nil {
 				s.logger.Errorf("[UTXO] failed to init new aerospike key in storeRetryCh: %v", err)
 				continue
@@ -211,7 +217,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 				}
 				prometheusUtxoRetryStoreFail.Inc()
 
-				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
+				s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s: %v", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
 
 				// requeue for retry
 				storeRetryUtxo.retryCount++
@@ -221,7 +227,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 					s.storeRetryCh <- storeRetryUtxo
 				}
 			} else {
-				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.hash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
+				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())
 			}
 		}
 	}()
@@ -310,7 +316,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxostore.Response{
-				Status: int(utxostore_api.Status_NOT_FOUND),
+				Status: int(utxostore.Status_NOT_FOUND),
 			}, utxostore.ErrNotFound
 		}
 
@@ -389,27 +395,13 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		batchRecords[idx] = record
 	}
 
+	batchId := s.batchId.Add(1)
+
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[BATCH_ERR] Failed to batch store aerospike utxos, adding to retry queue: %v\n", err)
+		s.logger.Warnf("[BATCH_ERR][%d] Failed to batch store aerospike utxos, adding to retry queue: %v\n", batchId, err)
 
-		for idx, batchRecord := range batchRecords {
-			err = batchRecord.BatchRec().Err
-			if err != nil {
-				s.logger.Warnf("[BATCH_ERR] error in aerospike utxo store BatchOperate batchRecord %d of %d (will retry): %s - %w", idx, len(batchRecords), utxoHashes[idx].String(), err)
-			}
-		}
-
-		for idx, hash := range utxoHashes {
-			s.storeRetryCh <- &storeUtxo{
-				idx:      idx,
-				hash:     hash,
-				txHash:   tx.TxIDChainHash(),
-				lockTime: storeLockTime,
-			}
-		}
-		prometheusUtxoStoreFail.Add(float64(len(utxoHashes)))
-		return fmt.Errorf("[BATCH_ERR] error in aerospike utxo store BatchOperate (will retry): %w", err)
+		// don't return, check each record in the batch for errors and process accordingly
 	}
 
 	// batchOperate may have no errors, but some of the records may have failed
@@ -425,14 +417,14 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			}
 
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-			e := fmt.Errorf("error in aerospike store batch record: %s - %w", utxoHashes[idx].String(), err)
+			e := fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch record: %s - %w", batchId, utxoHashes[idx].String(), err)
 			errorsThrown = append(errorsThrown, e)
 
 			s.logger.Errorf("%s", e.Error())
 
 			s.storeRetryCh <- &storeUtxo{
 				idx:      idx,
-				hash:     utxoHashes[idx],
+				utxoHash: utxoHashes[idx],
 				txHash:   tx.TxIDChainHash(),
 				lockTime: storeLockTime,
 			}
@@ -441,7 +433,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 	if len(errorsThrown) > 0 {
 		prometheusUtxoStoreFail.Add(float64(len(errorsThrown)))
-		return fmt.Errorf("error in aerospike store batch records: %d of %d failed", len(errorsThrown), len(batchRecords))
+		return fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch records: %d of %d failed (will retry)", batchId, len(errorsThrown), len(batchRecords))
 	}
 
 	prometheusUtxoStore.Add(float64(len(utxoHashes)))
@@ -470,7 +462,7 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, n
 
 		s.storeRetryCh <- &storeUtxo{
 			idx:      0,
-			hash:     hash,
+			utxoHash: hash,
 			txHash:   hash,
 			lockTime: nLockTime,
 		}
@@ -499,23 +491,27 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	policy := util.GetAerospikeWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
-	policy.FilterExpression = aerospike.ExpAnd(
-		// check whether txid has been set = spent
-		aerospike.ExpNot(aerospike.ExpBinExists("txid")),
+	if s.filterEnabled {
+		policy.FilterExpression = aerospike.ExpAnd(
+			// check whether txid has been set = spent
+			aerospike.ExpNot(aerospike.ExpBinExists("txid")),
 
-		aerospike.ExpOr(
-			// anything below the block height is spendable, including 0
-			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+			aerospike.ExpOr(
+				// anything below the block height is spendable, including 0
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
 
-			aerospike.ExpAnd(
-				aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
-				// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
-				// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
-				// and not the block time itself.
-				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				aerospike.ExpAnd(
+					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+					// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+					// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+					// and not the block time itself.
+					aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				),
 			),
-		),
-	)
+		)
+	} else {
+		s.logger.Warnf("[UTXO] filter expressions disabled")
+	}
 
 	spentSpends := make([]*utxostore.Spend, 0, len(spends))
 

@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -60,7 +60,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&coinbaseBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", options.ErrNotFound)
+			return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", ubsverrors.ErrNotFound)
 		}
 		return nil, nil, err
 	}

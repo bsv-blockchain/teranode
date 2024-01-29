@@ -55,6 +55,19 @@ The node has been designed as a collection of services that work together to pro
 
 ![UBSV_System_Context.png](img%2FUBSV_System_Context.png)
 
+Nodes are responsible for:
+
+* Validating and accepting or rejecting received transactions.
+
+* Building and finding new blocks.
+
+* Validating and accepting or rejecting received or found subtrees and blocks.
+
+* Adding found blocks to the Blockchain.
+
+* Managing Coinbase transactions and their spendability.
+
+
 The diagram below shows the different microservices, together with their interactions, that make up the UBSV node.
 
 ![UBSV_Container_Diagram.png](img%2FUBSV_Container_Diagram.png)

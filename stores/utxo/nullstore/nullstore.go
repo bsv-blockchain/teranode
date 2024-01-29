@@ -3,7 +3,6 @@ package nullstore
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 )
@@ -29,7 +28,7 @@ func (m *NullStore) Health(ctx context.Context) (int, string, error) {
 
 func (m *NullStore) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
 	return &utxostore.Response{
-		Status: int(utxostore_api.Status_OK),
+		Status: int(utxostore.Status_OK),
 	}, nil
 }
 

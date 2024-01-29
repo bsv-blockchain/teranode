@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -44,7 +43,7 @@ func Store(t *testing.T, db utxostore.Interface) {
 
 	resp, err := db.Get(ctx, testSpend0)
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 
 	err = db.Store(context.Background(), tx)
 	require.Error(t, err, utxostore.ErrAlreadyExists)
@@ -89,7 +88,7 @@ func Restore(t *testing.T, db utxostore.Interface) {
 
 	resp, err := db.Get(ctx, testSpend0)
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore_api.Status_OK), resp.Status)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 	require.Nil(t, resp.SpendingTxID)
 }
 
@@ -119,7 +118,7 @@ func LockTime(t *testing.T, db utxostore.Interface) {
 
 	resp, err := db.Get(ctx, spends[0])
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
 	require.Equal(t, *Hash, *resp.SpendingTxID)
 }
 
@@ -163,7 +162,7 @@ func Sanity(t *testing.T, db utxostore.Interface) {
 			SpendingTxID: Hash,
 		})
 		require.NoError(t, err)
-		require.Equal(t, int(utxostore_api.Status_SPENT), resp.Status)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
 		require.Equal(t, *Hash, *resp.SpendingTxID)
 	}
 }

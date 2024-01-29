@@ -30,7 +30,7 @@ func Store(t *testing.T, db txmeta.Store) {
 		assert.Len(t, resp.ParentTxHashes, 1)
 
 		_, err = db.Create(ctx, Tx1)
-		require.Error(t, err, txmeta.ErrAlreadyExists)
+		require.Error(t, err, txmeta.NewErrTxmetaAlreadyExists)
 	})
 
 	t.Run("extended tests", func(t *testing.T) {
@@ -54,7 +54,7 @@ func Store(t *testing.T, db txmeta.Store) {
 		}
 
 		_, err = db.Create(ctx, Tx1)
-		require.Error(t, err, txmeta.ErrAlreadyExists)
+		require.Error(t, err, txmeta.NewErrTxmetaAlreadyExists)
 	})
 
 	t.Run("mined", func(t *testing.T) {

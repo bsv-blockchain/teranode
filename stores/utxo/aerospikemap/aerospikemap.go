@@ -12,7 +12,6 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/aerospike/aerospike-client-go/v6/types"
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -230,7 +229,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxostore.Response{
-				Status: int(utxostore_api.Status_NOT_FOUND),
+				Status: int(utxostore.Status_NOT_FOUND),
 			}, nil
 		}
 		s.logger.Errorf("Failed to get aerospike key: %v\n", aErr)
@@ -407,7 +406,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			locktime, ok := value.Bins["locktime"].(int)
 			if ok {
 				status := utxostore.CalculateUtxoStatus(nil, uint32(locktime), s.blockHeight)
-				if status == utxostore_api.Status_LOCKED {
+				if status == utxostore.Status_LOCKED {
 					s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
 					return utxostore.NewErrLockTime(uint32(locktime), s.blockHeight)
 				}

@@ -56,6 +56,7 @@ type BlockAssembly struct {
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
 	blockAssemblyDisabled bool
+	localSetMined         bool
 }
 
 type subtreeRetrySend struct {
@@ -92,6 +93,7 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
+		localSetMined:         gocore.Config().GetBool("blockvalidation_localSetMined", false),
 	}
 
 	go ba.jobStore.Start()
@@ -593,7 +595,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
 
 	prometheusBlockAssemblySubmitMiningSolution.Inc()
-	ba.logger.Infof("[BlockAssembly] SubmitMiningSolution: %s", jobID)
+	ba.logger.Infof("[BlockAssembly][%s] SubmitMiningSolution", jobID)
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
@@ -602,20 +604,20 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 
 	jobItem := ba.jobStore.Get(*storeId)
 	if jobItem == nil {
-		return nil, fmt.Errorf("[BlockAssembly] job not found")
+		return nil, fmt.Errorf("[BlockAssembly][%s] job not found", jobID)
 	}
 	job := jobItem.Value()
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly] failed to convert hashPrevBlock: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly][%s] failed to convert hashPrevBlock: %w", jobID, err)
 	}
 
 	// TODO check whether we are already mining on a higher chain work, then just ignore this solution
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly] failed to convert coinbaseTx: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly][%s] failed to convert coinbaseTx: %w", jobID, err)
 	}
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
@@ -626,7 +628,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
 	if len(job.Subtrees) > 0 {
-		ba.logger.Infof("[BlockAssembly] submit job %s has subtrees: %d", jobID, len(job.Subtrees))
+		ba.logger.Infof("[BlockAssembly][%s] submit job has subtrees: %d", jobID, len(job.Subtrees))
 		for i, subtree := range job.Subtrees {
 			// the job subtree hash needs to be stored for the block, before the coinbase is replaced in the first
 			// subtree, which changes the id of the subtree
@@ -653,7 +655,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	// Create a new subtree with the subtreeHashes of the subtrees
 	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
 	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly] failed to create topTree: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly][%s] failed to create topTree: %w", jobID, err)
 	}
 	for _, hash := range subtreeHashes {
 		err = topTree.AddNode(hash, 1, 0)
@@ -671,7 +673,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		ba.logger.Infof("[BlockAssembly] calculating merkle proof for job %s", jobID)
 		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
 		if err != nil {
-			return nil, fmt.Errorf("[BlockAssembly] error getting merkle proof for coinbase: %w", err)
+			return nil, fmt.Errorf("[BlockAssembly][%s] error getting merkle proof for coinbase: %w", jobID, err)
 		}
 
 		cmp := make([]string, len(coinbaseMerkleProof))
@@ -709,17 +711,19 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		SubtreeSlices:    job.Subtrees,
 	}
 
-	ba.logger.Infof("[BlockAssembly] validating block: %s", block.Header.Hash())
+	startTime := time.Now()
+	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
 	if ok, err := block.Valid(cntxt, nil, nil, nil, nil); !ok {
-		ba.logger.Errorf("[BlockAssembly] invalid block: %s - %v - %v", utils.ReverseAndHexEncodeHash(*block.Header.Hash()), block.Header, err)
-		return nil, fmt.Errorf("[BlockAssembly] invalid block: %v", err)
+		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
+		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}
+	ba.logger.Infof("[BlockAssembly][%s][%s] validating block DONE in %s", jobID, block.Header.Hash(), time.Since(startTime).String())
 
 	// TODO context was being canceled, is this hiding a different problem?
 	err = ba.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
 	if err != nil {
-		ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx store: %v", err)
+		ba.logger.Errorf("[BlockAssembly][%s][%s] error storing coinbase tx in tx store: %v", jobID, block.Hash().String(), err)
 	}
 
 	// TODO why is this needed?
@@ -728,15 +732,15 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	//	ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
 	//}
 
-	ba.logger.Infof("[BlockAssembly] add block to blockchain: %s", block.Header.Hash())
+	ba.logger.Infof("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(cntxt, block, ""); err != nil {
-		return nil, fmt.Errorf("failed to add block: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
 
 	ids, err := ba.blockchainClient.GetBlockHeaderIDs(cntxt, block.Header.Hash(), 1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block header ids: %w", err)
+		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to get block header ids: %w", jobID, block.Hash().String(), err)
 	}
 
 	var blockID uint32
@@ -753,28 +757,41 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 		g, gCtx := errgroup.WithContext(setCtx)
 
 		g.Go(func() error {
-			ba.logger.Infof("[BlockAssembly] remove subtrees TTL: %s", block.Header.Hash())
+			timeStart := time.Now()
+			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees TTL", jobID, block.Header.Hash())
+
 			if err = ba.removeSubtreesTTL(gCtx, block); err != nil {
-				ba.logger.Errorf("failed to remove subtrees TTL: %w", err)
+				// TODO retry
+				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to remove subtrees TTL: %v", jobID, block.Header.Hash(), err)
 			}
+
+			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees TTL DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
+
 			return nil
 		})
 
-		g.Go(func() error {
-			// add the transactions in this block to the txMeta block hashes
-			ba.logger.Infof("[BlockAssembly] update tx mined status: %s", block.Header.Hash())
+		if !ba.localSetMined {
+			g.Go(func() error {
+				timeStart := time.Now()
+				// add the transactions in this block to the txMeta block hashes
+				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
 
-			if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
-				ba.logger.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
-			}
-			return nil
-		})
+				if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
+					// TODO retry
+					ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
+				}
+
+				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
+
+				return nil
+			})
+		}
 
 		if err = g.Wait(); err != nil {
 			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
-				ba.logger.Errorf("[BlockAssembly] failed to invalidate block: %s", err)
+				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to invalidate block: %s", jobID, block.Header.Hash(), err)
 			}
-			ba.logger.Errorf("[BlockAssembly] error updating status: %s", err)
+			ba.logger.Errorf("[BlockAssembly][%s][%s] error updating status: %s", jobID, block.Header.Hash(), err)
 		}
 	}()
 
@@ -806,14 +823,19 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.SetLimit(subtreeTTLConcurrency)
 
+	startTime := time.Now()
+	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs", block.Hash().String())
+
 	// update the subtree TTLs
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHashBytes := subtreeHash.CloneBytes()
+		subtreeHash := subtreeHash
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
 			err = ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0)
 			if err != nil {
-				ba.logger.Warnf("failed to update subtree TTL: %v", err)
+				// TODO should this retry? We are in a bad state when this happens
+				ba.logger.Errorf("[removeSubtreesTTL][%s][%s] failed to update subtree TTL: %v", block.Hash().String(), subtreeHash.String(), err)
 			}
 
 			return nil
@@ -823,6 +845,8 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	if err = g.Wait(); err != nil {
 		return err
 	}
+
+	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs DONE in %s", block.Hash().String(), time.Since(startTime).String())
 
 	return nil
 }

@@ -1017,7 +1017,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 }
 
 func Test_AddNode_Benchmark(t *testing.T) {
-	//util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 
 	g, stp, txHashes := initTestAddNodeBenchmark(t)
 
@@ -1034,7 +1034,7 @@ func Test_AddNode_Benchmark(t *testing.T) {
 }
 
 func Test_AddNodeWithMap_Benchmark(t *testing.T) {
-	//util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 
 	g, stp, txHashes := initTestAddNodeBenchmark(t)
 
