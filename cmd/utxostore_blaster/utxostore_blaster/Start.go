@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -92,7 +93,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|redis|null)")
 
 	delay := flag.String("storeSpendDelay", "0s", "Set delay between store and spend")
 	if delay != nil {
@@ -124,8 +125,18 @@ func Start() {
 		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
 	case "aerospike":
 		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_aerospike")
 			store, err := aerospike.New(logger, u)
+
+			return func() (utxo.Interface, error) {
+				return store, err
+			}()
+		}
+		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
+	case "redis":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err := redis.NewRedisClient(logger, u)
 
 			return func() (utxo.Interface, error) {
 				return store, err
