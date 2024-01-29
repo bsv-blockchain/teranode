@@ -9,7 +9,7 @@ var MetricsBucketsMilliSeconds = []float64{
 }
 
 var MetricsBucketsMilliLongSeconds = []float64{
-	64e-3, 128e-3, 256e-3, 512e-3, 1024e-3, 2048e-3, 4096e-6, 8192e-6, 16384e-6, 32768e-6, 65536e-6, 131072e-6,
+	64e-3, 128e-3, 256e-3, 512e-3, 1024e-3, 2048e-3, 4096e-3, 8192e-3, 16384e-3, 32768e-3, 65536e-3, 131072e-3,
 }
 
 var MetricsBucketsSeconds = []float64{
