@@ -16,7 +16,7 @@ export default defineConfig({
             } else if (id.includes('echarts')) {
               return 'vendor_echarts'
             }
-            return 'vendor' // all other package goes here
+            // return 'vendor' // all other package goes here
           }
           if (id.includes('.svg')) {
             if (
