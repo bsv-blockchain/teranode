@@ -93,7 +93,7 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|redis|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|redis|redis-cluster|redis-ring|null)")
 
 	delay := flag.String("storeSpendDelay", "0s", "Set delay between store and spend")
 	if delay != nil {
@@ -142,7 +142,27 @@ func Start() {
 				return store, err
 			}()
 		}
-		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
+		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
+	case "redis-cluster":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err := redis.NewRedisCluster(logger, u)
+
+			return func() (utxo.Interface, error) {
+				return store, err
+			}()
+		}
+		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
+	case "redis-ring":
+		storeFn = func() (utxo.Interface, error) {
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err := redis.NewRedisRing(logger, u)
+
+			return func() (utxo.Interface, error) {
+				return store, err
+			}()
+		}
+		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
 	}
