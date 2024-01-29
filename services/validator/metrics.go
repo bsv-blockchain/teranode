@@ -53,7 +53,7 @@ func initPrometheusMetrics() {
 	prometheusTransactionValidateTotal = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_validate_total",
+			Name:      "transactions_validate_total_micros",
 			Help:      "Duration of total transaction validation",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
@@ -61,7 +61,7 @@ func initPrometheusMetrics() {
 	prometheusTransactionValidate = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_validate",
+			Name:      "transactions_validate_micros",
 			Help:      "Duration of transaction validation",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
@@ -69,15 +69,15 @@ func initPrometheusMetrics() {
 	prometheusTransactionValidateBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_validate_batch",
+			Name:      "transactions_validate_batch_millis",
 			Help:      "Duration of transaction batch validation",
-			Buckets:   util.MetricsBucketsMicroSeconds,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 	prometheusTransactionStoreUtxos = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_store_utxos",
+			Name:      "transactions_store_utxos_micros",
 			Help:      "Duration of transaction storing utxos",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
@@ -85,7 +85,7 @@ func initPrometheusMetrics() {
 	prometheusTransactionSpendUtxos = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_spend_utxos",
+			Name:      "transactions_spend_utxos_micros",
 			Help:      "Duration of transaction spending utxos",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
@@ -93,7 +93,7 @@ func initPrometheusMetrics() {
 	prometheusTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_duration",
+			Name:      "transactions_duration_millis",
 			Help:      "Duration of transaction processing by the validator service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
@@ -101,7 +101,7 @@ func initPrometheusMetrics() {
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_size",
+			Name:      "transactions_size_v2",
 			Help:      "Size of transactions processed by the validator service",
 			Buckets:   util.MetricsBucketsSize,
 		},
@@ -109,7 +109,7 @@ func initPrometheusMetrics() {
 	prometheusValidatorSendToBlockAssembly = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_send_to_block_assembly",
+			Name:      "validator_send_to_block_assembly_micros",
 			Help:      "Duration of sending transactions to block assembly",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
@@ -117,7 +117,7 @@ func initPrometheusMetrics() {
 	prometheusValidatorSetTxMeta = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_set_tx_meta",
+			Name:      "validator_set_tx_meta_millis",
 			Help:      "Duration of validator set tx meta",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
@@ -125,7 +125,7 @@ func initPrometheusMetrics() {
 	prometheusValidatorSetTxMetaCache = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_set_tx_meta_cache",
+			Name:      "validator_set_tx_meta_cache_millis",
 			Help:      "Duration of validator set tx meta cache",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},

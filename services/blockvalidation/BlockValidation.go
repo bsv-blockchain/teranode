@@ -311,7 +311,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
 	}()
 
-	prometheusBlockValidationValidateBlockDuration.Observe(util.TimeSince(timeStart))
+	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	u.logger.Infof("[ValidateBlock][%s] DONE but finalizeBlockValidation will continue in the background", block.Hash().String())
 
@@ -633,7 +633,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	defer func() {
 		stat.AddTime(startTotal)
 		prometheusBlockValidationBlessMissingTransaction.Inc()
-		prometheusBlockValidationBlessMissingTransactionDuration.Observe(util.TimeSince(startTotal))
+		prometheusBlockValidationBlessMissingTransactionDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 	}()
 
 	if tx == nil {
@@ -882,7 +882,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	}
 
 	// only set this on no errors
-	prometheusBlockValidationValidateSubtreeDuration.Observe(util.TimeSince(startTotal))
+	prometheusBlockValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
 	return nil
 }

@@ -436,7 +436,7 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
-	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return &propagation_api.EmptyMessage{}, nil
 }
