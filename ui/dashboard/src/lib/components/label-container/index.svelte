@@ -20,7 +20,7 @@
   export let disabled = false
   export let required = false
   export let label: any = ''
-  export let variant: TypoVariantType = 'heading'
+  // export let variant: TypoVariantType = 'heading'
   export let interactive = false
   export let margin = '0'
   export let stretch = true

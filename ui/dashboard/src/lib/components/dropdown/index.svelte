@@ -315,7 +315,7 @@
   .list-item {
     display: flex;
     align-items: center;
-    width: calc(100% -2px);
+    width: calc(100% - 2px);
     height: var(--height);
     padding: var(--list-item-padding);
 
