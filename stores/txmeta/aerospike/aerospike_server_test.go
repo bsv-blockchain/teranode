@@ -27,17 +27,17 @@ var (
 )
 
 func TestAerospike(t *testing.T) {
-	// raw client to be able to do gets and cleanup
-	client, aeroErr := aero.NewClient("localhost", 3800)
-	require.NoError(t, aeroErr)
-
-	aeroURL, err := url.Parse("aerospike://localhost:3800/test")
+	aeroURL, err := url.Parse("aerospike://localhost:3000/test")
 	require.NoError(t, err)
 
 	// ubsv db client
 	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
+	db, err = New(ulogger.TestLogger{}, aeroURL) // SAO - call this before aero.NewClient() as we want to SetLevel of the aerospike logger to DEBUG before any other aerospike calls
 	require.NoError(t, err)
+
+	// raw client to be able to do gets and cleanup
+	client, aeroErr := aero.NewClient("localhost", 3000)
+	require.NoError(t, aeroErr)
 
 	parentTx := bt.NewTx()
 	parentTx.LockTime = 1
