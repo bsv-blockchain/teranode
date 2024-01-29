@@ -68,74 +68,78 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		return nil, fmt.Errorf("aerospike namespace not found")
 	}
 
-	readPolicyUrl, err, found := gocore.Config().GetURL("aerospike_readPolicy")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no aerospike_readPolicy setting found")
-	}
-
-	logger.Infof("[Aerospike] readPolicy url %s", readPolicyUrl)
-	readMaxRetries = getQueryInt(readPolicyUrl, "MaxRetries", aerospike.NewPolicy().MaxRetries, logger)
-	readTimeout = getQueryDuration(readPolicyUrl, "TotalTimeout", aerospike.NewPolicy().TotalTimeout, logger)
-	readSocketTimeout = getQueryDuration(readPolicyUrl, "SocketTimeout", aerospike.NewPolicy().SocketTimeout, logger)
-	readSleepBetweenRetries = getQueryDuration(readPolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
-	readSleepMultiplier = getQueryFloat64(readPolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
-	readExitFastOnExhaustedConnectionPool = getQueryBool(readPolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
-
-	writePolicyUrl, err, found := gocore.Config().GetURL("aerospike_writePolicy")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no aerospike_writePolicy setting found")
-	}
-
-	logger.Infof("[Aerospike] writePolicy url %s", writePolicyUrl)
-	writeMaxRetries = getQueryInt(writePolicyUrl, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
-	writeTimeout = getQueryDuration(writePolicyUrl, "TotalTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
-	writeSocketTimeout = getQueryDuration(writePolicyUrl, "SocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
-	writeSleepBetweenRetries = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
-	// TODO - remove the next line when this variable is actually used
-	_ = writeSleepBetweenRetries
-	writeSleepMultiplier = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
-	// TODO - remove the next line when this variable is actually used
-	_ = writeSleepMultiplier
-	writeExitFastOnExhaustedConnectionPool = getQueryBool(writePolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
-	// TODO - remove the next line when this variable is actually used
-	_ = writeExitFastOnExhaustedConnectionPool
-
-	// batching stuff
-	batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no aerospike_writePolicy setting found")
-	}
-
-	logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyUrl)
-	batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
-	batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
-	concurrentNodes = getQueryInt(batchPolicyUrl, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
-
 	policy := aerospike.NewClientPolicy()
 
-	// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
-	// todo optimize read policies
-	// todo optimize write policies
-	logger.Infof("[Aerospike] base/connection policy url %s", url)
-	policy.LimitConnectionsToQueueSize = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
-	policy.ConnectionQueueSize = getQueryInt(url, "ConnectionQueueSize", policy.ConnectionQueueSize, logger)
-	policy.MinConnectionsPerNode = getQueryInt(url, "MinConnectionsPerNode", policy.MinConnectionsPerNode, logger)
-	policy.MaxErrorRate = getQueryInt(url, "MaxErrorRate", policy.MaxErrorRate, logger)
-	policy.FailIfNotConnected = getQueryBool(url, "FailIfNotConnected", policy.FailIfNotConnected, logger)
-	policy.Timeout = getQueryDuration(url, "Timeout", policy.Timeout, logger)
-	policy.IdleTimeout = getQueryDuration(url, "IdleTimeout", policy.IdleTimeout, logger)
-	policy.LoginTimeout = getQueryDuration(url, "LoginTimeout", policy.LoginTimeout, logger)
-	policy.ErrorRateWindow = getQueryInt(url, "ErrorRateWindow", policy.ErrorRateWindow, logger)
-	policy.OpeningConnectionThreshold = getQueryInt(url, "OpeningConnectionThreshold", policy.OpeningConnectionThreshold, logger)
+	if gocore.Config().GetBool("aerospike_useDefaultBasePolicies", false) {
+		logger.Warnf("Using default aerospike connection (base) policies")
+	} else {
+		readPolicyUrl, err, found := gocore.Config().GetURL("aerospike_readPolicy")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("no aerospike_readPolicy setting found")
+		}
+
+		logger.Infof("[Aerospike] readPolicy url %s", readPolicyUrl)
+		readMaxRetries = getQueryInt(readPolicyUrl, "MaxRetries", aerospike.NewPolicy().MaxRetries, logger)
+		readTimeout = getQueryDuration(readPolicyUrl, "TotalTimeout", aerospike.NewPolicy().TotalTimeout, logger)
+		readSocketTimeout = getQueryDuration(readPolicyUrl, "SocketTimeout", aerospike.NewPolicy().SocketTimeout, logger)
+		readSleepBetweenRetries = getQueryDuration(readPolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
+		readSleepMultiplier = getQueryFloat64(readPolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
+		readExitFastOnExhaustedConnectionPool = getQueryBool(readPolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
+
+		writePolicyUrl, err, found := gocore.Config().GetURL("aerospike_writePolicy")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("no aerospike_writePolicy setting found")
+		}
+
+		logger.Infof("[Aerospike] writePolicy url %s", writePolicyUrl)
+		writeMaxRetries = getQueryInt(writePolicyUrl, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
+		writeTimeout = getQueryDuration(writePolicyUrl, "TotalTimeout", aerospike.NewWritePolicy(0, 0).TotalTimeout, logger)
+		writeSocketTimeout = getQueryDuration(writePolicyUrl, "SocketTimeout", aerospike.NewWritePolicy(0, 0).SocketTimeout, logger)
+		writeSleepBetweenRetries = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
+		// TODO - remove the next line when this variable is actually used
+		_ = writeSleepBetweenRetries
+		writeSleepMultiplier = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
+		// TODO - remove the next line when this variable is actually used
+		_ = writeSleepMultiplier
+		writeExitFastOnExhaustedConnectionPool = getQueryBool(writePolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
+		// TODO - remove the next line when this variable is actually used
+		_ = writeExitFastOnExhaustedConnectionPool
+
+		// batching stuff
+		batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("no aerospike_writePolicy setting found")
+		}
+
+		logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyUrl)
+		batchTotalTimeout = getQueryDuration(batchPolicyUrl, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
+		batchAllowInlineSSD = getQueryBool(batchPolicyUrl, "AllowInlineSSD", aerospike.NewBatchPolicy().AllowInlineSSD, logger)
+		concurrentNodes = getQueryInt(batchPolicyUrl, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
+
+		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
+		// todo optimize read policies
+		// todo optimize write policies
+		logger.Infof("[Aerospike] base/connection policy url %s", url)
+		policy.LimitConnectionsToQueueSize = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
+		policy.ConnectionQueueSize = getQueryInt(url, "ConnectionQueueSize", policy.ConnectionQueueSize, logger)
+		policy.MinConnectionsPerNode = getQueryInt(url, "MinConnectionsPerNode", policy.MinConnectionsPerNode, logger)
+		policy.MaxErrorRate = getQueryInt(url, "MaxErrorRate", policy.MaxErrorRate, logger)
+		policy.FailIfNotConnected = getQueryBool(url, "FailIfNotConnected", policy.FailIfNotConnected, logger)
+		policy.Timeout = getQueryDuration(url, "Timeout", policy.Timeout, logger)
+		policy.IdleTimeout = getQueryDuration(url, "IdleTimeout", policy.IdleTimeout, logger)
+		policy.LoginTimeout = getQueryDuration(url, "LoginTimeout", policy.LoginTimeout, logger)
+		policy.ErrorRateWindow = getQueryInt(url, "ErrorRateWindow", policy.ErrorRateWindow, logger)
+		policy.OpeningConnectionThreshold = getQueryInt(url, "OpeningConnectionThreshold", policy.OpeningConnectionThreshold, logger)
+	}
 
 	if url.User != nil {
 		policy.AuthMode = aerospike.AuthModeInternal
@@ -181,11 +185,13 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		return nil, err
 	}
 
-	warmUp := getQueryInt(url, "WarmUp", 0, logger)
-	cnxNum, err := client.WarmUp(warmUp)
-	logger.Infof("Warmed up %d aerospike connections", cnxNum)
-	if err != nil {
-		return nil, err
+	if gocore.Config().GetBool("aerospike_warmUp", true) {
+		warmUp := getQueryInt(url, "WarmUp", 0, logger)
+		cnxNum, err := client.WarmUp(warmUp)
+		logger.Infof("Warmed up %d aerospike connections", cnxNum)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return client, nil
@@ -276,6 +282,11 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 // If no options are provided, the policy will use the default values
 func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
+
+	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+		return readPolicy
+	}
+
 	readPolicy.MaxRetries = readMaxRetries
 	readPolicy.TotalTimeout = readTimeout
 	readPolicy.SocketTimeout = readSocketTimeout
@@ -327,6 +338,11 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 // If no options are provided, the policy will use the default values
 func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
+
+	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+		return writePolicy
+	}
+
 	writePolicy.MaxRetries = writeMaxRetries
 	writePolicy.TotalTimeout = writeTimeout
 	writePolicy.SocketTimeout = writeSocketTimeout
@@ -345,6 +361,11 @@ func GetAerospikeWritePolicy(generation, expiration uint32, options ...Aerospike
 
 func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 	batchPolicy := aerospike.NewBatchPolicy()
+
+	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+		return batchPolicy
+	}
+
 	batchPolicy.TotalTimeout = batchTotalTimeout
 	batchPolicy.AllowInlineSSD = batchAllowInlineSSD
 	batchPolicy.ConcurrentNodes = concurrentNodes
@@ -354,6 +375,11 @@ func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 
 func GetAerospikeBatchWritePolicy(generation, expiration uint32) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
+
+	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+		return batchWritePolicy
+	}
+
 	batchWritePolicy.Expiration = expiration
 	batchWritePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 

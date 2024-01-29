@@ -26,7 +26,8 @@ const updateFn = (json: string) => {
 export const assetHTTPAddress = writable('', (set: any) => {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
-    if (url.host.includes('localhost:517')) {
+    // let dev and preview mode connect to server
+    if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
       url.protocol = 'http:'
       url.host = 'localhost'
       url.port = '8090'

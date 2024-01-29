@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -778,7 +777,8 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(runtime.NumCPU() * 2)
+	concurrentSubtreeReads, _ := gocore.Config().GetInt("blockassembly_subtreeProcessorConcurrentReads", 4)
+	g.SetLimit(concurrentSubtreeReads)
 
 	// get all the subtrees from the block that we have not yet cleaned out
 	for subtreeHash := range blockSubtreesMap {

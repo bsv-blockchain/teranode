@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Button from '$lib/components/button/index.svelte'
   import Table from '$lib/components/table/index.svelte'
   import Pager from '$internal/components/pager/index.svelte'
   import Card from '$internal/components/card/index.svelte'
@@ -59,8 +60,6 @@
   </div>
 
   <svelte:fragment slot="header-tools">
-    <button on:click={refresh}>Refresh</button>
-
     <Pager
       i18n={i18nLocal}
       expandUp={true}
@@ -76,7 +75,15 @@
       on:change={onPage}
       on:total={onTotal}
     />
+    <div style="height: 24px; width: 12px;" />
     <TableToggle value={variant} on:change={onToggle} />
+    <Button
+      size="small"
+      ico={true}
+      icon="icon-refresh-line"
+      tooltip={t('tooltip.refresh')}
+      on:click={refresh}
+    />
   </svelte:fragment>
   <Table
     name="blocks"

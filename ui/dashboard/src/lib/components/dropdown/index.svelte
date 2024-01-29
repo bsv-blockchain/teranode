@@ -173,7 +173,16 @@
   }
 </script>
 
-<LabelContainer {size} {disabled} {label} {labelAlignment} {labelPlacement} {required} {stretch}>
+<LabelContainer
+  {name}
+  {size}
+  {disabled}
+  {label}
+  {labelAlignment}
+  {labelPlacement}
+  {required}
+  {stretch}
+>
   <FootnoteContainer {footnote} {error} {disabled}>
     <div
       data-test-id={testId}
@@ -205,6 +214,7 @@
             on:focus={() => onFocusAction('focus')}
             on:blur={() => onFocusAction('blur')}
             on:keydown={onKeyDown}
+            aria-labelledby={`${name}_label`}
           >
             {#each items as item (item.value)}
               <option value={item.value}>
