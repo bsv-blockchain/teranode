@@ -135,16 +135,17 @@ type storeUtxo struct {
 }
 
 type Store struct {
-	u             *url.URL
-	client        *uaerospike.Client
-	namespace     string
-	logger        ulogger.Logger
-	blockHeight   uint32
-	expiration    uint32
-	dbTimeout     time.Duration
-	storeRetryCh  chan *storeUtxo
-	filterEnabled bool
-	batchId       atomic.Uint64
+	u               *url.URL
+	client          *uaerospike.Client
+	namespace       string
+	logger          ulogger.Logger
+	blockHeight     uint32
+	expiration      uint32
+	dbTimeout       time.Duration
+	storeRetryCh    chan *storeUtxo
+	filterEnabled   bool
+	batchId         atomic.Uint64
+	batchingEnabled bool
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -172,17 +173,19 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 	filterEnabled := gocore.Config().GetBool("utxostore_filterEnabled", true)
+	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
 
 	s := &Store{
-		u:             u,
-		client:        client,
-		namespace:     namespace,
-		logger:        logger,
-		blockHeight:   0,
-		expiration:    expiration,
-		dbTimeout:     time.Duration(dbTimeoutMillis) * time.Millisecond,
-		storeRetryCh:  make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
-		filterEnabled: filterEnabled,
+		u:               u,
+		client:          client,
+		namespace:       namespace,
+		logger:          logger,
+		blockHeight:     0,
+		expiration:      expiration,
+		dbTimeout:       time.Duration(dbTimeoutMillis) * time.Millisecond,
+		storeRetryCh:    make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
+		filterEnabled:   filterEnabled,
+		batchingEnabled: batchingEnabled,
 	}
 
 	s.logger.Infof("[UTXO] filter expressions enabled: %t", s.filterEnabled)
@@ -372,6 +375,18 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	// just store it normally if it is only 1 utxo
 	if len(utxoHashes) == 1 {
 		return s.storeUtxo(policy, utxoHashes[0], storeLockTime)
+	}
+
+	if !s.batchingEnabled {
+		// TODO this as temporary fix for testing whether batching is causing a problem
+		for _, hash := range utxoHashes {
+			if err = s.storeUtxo(policy, hash, storeLockTime); err != nil {
+				// storeUtxo will retry if it fails
+				s.logger.Errorf("[UTXO] failed to store utxo %s: %v", hash.String(), err)
+			}
+		}
+
+		return nil
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
