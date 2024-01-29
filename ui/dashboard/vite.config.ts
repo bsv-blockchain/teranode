@@ -1,6 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig, type UserConfigExport } from 'vite'
 import { visualizer } from 'rollup-plugin-visualizer'
+import svg from '@poppanator/sveltekit-svg'
 
 export default defineConfig({
   build: {
@@ -13,6 +14,9 @@ export default defineConfig({
     visualizer({
       emitFile: true,
       filename: 'stats.html',
+    }),
+    svg({
+      includePaths: ['./src/internal/assets/icons/'],
     }),
   ],
   test: {
