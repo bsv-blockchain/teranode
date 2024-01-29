@@ -69,7 +69,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "block_found_duration",
 			Help:      "Duration of block found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -94,7 +94,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "catchup_duration",
 			Help:      "Duration of catchup",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -103,7 +103,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "process_block_found_duration",
 			Help:      "Duration of process block found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -120,7 +120,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "subtree_found_duration",
 			Help:      "Duration of subtree found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -137,7 +137,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "validate_block_duration",
 			Help:      "Duration of validate block",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -154,7 +154,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "validate_subtree_duration",
 			Help:      "Duration of validate subtree",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
@@ -171,7 +171,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "bless_missing_transaction_duration",
 			Help:      "Duration of bless missing transaction",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 

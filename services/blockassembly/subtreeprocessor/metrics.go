@@ -46,7 +46,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "move_up_duration_v2",
 			Help:      "Duration of moving up block in subtree processor",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -63,7 +63,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "move_down_duration_v2",
 			Help:      "Duration of moving down block in subtree processor",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -80,7 +80,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "process_coinbase_tx_duration_v2",
 			Help:      "Duration of processing coinbase tx in subtree processor",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -97,7 +97,7 @@ func initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "transaction_map_duration_v2",
 			Help:      "Duration of creating transaction map in subtree processor",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 

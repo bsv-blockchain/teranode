@@ -126,7 +126,10 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", stats)
-	defer stat.AddTime(start)
+	defer func() {
+		stat.AddTime(start)
+		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()))
+	}()
 
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend
@@ -251,6 +254,7 @@ func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
 	defer func() {
 		stat.AddTime(start)
 		storeUtxosSpan.Finish()
+		prometheusTransactionStoreUtxos.Observe(float64(time.Since(start).Microseconds()))
 	}()
 
 	err := v.utxoStore.Store(storeUtxosSpan.Ctx, tx)
@@ -271,7 +275,10 @@ func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
 
 func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxostore.Spend) (*txmeta.Data, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
-	defer stat.AddTime(start)
+	defer func() {
+		stat.AddTime(start)
+		prometheusValidatorSetTxMeta.Observe(float64(time.Since(start).Microseconds()))
+	}()
 
 	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
@@ -300,7 +307,10 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
-	defer stat.AddTime(start)
+	defer func() {
+		stat.AddTime(start)
+		prometheusTransactionValidate.Observe(float64(time.Since(start).Microseconds()))
+	}()
 
 	basicSpan := tracing.Start(ctx, "Validator:Validate:Basic")
 	defer func() {
@@ -317,7 +327,10 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error
 
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.Spend, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
-	defer stat.AddTime(start)
+	defer func() {
+		stat.AddTime(start)
+		prometheusTransactionSpendUtxos.Observe(float64(time.Since(start).Microseconds()))
+	}()
 
 	utxoSpan := tracing.Start(ctx, "Validator:Validate:SpendUtxos")
 	defer func() {
@@ -369,8 +382,11 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxostore.Spend) error {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
-	defer stat.AddTime(start)
+	startTime, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
+	defer func() {
+		stat.AddTime(startTime)
+		prometheusValidatorSendToBlockAssembly.Observe(float64(time.Since(startTime).Microseconds()))
+	}()
 
 	if v.kafkaProducer != nil {
 		if err := v.publishToKafka(traceSpan, bData); err != nil {

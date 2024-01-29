@@ -66,7 +66,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "add_tx_duration_v2",
 			Help:      "Duration of AddTx in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 
@@ -83,7 +83,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "remove_tx_duration",
 			Help:      "Duration of RemoveTx in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -100,7 +100,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "get_mining_candidate_duration_v2",
 			Help:      "Duration of GetMiningCandidate in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -125,7 +125,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "submit_mining_solution_duration_v2",
 			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -134,7 +134,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "update_subtrees_ttl_duration",
 			Help:      "Duration of updating subtrees TTL in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -208,7 +208,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "tx_meta_get_duration_v2",
 			Help:      "Duration of reading tx meta data from txmeta store in block assembler",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 
@@ -233,7 +233,7 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "reorg_duration_v2",
 			Help:      "Duration of reorg in block assembler",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 

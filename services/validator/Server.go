@@ -288,10 +288,10 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransaction", stats)
 	defer func() {
 		stat.AddTime(start)
+		prometheusProcessedTransactions.Inc()
+		prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
 	}()
 
-	prometheusProcessedTransactions.Inc()
-	timeStart := time.Now()
 	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
 	defer traceSpan.Finish()
 
@@ -316,7 +316,6 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
-	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,
@@ -327,6 +326,7 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransactionBatch", stats)
 	defer func() {
 		stat.AddTime(start)
+		prometheusTransactionValidateBatch.Observe(float64(time.Since(start).Microseconds()))
 	}()
 
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
