@@ -171,7 +171,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	}
 
 	if value.Bins["blockIDs"] != nil {
-		status.BlockIDs = value.Bins["blockIDs"].([]uint32)
+		temp := value.Bins["blockIDs"].([]interface{})
+		var blockIDs []uint32
+		for _, val := range temp {
+			blockIDs = append(blockIDs, uint32(val.(int)))
+		}
+		status.BlockIDs = blockIDs
 	}
 
 	// transform the aerospike interface{} into the correct types

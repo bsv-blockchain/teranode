@@ -79,10 +79,6 @@ func TestAerospike(t *testing.T) {
 	blockHash, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 	require.NoError(t, err)
 
-	var blockHash2 *chainhash.Hash
-	blockHash2, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c9")
-	require.NoError(t, err)
-
 	key, err = aero.NewKey("test", "txmeta", hash[:])
 	require.NoError(t, err)
 
@@ -115,29 +111,29 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(60), uint64(value.Bins["sizeInBytes"].(int)))
 		assert.Len(t, value.Bins["parentTxHashes"].([]byte), 32)
 		assert.Equal(t, parentTxHash[:], value.Bins["parentTxHashes"])
-		assert.Nil(t, value.Bins["blockHashes"])
+		assert.Nil(t, value.Bins["blockIDs"])
 
 		_, err = db.Create(context.Background(), tx)
 		// not allowed
 		require.Error(t, err)
 
-		err = db.SetMined(context.Background(), hash, blockHash)
+		err = db.SetMined(context.Background(), hash, 1)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(2), value.Generation)
-		assert.Len(t, value.Bins["blockHashes"].([]byte), 32)
-		assert.Equal(t, blockHash[:], value.Bins["blockHashes"].([]byte))
+		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 1)
+		assert.Equal(t, 1, value.Bins["blockIDs"].([]interface{})[0])
 
-		err = db.SetMined(context.Background(), hash, blockHash2)
+		err = db.SetMined(context.Background(), hash, 2)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 		require.Equal(t, uint32(3), value.Generation)
-		assert.Len(t, value.Bins["blockHashes"].([]byte), 2*32)
-		assert.Equal(t, append(blockHash[:], blockHash2[:]...), value.Bins["blockHashes"].([]byte))
+		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 2)
+		assert.Equal(t, 2, value.Bins["blockIDs"].([]interface{})[1])
 	})
 
 	t.Run("aerospike get", func(t *testing.T) {
@@ -151,18 +147,18 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Equal(t, uint64(60), value.SizeInBytes)
 		assert.Len(t, value.ParentTxHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{parentTxHash}, value.ParentTxHashes)
-		assert.Len(t, value.BlockHashes, 0)
-		assert.Nil(t, value.BlockHashes)
+		assert.Equal(t, []chainhash.Hash{*parentTxHash}, value.ParentTxHashes)
+		assert.Len(t, value.BlockIDs, 0)
+		assert.Nil(t, value.BlockIDs)
 
-		err = db.SetMined(context.Background(), hash, blockHash2)
+		err = db.SetMined(context.Background(), hash, 2)
 		require.NoError(t, err)
 
 		value, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
-		assert.Len(t, value.BlockHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
+		assert.Len(t, value.BlockIDs, 1)
+		assert.Equal(t, []uint32{2}, value.BlockIDs)
 	})
 
 	t.Run("aerospike get - expired", func(t *testing.T) {
@@ -179,23 +175,23 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Equal(t, uint64(60), value.SizeInBytes)
 		assert.Len(t, value.ParentTxHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{parentTxHash}, value.ParentTxHashes)
-		assert.Len(t, value.BlockHashes, 0)
-		assert.Nil(t, value.BlockHashes)
+		assert.Equal(t, []chainhash.Hash{*parentTxHash}, value.ParentTxHashes)
+		assert.Len(t, value.BlockIDs, 0)
+		assert.Nil(t, value.BlockIDs)
 
-		err = db.SetMined(context.Background(), hash, blockHash2)
+		err = db.SetMined(context.Background(), hash, 2)
 		require.NoError(t, err)
 
 		value, err = db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
-		assert.Len(t, value.BlockHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
+		assert.Len(t, value.BlockIDs, 1)
+		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
 		time.Sleep(2 * time.Second)
 
 		_, err = db.Get(context.Background(), hash)
-		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(hash))
 	})
 
 	t.Run("aerospike set mined multi", func(t *testing.T) {
@@ -209,29 +205,29 @@ func TestAerospike(t *testing.T) {
 		_, err = db.Create(context.Background(), tx3)
 		require.NoError(t, err)
 
-		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{hash, hash2, hash3, blockHash}, blockHash2)
+		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{hash, hash2, hash3, blockHash}, 2)
 		require.NoError(t, err)
 
 		value, err := db.Get(context.Background(), hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
-		assert.Len(t, value.BlockHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
+		assert.Len(t, value.BlockIDs, 1)
+		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
 		value, err = db.Get(context.Background(), hash2)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(102), value.Fee)
-		assert.Len(t, value.BlockHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
+		assert.Len(t, value.BlockIDs, 1)
+		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
 		value, err = db.Get(context.Background(), hash3)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)
-		assert.Len(t, value.BlockHashes, 1)
-		assert.Equal(t, []*chainhash.Hash{blockHash2}, value.BlockHashes)
+		assert.Len(t, value.BlockIDs, 1)
+		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
 		value, err = db.Get(context.Background(), blockHash)
-		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound)
+		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(blockHash))
 	})
 
 }
