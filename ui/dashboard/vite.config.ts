@@ -34,6 +34,12 @@ export default defineConfig({
               ['icon-cube', 'icon-arrow-transfer', 'icon-scale', 'icon-status'].includes(id)
             ) {
               return 'icons_nav'
+            } else if (
+              ['check-circle', 'exclamation-circle', 'exclamation', 'information-circle'].includes(
+                id,
+              )
+            ) {
+              return 'icons_toast'
             }
             return 'icons_rest'
           }
