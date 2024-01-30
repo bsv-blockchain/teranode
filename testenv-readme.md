@@ -22,7 +22,9 @@ If you are running for the first time or have made changes to the `local.Dockerf
 Before building a new image use `export GITHUB_SHA=<GITHUB_SHA to test>`
 ```bash
 docker-compose -f docker-compose-ci-template.yml up postgres ubsv-1 ubsv-2
-# Wait for sync...
+
+curl http://localhost:18091/lastblocks?n=1, http://localhost:18091/lastblocks?n=1 and get the latest block from `height` field
+Check if both nodes are in sync and have 300 blocks each
 ```
 
 ## Step 3: Start ubsv-1-coinbase and ubsv-2-coinbase
@@ -31,16 +33,18 @@ Start the coinbase services for both nodes. This time, you can start ubsv-2-coin
 
 ```bash
 docker-compose -f docker-compose-ci-template.yml up ubsv-1-coinbase ubsv-2-coinbase
-# Wait for a few blocks...
+
+curl http://localhost:18091/lastblocks?n=1, http://localhost:18091/lastblocks?n=1 and get the latest block from `height` field
+Check if both nodes are in sync and have 310 blocks each
 ```
 
-## Step 3: Start ubsv-1-coinbase and ubsv-2-coinbase
+## Step 3: Start TxBlaster
 
 Start TX blaster
 
 If you are running for the first time or have made changes to the `local.txblaster.Dockerfile`, use the --build option. You can start both tx-blaster-1 and tx-blaster-2 as follows:
 Before building a new image use `export GITHUB_SHA=<GITHUB_SHA to test>`
-Note: Node blaster args are not working from compose, so you'll need to manually add them to `local.txblaster.Dockerfile` for now and rebuild. This issue will be addressed soon.
+
 ```bash
 docker-compose -f docker-compose-ci-template.yml up tx-blaster-1
 docker-compose -f docker-compose-ci-template.yml up tx-blaster-2
