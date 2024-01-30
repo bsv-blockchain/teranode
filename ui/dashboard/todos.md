@@ -7,10 +7,15 @@
   - https://svelte.dev/docs/accessibility-warnings
   - https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA
 - [x] Improve SEO
-- [ ] Fix duplicate entries on p2p page [TODO: verify]
+- [x] Fix duplicate entries on p2p page
 - [x] Fix Safari Teranode logo
 - [x] Fix search input
 - [x] Don't let sidebar icons jump on open/close
 - [x] Fix refresh button
+- [ ] Smooth sidebar transition
+- [ ] Make spinner cover fill whole screen (not just content area)
+- [ ] Look at correct table column sorting, depending on field type
+- [ ] Serve webfonts with efficient cache policy [Server]
+- [ ] Serve responses with text compression, setting `Content-Encoding` [Server]
 - [ ] Cleanup [In progress]
 - [ ] Documentation
