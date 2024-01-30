@@ -43,11 +43,11 @@ services:
       dockerfile: local.Dockerfile
     environment:
       P2P_BOOTSTRAP_PORT: 9901
-      SETTINGS_CONTEXT: "docker"
+      SETTINGS_CONTEXT: "docker.ci.ubsv1"
     networks:
       - ubsv-network
     ports:
-      - "9901:9901"
+      - "19901:9901"
 
   p2p-bootstrap-2:
     build:
@@ -55,11 +55,11 @@ services:
       dockerfile: local.Dockerfile
     environment:
       P2P_BOOTSTRAP_PORT: 9901
-      SETTINGS_CONTEXT: "docker"
+      SETTINGS_CONTEXT: "docker.ci.ubsv2"
     networks:
       - ubsv-network
     ports:
-      - "9901:9901"
+      - "29901:9901"
 
   p2p-bootstrap-3:
     build:
@@ -67,11 +67,11 @@ services:
       dockerfile: local.Dockerfile
     environment:
       P2P_BOOTSTRAP_PORT: 9901
-      SETTINGS_CONTEXT: "docker"
+      SETTINGS_CONTEXT: "docker.ci.ubsv3"
     networks:
       - ubsv-network
     ports:
-      - "9901:9901"
+      - "39901:9901"
 
   ubsv-1:
     <<: *ubsv-base
@@ -103,7 +103,7 @@ services:
       coinbase_wait_until_block: 200
       propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWESmhNAN8s6NPdGNvJH3zJ4wMKDxapXKNUe2DzkAwKYqK|/dns4/p2p-bootstrap-2/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
     # volumes:
     #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
     #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
