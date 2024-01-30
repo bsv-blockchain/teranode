@@ -67,9 +67,9 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationBlockFoundDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "block_found_duration",
+			Name:      "block_found_duration_seconds",
 			Help:      "Duration of block found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -92,18 +92,18 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationCatchupDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "catchup_duration",
+			Name:      "catchup_duration_seconds",
 			Help:      "Duration of catchup",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
 	prometheusBlockValidationProcessBlockFoundDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "process_block_found_duration",
+			Name:      "process_block_found_duration_seconds",
 			Help:      "Duration of process block found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -118,9 +118,9 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationSubtreeFoundDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "subtree_found_duration",
+			Name:      "subtree_found_duration_millis",
 			Help:      "Duration of subtree found",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -135,9 +135,9 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationValidateBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "validate_block_duration",
+			Name:      "validate_block_duration_seconds",
 			Help:      "Duration of validate block",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -152,9 +152,9 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationValidateSubtreeDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "validate_subtree_duration",
+			Name:      "validate_subtree_duration_millis",
 			Help:      "Duration of validate subtree",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
@@ -169,9 +169,9 @@ func initPrometheusMetrics() {
 	prometheusBlockValidationBlessMissingTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "bless_missing_transaction_duration",
+			Name:      "bless_missing_transaction_duration_millis",
 			Help:      "Duration of bless missing transaction",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 

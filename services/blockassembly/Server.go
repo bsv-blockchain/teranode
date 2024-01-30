@@ -424,7 +424,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
 		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
-		prometheusBlockAssemblyAddTxDuration.Observe(util.TimeSince(startTime))
+		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
 	if len(req.Txid) != 32 {
@@ -450,7 +450,7 @@ func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.Remo
 	startTime := time.Now()
 	prometheusBlockAssemblyRemoveTx.Inc()
 	defer func() {
-		prometheusBlockAssemblyRemoveTxDuration.Observe(util.TimeSince(startTime))
+		prometheusBlockAssemblyRemoveTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
 	if len(req.Txid) != 32 {
@@ -505,7 +505,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 				txIdErrors = append(txIdErrors, req.Txid)
 			}
 
-			prometheusBlockAssemblyAddTxDuration.Observe(util.TimeSince(startTxTime))
+			prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
 		}
 	}
 	return &blockassembly_api.AddTxBatchResponse{
@@ -520,7 +520,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 	defer func() {
 		txMetaSpan.Finish()
 		// blockAssemblyStat.NewStat("GetTxMeta_grpc", true).AddTime(startMetaTime)
-		prometheusBlockAssemblerTxMetaGetDuration.Observe(time.Since(startMetaTime).Seconds())
+		prometheusBlockAssemblerTxMetaGetDuration.Observe(float64(time.Since(startMetaTime).Microseconds()) / 1_000_000)
 	}()
 
 	txMetadata, err := ba.txMetaStore.Get(txMetaSpanCtx, txHash)
@@ -549,7 +549,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	prometheusBlockAssemblyGetMiningCandidate.Inc()
 	defer func() {
 		// blockAssemblyStat.NewStat("GetMiningCandidate_grpc", true).AddTime(startTime)
-		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
+		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
@@ -588,8 +588,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	start := time.Now()
 	defer func() {
 		// stat.AddTime(start)
-		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(util.TimeSince(start))
-		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(time.Since(start).Seconds())
+		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
@@ -811,7 +810,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	defer func() {
 		span.Finish()
 		// stat.AddTime(start)
-		prometheusBlockAssemblyUpdateSubtreesTTL.Observe(util.TimeSince(start))
+		prometheusBlockAssemblyUpdateSubtreesTTL.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background

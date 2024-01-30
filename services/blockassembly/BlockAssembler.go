@@ -426,7 +426,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error doing reorg: %w", err)
 	}
 
-	prometheusBlockAssemblerReorgDuration.Observe(time.Since(startTime).Seconds())
+	prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
 }

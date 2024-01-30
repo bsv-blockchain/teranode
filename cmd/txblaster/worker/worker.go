@@ -50,7 +50,14 @@ const (
 	ContextRetry
 )
 
-func init() {
+var prometheusMetricsInitialized = false
+
+func initPrometheusMetrics() {
+	if prometheusMetricsInitialized {
+		return
+	}
+	prometheusMetricsInitialized = true
+
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "tx_blaster_workers",
@@ -159,6 +166,7 @@ func NewWorker(
 	globalStartTime *time.Time,
 	topic *pubsub.Topic,
 ) (*Worker, error) {
+	initPrometheusMetrics()
 
 	// Generate a random private key
 	privateKey, err := bec.NewPrivateKey(bec.S256())

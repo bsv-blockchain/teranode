@@ -45,6 +45,10 @@ func main() {
 	if !ok {
 		panic(fmt.Errorf("failed to get p2p_bootstrap_listenPort"))
 	}
+	transportProtocol, ok := gocore.Config().Get("p2p_bootstrap_transportProtocol", "ip4")
+	if !ok {
+		fmt.Printf("failed to get p2p_bootstrap_transportProtocol")
+	}
 	dhtProtocolID := protocol.ID(dhtProtocolIdStr)
 
 	pkBytes, err := hex.DecodeString(privkeyHex)
@@ -66,7 +70,7 @@ func main() {
 		panic(err)
 	}
 	host, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", listenAddr, listenPort)),
+		libp2p.ListenAddrStrings(fmt.Sprintf("/%s/%s/tcp/%d", transportProtocol, listenAddr, listenPort)),
 		libp2p.Identity(pk),
 		libp2p.PrivateNetwork(psk),
 	)

@@ -456,7 +456,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// we must set the current block header
 	stp.currentBlockHeader = block.Header
 
-	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(time.Since(startTime).Seconds())
+	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
 }
@@ -471,7 +471,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	startTime := time.Now()
 	defer func() {
-		prometheusSubtreeProcessorMoveUpBlockDuration.Observe(time.Since(startTime).Seconds())
+		prometheusSubtreeProcessorMoveUpBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		stp.logger.Infof("[moveUpBlock][%s] with block DONE in %s", block.String(), time.Since(startTime).String())
 
 		err := recover()
@@ -713,7 +713,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}
 
-	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(time.Since(startTime).Seconds())
+	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
 }
@@ -809,7 +809,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 
 	stp.logger.Infof("createTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
 
-	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(time.Since(startTime).Seconds())
+	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return transactionMap, nil
 }

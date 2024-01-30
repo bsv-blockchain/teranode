@@ -229,7 +229,7 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 	}
 
 	prometheusBlockMined.Inc()
-	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
 }

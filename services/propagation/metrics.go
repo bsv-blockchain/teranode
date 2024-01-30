@@ -1,6 +1,7 @@
 package propagation
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -44,15 +45,17 @@ func initPrometheusMetrics() {
 	prometheusTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "propagation",
-			Name:      "transactions_duration",
+			Name:      "transactions_duration_millis",
 			Help:      "Duration of transaction processing by the propagation service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "propagation",
-			Name:      "transactions_size",
+			Name:      "transactions_size_v2",
 			Help:      "Size of transactions processed by the propagation service",
+			Buckets:   util.MetricsBucketsSize,
 		},
 	)
 

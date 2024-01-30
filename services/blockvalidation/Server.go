@@ -282,7 +282,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", stats)
 	defer func() {
 		stat.AddTime(start)
-		prometheusBlockValidationBlockFoundDuration.Observe(util.TimeSince(start))
+		prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 		u.logger.Infof("[BlockFound][%s] DONE from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
 	}()
 
@@ -324,7 +324,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)
-		prometheusBlockValidationProcessBlockFoundDuration.Observe(util.TimeSince(start))
+		prometheusBlockValidationProcessBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
@@ -430,7 +430,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	defer func() {
 		stat.AddTime(start)
 		span.Finish()
-		prometheusBlockValidationCatchupDuration.Observe(util.TimeSince(start))
+		prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	prometheusBlockValidationCatchup.Inc()
@@ -506,7 +506,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	defer func() {
 		stat.AddTime(start)
 		span.Finish()
-		prometheusBlockValidationSubtreeFoundDuration.Observe(util.TimeSince(start))
+		prometheusBlockValidationSubtreeFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	subtreeHash, err := chainhash.NewHash(req.Hash)

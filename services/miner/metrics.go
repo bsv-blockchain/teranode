@@ -1,6 +1,7 @@
 package miner
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -28,8 +29,9 @@ func initPrometheusMetrics() {
 	prometheusBlockMinedDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "miner",
-			Name:      "block_mined_duration",
+			Name:      "block_mined_duration_seconds",
 			Help:      "Duration of block mining",
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 

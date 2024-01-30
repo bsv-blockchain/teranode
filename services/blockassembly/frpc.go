@@ -41,7 +41,7 @@ func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.Blo
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblerQueuedTransactions.Set(float64(f.ba.blockAssembler.QueueLength()))
 		prometheusBlockAssemblerSubtrees.Set(float64(f.ba.blockAssembler.SubtreeCount()))
-		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
 	if len(req.Txid) != 32 {
@@ -84,7 +84,7 @@ func (f *fRPC_BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_
 			txIdErrors = append(txIdErrors, req.Txid)
 		}
 
-		prometheusBlockAssemblyAddTxDuration.Observe(time.Since(startTime).Seconds())
+		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}
 
 	return &blockassembly_api.BlockassemblyApiAddTxBatchResponse{
@@ -97,7 +97,7 @@ func (f *fRPC_BlockAssembly) RemoveTx(_ context.Context, request *blockassembly_
 	startTime := time.Now()
 	prometheusBlockAssemblyRemoveTx.Inc()
 	defer func() {
-		prometheusBlockAssemblyRemoveTxDuration.Observe(util.TimeSince(startTime))
+		prometheusBlockAssemblyRemoveTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
 	if len(request.Txid) != 32 {
