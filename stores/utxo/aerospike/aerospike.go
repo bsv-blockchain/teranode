@@ -139,7 +139,7 @@ type Store struct {
 	client          *uaerospike.Client
 	namespace       string
 	logger          ulogger.Logger
-	blockHeight     uint32
+	blockHeight     atomic.Uint32
 	expiration      uint32
 	dbTimeout       time.Duration
 	storeRetryCh    chan *storeUtxo
@@ -180,7 +180,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		client:          client,
 		namespace:       namespace,
 		logger:          logger,
-		blockHeight:     0,
+		blockHeight:     atomic.Uint32{},
 		expiration:      expiration,
 		dbTimeout:       time.Duration(dbTimeoutMillis) * time.Millisecond,
 		storeRetryCh:    make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
@@ -240,12 +240,12 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight = blockHeight
+	s.blockHeight.Store(blockHeight)
 	return nil
 }
 
 func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight, nil
+	return s.blockHeight.Load(), nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -349,7 +349,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	}
 
 	return &utxostore.Response{
-		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight)),
+		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight.Load())),
 		SpendingTxID: spendingTxId,
 		LockTime:     lockTime,
 	}, nil
@@ -513,7 +513,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 
 			aerospike.ExpOr(
 				// anything below the block height is spendable, including 0
-				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight.Load()))),
 
 				aerospike.ExpAnd(
 					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
@@ -626,13 +626,13 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			}
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
-			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
+			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
 			lockTime, ok := value.Bins["locktime"].(uint32)
 			if !ok {
 				lockTime = 0
 			}
 
-			return utxostore.NewErrLockTime(lockTime, s.blockHeight)
+			return utxostore.NewErrLockTime(lockTime, s.blockHeight.Load())
 		}
 
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)
