@@ -21,7 +21,7 @@ import (
 
 const (
 	aerospikeHost      = "localhost" // "localhost"
-	aerospikePort      = 3800        // 3800
+	aerospikePort      = 3000        // 3800
 	aerospikeNamespace = "test"      // test
 )
 
