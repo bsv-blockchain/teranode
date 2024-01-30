@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { addNumCommas } from '$lib/utils/format'
   import { failure } from '$lib/utils/notifications'
@@ -84,7 +85,9 @@
   }
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
 
-  $: getData()
+  onMount(() => {
+    getData()
+  })
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
