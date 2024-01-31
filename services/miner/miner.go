@@ -30,7 +30,6 @@ type Miner struct {
 	isMiningImmediately              bool
 	candidateRequestInterval         time.Duration
 	difficultyAdjustment             bool
-	initialBlockWaitDuration         time.Duration
 	initialBlockFinalWaitDuration    time.Duration
 }
 
@@ -49,13 +48,6 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	candidateRequestInterval, _ := gocore.Config().GetInt("mine_candidate_request_interval", 10)
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
-	// How long to wait between mining the first few blocks
-	wait, _ := gocore.Config().Get("mine_initial_blocks_wait", "100ms")
-	initialBlockWaitDuration, err := time.ParseDuration(wait)
-	if err != nil {
-		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_wait: %v", err)
-	}
-
 	// How long to wait between mining the last few blocks
 	waitFinal, _ := gocore.Config().Get("mine_initial_blocks_final_wait", "5s")
 	initialBlockFinalWaitDuration, err := time.ParseDuration(waitFinal)
@@ -68,7 +60,6 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 		blockAssemblyClient:           blockassembly.NewClient(ctx, logger),
 		candidateRequestInterval:      time.Duration(candidateRequestInterval),
 		difficultyAdjustment:          difficultyAdjustment,
-		initialBlockWaitDuration:      initialBlockWaitDuration,
 		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
 	}
 }
@@ -237,11 +228,8 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 		m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
 
 		if candidate.Height > uint32(initialBlockCount-5) {
-			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining last few 'initial block'", m.initialBlockFinalWaitDuration)
+			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining last few initial blocks", m.initialBlockFinalWaitDuration)
 			time.Sleep(m.initialBlockFinalWaitDuration)
-		} else if candidate.Height > uint32(100) {
-			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining next 'initial block'", m.initialBlockWaitDuration)
-			time.Sleep(m.initialBlockWaitDuration)
 		}
 
 	}
