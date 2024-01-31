@@ -13,7 +13,7 @@
 - [x] Don't let sidebar icons jump on open/close
 - [x] Fix refresh button
 - [ ] Smooth sidebar transition
-- [ ] Make spinner cover fill whole screen (not just content area)
+- [x] Make spinner cover fill whole screen (not just content area)
 - [ ] Look at correct table column sorting, depending on field type
 - [ ] Serve webfonts with efficient cache policy [Server]
 - [ ] Serve responses with text compression, setting `Content-Encoding` [Server]
