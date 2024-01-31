@@ -143,10 +143,7 @@
     width: calc(100% - var(--offset-left));
     overflow-x: hidden;
     overflow-y: auto;
-    transition:
-      top 0.2s linear,
-      left 0.2s linear,
-      width 0.2s linear;
+    transition: top 0.2s linear;
   }
 
   .logo-container {
