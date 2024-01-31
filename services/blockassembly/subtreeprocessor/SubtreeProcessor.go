@@ -29,6 +29,11 @@ type Job struct {
 	MiningCandidate *model.MiningCandidate
 }
 
+type NewSubtreeRequest struct {
+	Subtree *util.Subtree
+	ErrChan chan error
+}
+
 type moveBlockRequest struct {
 	block   *model.Block
 	errChan chan error
@@ -46,7 +51,7 @@ type SubtreeProcessor struct {
 	moveUpBlockChan           chan moveBlockRequest
 	reorgBlockChan            chan reorgBlocksRequest
 	deDuplicateTransactionsCh chan struct{}
-	newSubtreeChan            chan *util.Subtree // used to notify of a new subtree
+	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
 	chainedSubtrees           []*util.Subtree
 	currentSubtree            *util.Subtree
 	currentBlockHeader        *model.BlockHeader
@@ -67,7 +72,7 @@ var (
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
-	newSubtreeChan chan *util.Subtree, options ...Options) *SubtreeProcessor {
+	newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()
 
@@ -145,7 +150,17 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 					completeSubtrees = append(completeSubtrees, incompleteSubtree)
 
 					// store (and announce) new incomplete subtree to other miners
-					newSubtreeChan <- incompleteSubtree
+					send := NewSubtreeRequest{
+						Subtree: incompleteSubtree,
+						ErrChan: make(chan error),
+					}
+					newSubtreeChan <- send
+
+					// wait for a response
+					// if we don't then we can't mine initial blocks and run coinbase splitter together
+					// this is because getMiningCandidate would create subtrees in the background and
+					// submitMiningSolution would try to setTTL on something that might not yet exist
+					<-send.ErrChan
 				}
 
 				getSubtreesChan <- completeSubtrees
@@ -250,7 +265,7 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 
 		if !skipNotification {
 			// Send the subtree to the newSubtreeChan
-			stp.newSubtreeChan <- oldSubtree
+			stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree}
 		}
 	}
 
