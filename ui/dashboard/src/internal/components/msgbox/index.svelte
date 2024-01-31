@@ -138,7 +138,7 @@
 
   .label {
     min-width: 135px;
-    transition: min-width 0.2s linear;
+    transition: min-width var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
     word-break: break-all;
   }
   .msgbox.collapse .label {

@@ -271,7 +271,7 @@
   .icon {
     width: var(--icon-size);
     height: var(--icon-size);
-    transition: transform 0.2s linear;
+    transition: transform var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
   .tui-dropdown .icon {
     transform: rotate(0deg);

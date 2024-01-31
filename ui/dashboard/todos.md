@@ -12,7 +12,7 @@
 - [x] Fix search input
 - [x] Don't let sidebar icons jump on open/close
 - [x] Fix refresh button
-- [ ] Smooth sidebar transition
+- [x] Smooth sidebar transition
 - [x] Make spinner cover fill whole screen (not just content area)
 - [ ] Look at correct table column sorting, depending on field type
 - [ ] Serve webfonts with efficient cache policy [Server]
