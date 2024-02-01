@@ -76,7 +76,17 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
+	duration, _ := gocore.Config().Get("distributor_backoff_duration", "1s")
+	backoffDuration, err := time.ParseDuration(duration)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse distributor_backoff_duration: %v", err)
+	}
+
+	maxRetries, _ := gocore.Config().GetInt("distributor_max_retries", 3)
+
+	failureTolerance, _ := gocore.Config().GetInt("distributor_failure_tolerance", 0)
+
+	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
 	if err != nil {
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
