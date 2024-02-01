@@ -99,6 +99,7 @@ func (m *Miner) Start(ctx context.Context) error {
 	var miningCtx context.Context
 	var cancel context.CancelFunc
 
+	var previousCandidate *model.MiningCandidate
 	for {
 		select {
 
@@ -127,9 +128,21 @@ func (m *Miner) Start(ctx context.Context) error {
 			miningCtx, cancel = context.WithCancel(context.Background())
 			defer cancel() // Ensure cancel is called at the end of each iteration
 
+			candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
+			if err != nil {
+				// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
+				return fmt.Errorf("error getting mining candidate: %w", err)
+			}
+			if previousCandidate != nil && bytes.Equal(candidate.Id, previousCandidate.Id) {
+				m.logger.Infof("[Miner] Got same candidate as previous, skipping %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
+				m.candidateTimer.Reset(0)
+				continue
+			}
+			previousCandidate = candidate
+
 			// start mining in a new goroutine, so we can cancel it if we need to
 			go func(ctx context.Context) {
-				err := m.mine(ctx, m.waitSeconds)
+				err := m.mine(ctx, candidate, m.waitSeconds)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
@@ -170,14 +183,9 @@ func (m *Miner) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
+func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, waitSeconds int) error {
 	timeStart := time.Now()
 
-	candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
-	if err != nil {
-		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error getting mining candidate: %w", err)
-	}
 	m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
