@@ -4,11 +4,12 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
 
-	aero "github.com/aerospike/aerospike-client-go/v6"
+	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -19,24 +20,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	aerospikeHost      = "localhost" // "localhost"
+	aerospikePort      = 3000        // 3800
+	aerospikeNamespace = "test"      // test
+)
+
 var (
-	key  *aero.Key
-	key2 *aero.Key
-	key3 *aero.Key
-	key4 *aero.Key
+	ctx  = context.Background()
+	key  *aerospike.Key
+	key2 *aerospike.Key
+	key3 *aerospike.Key
+	key4 *aerospike.Key
 )
 
 func TestAerospike(t *testing.T) {
-	aeroURL, err := url.Parse("aerospike://localhost:3000/test")
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)
 
 	// ubsv db client
 	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL) // SAO - call this before aero.NewClient() as we want to SetLevel of the aerospike logger to DEBUG before any other aerospike calls
+	db, err = New(ulogger.TestLogger{}, aeroURL) // SAO - call this before aerospike.NewClient() as we want to SetLevel of the aerospike logger to DEBUG before any other aerospike calls
 	require.NoError(t, err)
 
 	// raw client to be able to do gets and cleanup
-	client, aeroErr := aero.NewClient("localhost", 3000)
+	client, aeroErr := aerospike.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
 	parentTx := bt.NewTx()
@@ -79,16 +87,16 @@ func TestAerospike(t *testing.T) {
 	blockHash, err = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
 	require.NoError(t, err)
 
-	key, err = aero.NewKey("test", "txmeta", hash[:])
+	key, err = aerospike.NewKey(aerospikeNamespace, "txmeta", hash[:])
 	require.NoError(t, err)
 
-	key2, err = aero.NewKey("test", "txmeta", hash2[:])
+	key2, err = aerospike.NewKey(aerospikeNamespace, "txmeta", hash2[:])
 	require.NoError(t, err)
 
-	key3, err = aero.NewKey("test", "txmeta", hash3[:])
+	key3, err = aerospike.NewKey(aerospikeNamespace, "txmeta", hash3[:])
 	require.NoError(t, err)
 
-	key4, err = aero.NewKey("test", "txmeta", blockHash[:])
+	key4, err = aerospike.NewKey(aerospikeNamespace, "txmeta", blockHash[:])
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -99,10 +107,10 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client)
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(ctx, tx)
 		require.NoError(t, err)
 
-		var value *aero.Record
+		var value *aerospike.Record
 		// raw aerospike get
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -113,11 +121,11 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, parentTxHash[:], value.Bins["parentTxHashes"])
 		assert.Nil(t, value.Bins["blockIDs"])
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(ctx, tx)
 		// not allowed
 		require.Error(t, err)
 
-		err = db.SetMined(context.Background(), hash, 1)
+		err = db.SetMined(ctx, hash, 1)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
@@ -126,7 +134,7 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 1)
 		assert.Equal(t, 1, value.Bins["blockIDs"].([]interface{})[0])
 
-		err = db.SetMined(context.Background(), hash, 2)
+		err = db.SetMined(ctx, hash, 2)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
@@ -138,11 +146,11 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client)
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(ctx, tx)
 		require.NoError(t, err)
 
 		var value *txmeta.Data
-		value, err = db.Get(context.Background(), hash)
+		value, err = db.Get(ctx, hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Equal(t, uint64(60), value.SizeInBytes)
@@ -151,10 +159,10 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, value.BlockIDs, 0)
 		assert.Nil(t, value.BlockIDs)
 
-		err = db.SetMined(context.Background(), hash, 2)
+		err = db.SetMined(ctx, hash, 2)
 		require.NoError(t, err)
 
-		value, err = db.Get(context.Background(), hash)
+		value, err = db.Get(ctx, hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
@@ -166,11 +174,11 @@ func TestAerospike(t *testing.T) {
 
 		db.expiration = 1
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(ctx, tx)
 		require.NoError(t, err)
 
 		var value *txmeta.Data
-		value, err = db.Get(context.Background(), hash)
+		value, err = db.Get(ctx, hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Equal(t, uint64(60), value.SizeInBytes)
@@ -179,10 +187,10 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, value.BlockIDs, 0)
 		assert.Nil(t, value.BlockIDs)
 
-		err = db.SetMined(context.Background(), hash, 2)
+		err = db.SetMined(ctx, hash, 2)
 		require.NoError(t, err)
 
-		value, err = db.Get(context.Background(), hash)
+		value, err = db.Get(ctx, hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
@@ -190,49 +198,49 @@ func TestAerospike(t *testing.T) {
 
 		time.Sleep(2 * time.Second)
 
-		_, err = db.Get(context.Background(), hash)
+		_, err = db.Get(ctx, hash)
 		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(hash))
 	})
 
 	t.Run("aerospike set mined multi", func(t *testing.T) {
 		cleanDB(t, client)
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(ctx, tx)
 		require.NoError(t, err)
 
-		_, err = db.Create(context.Background(), tx2)
+		_, err = db.Create(ctx, tx2)
 		require.NoError(t, err)
 
-		_, err = db.Create(context.Background(), tx3)
+		_, err = db.Create(ctx, tx3)
 		require.NoError(t, err)
 
-		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{hash, hash2, hash3, blockHash}, 2)
+		err = db.SetMinedMulti(ctx, []*chainhash.Hash{hash, hash2, hash3, blockHash}, 2)
 		require.NoError(t, err)
 
-		value, err := db.Get(context.Background(), hash)
+		value, err := db.Get(ctx, hash)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
-		value, err = db.Get(context.Background(), hash2)
+		value, err = db.Get(ctx, hash2)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(102), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
-		value, err = db.Get(context.Background(), hash3)
+		value, err = db.Get(ctx, hash3)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(103), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
-		value, err = db.Get(context.Background(), blockHash)
+		value, err = db.Get(ctx, blockHash)
 		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(blockHash))
 	})
 
 }
 
-func cleanDB(t *testing.T, client *aero.Client) {
+func cleanDB(t *testing.T, client *aerospike.Client) {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)

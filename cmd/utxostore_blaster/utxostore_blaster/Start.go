@@ -8,6 +8,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,9 @@ var (
 	workerCount                     int
 	storeSpendDelay                 time.Duration
 	storeType                       string
-	storeFn                         func() (utxo.Interface, error)
+
+	storeFn   func() (utxo.Interface, error)
+	storeOnce sync.Once
 )
 
 func Init() {
@@ -118,51 +121,82 @@ func Start() {
 			return memory.New(false), nil
 		}
 		log.Printf("Starting memory utxostore-blaster with %d worker(s)", workerCount)
+
 	case "null":
 		storeFn = func() (utxo.Interface, error) {
 			return nullstore.NewNullStore()
 		}
 		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
-	case "aerospike":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_aerospike")
-			store, err := aerospike.New(logger, u)
 
-			return func() (utxo.Interface, error) {
-				return store, err
-			}()
+	case "aerospike":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_aerospike")
+			store, err = aerospike.New(logger, u)
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
-	case "redis":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err := redis.NewRedisClient(logger, u)
 
-			return func() (utxo.Interface, error) {
-				return store, err
-			}()
+	case "redis":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisClient(logger, u)
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
 		}
 		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-cluster":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err := redis.NewRedisCluster(logger, u)
 
-			return func() (utxo.Interface, error) {
-				return store, err
-			}()
+	case "redis-cluster":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisCluster(logger, u)
+
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
 		}
 		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-ring":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err := redis.NewRedisRing(logger, u)
 
-			return func() (utxo.Interface, error) {
-				return store, err
-			}()
+	case "redis-ring":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisRing(logger, u)
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
 		}
 		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
+
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
 	}

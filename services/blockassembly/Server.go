@@ -108,7 +108,7 @@ func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// this is passed into the block assembler and subtree processor where new subtrees are created
 	newSubtreeChanBuffer, _ := gocore.Config().GetInt("blockassembly_newSubtreeChanBuffer", 1_000)
-	newSubtreeChan := make(chan *util.Subtree, newSubtreeChanBuffer)
+	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, newSubtreeChanBuffer)
 
 	// retry channel for subtrees that failed to be stored
 	subtreeRetryChanBuffer, _ := gocore.Config().GetInt("blockassembly_subtreeRetryChanBuffer", 1_000)
@@ -189,58 +189,20 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 	// start the new subtree listener in the background
 	go func() {
-		var subtreeBytes []byte
 		for {
 			select {
 			case <-ctx.Done():
 				ba.logger.Infof("Stopping subtree listener")
 				return
 
-			case subtree := <-newSubtreeChan:
-				// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
+			case newSubtreeRequest := <-newSubtreeChan:
 
-				// check whether this subtree already exists in the store, which would mean it has already been announced
-				if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:]); ok {
-					// subtree already exists, nothing to do
-					ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
-					continue
+				err = ba.storeSubtree(ctx, newSubtreeRequest.Subtree, subtreeRetryChan)
+				if err != nil {
+					ba.logger.Errorf(err.Error())
 				}
-
-				prometheusBlockAssemblerSubtreeCreated.Inc()
-				ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
-
-				if subtreeBytes, err = subtree.Serialize(); err != nil {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to serialize subtree: %s", subtree.RootHash().String(), err)
-					continue
-				}
-
-				if err = ba.subtreeStore.Set(ctx,
-					subtree.RootHash()[:],
-					subtreeBytes,
-					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
-				); err != nil {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
-
-					// add to retry saving the subtree
-					subtreeRetryChan <- &subtreeRetrySend{
-						subtreeHash:  *subtree.RootHash(),
-						subtreeBytes: subtreeBytes,
-						retries:      0,
-					}
-
-					continue
-				}
-
-				// TODO #145
-				// the repository in the blob server sometimes cannot find subtrees that were just stored
-				// this is the dumbest way we can think of to fix it, at least temporarily
-				time.Sleep(20 * time.Millisecond)
-
-				if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
-					Type: model.NotificationType_Subtree,
-					Hash: subtree.RootHash(),
-				}); err != nil {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtree.RootHash().String(), err)
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- err
 				}
 			}
 		}
@@ -263,6 +225,57 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 		}
 	}()
 
+	return nil
+}
+
+func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree, subtreeRetryChan chan *subtreeRetrySend) (err error) {
+	// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
+
+	// check whether this subtree already exists in the store, which would mean it has already been announced
+	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:]); ok {
+
+		// subtree already exists, nothing to do
+		ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
+		return
+	}
+
+	prometheusBlockAssemblerSubtreeCreated.Inc()
+	ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
+
+	var subtreeBytes []byte
+	if subtreeBytes, err = subtree.Serialize(); err != nil {
+		return fmt.Errorf("[BlockAssembly:Init][%s] failed to serialize subtree: %s", subtree.RootHash().String(), err)
+
+	}
+
+	if err = ba.subtreeStore.Set(ctx,
+		subtree.RootHash()[:],
+		subtreeBytes,
+		options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+	); err != nil {
+		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+
+		// add to retry saving the subtree
+		subtreeRetryChan <- &subtreeRetrySend{
+			subtreeHash:  *subtree.RootHash(),
+			subtreeBytes: subtreeBytes,
+			retries:      0,
+		}
+
+		return nil
+	}
+
+	// TODO #145
+	// the repository in the blob server sometimes cannot find subtrees that were just stored
+	// this is the dumbest way we can think of to fix it, at least temporarily
+	time.Sleep(20 * time.Millisecond)
+
+	if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
+		Type: model.NotificationType_Subtree,
+		Hash: subtree.RootHash(),
+	}); err != nil {
+		return fmt.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtree.RootHash().String(), err)
+	}
 	return nil
 }
 

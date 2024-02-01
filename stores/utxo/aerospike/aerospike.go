@@ -139,7 +139,7 @@ type Store struct {
 	client          *uaerospike.Client
 	namespace       string
 	logger          ulogger.Logger
-	blockHeight     uint32
+	blockHeight     atomic.Uint32
 	expiration      uint32
 	dbTimeout       time.Duration
 	storeRetryCh    chan *storeUtxo
@@ -180,7 +180,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		client:          client,
 		namespace:       namespace,
 		logger:          logger,
-		blockHeight:     0,
+		blockHeight:     atomic.Uint32{},
 		expiration:      expiration,
 		dbTimeout:       time.Duration(dbTimeoutMillis) * time.Millisecond,
 		storeRetryCh:    make(chan *storeUtxo, 1_000_000), // buffer needs to be big enough to never fail
@@ -240,12 +240,12 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight = blockHeight
+	s.blockHeight.Store(blockHeight)
 	return nil
 }
 
 func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight, nil
+	return s.blockHeight.Load(), nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -320,11 +320,11 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxostore.Response{
 				Status: int(utxostore.Status_NOT_FOUND),
-			}, utxostore.ErrNotFound
+			}, fmt.Errorf("%v: %w", aErr, utxostore.ErrNotFound)
 		}
 
 		s.logger.Errorf("Failed to get aerospike key (time taken: %s) : %v\n", time.Since(start).String(), aErr)
-		return nil, aErr
+		return nil, fmt.Errorf("%v: %w", aErr, utxostore.ErrNotFound)
 	}
 
 	var err error
@@ -349,7 +349,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	}
 
 	return &utxostore.Response{
-		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight)),
+		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight.Load())),
 		SpendingTxID: spendingTxId,
 		LockTime:     lockTime,
 	}, nil
@@ -428,6 +428,9 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			// TODO check if this is the correct handling of this
 			// we assume because it exists, it is OK
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
+				e := fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch record: %s - %w", batchId, utxoHashes[idx].String(), err)
+				errorsThrown = append(errorsThrown, e)
 				continue
 			}
 
@@ -513,7 +516,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 
 			aerospike.ExpOr(
 				// anything below the block height is spendable, including 0
-				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight.Load()))),
 
 				aerospike.ExpAnd(
 					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
@@ -538,20 +541,20 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			}
 			return fmt.Errorf("context cancelled spending %d of %d aerospike utxos", i, len(spends))
 		default:
+			// if err = s.spendUtxo(policy, spend); err != nil {
+			// 	// TODO remove this hack
+			// 	// TEMP TEMP TEMP - we need to figure out why utxos are not stored properly
+			// 	// there are no double spends, so we can just ignore this error for now to be able to test performance
+			// 	s.logger.Warnf("[BACKUP_UTXO_STORE] failed to spend utxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
+			// 	if err = s.storeUtxo(util.GetAerospikeWritePolicy(0, 0), spend.Hash, 0); err != nil {
+			// 		s.logger.Errorf("[BACKUP_UTXO_STORE] failed to store utxo as backup in spendUtxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
+			// 	} else {
 			if err = s.spendUtxo(policy, spend); err != nil {
-				// TODO remove this hack
-				// TEMP TEMP TEMP - we need to figure out why utxos are not stored properly
-				// there are no double spends, so we can just ignore this error for now to be able to test performance
-				s.logger.Warnf("[BACKUP_UTXO_STORE] failed to spend utxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
-				if err = s.storeUtxo(util.GetAerospikeWritePolicy(0, 0), spend.Hash, 0); err != nil {
-					s.logger.Errorf("[BACKUP_UTXO_STORE] failed to store utxo as backup in spendUtxo %s on tx %s:%d: %v", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
-				} else {
-					if err = s.spendUtxo(policy, spend); err != nil {
-						_ = s.UnSpend(context.Background(), spentSpends)
-						return err
-					}
-					return nil
-				}
+				// 	_ = s.UnSpend(context.Background(), spentSpends)
+				// 	return err
+				// }
+				// return nil
+				// }
 
 				// revert the spent utxos
 				_ = s.UnSpend(context.Background(), spentSpends)
@@ -626,13 +629,13 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			}
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
-			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
+			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
 			lockTime, ok := value.Bins["locktime"].(uint32)
 			if !ok {
 				lockTime = 0
 			}
 
-			return utxostore.NewErrLockTime(lockTime, s.blockHeight)
+			return utxostore.NewErrLockTime(lockTime, s.blockHeight.Load())
 		}
 
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)

@@ -1,0 +1,24 @@
+@startuml
+!define RECTANGLE class
+
+RECTANGLE BlockAssembly {
+  <color:grey><i><size:10>This will push subtree</size></i></color>
+  <color:grey><i><size:10>to the shared filesystem
+}
+
+RECTANGLE BlockValidation {
+}
+
+RECTANGLE AssetService {
+}
+
+RECTANGLE LustreFS {
+}
+
+RECTANGLE S3 {}
+
+BlockAssembly -- LustreFS : subtrees TTL >
+BlockValidation -- LustreFS : subtrees TTL
+AssetService -- LustreFS : subtrees TTL <
+LustreFS -- S3 : subtrees (non-TTL) >
+@enduml

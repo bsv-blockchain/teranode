@@ -32,6 +32,7 @@ type Redis struct {
 }
 
 func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
+	logger.Infof("RedisClient using host: %v", u.Host)
 	o := &redis.Options{
 		Addr:        u.Host,
 		PoolTimeout: time.Duration(10) * time.Second,
@@ -64,6 +65,7 @@ func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Red
 
 func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
+	logger.Infof("RedisCluster using hosts: %v", hosts)
 
 	addrs := make([]string, 0)
 	addrs = append(addrs, hosts...)
@@ -100,6 +102,7 @@ func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Re
 
 func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
+	logger.Infof("RedisRing using hosts: %v", hosts)
 
 	addrs := make(map[string]string)
 	for i, host := range hosts {

@@ -172,7 +172,7 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 }
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
+	// s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
@@ -211,7 +211,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 }
 
 func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
-	s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
+	// s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
 	// not supported on files yet
 	return nil
 }

@@ -30,7 +30,7 @@ type baTestItems struct {
 	txMetaStore      *txmetastore.Memory
 	txStore          *memory.Memory
 	blobStore        *memory.Memory
-	newSubtreeChan   chan *util.Subtree
+	newSubtreeChan   chan subtreeprocessor.NewSubtreeRequest
 	blockAssembler   *BlockAssembler
 	blockchainClient blockchain.ClientI
 }
@@ -86,7 +86,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
-			subtree := <-testItems.newSubtreeChan
+			subtreeRequest := <-testItems.newSubtreeChan
+			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
 			assert.Equal(t, *model.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
@@ -304,7 +305,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items.txStore = memory.New()                              // tx memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-	items.newSubtreeChan = make(chan *util.Subtree)
+	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)

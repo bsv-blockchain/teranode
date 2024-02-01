@@ -36,52 +36,54 @@ services:
       timeout: 5s
       retries: 5
 
-  ubsv-1-blockchain:
-    <<: *ubsv-base
-    command: ["./ubsv", "-miner=0", "-coinbase=0", "-asset=0","-blockchain=1","-blockassembly=0","-blockvalidation=0"]
-    environment:
-      SETTINGS_CONTEXT: "docker.ci.ubsv1"
-      # asset_httpAddress: "http://ubsv-1:8090"
-      startBlockValidation: false
-      startBlockAssembly: false
-      # subtreestore: file:///data/ubsv1/subtreestore
-      # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      # coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      startTxMetaStore: "false"
-      startTxStore: "false"
-      startBootstrap: false
-      startP2P: false
-      feature_libP2P: false
-      feature_bootstrap: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
-      blockchain_grpcAddress: "localhost:8087"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-    # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
-    ports:
-      - "18087-18087:8087-8087"
-    expose:
-      - 8093-9099
-
   # Define node-specific configurations as extensions
+  # p2p-bootstrap-1:
+  #   build:
+  #     context: ./modules/p2pBootstrap
+  #     dockerfile: local.Dockerfile
+  #   environment:
+  #     P2P_BOOTSTRAP_PORT: 9901
+  #     SETTINGS_CONTEXT: "docker.ci.ubsv1"
+  #   networks:
+  #     - ubsv-network
+  #   ports:
+  #     - "19901:9901"
+
+  # p2p-bootstrap-2:
+  #   build:
+  #     context: ./modules/p2pBootstrap
+  #     dockerfile: local.Dockerfile
+  #   environment:
+  #     P2P_BOOTSTRAP_PORT: 9901
+  #     SETTINGS_CONTEXT: "docker.ci.ubsv2"
+  #   networks:
+  #     - ubsv-network
+  #   ports:
+  #     - "29901:9901"
+
+  # p2p-bootstrap-3:
+  #   build:
+  #     context: ./modules/p2pBootstrap
+  #     dockerfile: local.Dockerfile
+  #   environment:
+  #     P2P_BOOTSTRAP_PORT: 9901
+  #     SETTINGS_CONTEXT: "docker.ci.ubsv3"
+  #   networks:
+  #     - ubsv-network
+  #   ports:
+  #     - "39901:9901"
+
   ubsv-1:
     <<: *ubsv-base
-    command: ["./ubsv", "-miner=1", "-coinbase=0", "-asset=1","-blockchain=0","-blockassembly=0","-blockvalidation=0"]
+    command: ["./ubsv", "-miner=1", "-coinbase=0"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       startCoinbase: false
-      asset_httpAddress: "http://localhost:8090"
+      asset_httpAddress: "http://ubsv-1:8090"
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
       startTxStore: "true"
       txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
@@ -91,110 +93,23 @@ services:
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
       startP2P: true
-      startAsset: true
       feature_libP2P: true
       feature_bootstrap: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
-      blockchain_grpcAddress: "ubsv-1-blockchain:8087"
-      blockvalidation_grpcAddress: "ubsv-1-blockvalidation:8088"
-      # asset_grpcAddress: "ubsv-1-asset:8091"
-      coinbase_should_wait: true
-      coinbase_wait_until_block: 200
-      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
-      blockassembly_grpcAddress: "ubsv-1-blockassembly:8085"
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-    # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
-    ports:
-      - "18081-18084:8084-8084"
-      - "18086-18086:8086-8086"
-      - "18089-18089:8089-8089"
-      - "18090-18092:8090-8092"
-
-  ubsv-1-blockassembly:
-    <<: *ubsv-base
-    command: ["./ubsv", "-miner=0", "-coinbase=0", "-asset=0","-blockchain=0","-blockassembly=1"]
-    environment:
-      SETTINGS_CONTEXT: "docker.ci.ubsv1"
-      startCoinbase: false
-      asset_httpAddress: "http://ubsv-1:8090"
-      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
-      startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
-      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
-      startBootstrap: false
-      startP2P: true
-      startAsset: true
-      feature_libP2P: true
-      feature_bootstrap: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
-      blockchain_grpcAddress: "ubsv-1-blockchain:8087"
-      blockvalidation_grpcAddress: "ubsv-1-blockvalidation:8088"
-      # asset_grpcAddress: "ubsv-1-asset:8091"
-      coinbase_should_wait: true
-      coinbase_wait_until_block: 200
-      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-    # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
-    ports:
-      - "18085-18085:8085-8085"
-      # - "18090-18092:8090-8092"
-
-  ubsv-1-blockvalidation:
-    <<: *ubsv-base
-    command: ["./ubsv", "-miner=0", "-coinbase=0", "-asset=0","-blockchain=0","-blockassembly=0","-blockvalidation=1"]
-    environment:
-      SETTINGS_CONTEXT: "docker.ci.ubsv1"
-      startCoinbase: false
-      asset_httpAddress: "http://ubsv-1:8090"
-      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
-      startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
-      miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
-      startBootstrap: false
-      # startP2P: true
-      startAsset: true
-      feature_libP2P: true
-      feature_bootstrap: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
-      blockchain_grpcAddress: "ubsv-1-blockchain:8087"
+      blockchain_grpcAddress: "ubsv-1:8087"
       blockvalidation_httpAddress: "http://localhost:8088"
-      # asset_grpcAddress: "ubsv-1-asset:8091"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_shared_key: "285b49e6d910726a70f205086c39cbac6d8dcc47839053a21b1f614773bbc137"
+      p2p_bootstrapAddresses: "/dns4/eu-p2pbootstrap.ubsv.dev/tcp/9905/p2p/12D3KooWESmhNAN8s6NPdGNvJH3zJ4wMKDxapXKNUe2DzkAwKYqK|/dns4/us-p2pbootstrap.ubsv.dev/tcp/9905/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
     # volumes:
     #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
     #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
-      - "18088-18088:8088-8088"
-      # - "18090-18092:8090-8092"
+      - "18081-18089:8081-8089"
+      - "18090-18092:8090-8092"
 
   ubsv-1-coinbase:
     <<: *ubsv-base
@@ -204,11 +119,10 @@ services:
       asset_httpAddress: "http://ubsv-1:8090"
       startBlockValidation: false
       startBlockAssembly: false
-      # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      # blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
+      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      startTxMetaStore: "false"
       startTxStore: "false"
       mine_initial_blocks_count: 200
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -219,7 +133,7 @@ services:
       feature_bootstrap: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
-      blockchain_grpcAddress: "ubsv-1-blockchain:8087"
+      blockchain_grpcAddress: "ubsv-1:8087"
       coinbase_should_wait: true
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
@@ -245,7 +159,6 @@ services:
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
-      startTxMetaStore: "true"
       startTxStore: "true"
       txstore: file:///data/ubsv2/txstore
       subtreestore: file:///data/ubsv2/subtreestore
@@ -264,7 +177,7 @@ services:
       coinbase_wait_until_block: 200
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      # p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
     volumes:
       - ./data/ubsv2/txstore:/data/ubsv2/txstore
       - ./data/ubsv2/subtreestore:/data/ubsv2/subtreestore
@@ -284,7 +197,6 @@ services:
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      startTxMetaStore: "false"
       startTxStore: "false"
       # txstore: badger:///data/ubsv2/txstore
       # subtreestore: badger:///data/ubsv2/subtreestore
@@ -302,7 +214,7 @@ services:
       coinbase_grpcAddress: localhost:8093
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
     volumes:
       - ./data/ubsv1/txstore:/data/ubsv1/txstore
       - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
@@ -333,7 +245,7 @@ services:
       securityLevelHTTP: 0
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
     command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=true"]
@@ -440,6 +352,7 @@ services:
       coinbase_wait_until_block: 200
       coinbase_grpcAddress: localhost:8093
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
       - ./data/ubsv3/txstore:/data/ubsv3/txstore
       - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
@@ -479,18 +392,6 @@ services:
     volumes:
       - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
-
-  p2p-bootstrap-1:
-    build:
-      context: ./modules/p2pBootstrap
-      dockerfile: local.Dockerfile
-    environment:
-      P2P_BOOTSTRAP_PORT: 9901
-      SETTINGS_CONTEXT: "docker"
-    networks:
-      - ubsv-network
-    ports:
-      - "9901:9901"
 
 
 # Add more ubsv nodes as needed

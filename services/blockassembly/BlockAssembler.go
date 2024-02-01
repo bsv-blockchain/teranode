@@ -54,7 +54,7 @@ type BlockAssembler struct {
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
 	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)

@@ -122,7 +122,7 @@ func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 }
 
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
+	// s.logger.Debugf("[Badger] Set: %s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack())
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Set").AddTime(start)
@@ -150,7 +150,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 }
 
 func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	//s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
+	// s.logger.Debugf("[Badger] SetTTL: %s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack())
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("SetTTL").AddTime(start)
@@ -199,7 +199,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 		data, err := tx.Get(hash)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "badger key not found: %w", err)
+				return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
 			}
 			traceSpan.RecordError(err)
 			return err
