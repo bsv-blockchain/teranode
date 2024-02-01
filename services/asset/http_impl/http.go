@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
@@ -42,6 +43,18 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{echo.GET},
+	}))
+
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Skipper: func(c echo.Context) bool {
+			for _, str := range []string{"lastblocks", "json", "search", "blockstats", "blockgraphdata"} {
+				if strings.Contains(c.Path(), str) {
+					return false
+				}
+			}
+			// skip compression if none of the above endpoints match
+			return true
+		},
 	}))
 
 	h := &HTTP{
