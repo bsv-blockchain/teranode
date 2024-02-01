@@ -189,7 +189,6 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 	// start the new subtree listener in the background
 	go func() {
-		var subtreeBytes []byte
 		for {
 			select {
 			case <-ctx.Done():
@@ -198,7 +197,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 			case newSubtreeRequest := <-newSubtreeChan:
 
-				err = ba.storeSubtree(ctx, newSubtreeRequest.Subtree, subtreeBytes, subtreeRetryChan)
+				err = ba.storeSubtree(ctx, newSubtreeRequest.Subtree, subtreeRetryChan)
 				if err != nil {
 					ba.logger.Errorf(err.Error())
 				}
@@ -229,7 +228,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree, subtreeBytes []byte, subtreeRetryChan chan *subtreeRetrySend) (err error) {
+func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree, subtreeRetryChan chan *subtreeRetrySend) (err error) {
 	// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
 
 	// check whether this subtree already exists in the store, which would mean it has already been announced
@@ -243,6 +242,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	prometheusBlockAssemblerSubtreeCreated.Inc()
 	ba.logger.Infof("[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length())
 
+	var subtreeBytes []byte
 	if subtreeBytes, err = subtree.Serialize(); err != nil {
 		return fmt.Errorf("[BlockAssembly:Init][%s] failed to serialize subtree: %s", subtree.RootHash().String(), err)
 
