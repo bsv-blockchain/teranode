@@ -2,14 +2,15 @@ package util
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -259,13 +260,15 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						)
 					}
 
-					switch s.(type) {
+					switch i := s.(type) {
 					case int16:
-						aerospikePrometheusMetrics[key].Add(float64(s.(int16)))
+						aerospikePrometheusMetrics[key].Add(float64(i))
 					case int:
-						aerospikePrometheusMetrics[key].Add(float64(s.(int)))
+						aerospikePrometheusMetrics[key].Add(float64(i))
+					case float64:
+						aerospikePrometheusMetrics[key].Add(i)
 					default:
-						aerospikePrometheusMetrics[key].Add(s.(float64))
+						logger.Errorf("Unknown type for aerospike stat %s: %T", key, i)
 					}
 				}
 			}
