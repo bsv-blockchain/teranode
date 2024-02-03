@@ -82,10 +82,10 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 func (g *S3) Health(ctx context.Context) (int, string, error) {
 	_, err := g.Exists(ctx, []byte("Health"))
 	if err != nil {
-		return -1, "Minio Store", err
+		return -1, "S3 Store", err
 	}
 
-	return 0, "Minio Store", nil
+	return 0, "S3 Store", nil
 }
 
 func (g *S3) Close(_ context.Context) error {
