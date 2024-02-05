@@ -106,8 +106,10 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
-	threshold, _ := gocore.Config().GetInt("coinbase_notification_threshold", 100_000)
-	go c.monitorSpendableUTXOs(uint64(threshold))
+	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
+	if found {
+		go c.monitorSpendableUTXOs(uint64(threshold))
+	}
 
 	return c, nil
 }
@@ -859,7 +861,9 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		defer func() {
-			_ = txn.Rollback()
+			if err := txn.Rollback(); err != nil {
+				return fmt.Errorf("insertSpendableUTXOs: could not rollback transaction: %w", err)
+			}
 		}()
 
 		stmt, err = txn.Prepare(pq.CopyIn("spendable_utxos", "txid", "vout", "locking_script", "satoshis"))
