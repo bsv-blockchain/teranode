@@ -137,16 +137,13 @@ func main() {
 		var ok bool
 		profilerAddr, ok = gocore.Config().Get("profilerAddr")
 		if ok {
-			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
-			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
-		}
-	}()
+			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
-	go func() {
-		statisticsServerAddr, found := gocore.Config().Get("gocore_stats_addr")
-		if found {
-			servicemanager.AddListenerInfo(fmt.Sprintf("StatsServer HTTP listening on %s", statisticsServerAddr))
-			gocore.StartStatsServer(statisticsServerAddr)
+			gocore.RegisterStatsHandlers()
+			prefix, _ := gocore.Config().Get("stats_prefix")
+			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
 		}
 	}()
 
