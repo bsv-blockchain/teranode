@@ -19,6 +19,7 @@ export default defineConfig({
             // return 'vendor' // all other package goes here
           }
           if (id.includes('.svg')) {
+            // console.log('manualChunks: id = ', id)
             if (
               [
                 'icon-search',
@@ -27,16 +28,18 @@ export default defineConfig({
                 'icon-p2p',
                 'icon-network',
                 'icon-chevron',
-              ].includes(id)
+              ].some((str) => id.includes(str))
             ) {
               return 'icons_nav'
             } else if (
-              ['icon-cube', 'icon-arrow-transfer', 'icon-scale', 'icon-status'].includes(id)
+              ['icon-cube', 'icon-arrow-transfer', 'icon-scale', 'icon-status'].some((str) =>
+                id.includes(str),
+              )
             ) {
               return 'icons_nav'
             } else if (
-              ['check-circle', 'exclamation-circle', 'exclamation', 'information-circle'].includes(
-                id,
+              ['check-circle', 'exclamation-circle', 'exclamation', 'information-circle'].some(
+                (str) => id.includes(str),
               )
             ) {
               return 'icons_toast'
