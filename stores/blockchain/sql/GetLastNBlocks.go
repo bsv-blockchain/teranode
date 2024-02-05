@@ -109,6 +109,8 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		return nil, err
 	}
 
+	defer rows.Close()
+
 	blockInfos := make([]*model.BlockInfo, 0)
 
 	for rows.Next() {
