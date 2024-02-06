@@ -26,7 +26,7 @@ vite.config.js.timestamp-*
 
 vite.config.ts.timestamp-*
 
-private_key
+*.private_key
 
 coverage.out
 
