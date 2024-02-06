@@ -76,14 +76,17 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}()
 
+			ctxTimeout, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+
 			// add data to block validation cache
-			if err := validator.blockValidationClient.SetTxMeta(ctx, batch); err != nil {
+			if err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch); err != nil {
 				validator.logger.Errorf("error sending tx meta batch to block validation cache: %v", err)
 			}
 		}
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
 		batchTimeOut, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchTimeoutMillis", 10)
-		validator.blockValidationBatcher = *batcher.New[txmeta.Data](batchSize, time.Duration(batchTimeOut)*time.Millisecond, sendBatch, false)
+		validator.blockValidationBatcher = *batcher.New[txmeta.Data](batchSize, time.Duration(batchTimeOut)*time.Millisecond, sendBatch, true)
 	}
 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
@@ -297,9 +300,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	}
 
 	if v.blockValidationClient != nil && v.blockValidationBatcherEnabled {
-		go func() {
-			v.blockValidationBatcher.Put(data)
-		}()
+		v.blockValidationBatcher.Put(data)
 	}
 
 	return data, nil
