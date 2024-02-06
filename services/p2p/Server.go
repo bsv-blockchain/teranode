@@ -39,7 +39,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-const privateKeyFilename = "private_key"
+var privateKeyFilename = fmt.Sprintf("peer.%s.p2p.private_key", gocore.Config().GetContext())
 
 var (
 	topicPrefix         string
@@ -390,6 +390,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					s.logger.Errorf("json marshal error: ", err)
 					continue
 				}
+				s.logger.Debugf("P2P publishing miningOnMessage")
 				if err = s.topics[miningOnTopicName].Publish(ctx, msgBytes); err != nil {
 					s.logger.Errorf("publish error:", err)
 				}
@@ -629,7 +630,7 @@ ConnectLoop:
 							//  we fail to connect to a lot of peers. Just ignore it for now.
 							// s.logger.Debugf("Failed connecting to ", peer.ID.Pretty(), ", error:", err)
 						} else {
-							s.logger.Debugf("Connected to:", p.ID.String())
+							s.logger.Debugf("Connected to:", p.String())
 							anyConnected = true
 						}
 					}
