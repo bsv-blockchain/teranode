@@ -39,7 +39,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var privateKeyFilename = fmt.Sprintf("peer.%s.p2p.private_key", gocore.Config().GetContext())
+const privateKeyFilename = "private_key"
 
 var (
 	topicPrefix         string
