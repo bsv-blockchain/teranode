@@ -1,7 +1,6 @@
 package util
 
 import (
-	"database/sql"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/labstack/gommon/random"
 	"github.com/ordishs/gocore"
 )
@@ -22,7 +22,7 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
-func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 	switch storeUrl.Scheme {
 	case "postgres":
 		return InitPostgresDB(logger, storeUrl)
@@ -33,7 +33,7 @@ func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 	dbHost := storeUrl.Hostname()
 	port := storeUrl.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -47,7 +47,7 @@ func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 
 	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable host=%s port=%d", dbUser, dbPassword, dbName, dbHost, dbPort)
 
-	db, err := sql.Open(storeUrl.Scheme, dbInfo)
+	db, err := usql.Open(storeUrl.Scheme, dbInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open postgres DB: %+v", err)
 	}
@@ -62,7 +62,7 @@ func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 	return db, nil
 }
 
-func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
+func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 	var filename string
 	var err error
 
@@ -89,8 +89,8 @@ func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*sql.DB, error) {
 
 	logger.Infof("Using sqlite DB: %s", filename)
 
-	var db *sql.DB
-	db, err = sql.Open("sqlite", filename)
+	var db *usql.DB
+	db, err = usql.Open("sqlite", filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite DB: %+v", err)
 	}

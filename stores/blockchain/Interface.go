@@ -2,11 +2,11 @@ package blockchain
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -18,7 +18,7 @@ var (
 )
 
 type Store interface {
-	GetDB() *sql.DB
+	GetDB() *usql.DB
 	GetDBEngine() util.SQLEngine
 	GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error)
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)

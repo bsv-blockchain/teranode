@@ -95,7 +95,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	c := &Coinbase{
 		store:        store,
-		db:           &usql.DB{DB: store.GetDB()},
+		db:           store.GetDB(),
 		engine:       engine,
 		blockFoundCh: make(chan processBlockFound, 100),
 		catchupCh:    make(chan processBlockCatchup),
@@ -862,7 +862,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 
 		defer func() {
 			if err := txn.Rollback(); err != nil {
-				return fmt.Errorf("insertSpendableUTXOs: could not rollback transaction: %w", err)
+				c.logger.Errorf("insertSpendableUTXOs: could not rollback transaction: %w", err)
 			}
 		}()
 
