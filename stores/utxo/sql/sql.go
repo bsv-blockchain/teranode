@@ -233,6 +233,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 
 		for _, hash := range utxoHashes {
 			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
+				s.logger.Errorf("error storing utxo: %s", err.Error())
 				return err
 			}
 		}
