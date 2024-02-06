@@ -150,6 +150,7 @@
         use:$tippy={{ content: item.tooltip }}
         role="option"
         aria-selected={item.value === value}
+        aria-label={item.label}
         tabindex={-1}
       >
         <!-- <Icon name={item.icon} style="--icon-size:var(--toggle-icon-size, 16px)" /> -->
