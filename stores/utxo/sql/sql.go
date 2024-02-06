@@ -137,7 +137,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 
 	s := &Store{
 		logger:    logger,
-		db:        &usql.DB{DB: db},
+		db:        db,
 		engine:    storeUrl.Scheme,
 		dbTimeout: time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
@@ -233,6 +233,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 
 		for _, hash := range utxoHashes {
 			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
+				s.logger.Errorf("error storing utxo: %s", err.Error())
 				return err
 			}
 		}
@@ -422,7 +423,7 @@ func (s *Store) delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func createPostgresSchema(db *sql.DB) error {
+func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS utxos (
 	    id            BIGSERIAL PRIMARY KEY
@@ -444,7 +445,7 @@ func createPostgresSchema(db *sql.DB) error {
 	return nil
 }
 
-func createSqliteSchema(db *sql.DB) error {
+func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS utxos (
 		 id           INTEGER PRIMARY KEY AUTOINCREMENT

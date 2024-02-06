@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -103,6 +104,13 @@ func main() {
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 	logger := initLogger(serviceName)
 
+	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
+	if shouldStart("wait_for_postgres") {
+		if err := waitForPostgresToStart(logger); err != nil {
+			logger.Fatalf("error waiting for postgres: %v", err)
+		}
+	}
+
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
@@ -129,16 +137,13 @@ func main() {
 		var ok bool
 		profilerAddr, ok = gocore.Config().Get("profilerAddr")
 		if ok {
-			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
-			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
-		}
-	}()
+			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
-	go func() {
-		statisticsServerAddr, found := gocore.Config().Get("gocore_stats_addr")
-		if found {
-			servicemanager.AddListenerInfo(fmt.Sprintf("StatsServer HTTP listening on %s", statisticsServerAddr))
-			gocore.StartStatsServer(statisticsServerAddr)
+			gocore.RegisterStatsHandlers()
+			prefix, _ := gocore.Config().Get("stats_prefix")
+			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
 		}
 	}()
 
@@ -512,4 +517,33 @@ func printUsage() {
 	fmt.Println("    -tracer=<1|0>")
 	fmt.Println("          whether to start the Jaeger tracer (default=false)")
 	fmt.Println("")
+}
+
+func waitForPostgresToStart(logger ulogger.Logger) error {
+	host := "localhost"
+	port := "5432"
+
+	timeout := time.Minute // 1 minutes timeout
+
+	address := net.JoinHostPort(host, port)
+	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		conn, err := net.DialTimeout("tcp", address, time.Second)
+		if err != nil {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("Timed out waiting for PostgreSQL to start: %w", err)
+			}
+
+			logger.Infof("PostgreSQL is not up yet - waiting")
+			time.Sleep(time.Second)
+			continue
+		}
+
+		_ = conn.Close()
+		logger.Infof("PostgreSQL is up - ready to go!")
+		return nil
+	}
 }

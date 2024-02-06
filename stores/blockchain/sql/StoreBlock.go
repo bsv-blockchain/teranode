@@ -169,6 +169,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 		return 0, err
 	}
 
+	defer rows.Close()
+
 	rowFound := rows.Next()
 	if !rowFound {
 		return 0, fmt.Errorf("block already exists: %s", block.Hash())

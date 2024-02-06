@@ -3,10 +3,14 @@ package util
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/aerospike/aerospike-client-go/v6"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -36,6 +40,8 @@ var writeExitFastOnExhaustedConnectionPool bool
 var batchTotalTimeout time.Duration
 var batchAllowInlineSSD bool
 var concurrentNodes int
+
+var aerospikePrometheusMetrics = map[string]prometheus.Counter{}
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
@@ -194,7 +200,82 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		}
 	}
 
+	initStats(logger, client)
+
 	return client, nil
+}
+
+func initStats(logger ulogger.Logger, client *uaerospike.Client) {
+	var nonAlphanumericRegex, _ = regexp.Compile(`[^a-zA-Z0-9]+`)
+
+	aerospikeStatsRefresh, _ := gocore.Config().GetInt("aerospike_statsRefresh", 5)
+	aerospikeStatsRefreshInterval := time.Duration(aerospikeStatsRefresh) * time.Second
+
+	go func() {
+		for {
+			if !client.IsConnected() {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			stats, err := client.Stats()
+			if err != nil {
+				logger.Errorf("Error getting aerospike stats: %s", err.Error())
+				continue
+			}
+
+			// stats are: map[string]interface {} of
+			// "server" -> map[string]interface{}
+			// "cluster-aggregated-stats" -> map[string]interface{}
+			// open-connections -> int16
+			for key, stat := range stats {
+				key := nonAlphanumericRegex.ReplaceAllString(key, "_")
+				switch s := stat.(type) {
+				case map[string]interface{}:
+					for subKey, subStat := range s {
+						subKey := nonAlphanumericRegex.ReplaceAllString(subKey, "_")
+						prometheusKey := fmt.Sprintf("%s_%s", key, subKey)
+						// create prometheus metric, if not exists
+						if _, ok := aerospikePrometheusMetrics[prometheusKey]; !ok {
+							aerospikePrometheusMetrics[prometheusKey] = promauto.NewCounter(
+								prometheus.CounterOpts{
+									Namespace: "aerospike_client",
+									Subsystem: key,
+									Name:      subKey,
+									Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
+								},
+							)
+						}
+
+						aerospikePrometheusMetrics[prometheusKey].Add(subStat.(float64))
+					}
+				default:
+					if _, ok := aerospikePrometheusMetrics[key]; !ok {
+						aerospikePrometheusMetrics[key] = promauto.NewCounter(
+							prometheus.CounterOpts{
+								Namespace: "aerospike_client",
+								Name:      key,
+								Help:      fmt.Sprintf("Aerospike stat %s", key),
+							},
+						)
+					}
+
+					switch i := s.(type) {
+					case int16:
+						aerospikePrometheusMetrics[key].Add(float64(i))
+					case int:
+						aerospikePrometheusMetrics[key].Add(float64(i))
+					case float64:
+						aerospikePrometheusMetrics[key].Add(i)
+					default:
+						logger.Errorf("Unknown type for aerospike stat %s: %T", key, i)
+					}
+				}
+			}
+
+			time.Sleep(aerospikeStatsRefreshInterval)
+		}
+	}()
 }
 
 func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Logger) bool {

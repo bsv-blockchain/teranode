@@ -95,7 +95,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	c := &Coinbase{
 		store:        store,
-		db:           &usql.DB{DB: store.GetDB()},
+		db:           store.GetDB(),
 		engine:       engine,
 		blockFoundCh: make(chan processBlockFound, 100),
 		catchupCh:    make(chan processBlockCatchup),
@@ -106,8 +106,10 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
-	threshold, _ := gocore.Config().GetInt("coinbase_notification_threshold", 100_000)
-	go c.monitorSpendableUTXOs(uint64(threshold))
+	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
+	if found {
+		go c.monitorSpendableUTXOs(uint64(threshold))
+	}
 
 	return c, nil
 }
@@ -259,17 +261,17 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := c.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_processed_at index - [%+v]", err)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_spendable_utxos_inserted_at index - [%+v]", err)
 	}
@@ -470,12 +472,15 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 	}
 
 	_, _, ctx = util.NewStatFromContext(context.Background(), "go routine", stat, false)
-	go c.createSpendingUtxos(ctx, timestamp)
+
+	if err := c.createSpendingUtxos(ctx, timestamp); err != nil {
+		return fmt.Errorf("could not create spending utxos: %w", err)
+	}
 
 	return nil
 }
 
-func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) error {
 	start, stat, ctx := util.StartStatFromContext(ctx, "createSpendingUtxos")
 	defer func() {
 		stat.AddTime(start)
@@ -496,8 +501,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 	rows, err := c.db.QueryContext(ctx, q, timestamp)
 	if err != nil {
-		c.logger.Errorf("could not get coinbase utxos: %+v", err)
-		return
+		return fmt.Errorf("could not get coinbase utxos: %w", err)
 	}
 
 	defer rows.Close()
@@ -509,14 +513,12 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		var satoshis uint64
 
 		if err := rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
-			c.logger.Errorf("could not scan coinbase utxo: %+v", err)
-			return
+			return fmt.Errorf("could not scan coinbase utxo: %w", err)
 		}
 
 		hash, err := chainhash.NewHash(txid)
 		if err != nil {
-			c.logger.Errorf("could not create hash from txid: %+v", err)
-			continue
+			return fmt.Errorf("could not create hash from txid: %w", err)
 		}
 
 		utxo := &bt.UTXO{
@@ -529,9 +531,11 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", hash, vout)
 
 		if err := c.splitUtxo(ctx, utxo); err != nil {
-			c.logger.Errorf("could not split utxo: %+v", err)
+			return fmt.Errorf("could not split utxo: %w", err)
 		}
 	}
+
+	return nil
 }
 
 func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
@@ -859,6 +863,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		defer func() {
+			// Silently ignore rollback errors
 			_ = txn.Rollback()
 		}()
 

@@ -34,7 +34,7 @@ func startServices() {
 	composeFilePath := filepath.Join("..", "..", "..", "..", "docker-compose-ci-template.yml")
 
 	// Start the Docker services in the background
-	startService(fmt.Sprintf("docker-compose -f %s up -d p2p-bootstrap-1", composeFilePath))
+	startService(fmt.Sprintf("docker-compose -f %s up -d p2p-bootstrap-1 p2p-bootstrap-2 p2p-bootstrap-3", composeFilePath))
 	time.Sleep(10 * time.Second)
 	startService(fmt.Sprintf("docker-compose -f %s up -d postgres", composeFilePath))
 	time.Sleep(10 * time.Second)
@@ -47,11 +47,14 @@ func startServices() {
 	checkBlocks("http://localhost:38090", 305)
 
 	// Start the Coinbase services in the background
-	startService(fmt.Sprintf("docker-compose -f %s up -d ubsv-1-coinbase ubsv-2-coinbase", composeFilePath))
+	startService(fmt.Sprintf("docker-compose -f %s up -d ubsv-1-coinbase ubsv-2-coinbase ubsv-3-coinbase", composeFilePath))
 	time.Sleep(10 * time.Second)
-	checkBlocks("http://localhost:18090", 310)
-	checkBlocks("http://localhost:28090", 310)
-	checkBlocks("http://localhost:38090", 310)
+	checkBlocks("http://localhost:18090", 315)
+	checkBlocks("http://localhost:28090", 315)
+	checkBlocks("http://localhost:38090", 315)
+
+	// Start the TxBlaster services in the background
+	startService(fmt.Sprintf("docker-compose -f %s up -d tx-blaster-1 tx-blaster-2 tx-blaster-3", composeFilePath))
 }
 
 func cleanup() {
