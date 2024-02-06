@@ -178,7 +178,7 @@ func (s *PeerConnection) SetTopicHandler(ctx context.Context, topicName string, 
 				}
 
 				s.logger.Debugf("[PeerConnection][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
-				handler(m.Data, m.ReceivedFrom.ShortString())
+				handler(m.Data, m.ReceivedFrom.String())
 			}
 		}
 	}()
@@ -297,7 +297,7 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 				for p := range peerChan {
 
 					if p.ID == s.host.ID() {
-						// s.logger.Debugf("[PeerConnection][%s] Ignoring self for topic %s", p.ID.String(), topicName)
+						// s.logger.Debugf("[PeerConnection][%s] Ignoring self for topic %s", p.String(), topicName)
 						continue // No self connection
 					}
 
@@ -306,16 +306,16 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 						continue
 					}
 
-					// s.logger.Debugf("[PeerConnection]%+v[%s] Connecting for topic %s", p, p.ID.String(), topicName)
+					// s.logger.Debugf("[PeerConnection]%+v[%s] Connecting for topic %s", p, p.String(), topicName)
 					err = s.host.Connect(ctx, p)
 					if err != nil {
 						// A peer may not be available at the time of discovery.
 						// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
 						// Logging each attempt to connect to these peers is too noisy
 
-						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.ID.String(), topicName, err)
+						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
 					} else {
-						s.logger.Debugf("[PeerConnection][%s] Connected to topic %s", p.ID.String(), topicName)
+						s.logger.Debugf("[PeerConnection][%s] Connected to topic %s", p.String(), topicName)
 					}
 				}
 				time.Sleep(5 * time.Second)
