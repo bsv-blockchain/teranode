@@ -863,9 +863,8 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		defer func() {
-			if err := txn.Rollback(); err != nil {
-				c.logger.Errorf("insertSpendableUTXOs: could not rollback transaction: %w", err)
-			}
+			// Silently ignore rollback errors
+			_ = txn.Rollback()
 		}()
 
 		stmt, err = txn.Prepare(pq.CopyIn("spendable_utxos", "txid", "vout", "locking_script", "satoshis"))
