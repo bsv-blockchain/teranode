@@ -472,12 +472,15 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 	}
 
 	_, _, ctx = util.NewStatFromContext(context.Background(), "go routine", stat, false)
-	go c.createSpendingUtxos(ctx, timestamp)
+
+	if err := c.createSpendingUtxos(ctx, timestamp); err != nil {
+		return fmt.Errorf("could not create spending utxos: %w", err)
+	}
 
 	return nil
 }
 
-func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) error {
 	start, stat, ctx := util.StartStatFromContext(ctx, "createSpendingUtxos")
 	defer func() {
 		stat.AddTime(start)
@@ -498,8 +501,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 	rows, err := c.db.QueryContext(ctx, q, timestamp)
 	if err != nil {
-		c.logger.Errorf("could not get coinbase utxos: %+v", err)
-		return
+		return fmt.Errorf("could not get coinbase utxos: %w", err)
 	}
 
 	defer rows.Close()
@@ -511,14 +513,12 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		var satoshis uint64
 
 		if err := rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
-			c.logger.Errorf("could not scan coinbase utxo: %+v", err)
-			return
+			return fmt.Errorf("could not scan coinbase utxo: %w", err)
 		}
 
 		hash, err := chainhash.NewHash(txid)
 		if err != nil {
-			c.logger.Errorf("could not create hash from txid: %+v", err)
-			continue
+			return fmt.Errorf("could not create hash from txid: %w", err)
 		}
 
 		utxo := &bt.UTXO{
@@ -531,9 +531,11 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", hash, vout)
 
 		if err := c.splitUtxo(ctx, utxo); err != nil {
-			c.logger.Errorf("could not split utxo: %+v", err)
+			return fmt.Errorf("could not split utxo: %w", err)
 		}
 	}
+
+	return nil
 }
 
 func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
