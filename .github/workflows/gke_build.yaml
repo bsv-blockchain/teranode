@@ -77,3 +77,4 @@ jobs:
             RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest
