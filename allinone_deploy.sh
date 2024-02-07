@@ -31,7 +31,7 @@ fi
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 IMAGE_TAG=$(git rev-parse HEAD)
-IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest"
+IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest-arm64"
 
 REGION=$(kubectl config view --minify --output 'jsonpath={..name}' | cut -d ' ' -f1 | cut -d ':' -f 4)
 NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
