@@ -67,38 +67,71 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+	logger := ulogger.TestLogger{}
+	c := NewTxMetaCache(ctx, logger, memory.New(logger))
 	cache := c.(*TxMetaCache)
 
+	// Pre-generate all hashes
 	hashes := make([]chainhash.Hash, b.N)
 	for i := 0; i < b.N; i++ {
 		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
 
-	// runtime.SetCPUProfileRate(500)
-	// f, _ := os.Create("cpu.prof")
-	// defer f.Close()
-
-	// _ = pprof.StartCPUProfile(f)
-	// defer pprof.StopCPUProfile()
-
 	b.ResetTimer()
 
-	g := errgroup.Group{}
+	g := new(errgroup.Group)
 	for i := 0; i < b.N; i++ {
-		i := i
+		hash := hashes[i]
 		g.Go(func() error {
-			return cache.SetCache(&hashes[i], &txmeta.Data{})
+			return cache.SetCache(&hash, &txmeta.Data{})
 		})
 	}
 
 	err := g.Wait()
 	require.NoError(b, err)
+}
 
-	// f, _ = os.Create("mem.prof")
-	// defer f.Close()
-	// _ = pprof.WriteHeapProfile(f)
+func Benchmark_txMetaCache_Get(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	c := NewTxMetaCache(ctx, logger, memory.New(logger))
+	cache := c.(*TxMetaCache)
 
+	meta := &txmeta.Data{
+		Fee:            100,
+		SizeInBytes:    111,
+		ParentTxHashes: []chainhash.Hash{},
+	}
+
+	iterationCount := 50_000
+
+	// Pre-generate and pre-populate the cache
+	hashes := make([]chainhash.Hash, iterationCount)
+	for i := 0; i < iterationCount; i++ {
+		hash := chainhash.HashH([]byte(string(rune(i))))
+		hashes[i] = hash
+		if err := cache.SetCache(&hash, meta); err != nil {
+			b.Fatalf("pre-population of cache failed: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+
+	g := new(errgroup.Group)
+	for i := 0; i < iterationCount; i++ {
+		hash := hashes[i]
+		g.Go(func() error {
+			_, found := cache.GetCache(&hash)
+			//require.True(b, found, "cache miss")
+			if !found {
+				b.Fatalf("cache miss")
+			}
+			return nil
+		})
+	}
+
+	err := g.Wait()
+	require.NoError(b, err)
 }
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
