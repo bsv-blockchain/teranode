@@ -7,60 +7,6 @@ import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/ind
 const baseKey = 'page.viewer-block.subtrees'
 const labelKey = `${baseKey}.col-defs-label`
 
-export const mockData = {
-  data: [
-    {
-      height: 1000,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1001,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1002,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1003,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1004,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1005,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-    {
-      height: 1006,
-      hash: '0000000000000000084e2487ac4ab69e7418a5a4d19bb53ad3bc5dd859543684',
-      transactionCount: Math.random() * 200,
-      fee: `${(Math.random() * 100).toFixed(2)} BSV`,
-      size: Math.random() * 200,
-    },
-  ],
-}
-
 export const getColDefs = (t) => {
   return [
     {
