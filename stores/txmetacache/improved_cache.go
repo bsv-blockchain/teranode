@@ -9,8 +9,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxValueSizeKB = 2
-const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
+const maxValueSizeKB = 32
+const maxValueSizeLog = 15 // 10 + log2(maxValueSizeKB)
 
 const chunksPerAlloc = 1024
 
@@ -34,10 +34,10 @@ type Stats struct {
 	EntriesCount uint64
 
 	// BytesSize is the current size of the cache in bytes.
-	BytesSize uint64
+	//BytesSize uint64
 
 	// MaxBytesSize is the maximum allowed size of the cache in bytes (aka capacity).
-	MaxBytesSize uint64
+	//MaxBytesSize uint64
 }
 
 // Reset resets s, so it may be re-used again in Cache.UpdateStats.
@@ -152,12 +152,6 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 	for i := range c.buckets[:] {
 		c.buckets[i].UpdateStats(s)
 	}
-	// s.GetBigCalls += atomic.LoadUint64(&c.bigStats.GetBigCalls)
-	// s.SetBigCalls += atomic.LoadUint64(&c.bigStats.SetBigCalls)
-	// s.TooBigKeyErrors += atomic.LoadUint64(&c.bigStats.TooBigKeyErrors)
-	// s.InvalidMetavalueErrors += atomic.LoadUint64(&c.bigStats.InvalidMetavalueErrors)
-	// s.InvalidValueLenErrors += atomic.LoadUint64(&c.bigStats.InvalidValueLenErrors)
-	// s.InvalidValueHashErrors += atomic.LoadUint64(&c.bigStats.InvalidValueHashErrors)
 }
 
 type bucket struct {
@@ -232,20 +226,14 @@ func (b *bucket) cleanLocked() {
 }
 
 func (b *bucket) UpdateStats(s *Stats) {
-	// s.GetCalls += atomic.LoadUint64(&b.getCalls)
-	// s.SetCalls += atomic.LoadUint64(&b.setCalls)
-	// s.Misses += atomic.LoadUint64(&b.misses)
-	// s.Collisions += atomic.LoadUint64(&b.collisions)
-	// s.Corruptions += atomic.LoadUint64(&b.corruptions)
-
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
 	bytesSize := uint64(0)
 	for _, chunk := range b.chunks {
 		bytesSize += uint64(cap(chunk))
 	}
-	s.BytesSize += bytesSize
-	s.MaxBytesSize += uint64(len(b.chunks)) * chunkSize
+	//s.BytesSize += bytesSize
+	//s.MaxBytesSize += uint64(len(b.chunks)) * chunkSize
 	b.mu.RUnlock()
 }
 

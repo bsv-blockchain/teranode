@@ -223,8 +223,8 @@ func (t *TxMetaCache) Length() int {
 	return int(s.EntriesCount)
 }
 
-func (t *TxMetaCache) BytesSize() int {
-	s := &Stats{}
-	t.cache.UpdateStats(s)
-	return int(s.BytesSize)
-}
+// func (t *TxMetaCache) BytesSize() int {
+// 	s := &Stats{}
+// 	t.cache.UpdateStats(s)
+// 	return int(s.BytesSize)
+// }
