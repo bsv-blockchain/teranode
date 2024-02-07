@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
-  import { shortHash } from '$lib/utils/format'
   import { getDetailsUrl } from '$internal/utils/urls'
   import i18n from '../../i18n'
 
@@ -8,13 +8,18 @@
 
   const baseKey = 'comp.breadcrumbs.page'
 
-  $: searchParams = new URLSearchParams($page.url.search)
+  let ready = false
+  $: searchParams = ready ? new URLSearchParams($page.url.search) : null
+
+  beforeUpdate(() => {
+    ready = true
+  })
 
   let data: any[] = []
 
   $: {
     const tmp: any[] = []
-    const pathname = $page.url.pathname
+    const pathname = ready ? $page.url.pathname : ''
 
     let paths = pathname.split('/').filter((path) => path.length > 0)
 
@@ -34,7 +39,7 @@
             selected: paths.length === 1,
           })
           const type = paths[1]
-          const hash = searchParams.get('hash') || ''
+          const hash = searchParams ? searchParams.get('hash') || '' : ''
           if (paths.length === 2 && hash) {
             tmp.push({
               label: $i18n.t(`${baseKey}.viewer.page.${type}.title`),

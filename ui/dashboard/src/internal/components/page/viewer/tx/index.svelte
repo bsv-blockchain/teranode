@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import TxDetailsCard from './tx-details-card/index.svelte'
   import TxIoCard from './tx-io-card/index.svelte'
@@ -10,13 +11,19 @@
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
+  let ready = false
   const type = 'tx'
+
   export let hash = ''
 
   let display: DetailTab
 
-  $: tab = new URLSearchParams($page.url.search).get('tab') || ''
+  $: tab = ready ? new URLSearchParams($page.url.search).get('tab') || '' : ''
   $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
+
+  beforeUpdate(() => {
+    ready = true
+  })
 
   let result: any = null
 

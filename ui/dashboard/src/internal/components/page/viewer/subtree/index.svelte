@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import SubtreeDetailsCard from './subtree-details-card/index.svelte'
   import SubtreeTxsCard from './subtree-txs-card/index.svelte'
@@ -10,14 +11,20 @@
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
+  let ready = false
   const type = 'subtree'
+
   export let hash = ''
 
-  $: blockHash = $page.url.searchParams.get('blockHash')
+  $: blockHash = ready ? $page.url.searchParams.get('blockHash') : ''
+
+  beforeUpdate(() => {
+    ready = true
+  })
 
   let display: DetailTab
 
-  $: tab = new URLSearchParams($page.url.search).get('tab') || ''
+  $: tab = ready ? new URLSearchParams($page.url.search).get('tab') || '' : ''
   $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
 
   let result: any = null

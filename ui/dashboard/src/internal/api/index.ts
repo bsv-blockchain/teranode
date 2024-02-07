@@ -1,10 +1,5 @@
-import { env } from '$env/dynamic/public'
 import { spinCount } from '../stores/nav'
 import { assetHTTPAddress } from '$internal/stores/nodeStore'
-
-console.log('env.PUBLIC_BASE_URL = ', env.PUBLIC_BASE_URL)
-
-// const PUBLIC_BASE_URL = env.PUBLIC_BASE_URL
 
 export enum ItemType {
   block = 'block',
@@ -132,6 +127,6 @@ export function getBlockStats(done?, fail?) {
   return get(`${baseUrl}/blockstats`, {}, done, fail)
 }
 
-export function getBlockGraphData(data: {periodMillis: number}, done?, fail?) {
+export function getBlockGraphData(data: { periodMillis: number }, done?, fail?) {
   return get(`${baseUrl}/blockgraphdata?periodMillis=${data.periodMillis}`, {}, done, fail)
 }

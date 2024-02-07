@@ -5,6 +5,8 @@
   import * as api from '$internal/api'
   import { failure } from '$lib/utils/notifications'
 
+  let isMounted = false
+
   // stats
   let statsLoading = true
   let statsData = {}
@@ -72,9 +74,9 @@
     }
   }
 
-  let rangeMillis = oneDayMillis
+  let rangeMillis
 
-  $: if (rangeMillis) {
+  $: if (isMounted && rangeMillis) {
     let from = new Date().getTime() - rangeMillis
 
     getBlockGraphData(from)
@@ -90,6 +92,9 @@
     getStatsData()
 
     // graph
+    isMounted = true
+    rangeMillis = oneDayMillis
+
     const timeoutId = setTimeout(async () => {
       Graph = (await import('$internal/components/page/home/home-stats-graph/index.svelte')).default
     }, 10)

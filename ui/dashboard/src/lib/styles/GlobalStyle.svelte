@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { theme as themeStore } from '$lib/stores/media'
   import deepmerge from 'deepmerge'
 
   import { defaults, light } from './themes'
@@ -29,7 +30,8 @@
         }
       }
       themeProps = deepmerge(themeProps, customThemeProps)
-      localStorage.setItem('theme', theme)
+
+      $themeStore = theme
     } else {
       themeProps = light
     }
