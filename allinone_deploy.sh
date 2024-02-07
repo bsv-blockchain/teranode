@@ -46,13 +46,13 @@ case $REGION in
         TRAEFIK=$(kubectl get namespaces traefik --output 'jsonpath={..name}')
         if [[ -z $TRAEFIK ]]; then
             echo "Traefik is not installed, installing it now..."
-            kubectl create namespace traefik
             helm repo add traefik https://traefik.github.io/charts
             helm repo update
-            helm install traefik traefik/traefik
+            kubectl create namespace traefik
+            helm install traefik traefik/traefik --namespace traefik
         fi
 
-        docker pull $IMAGE_NAME
+        docker pull $IMAGE_NAME > /dev/null
         if [[ $? -ne 0 ]]; then
             echo "Failed to pull image: $IMAGE_NAME"
             echo "Login to ECR and try again."
@@ -88,9 +88,7 @@ esac
 
 cd $DIR/deploy/k8s/base/allinone-miner
 
-kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$(git rev-parse HEAD)
-# kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:ae32fd77d3f2f747c0787fd04b2ec7931afd32c7
-
+kustomize edit set image REPO:IMAGE:TAG=$IMAGE_NAME
 
 cd $DIR/deploy/k8s/$REGION/allinone
 

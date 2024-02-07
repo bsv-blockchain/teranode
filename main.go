@@ -520,12 +520,10 @@ func printUsage() {
 }
 
 func waitForPostgresToStart(logger ulogger.Logger) error {
-	host := "localhost"
-	port := "5432"
+	address, _ := gocore.Config().Get("postgres_check_address", "localhost:5432")
 
 	timeout := time.Minute // 1 minutes timeout
 
-	address := net.JoinHostPort(host, port)
 	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)
 
 	deadline := time.Now().Add(timeout)
