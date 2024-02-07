@@ -1,0 +1,346 @@
+package txmetacache
+
+import (
+	"fmt"
+	"sync"
+	"unsafe"
+
+	"github.com/cespare/xxhash"
+	"golang.org/x/sys/unix"
+)
+
+const maxValueSizeKB = 2
+const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
+
+const chunksPerAlloc = 1024
+
+const bucketsCount = 512
+
+const chunkSize = maxValueSizeKB * 1024
+
+const bucketSizeBits = 40
+
+const genSizeBits = 64 - bucketSizeBits
+
+const maxGen = 1<<genSizeBits - 1
+
+const maxBucketSize uint64 = 1 << bucketSizeBits
+
+// ImprovedCache is a fast thread-safe inmemory cache optimized for big number
+// of entries.
+//
+// It has much lower impact on GC comparing to a simple `map[string][]byte`.
+//
+// Use New or LoadFromFile* for creating new cache instance.
+// Concurrent goroutines may call any Cache methods on the same cache instance.
+//
+// Call Reset when the cache is no longer needed. This reclaims the allocated
+// memory.
+type ImprovedCache struct {
+	buckets [bucketsCount]bucket
+}
+
+// New returns new cache with the given maxBytes capacity in bytes.
+//
+// maxBytes must be smaller than the available RAM size for the app,
+// since the cache holds data in memory.
+//
+// If maxBytes is less than 32MB, then the minimum cache capacity is 32MB.
+func NewImprovedCache(maxBytes int) *ImprovedCache {
+	if maxBytes <= 0 {
+		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
+	}
+	var c ImprovedCache
+	maxBucketBytes := uint64((maxBytes + bucketsCount - 1) / bucketsCount)
+	for i := range c.buckets[:] {
+		c.buckets[i].Init(maxBucketBytes)
+	}
+	return &c
+}
+
+// Set stores (k, v) in the cache.
+//
+// Get must be used for reading the stored entry.
+//
+// The stored entry may be evicted at any time either due to cache
+// overflow or due to unlikely hash collision.
+// Pass higher maxBytes value to New if the added items disappear
+// frequently.
+//
+// (k, v) entries with summary size exceeding maxValueSizeKB aren't stored in the cache.
+// SetBig can be used for storing entries exceeding maxValueSizeKB.
+//
+// k and v contents may be modified after returning from Set.
+func (c *ImprovedCache) Set(k, v []byte) {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+	c.buckets[idx].Set(k, v, h)
+}
+
+// Get appends value by the key k to the given dst.
+//
+// Get allocates new byte slice for the returned value if dst is nil.
+//
+// Get returns only values stored in c via Set.
+//
+// k contents may be modified after returning from Get.
+func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+
+	if !c.buckets[idx].Get(dst, k, h, true) {
+		return fmt.Errorf("key %s not found in cache", k)
+	}
+	return nil
+}
+
+// // HasGet works identically to Get, but also returns whether the given key
+// // exists in the cache. This method makes it possible to differentiate between a
+// // stored nil/empty value versus and non-existing value.
+func (c *ImprovedCache) HasGet(dst, k []byte) ([]byte, bool) {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+	return dst, c.buckets[idx].Get(&dst, k, h, true)
+}
+
+// // Has returns true if entry for the given key k exists in the cache.
+func (c *ImprovedCache) Has(k []byte) bool {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+	return c.buckets[idx].Get(nil, k, h, false)
+}
+
+// Del deletes value for the given k from the cache.
+//
+// k contents may be modified after returning from Del.
+func (c *ImprovedCache) Del(k []byte) {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+	c.buckets[idx].Del(h)
+}
+
+// Reset removes all the items from the cache.
+func (c *ImprovedCache) Reset() {
+	for i := range c.buckets[:] {
+		c.buckets[i].Reset()
+	}
+}
+
+type bucket struct {
+	mu sync.RWMutex
+
+	// chunks is a ring buffer with encoded (k, v) pairs.
+	// It consists of maxValueSizeKB chunks.
+	chunks [][]byte
+
+	// m maps hash(k) to idx of (k, v) pair in chunks.
+	m map[uint64]uint64
+
+	// idx points to chunks for writing the next (k, v) pair.
+	idx uint64
+
+	// gen is the generation of chunks.
+	gen uint64
+}
+
+func (b *bucket) Init(maxBytes uint64) {
+	if maxBytes == 0 {
+		panic(fmt.Errorf("maxBytes cannot be zero"))
+	}
+	if maxBytes >= maxBucketSize {
+		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+	}
+	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
+	b.chunks = make([][]byte, maxChunks)
+	b.m = make(map[uint64]uint64)
+	b.Reset()
+}
+
+func (b *bucket) Reset() {
+	b.mu.Lock()
+	chunks := b.chunks
+	for i := range chunks {
+		putChunk(chunks[i])
+		chunks[i] = nil
+	}
+	b.m = make(map[uint64]uint64)
+	b.idx = 0
+	b.gen = 1
+	b.mu.Unlock()
+}
+
+func (b *bucket) cleanLocked() {
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	bIdx := b.idx
+	bm := b.m
+	newItems := 0
+	for _, v := range bm {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+			newItems++
+		}
+	}
+	if newItems < len(bm) {
+		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
+		// This should reduce memory fragmentation and the number Go objects behind b.m.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
+		bmNew := make(map[uint64]uint64, newItems)
+		for k, v := range bm {
+			gen := v >> bucketSizeBits
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+				bmNew[k] = v
+			}
+		}
+		b.m = bmNew
+	}
+}
+
+func (b *bucket) Set(k, v []byte, h uint64) {
+	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
+		// Too big key or value - its length cannot be encoded
+		// with 2 bytes (see below). Skip the entry.
+		return
+	}
+	var kvLenBuf [4]byte
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	if kvLen >= chunkSize {
+		// Do not store too big keys and values, since they do not
+		// fit a chunk.
+		return
+	}
+
+	chunks := b.chunks
+	needClean := false
+	b.mu.Lock()
+	idx := b.idx
+	idxNew := idx + kvLen
+	chunkIdx := idx / chunkSize
+	chunkIdxNew := idxNew / chunkSize
+	if chunkIdxNew > chunkIdx {
+		if chunkIdxNew >= uint64(len(chunks)) {
+			idx = 0
+			idxNew = kvLen
+			chunkIdx = 0
+			b.gen++
+			if b.gen&((1<<genSizeBits)-1) == 0 {
+				b.gen++
+			}
+			needClean = true
+		} else {
+			idx = chunkIdxNew * chunkSize
+			idxNew = idx + kvLen
+			chunkIdx = chunkIdxNew
+		}
+		chunks[chunkIdx] = chunks[chunkIdx][:0]
+	}
+	chunk := chunks[chunkIdx]
+	if chunk == nil {
+		chunk = getChunk()
+		chunk = chunk[:0]
+	}
+	chunk = append(chunk, kvLenBuf[:]...)
+	chunk = append(chunk, k...)
+	chunk = append(chunk, v...)
+	chunks[chunkIdx] = chunk
+	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.idx = idxNew
+	if needClean {
+		b.cleanLocked()
+	}
+	b.mu.Unlock()
+}
+
+func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool) bool {
+	found := false
+	chunks := b.chunks
+	b.mu.RLock()
+	v := b.m[h]
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	if v > 0 {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
+			chunkIdx := idx / chunkSize
+			if chunkIdx >= uint64(len(chunks)) {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			chunk := chunks[chunkIdx]
+			idx %= chunkSize
+			if idx+4 >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			kvLenBuf := chunk[idx : idx+4]
+			keyLen := (uint64(kvLenBuf[0]) << 8) | uint64(kvLenBuf[1])
+			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
+			idx += 4
+			if idx+keyLen+valLen >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			if string(k) == string(chunk[idx:idx+keyLen]) {
+				idx += keyLen
+				if returnDst {
+					*dst = append(*dst, chunk[idx:idx+valLen]...)
+				}
+				found = true
+			}
+		}
+	}
+end:
+	b.mu.RUnlock()
+	return found
+}
+
+func (b *bucket) Del(h uint64) {
+	b.mu.Lock()
+	delete(b.m, h)
+	b.mu.Unlock()
+}
+
+var (
+	freeChunks     []*[chunkSize]byte
+	freeChunksLock sync.Mutex
+)
+
+func getChunk() []byte {
+	freeChunksLock.Lock()
+	if len(freeChunks) == 0 {
+		// Allocate offheap memory, so GOGC won't take into account cache size.
+		// This should reduce free memory waste.
+		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		if err != nil {
+			panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+		}
+		for len(data) > 0 {
+			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+			freeChunks = append(freeChunks, p)
+			data = data[chunkSize:]
+		}
+	}
+	n := len(freeChunks) - 1
+	p := freeChunks[n]
+	freeChunks[n] = nil
+	freeChunks = freeChunks[:n]
+	freeChunksLock.Unlock()
+	return p[:]
+}
+
+func putChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	chunk = chunk[:chunkSize]
+	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+
+	freeChunksLock.Lock()
+	freeChunks = append(freeChunks, p)
+	freeChunksLock.Unlock()
+}
