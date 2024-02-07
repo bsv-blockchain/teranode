@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
@@ -31,7 +30,7 @@ type CachedData struct {
 
 type TxMetaCache struct {
 	txMetaStore txmeta.Store
-	cache       *fastcache.Cache
+	cache       *ImprovedCache
 	metrics     metrics
 	logger      ulogger.Logger
 }
@@ -46,7 +45,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       fastcache.New(maxMB * 1024 * 1024),
+		cache:       NewImprovedCache(maxMB * 1024 * 1024),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -92,28 +91,17 @@ func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) erro
 	return nil
 }
 
-func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
-	// cachedBytes := make([]byte, 0, 20480)
-	cachedBytes := t.cache.Get(nil, hash[:])
+func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	cachedBytes := make([]byte, 0)
+	t.cache.Get(&cachedBytes, hash[:])
+
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
-		txmetaData, err := txmeta.NewMetaDataFromBytes(cachedBytes)
-		if err != nil {
-			t.logger.Errorf("error getting txMeta from cache: %s", err.Error())
-			return nil, false
-		}
-		return txmetaData, true
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		return &txmetaData, nil
 	}
-
 	t.metrics.misses.Add(1)
-	return nil, false
-}
-
-func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached, ok := t.GetCache(hash)
-	if ok {
-		return cached, nil
-	}
 
 	t.logger.Warnf("txMetaCache miss for %s", hash.String())
 
@@ -130,11 +118,19 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 }
 
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached, ok := t.GetCache(hash)
-	if ok {
-		return cached, nil
+	cachedBytes := make([]byte, 0)
+	t.cache.Get(&cachedBytes, hash[:])
+	// if found in cache
+	if len(cachedBytes) > 0 {
+		t.metrics.hits.Add(1)
+
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		return &txmetaData, nil
 	}
 
+	// if not found in the cache, add it to the cache, record cache miss
+	t.metrics.misses.Add(1)
 	txMeta, err := t.txMetaStore.Get(ctx, hash)
 	if err != nil {
 		return nil, err
@@ -222,13 +218,13 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 }
 
 func (t *TxMetaCache) Length() int {
-	s := &fastcache.Stats{}
+	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.EntriesCount)
 }
 
 func (t *TxMetaCache) BytesSize() int {
-	s := &fastcache.Stats{}
+	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.BytesSize)
 }
