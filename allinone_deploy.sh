@@ -49,7 +49,7 @@ case $REGION in
             helm repo add traefik https://traefik.github.io/charts
             helm repo update
             kubectl create namespace traefik
-            helm install traefik traefik/traefik --namespace traefik
+            helm install --namespace traefik -f ./allinone-traefik-extra.yaml traefik traefik/traefik
         fi
 
         docker pull $IMAGE_NAME > /dev/null
