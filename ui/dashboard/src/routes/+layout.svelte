@@ -2,7 +2,6 @@
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { SvelteToast } from '@zerodevx/svelte-toast'
-  import 'tippy.js/animations/perspective-subtle.css'
   import { createTippy } from '$lib/actions/tooltip'
   import { pageLinks, spinCount, contentLeft } from '$internal/stores/nav'
   import { query } from '$lib/actions'
@@ -55,6 +54,7 @@
     iconNameOverrides: {
       'chevron-right': 'icon-chevron-right-line',
       'chevron-down': 'icon-chevron-down-line',
+      'chevron-up': 'icon-chevron-up-line',
     },
   })
   $injectedLogos = logos
