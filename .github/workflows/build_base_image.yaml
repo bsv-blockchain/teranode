@@ -55,4 +55,5 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:base-build-${{ steps.vars.outputs.sha_short }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:latest
           platforms: linux/amd64,linux/arm64
