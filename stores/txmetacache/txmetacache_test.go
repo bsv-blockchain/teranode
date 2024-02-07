@@ -121,8 +121,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	for i := 0; i < iterationCount; i++ {
 		hash := hashes[i]
 		g.Go(func() error {
-			_, err := cache.GetMeta(context.Background(), &hash) //GetCache(&hash)
-			//require.True(b, found, "cache miss")
+			_, err := cache.GetMeta(context.Background(), &hash)
 			if err != nil {
 				b.Fatalf("cache miss")
 			}
