@@ -81,7 +81,7 @@ func (m *Miner) Start(ctx context.Context) error {
 		m.logger.Fatalf("[Miner] No miner_httpListenAddress specified")
 	}
 	go func() {
-		http.HandleFunc("/", m.handler)
+		http.HandleFunc("/mine", m.handler)
 		err := http.ListenAndServe(listenAddress, nil)
 		if err != nil {
 			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
@@ -168,18 +168,17 @@ func (m *Miner) Stop(ctx context.Context) error {
 
 func (m *Miner) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		if r.URL.Path[1:] == "mine" {
-			if r.URL.Query().Get("blocks") != "" {
-				if !m.isMiningImmediately {
-					blocks, _ := strconv.Atoi(r.URL.Query().Get("blocks"))
-					m.MineBlocksNImmediatelyChan <- blocks
-				}
-			} else if r.URL.Query().Get("cancel") != "" {
-				if m.isMiningImmediately {
-					m.MineBlocksNImmediatelyCancelChan <- true
-				}
+		if r.URL.Query().Get("blocks") != "" {
+			if !m.isMiningImmediately {
+				blocks, _ := strconv.Atoi(r.URL.Query().Get("blocks"))
+				m.MineBlocksNImmediatelyChan <- blocks
+			}
+		} else if r.URL.Query().Get("cancel") != "" {
+			if m.isMiningImmediately {
+				m.MineBlocksNImmediatelyCancelChan <- true
 			}
 		}
+
 	}
 }
 
