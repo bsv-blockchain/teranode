@@ -92,7 +92,14 @@ func (p *PeerSync) miningOnHandler(msg []byte, from string) {
 		p.logger.Debugf("[PeerSync] Received miningon message from %s: %v", from, miningOnMessage)
 	}
 
+	before := len(p.lastMsgByPeerId)
+
 	p.lastMsgByPeerId[from] = miningOnMessage
+
+	// log if we have received a miningon message from all expected peers. but only once
+	if len(p.lastMsgByPeerId) > before && len(p.lastMsgByPeerId) >= p.numberOfExpectedPeers {
+		p.logger.Infof("[PeerSync] Received a miningon message from %d peers. Startup complete for checking things are in sync.", len(p.lastMsgByPeerId))
+	}
 }
 
 /*
