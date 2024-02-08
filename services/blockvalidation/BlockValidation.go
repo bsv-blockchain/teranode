@@ -154,7 +154,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 				return fmt.Errorf("[localSetMined][%s] failed to deserialize subtree from reader: %v", blockHash.String(), err)
 			}
 
-			var blockIDBytes []byte
+			blockIDBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
 			return u.minedBlockStore.SetMulti(subtreeTxIDbytes, blockIDBytes, chainhash.HashSize)
 		})
