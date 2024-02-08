@@ -315,7 +315,7 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 						// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
 						// Logging each attempt to connect to these peers is too noisy
 
-						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
+						s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
 					} else {
 						s.logger.Infof("[PeerConnection][%s] Connected to topic %s : discovered and connected %s after startup", p.String(), topicName, time.Since(s.startTime))
 					}
