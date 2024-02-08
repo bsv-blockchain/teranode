@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/p2p"
@@ -89,7 +90,10 @@ func NewPeerConnection(logger ulogger.Logger, config PeerConfig) *PeerConnection
 		// h, err = libp2p.New(libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"), libp2p.Identity(*pk))
 
 		// p2p service did this
-		h, err = libp2p.New(libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)), libp2p.Identity(*pk))
+		h, err = libp2p.New(
+			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
+			libp2p.Identity(*pk),
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -279,6 +283,8 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 	s.logger.Debugf("[PeerConnection] connected to %d peers\n", len(s.host.Network().Peers()))
 	s.logger.Debugf("[PeerConnection] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
 
+	ctx = network.WithSimultaneousConnect(ctx, true, "reason for simultaneous dial")
+
 	// Look for others who have announced and attempt to connect to them
 	for {
 		select {
@@ -287,40 +293,53 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 			return
 		default:
 			// s.logger.Debugf("[PeerConnection] Searching for peers for %d topic(s)", len(topicNames))
+
+			g := sync.WaitGroup{}
+			g.Add(len(topicNames))
+
 			for _, topicName := range topicNames {
-				// s.logger.Debugf("[PeerConnection] Searching for peers for topic %s..", topicName)
-
-				peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
-				if err != nil {
-					s.logger.Errorf("[PeerConnection] error finding peers: %+v", err)
-				}
-
-				// s.logger.Debugf("[PeerConnection] Checking peerChan for topic %s", topicName)
-				for p := range peerChan {
-
-					if p.ID == s.host.ID() {
-						// s.logger.Debugf("[PeerConnection][%s] Ignoring self for topic %s", p.String(), topicName)
-						continue // No self connection
-					}
-
-					// no point trying to connect to a peer that is already connected
-					if s.host.Network().Connectedness(p.ID) == network.Connected {
-						continue
-					}
-
-					// s.logger.Debugf("[PeerConnection]%+v[%s] Connecting for topic %s", p, p.String(), topicName)
-					err = s.host.Connect(ctx, p)
+				go func() {
+					// s.logger.Debugf("[PeerConnection] Searching for peers for topic %s..", topicName)
+					peerChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
-						// A peer may not be available at the time of discovery.
-						// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
-						// Logging each attempt to connect to these peers is too noisy
-
-						s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
-					} else {
-						s.logger.Infof("[PeerConnection][%s] Connected to topic %s : discovered and connected %s after startup", p.String(), topicName, time.Since(s.startTime))
+						s.logger.Errorf("[PeerConnection] error finding peers: %+v", err)
 					}
-				}
+
+					// s.logger.Debugf("[PeerConnection] Checking peerChan for topic %s", topicName)
+					for p := range peerChan {
+
+						if p.ID == s.host.ID() {
+							// s.logger.Debugf("[PeerConnection][%s] Ignoring self for topic %s", p.String(), topicName)
+							continue // No self connection
+						}
+
+						// no point trying to connect to a peer that is already connected
+						if s.host.Network().Connectedness(p.ID) == network.Connected {
+							continue
+						}
+
+						go func(pChan peer.AddrInfo, topicName string) {
+							// s.logger.Debugf("[PeerConnection]%+v[%s] Connecting for topic %s", p, p.String(), topicName)
+							err = s.host.Connect(ctx, pChan)
+							if err != nil {
+								// A peer may not be available at the time of discovery.
+								// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
+								// Logging each attempt to connect to these peers is too noisy
+
+								s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
+							} else {
+								s.logger.Infof("[PeerConnection][%s] Connected to topic %s : discovered and connected %s after startup", p.String(), topicName, time.Since(s.startTime))
+							}
+						}(p, topicName)
+					}
+
+					g.Done()
+
+				}()
+
+				g.Wait()
 				time.Sleep(5 * time.Second)
+
 			}
 		}
 	}
