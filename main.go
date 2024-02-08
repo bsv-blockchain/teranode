@@ -104,15 +104,15 @@ func main() {
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 	logger := initLogger(serviceName)
 
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
+
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if shouldStart("wait_for_postgres") {
 		if err := waitForPostgresToStart(logger); err != nil {
 			logger.Fatalf("error waiting for postgres: %v", err)
 		}
 	}
-
-	stats := gocore.Config().Stats()
-	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
