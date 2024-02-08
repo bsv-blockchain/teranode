@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/util"
+
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -48,8 +50,30 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		start2 := gocore.CurrentTime()
-		subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
+		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+
+		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
+
+		if mode == JSON {
+			start2 := gocore.CurrentTime()
+			// get subtree is much less efficient than get subtree reader and then only deserializing the nodes
+			// this is only needed for the json response
+			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
+			if err != nil {
+				if strings.HasSuffix(err.Error(), " not found") {
+					return echo.NewHTTPError(http.StatusNotFound, err.Error())
+				} else {
+					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+				}
+			}
+			start2 = stat.NewStat("Get Subtree from repository").AddTime(start2)
+
+			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
+			return c.JSONPretty(200, subtree, "  ")
+		}
+
+		// get subtree reader is much more efficient than get subtree
+		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -58,37 +82,11 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		start2 = stat.NewStat("Get Subtree from repository").AddTime(start2)
-
-		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
-
-		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
-
-		if mode == JSON {
-			/*
-					subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
-				if err != nil {
-					if strings.HasSuffix(err.Error(), " not found") {
-						return echo.NewHTTPError(http.StatusNotFound, err.Error())
-					} else {
-						return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-					}
-				}
-			*/
-			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
-			return c.JSONPretty(200, subtree, "  ")
-		}
-
-		// If we did not serve JSON, we need to serialize the nodes into a byte slice.
-		// We use SerializeNodes() for this which does NOT include the fees and sizes.
-		b, err = subtree.SerializeNodes()
+		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
+		b, err = util.DeserializeNodesFromReader(subtreeReader)
 		if err != nil {
-			return err
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-
-		// DeserializeTransactionIDsOf
-
-		stat.NewStat("Serialize Subtree").AddTime(start2)
 
 		switch mode {
 		case BINARY_STREAM:

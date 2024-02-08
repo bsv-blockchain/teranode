@@ -67,6 +67,58 @@ func TestTransaction(t *testing.T) {
 }
 
 func TestSubtree(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	// Get the subtree node bytes from the repository
+	st, err := repo.GetSubtree(context.Background(), key)
+	require.NoError(t, err)
+
+	b, err := st.SerializeNodes()
+	require.NoError(t, err)
+
+	subtreeNodes := make([]chainhash.Hash, len(b)/32)
+	for i := 0; i < len(b); i += 32 {
+		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
+	}
+
+	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
+	require.NoError(t, err)
+	for _, hash := range subtreeNodes {
+		err = subtree2.AddNode(hash, 0, 0)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
+	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
+}
+
+func TestSubtreeReader(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	// Get the subtree node bytes from the repository
+	reader, err := repo.GetSubtreeReader(context.Background(), key)
+	require.NoError(t, err)
+
+	b, err := util.DeserializeNodesFromReader(reader)
+	require.NoError(t, err)
+
+	subtreeNodes := make([]chainhash.Hash, len(b)/32)
+	for i := 0; i < len(b); i += 32 {
+		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
+	}
+
+	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
+	require.NoError(t, err)
+	for _, hash := range subtreeNodes {
+		err = subtree2.AddNode(hash, 0, 0)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
+	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
+}
+
+func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *repository.Repository) {
 	itemsPerSubtree := 2
 
 	subtree, err := util.NewTreeByLeafCount(itemsPerSubtree)
@@ -112,25 +164,5 @@ func TestSubtree(t *testing.T) {
 	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore)
 	require.NoError(t, err)
 
-	// Get the subtree node bytes from the repository
-	st, err := repo.GetSubtree(context.Background(), key)
-	require.NoError(t, err)
-
-	b, err := st.SerializeNodes()
-	require.NoError(t, err)
-
-	subtreeNodes := make([]chainhash.Hash, len(b)/32)
-	for i := 0; i < len(b); i += 32 {
-		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
-	}
-
-	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
-	require.NoError(t, err)
-	for _, hash := range subtreeNodes {
-		err = subtree2.AddNode(hash, 0, 0)
-		require.NoError(t, err)
-	}
-
-	assert.Equal(t, txns[0], subtree2.Nodes[0].Hash)
-	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
+	return txns, key, repo
 }

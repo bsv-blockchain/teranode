@@ -141,9 +141,10 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	// add the transactions in this block to the txMeta block hashes
 	startTime = time.Now()
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
-	// if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
-	// 	return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
-	// }
+	// comment the following!
+	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
+		return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
+	}
 
 	// for each subtree gives me the byte array of the subtree
 	// divide 32 bytes -> 1 txID
