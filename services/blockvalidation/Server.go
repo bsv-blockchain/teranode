@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -623,7 +622,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 			hash := chainhash.Hash(meta[:32])
 
 			data := meta[32:]
-			txMetaData := &txmeta.Data{}
+			txMetaData := &txmeta_store.Data{}
 			txmeta_store.NewMetaDataFromBytes(&data, txMetaData)
 
 			if err := u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {

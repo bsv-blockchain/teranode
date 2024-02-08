@@ -122,8 +122,10 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	g := new(errgroup.Group)
 	for i := 0; i < iterationCount; i++ {
 		hash := hashes[i]
+		i := i
 		g.Go(func() error {
 			data, err := cache.GetMeta(context.Background(), &hash)
+			_ = data
 			if err != nil {
 				b.Fatalf("cache miss, iteration %d: %v", i, err)
 			}

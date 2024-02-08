@@ -34,7 +34,6 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		d.ParentTxHashes[i] = chainhash.Hash((*dataBytes)[24+i*32 : 24+(i+1)*32])
 	}
-	return
 }
 
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {

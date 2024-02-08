@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -64,7 +63,7 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 			hash := chainhash.Hash(meta[:32])
 
 			data := meta[32:]
-			txMetaData := &txmeta.Data{}
+			txMetaData := &txmeta_store.Data{}
 			txmeta_store.NewMetaDataFromBytes(&data, txMetaData)
 
 			txMetaData.Tx = nil

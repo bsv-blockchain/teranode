@@ -153,8 +153,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			var blockIDBytes []byte
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
-			err = u.minedBlockStore.SetMulti(subtreeTxIDbytes, blockIDBytes, chainhash.HashSize)
-			return nil
+			return u.minedBlockStore.SetMulti(subtreeTxIDbytes, blockIDBytes, chainhash.HashSize)
 		})
 	}
 

@@ -66,7 +66,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
 			}
-			start2 = stat.NewStat("Get Subtree from repository").AddTime(start2)
+			_ = stat.NewStat("Get Subtree from repository").AddTime(start2)
 
 			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
 			return c.JSONPretty(200, subtree, "  ")

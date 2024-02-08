@@ -93,7 +93,7 @@ func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) erro
 
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cachedBytes := make([]byte, 0)
-	t.cache.Get(&cachedBytes, hash[:])
+	_ = t.cache.Get(&cachedBytes, hash[:])
 
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
@@ -119,7 +119,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cachedBytes := make([]byte, 0)
-	t.cache.Get(&cachedBytes, hash[:])
+	_ = t.cache.Get(&cachedBytes, hash[:])
 	// if found in cache
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)

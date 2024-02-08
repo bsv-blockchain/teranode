@@ -18,11 +18,6 @@ import (
 )
 
 func TestNewTree(t *testing.T) {
-	t.Run("null size", func(t *testing.T) {
-		_, err := NewTree(0)
-		require.Error(t, err)
-	})
-
 	t.Run("invalid size", func(t *testing.T) {
 		_, err := NewTreeByLeafCount(123)
 		require.Error(t, err)

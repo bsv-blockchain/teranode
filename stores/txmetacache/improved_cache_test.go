@@ -15,7 +15,7 @@ func TestImprovedCache_Get(t *testing.T) {
 	cache := NewImprovedCache(1 * 1024 * 1024)
 	cache.Set([]byte("key"), []byte("value"))
 	dst := make([]byte, 0)
-	cache.Get(&dst, []byte("key"))
+	_ = cache.Get(&dst, []byte("key"))
 	require.Equal(t, []byte("value"), dst)
 
 }
@@ -32,7 +32,7 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 
 	// get the value
 	dst := make([]byte, 0)
-	cache.Get(&dst, key)
+	_ = cache.Get(&dst, key)
 	require.Equal(t, value, dst)
 }
 
@@ -48,12 +48,12 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	}
 
 	startTime := time.Now()
-	cache.SetMulti(allKeys, value, chainhash.HashSize)
+	_ = cache.SetMulti(allKeys, value, chainhash.HashSize)
 	t.Log("SetMulti took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
-		cache.Get(&dst, allKeys[i:i+chainhash.HashSize])
+		_ = cache.Get(&dst, allKeys[i:i+chainhash.HashSize])
 		require.Equal(t, value, dst)
 	}
 }
