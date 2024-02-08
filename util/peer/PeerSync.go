@@ -102,9 +102,10 @@ func (p *PeerSync) miningOnHandler(msg []byte, from string) {
 func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
 	if len(p.lastMsgByPeerId) < p.numberOfExpectedPeers {
 		if first {
-		p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
-		for _, miningon := range p.lastMsgByPeerId {
-			p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
+			p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
+			for _, miningon := range p.lastMsgByPeerId {
+				p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
+			}
 		}
 		return false
 	}
