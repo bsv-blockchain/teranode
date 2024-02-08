@@ -38,7 +38,7 @@ type TxMetaCache struct {
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
 	initPrometheusMetrics()
 
-	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 128)
+	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 32)
 	if len(options) > 0 {
 		maxMB = options[0]
 	}
