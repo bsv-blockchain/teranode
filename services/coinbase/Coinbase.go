@@ -100,7 +100,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 	if !ok {
 		panic("[PeerStatus] propagation_grpcAddresses not found")
 	}
-	numberOfExpectedPeers := strings.Count(addresses, ":") // each : is a ip:port separator
+	numberOfExpectedPeers := strings.Count(addresses, "|") // each | is a ip:port separator
 
 	timeout, _ := gocore.Config().Get("peerStatus_timeout", "30s")
 	peerStatusTimeout, err := time.ParseDuration(timeout)

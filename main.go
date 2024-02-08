@@ -104,15 +104,15 @@ func main() {
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 	logger := initLogger(serviceName)
 
+	stats := gocore.Config().Stats()
+	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
+
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if shouldStart("wait_for_postgres") {
 		if err := waitForPostgresToStart(logger); err != nil {
 			logger.Fatalf("error waiting for postgres: %v", err)
 		}
 	}
-
-	stats := gocore.Config().Stats()
-	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -520,12 +520,10 @@ func printUsage() {
 }
 
 func waitForPostgresToStart(logger ulogger.Logger) error {
-	host := "localhost"
-	port := "5432"
+	address, _ := gocore.Config().Get("postgres_check_address", "localhost:5432")
 
 	timeout := time.Minute // 1 minutes timeout
 
-	address := net.JoinHostPort(host, port)
 	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)
 
 	deadline := time.Now().Add(timeout)
@@ -534,7 +532,7 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			if time.Now().After(deadline) {
-				return fmt.Errorf("Timed out waiting for PostgreSQL to start: %w", err)
+				return fmt.Errorf("timed out waiting for PostgreSQL to start: %w", err)
 			}
 
 			logger.Infof("PostgreSQL is not up yet - waiting")
