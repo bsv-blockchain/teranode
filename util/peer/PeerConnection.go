@@ -37,6 +37,7 @@ type PeerConnection struct {
 	bitcoinProtocolId string
 	usePrivateDHT     bool
 	handlerByTopic    map[string]Handler
+	startTime         time.Time
 }
 
 type Handler func(msg []byte, from string)
@@ -106,6 +107,7 @@ func NewPeerConnection(logger ulogger.Logger, config PeerConfig) *PeerConnection
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		usePrivateDHT:     config.UsePrivateDHT,
 		handlerByTopic:    make(map[string]Handler),
+		startTime:         time.Now(),
 	}
 }
 
@@ -315,7 +317,7 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 
 						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
 					} else {
-						s.logger.Infof("[PeerConnection][%s] Connected to topic %s", p.String(), topicName)
+						s.logger.Infof("[PeerConnection][%s] Connected to topic %s : discovered and connected %s after startup", p.String(), topicName, time.Since(s.startTime))
 					}
 				}
 				time.Sleep(5 * time.Second)
