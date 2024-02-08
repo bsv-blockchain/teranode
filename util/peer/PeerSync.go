@@ -99,9 +99,13 @@ func (p *PeerSync) miningOnHandler(msg []byte, from string) {
  * HaveAllPeersReachedMinHeight checks if all peers are mining at the given block height or higher.
  * Very crude implementation, we need to allow for natural forks and reorgs.
  */
-func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool) bool {
+func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
 	if len(p.lastMsgByPeerId) < p.numberOfExpectedPeers {
+		if first {
 		p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
+		for _, miningon := range p.lastMsgByPeerId {
+			p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
+		}
 		return false
 	}
 
@@ -135,14 +139,16 @@ func (p *PeerSync) WaitForAllPeers(ctx context.Context, height uint32, testAllPe
 		defer cancel()
 	}
 
+	first := true
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.New("[PeerSync] WaitForAllPeers cancelled due to timeout or context cancellation")
 		default:
-			if p.HaveAllPeersReachedMinHeight(height, testAllPeers) {
+			if p.HaveAllPeersReachedMinHeight(height, testAllPeers, first) {
 				return nil
 			}
+			first = false
 			time.Sleep(1 * time.Second)
 		}
 	}
