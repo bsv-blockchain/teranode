@@ -198,7 +198,7 @@ func TestBlock_Valid(t *testing.T) {
 		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain, currentChainIDs)
+	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, nil, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	require.True(t, v)
 

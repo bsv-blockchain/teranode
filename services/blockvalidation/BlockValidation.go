@@ -37,7 +37,7 @@ type BlockValidation struct {
 	subtreeTTL          time.Duration
 	txStore             blob.Store
 	txMetaStore         txmeta.Store
-	minedBlockStore     txmetacache.ImprovedCache
+	minedBlockStore     *txmetacache.ImprovedCache
 	validatorClient     validator.Interface
 	subtreeDeDuplicator *deduplicator.DeDuplicator
 	optimisticMining    bool
@@ -61,6 +61,8 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 
+	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 128)
+
 	bv := &BlockValidation{
 		logger:              logger,
 		blockchainClient:    blockchainClient,
@@ -68,6 +70,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		subtreeTTL:          subtreeTTL,
 		txStore:             txStore,
 		txMetaStore:         txMetaStore,
+		minedBlockStore:     txmetacache.NewImprovedCache(blockMinedCacheMaxMB * 1024 * 1024),
 		validatorClient:     validatorClient,
 		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 		optimisticMining:    optimisticMining,
@@ -282,7 +285,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			defer optimisticMiningWg.Done()
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
-			if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
+			if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
 				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
 				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
@@ -293,7 +296,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	} else {
 		// validate the block
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-		if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, blockHeaders, blockHeaderIDs); !ok {
+		if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
