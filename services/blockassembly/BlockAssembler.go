@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -362,8 +361,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
-		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree, err := util.NewTree(height)
+		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
 		}

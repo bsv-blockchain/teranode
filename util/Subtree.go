@@ -37,8 +37,8 @@ type Subtree struct {
 //
 // height is the number if levels in a merkle tree of the subtree
 func NewTree(height int) (*Subtree, error) {
-	if height < 1 {
-		return nil, fmt.Errorf("height must be at least 1")
+	if height < 0 {
+		return nil, fmt.Errorf("height must be at least 0")
 	}
 
 	var treeSize = int(math.Pow(2, float64(height)))
