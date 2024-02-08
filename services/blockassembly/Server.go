@@ -726,7 +726,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	startTime := time.Now()
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(cntxt, nil, nil, nil, nil); !ok {
+	if ok, err := block.Valid(cntxt, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}

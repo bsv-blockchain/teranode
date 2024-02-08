@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
@@ -31,7 +30,7 @@ type CachedData struct {
 
 type TxMetaCache struct {
 	txMetaStore txmeta.Store
-	cache       *fastcache.Cache
+	cache       *ImprovedCache
 	metrics     metrics
 	logger      ulogger.Logger
 }
@@ -46,7 +45,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       fastcache.New(maxMB * 1024 * 1024),
+		cache:       NewImprovedCache(maxMB * 1024 * 1024),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -92,28 +91,17 @@ func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) erro
 	return nil
 }
 
-func (t *TxMetaCache) GetCache(hash *chainhash.Hash) (*txmeta.Data, bool) {
-	// cachedBytes := make([]byte, 0, 20480)
-	cachedBytes := t.cache.Get(nil, hash[:])
+func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	cachedBytes := make([]byte, 0)
+	_ = t.cache.Get(&cachedBytes, hash[:])
+
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
-		txmetaData, err := txmeta.NewMetaDataFromBytes(cachedBytes)
-		if err != nil {
-			t.logger.Errorf("error getting txMeta from cache: %s", err.Error())
-			return nil, false
-		}
-		return txmetaData, true
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		return &txmetaData, nil
 	}
-
 	t.metrics.misses.Add(1)
-	return nil, false
-}
-
-func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached, ok := t.GetCache(hash)
-	if ok {
-		return cached, nil
-	}
 
 	t.logger.Warnf("txMetaCache miss for %s", hash.String())
 
@@ -130,11 +118,19 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 }
 
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	cached, ok := t.GetCache(hash)
-	if ok {
-		return cached, nil
+	cachedBytes := make([]byte, 0)
+	_ = t.cache.Get(&cachedBytes, hash[:])
+	// if found in cache
+	if len(cachedBytes) > 0 {
+		t.metrics.hits.Add(1)
+
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		return &txmetaData, nil
 	}
 
+	// if not found in the cache, add it to the cache, record cache miss
+	t.metrics.misses.Add(1)
 	txMeta, err := t.txMetaStore.Get(ctx, hash)
 	if err != nil {
 		return nil, err
@@ -167,6 +163,14 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	//	return err
 	//}
 
+	// remove const, parameterize
+
+	// currently CPU is overwhelmed
+	// workload
+	// 1- cont. write and read a.t.m txMeta. Locks should be short. Buckets are smaller, less update per bucket -> less lock time per bucket
+	// 2- blockIDs: readaing or writing a lot. Multi makes sense. Big batfcfh comes at once, longer lock is fine
+
+	// G: why we can't call it with goroutines?
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {
@@ -174,10 +178,17 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 		}
 	}
 
+	// call improved cache setmulti
+
 	return nil
 }
 
+// 1 move blockID slice out of metacache
+// 2 implement improvedcache setmulti with locks
+
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
+	// G: why not comment out the following as well?
+	// Does only SetMinedMulti called. Yes block validaiton only calls that
 	err := t.txMetaStore.SetMined(ctx, hash, blockID)
 	if err != nil {
 		return err
@@ -222,13 +233,13 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 }
 
 func (t *TxMetaCache) Length() int {
-	s := &fastcache.Stats{}
+	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.EntriesCount)
 }
 
-func (t *TxMetaCache) BytesSize() int {
-	s := &fastcache.Stats{}
-	t.cache.UpdateStats(s)
-	return int(s.BytesSize)
-}
+// func (t *TxMetaCache) BytesSize() int {
+// 	s := &Stats{}
+// 	t.cache.UpdateStats(s)
+// 	return int(s.BytesSize)
+// }

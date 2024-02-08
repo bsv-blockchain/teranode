@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -191,11 +192,18 @@ func (b *Block) Hash() *chainhash.Hash {
 	return b.hash
 }
 
+// MinedBlockStore
+// TODO This should be compatible with the normal txmetastore.Store, but was implemented now just as a test
+type MinedBlockStore interface {
+	SetMulti(keys []byte, value []byte, keySize int) error
+	Get(dst *[]byte, k []byte) error
+}
+
 func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, currentChain []*BlockHeader, currentChainIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -297,7 +305,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, txMetaStore, currentChainIDs)
+		err = b.validOrderAndBlessed(spanCtx, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
 		if err != nil {
 			return false, err
 		}
@@ -361,18 +369,14 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
-	return nil
-}
-
-func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentChainIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
 
-	currentChainIDsMap := make(map[uint32]struct{}, len(currentChainIDs))
-	for _, id := range currentChainIDs {
-		currentChainIDsMap[id] = struct{}{}
+	currentBlockHeaderIDsMap := make(map[uint32]struct{}, len(currentBlockHeaderIDs))
+	for _, id := range currentBlockHeaderIDs {
+		currentBlockHeaderIDsMap[id] = struct{}{}
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -399,17 +403,20 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 				txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 				if err != nil {
 					return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
-				}
-
-				if txMeta == nil {
+				} else if txMeta == nil {
 					return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
 				}
 
 				// check whether the transaction has already been mined in a block on our chain
-				if len(txMeta.BlockIDs) > 0 {
-					for _, blockID := range txMeta.BlockIDs {
-						if _, ok := currentChainIDsMap[blockID]; ok {
-							return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+				if minedBlockStore != nil {
+					var blockIDBytes []byte
+					_ = minedBlockStore.Get(&blockIDBytes, subtreeNode.Hash[:])
+					if len(blockIDBytes) > 0 {
+						for i := 0; i < len(blockIDBytes); i += 4 {
+							blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
+							if _, ok := currentBlockHeaderIDsMap[blockID]; ok {
+								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+							}
 						}
 					}
 				}
@@ -428,12 +435,16 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentCha
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
 						if parentTxMeta != nil {
-							if len(parentTxMeta.BlockIDs) == 0 {
-								return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
-							} else {
-								for _, blockID := range parentTxMeta.BlockIDs {
-									if _, ok := currentChainIDsMap[blockID]; !ok {
-										return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
+							if minedBlockStore != nil {
+								// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
+								var blockIDBytes []byte
+								_ = minedBlockStore.Get(&blockIDBytes, parentTxHash[:])
+								if len(blockIDBytes) > 0 {
+									for i := 0; i < len(blockIDBytes); i += 4 {
+										blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
+										if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
+											return fmt.Errorf("parent transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+										}
 									}
 								}
 							}

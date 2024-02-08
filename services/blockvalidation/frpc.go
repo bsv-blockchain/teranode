@@ -62,11 +62,9 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
 
-			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
-			if err != nil {
-				f.logger.Errorf("failed to create tx meta data from bytes: %v", err)
-				return
-			}
+			data := meta[32:]
+			txMetaData := &txmeta_store.Data{}
+			txmeta_store.NewMetaDataFromBytes(&data, txMetaData)
 
 			txMetaData.Tx = nil
 			hashes[hash] = txMetaData
