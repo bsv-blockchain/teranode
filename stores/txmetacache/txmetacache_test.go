@@ -2,7 +2,9 @@ package txmetacache
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"unsafe"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -121,10 +123,11 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	for i := 0; i < iterationCount; i++ {
 		hash := hashes[i]
 		g.Go(func() error {
-			_, err := cache.GetMeta(context.Background(), &hash)
+			data, err := cache.GetMeta(context.Background(), &hash)
 			if err != nil {
-				b.Fatalf("cache miss")
+				b.Fatalf("cache miss, iteration %d: %v", i, err)
 			}
+			fmt.Println("data size: ", unsafe.Sizeof(data))
 			return nil
 		})
 	}

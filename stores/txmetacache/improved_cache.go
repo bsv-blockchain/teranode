@@ -9,8 +9,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxValueSizeKB = 32
-const maxValueSizeLog = 15 // 10 + log2(maxValueSizeKB)
+// 1024 buckets, 100 in a batch, 1000 in a batch, 10000 in a batch. does it make sense?
+// only for bigger batches?
+
+const maxValueSizeKB = 2
+const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
 const chunksPerAlloc = 1024
 
@@ -95,6 +98,11 @@ func (c *ImprovedCache) Set(k, v []byte) {
 	idx := h % bucketsCount
 	c.buckets[idx].Set(k, v, h)
 }
+
+// SetMulti -> big batches
+// slices of keys and values. !fixed size!
+// identify buckets and set the keys and values in the buckets
+// parallely call bucket.Set() which internal mutexes
 
 // Get appends value by the key k to the given dst.
 //
@@ -228,14 +236,16 @@ func (b *bucket) cleanLocked() {
 func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
-	bytesSize := uint64(0)
-	for _, chunk := range b.chunks {
-		bytesSize += uint64(cap(chunk))
-	}
+	// bytesSize := uint64(0)
+	// for _, chunk := range b.chunks {
+	// 	bytesSize += uint64(cap(chunk))
+	// }
 	//s.BytesSize += bytesSize
 	//s.MaxBytesSize += uint64(len(b.chunks)) * chunkSize
 	b.mu.RUnlock()
 }
+
+// b.SetMulti()
 
 func (b *bucket) Set(k, v []byte, h uint64) {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {

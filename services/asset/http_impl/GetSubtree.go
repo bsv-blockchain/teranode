@@ -65,6 +65,16 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
 
 		if mode == JSON {
+			/*
+					subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
+				if err != nil {
+					if strings.HasSuffix(err.Error(), " not found") {
+						return echo.NewHTTPError(http.StatusNotFound, err.Error())
+					} else {
+						return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+					}
+				}
+			*/
 			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
 			return c.JSONPretty(200, subtree, "  ")
 		}
@@ -75,6 +85,8 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		if err != nil {
 			return err
 		}
+
+		// DeserializeTransactionIDsOf
 
 		stat.NewStat("Serialize Subtree").AddTime(start2)
 

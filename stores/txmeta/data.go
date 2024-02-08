@@ -24,22 +24,6 @@ type MetaData struct {
 	SizeInBytes uint64 `json:"sizeInBytes"`
 }
 
-// func NewMetaDataFromBytes(dataBytes []byte) (*Data, error) {
-// 	d := &Data{}
-
-// 	// read the numbers
-// 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
-// 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
-// 	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[16:24])
-// 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
-
-// 	for i := uint64(0); i < parentTxHashesLen; i++ {
-// 		d.ParentTxHashes[i] = chainhash.Hash(dataBytes[24+i*32 : 24+(i+1)*32])
-// 	}
-
-// 	return d, nil
-// }
-
 func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64((*dataBytes)[:8])

@@ -36,6 +36,7 @@ type BlockValidation struct {
 	subtreeTTL          time.Duration
 	txStore             blob.Store
 	txMetaStore         txmeta.Store
+	minedBlockStore     txmetacache.ImprovedCache
 	validatorClient     validator.Interface
 	subtreeDeDuplicator *deduplicator.DeDuplicator
 	optimisticMining    bool
@@ -140,9 +141,20 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	// add the transactions in this block to the txMeta block hashes
 	startTime = time.Now()
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
-	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
-		return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
-	}
+	// if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
+	// 	return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
+	// }
+
+	// for each subtree gives me the byte array of the subtree
+	// divide 32 bytes -> 1 txID
+	// 8 MB data -> each item is 32 bytes -> 8MB/32 = 250000 items, now divide it to number of buckets -> call SetMulti() on bucket
+	// which is sent to u.minedBlocks.SetMulti(ctx, subtreeHashes, blockID, size) //32 bytes
+
+	// we only need txIDs, not other data like FEE
+	block.GetSubtrees(u.subtreeStore)
+
+	// for loop subtree, subtree, txID and update blockMinedC
+
 	u.logger.Infof("[localSetMined][%s] update tx mined for block DONE in %s", blockHash.String(), time.Since(startTime))
 
 	return nil
