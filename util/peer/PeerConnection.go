@@ -95,10 +95,10 @@ func NewPeerConnection(logger ulogger.Logger, config PeerConfig) *PeerConnection
 		}
 	}
 
-	logger.Debugf("[PeerConnection] peer ID: %s", h.ID().Pretty())
-	logger.Debugf("[PeerConnection] Connect to me on:")
+	logger.Infof("[PeerConnection] peer ID: %s", h.ID().Pretty())
+	logger.Infof("[PeerConnection] Connect to me on:")
 	for _, addr := range h.Addrs() {
-		logger.Debugf("[PeerConnection]   %s/p2p/%s", addr, h.ID().Pretty())
+		logger.Infof("[PeerConnection]   %s/p2p/%s", addr, h.ID().Pretty())
 	}
 
 	return &PeerConnection{

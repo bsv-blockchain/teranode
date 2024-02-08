@@ -188,10 +188,10 @@ func NewServer(logger ulogger.Logger) *Server {
 			panic(err)
 		}
 	}
-	logger.Debugf("peer ID: %s", h.ID().Pretty())
-	logger.Debugf("Connect to me on:")
+	logger.Infof("peer ID: %s", h.ID().Pretty())
+	logger.Infof("Connect to me on:")
 	for _, addr := range h.Addrs() {
-		logger.Debugf("  %s/p2p/%s", addr, h.ID().Pretty())
+		logger.Infof("  %s/p2p/%s", addr, h.ID().Pretty())
 	}
 
 	return &Server{
