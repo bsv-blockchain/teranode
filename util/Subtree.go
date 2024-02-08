@@ -34,8 +34,15 @@ type Subtree struct {
 }
 
 // NewTree creates a new Subtree with a fixed height
+//
+// height is the number if levels in a merkle tree of the subtree
 func NewTree(height int) (*Subtree, error) {
-	var treeSize = int(math.Pow(2, float64(height))) // 1024 * 1024
+	if height < 1 {
+		return nil, fmt.Errorf("height must be at least 1")
+	}
+
+	var treeSize = int(math.Pow(2, float64(height)))
+
 	return &Subtree{
 		Nodes:        make([]SubtreeNode, 0, treeSize),
 		Height:       height,
