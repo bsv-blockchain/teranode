@@ -100,11 +100,6 @@ func (p *PeerSync) miningOnHandler(msg []byte, from string) {
  * Very crude implementation, we need to allow for natural forks and reorgs.
  */
 func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool) bool {
-	if len(p.lastMsgByPeerId) == 0 {
-		// no peers to check
-		return true
-	}
-
 	if len(p.lastMsgByPeerId) < p.numberOfExpectedPeers {
 		p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
 		return false
