@@ -48,13 +48,14 @@ func NewTree(height int) (*Subtree, error) {
 
 func NewTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	if !IsPowerOfTwo(maxNumberOfLeaves) {
-		panic("numberOfLeaves must be a power of two")
+		return nil, fmt.Errorf("numberOfLeaves must be a power of two")
 	}
 
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
 
 	return NewTree(int(height))
 }
+
 func NewIncompleteTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
 

@@ -18,12 +18,24 @@ import (
 )
 
 func TestNewTree(t *testing.T) {
-	st, err := NewTree(20)
-	require.NoError(t, err)
+	t.Run("null size", func(t *testing.T) {
+		_, err := NewTree(0)
+		require.Error(t, err)
+	})
 
-	if st.Size() != 1048576 {
-		t.Errorf("expected size to be 1048576, got %d", st.Size())
-	}
+	t.Run("invalid size", func(t *testing.T) {
+		_, err := NewTreeByLeafCount(123)
+		require.Error(t, err)
+	})
+
+	t.Run("valid size", func(t *testing.T) {
+		st, err := NewTree(20)
+		require.NoError(t, err)
+
+		if st.Size() != 1048576 {
+			t.Errorf("expected size to be 1048576, got %d", st.Size())
+		}
+	})
 }
 
 func TestRootHash(t *testing.T) {
@@ -196,6 +208,16 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, hash2.String(), txHashes[1].String())
 		assert.Equal(t, hash3.String(), txHashes[2].String())
 		assert.Equal(t, hash4.String(), txHashes[3].String())
+	})
+
+	t.Run("New subtree from bytes", func(t *testing.T) {
+		st, serializedBytes := getSubtreeBytes(t)
+
+		newSubtree, err := NewSubtreeFromBytes(serializedBytes)
+		require.NoError(t, err)
+		for i := 0; i < newSubtree.Size(); i += chainhash.HashSize {
+			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), newSubtree.Nodes[i/chainhash.HashSize].Hash.String())
+		}
 	})
 
 	t.Run("DeserializeNodes with reader", func(t *testing.T) {
