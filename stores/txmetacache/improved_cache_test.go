@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -33,4 +34,26 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 	dst := make([]byte, 0)
 	cache.Get(&dst, key)
 	require.Equal(t, value, dst)
+}
+
+func TestImprovedCache_SetMulti(t *testing.T) {
+	cache := NewImprovedCache(100 * 1024 * 1024)
+	allKeys := make([]byte, 0)
+	value := []byte("value")
+	for i := 0; i < bucketsCount*1_000; i++ {
+		key := make([]byte, 32)
+		_, err := rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key...)
+	}
+
+	startTime := time.Now()
+	cache.SetMulti(allKeys, value, chainhash.HashSize)
+	t.Log("SetMulti took:", time.Since(startTime))
+
+	for i := 0; i < len(allKeys); i += chainhash.HashSize {
+		dst := make([]byte, 0)
+		cache.Get(&dst, allKeys[i:i+chainhash.HashSize])
+		require.Equal(t, value, dst)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/cespare/xxhash"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
@@ -35,12 +36,6 @@ const maxBucketSize uint64 = 1 << bucketSizeBits
 type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
 	EntriesCount uint64
-
-	// BytesSize is the current size of the cache in bytes.
-	//BytesSize uint64
-
-	// MaxBytesSize is the maximum allowed size of the cache in bytes (aka capacity).
-	//MaxBytesSize uint64
 }
 
 // Reset resets s, so it may be re-used again in Cache.UpdateStats.
@@ -99,10 +94,50 @@ func (c *ImprovedCache) Set(k, v []byte) {
 	c.buckets[idx].Set(k, v, h)
 }
 
-// SetMulti -> big batches
-// slices of keys and values. !fixed size!
-// identify buckets and set the keys and values in the buckets
-// parallely call bucket.Set() which internal mutexes
+// lots of key value pairs at once
+// decides which bucket, for lots of items
+// [0..31 -b0, 32..63 -b1, 64..95 -b2, 96..127 -b3, 128..159 -b4, 160..191 -b5, 192..223 -b6, 224..255 -b7, 256..287 -b0, 288..319 -b1, 320..351 -b2, 352..383 -b3, 384..415 -b4, 416..447 -b5, 448..479 -b6, 480..511 -b7]
+// Value is a byte slice per key. 4 bytes for each block ID, can have more than one block ID per key.
+// a single block id is sent for all keys
+func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
+	if len(keys)%keySize != 0 {
+		return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+	}
+
+	batchedKeys := make([][][]byte, bucketsCount)
+	hashes := make([][]uint64, bucketsCount)
+
+	var key []byte
+	var bucketIdx uint64
+	var h uint64
+
+	// divide keys blob into buckets
+	for i := 0; i < len(keys); i += keySize {
+		key = keys[i : i+keySize]
+		h = xxhash.Sum64(key)
+		bucketIdx = h % bucketsCount
+		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
+		hashes[bucketIdx] = append(hashes[bucketIdx], h)
+	}
+
+	g := errgroup.Group{}
+
+	for bucketIdx := range batchedKeys {
+		if len(batchedKeys[bucketIdx]) == 0 { // there is no key for this bucket
+			continue
+		}
+		bucketIdx := bucketIdx
+		g.Go(func() error {
+			return c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], value, hashes[bucketIdx])
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return nil
+}
 
 // Get appends value by the key k to the given dst.
 //
@@ -245,9 +280,21 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
-// b.SetMulti()
+func (b *bucket) SetMulti(keys [][]byte, value []byte, hashes []uint64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var prevValue []byte
 
-func (b *bucket) Set(k, v []byte, h uint64) {
+	for idx, key := range keys {
+		prevValue = value
+		b.Get(&prevValue, key, hashes[idx], false, true)
+		b.Set(key, prevValue, hashes[idx], true)
+	}
+
+	return nil
+}
+
+func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
@@ -267,7 +314,12 @@ func (b *bucket) Set(k, v []byte, h uint64) {
 
 	chunks := b.chunks
 	needClean := false
-	b.mu.Lock()
+
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+
 	idx := b.idx
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
@@ -303,13 +355,16 @@ func (b *bucket) Set(k, v []byte, h uint64) {
 	if needClean {
 		b.cleanLocked()
 	}
-	b.mu.Unlock()
 }
 
-func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool) bool {
+func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
 	chunks := b.chunks
-	b.mu.RLock()
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.RLock()
+		defer b.mu.RUnlock()
+	}
+
 	v := b.m[h]
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 	if v > 0 {
@@ -345,7 +400,6 @@ func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool) bool {
 		}
 	}
 end:
-	b.mu.RUnlock()
 	return found
 }
 

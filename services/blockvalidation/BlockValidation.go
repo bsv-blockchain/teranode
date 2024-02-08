@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -113,7 +114,6 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
 	var block *model.Block
 	var ids []uint32
-	var blockSubtrees []*util.Subtree
 
 	// get the block from the blockchain
 	block, err = u.blockchainClient.GetBlock(ctx, blockHash)
@@ -130,31 +130,37 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 		return fmt.Errorf("[localSetMined][%s] failed to get block header id: %v", blockHash.String(), err)
 	}
 
-	startTime := time.Now()
-	u.logger.Infof("[localSetMined][%s] get subtrees", blockHash.String())
-	blockSubtrees, err = block.GetSubtrees(u.subtreeStore)
-	if err != nil {
-		return fmt.Errorf("[localSetMined][%s] failed to get subtrees from block: %v", blockHash.String(), err)
-	}
-	u.logger.Infof("[localSetMined][%s] get subtrees DONE in %s", blockHash.String(), time.Since(startTime))
-
 	// add the transactions in this block to the txMeta block hashes
-	startTime = time.Now()
+	startTime := time.Now()
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
-	// comment the following!
-	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, ids[0]); err != nil {
-		return fmt.Errorf("[localSetMined][%s] error updating tx mined status: %v", blockHash.String(), err)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
+
+	for _, subtree := range block.Subtrees {
+		subtreeHash := subtree
+		g.Go(func() error {
+			reader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+			if err != nil {
+				return fmt.Errorf("[localSetMined][%s] failed to get subtree from store: %v", blockHash.String(), err)
+			}
+			defer reader.Close()
+
+			subtreeTxIDbytes, err := util.DeserializeNodesFromReader(reader)
+			if err != nil {
+				return fmt.Errorf("[localSetMined][%s] failed to deserialize subtree from reader: %v", blockHash.String(), err)
+			}
+
+			var blockIDBytes []byte
+			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
+			err = u.minedBlockStore.SetMulti(subtreeTxIDbytes, blockIDBytes, chainhash.HashSize)
+			return nil
+		})
 	}
 
-	// for each subtree gives me the byte array of the subtree
-	// divide 32 bytes -> 1 txID
-	// 8 MB data -> each item is 32 bytes -> 8MB/32 = 250000 items, now divide it to number of buckets -> call SetMulti() on bucket
-	// which is sent to u.minedBlocks.SetMulti(ctx, subtreeHashes, blockID, size) //32 bytes
-
-	// we only need txIDs, not other data like FEE
-	block.GetSubtrees(u.subtreeStore)
-
-	// for loop subtree, subtree, txID and update blockMinedC
+	if err = g.Wait(); err != nil {
+		return fmt.Errorf("[localSetMined][%s] failed to update tx mined for block: %v", blockHash.String(), err)
+	}
 
 	u.logger.Infof("[localSetMined][%s] update tx mined for block DONE in %s", blockHash.String(), time.Since(startTime))
 
