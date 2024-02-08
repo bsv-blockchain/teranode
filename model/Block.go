@@ -391,10 +391,10 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentBlo
 					continue
 				}
 
-				// txIdx, ok := b.txMap.Get(subtreeNode.Hash)
-				// if !ok {
-				// 	return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
-				// }
+				txIdx, ok := b.txMap.Get(subtreeNode.Hash)
+				if !ok {
+					return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
+				}
 
 				txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 				if err != nil {
@@ -412,38 +412,32 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentBlo
 					}
 				}
 
-				if len(txMeta.ParentTxHashes) > 0 {
-					if err = b.checkParentTxHashes(gCtx, uint64(snIdx), txMeta, subtreeNode, txMetaStore, currentBlockHeaderIDsMap); err != nil {
-						return err
+				for _, parentTxHash := range txMeta.ParentTxHashes {
+					parentTxIdx, ok := b.txMap.Get(parentTxHash)
+					if ok {
+						// parent tx was found in the same block as our tx, check idx
+						if parentTxIdx > txIdx {
+							return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+						}
+					} else {
+						// check whether the parent is in a block on our chain
+						parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
+						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
+							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						}
+						if parentTxMeta != nil {
+							if len(parentTxMeta.BlockIDs) == 0 {
+								return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
+							} else {
+								for _, blockID := range parentTxMeta.BlockIDs {
+									if _, ok := currentBlockHeaderIDsMap[blockID]; !ok {
+										return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
+									}
+								}
+							}
+						}
 					}
 				}
-
-				// for _, parentTxHash := range txMeta.ParentTxHashes {
-				// 	parentTxIdx, ok := b.txMap.Get(parentTxHash)
-				// 	if ok {
-				// 		// parent tx was found in the same block as our tx, check idx
-				// 		if parentTxIdx > txIdx {
-				// 			return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
-				// 		}
-				// 	} else {
-				// 		// check whether the parent is in a block on our chain
-				// 		parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
-				// 		if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-				// 			return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
-				// 		}
-				// 		if parentTxMeta != nil {
-				// 			if len(parentTxMeta.BlockIDs) == 0 {
-				// 				return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
-				// 			} else {
-				// 				for _, blockID := range parentTxMeta.BlockIDs {
-				// 					if _, ok := currentBlockHeaderIDsMap[blockID]; !ok {
-				// 						return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
-				// 					}
-				// 				}
-				// 			}
-				// 		}
-				// 	}
-				// }
 			}
 
 			return nil
@@ -452,47 +446,6 @@ func (b *Block) _(ctx context.Context, txMetaStore txmetastore.Store, currentBlo
 
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("error validating transaction order: %v", err)
-	}
-
-	return nil
-}
-
-func (b *Block) checkParentTxHashes(gCtx context.Context, txIdx uint64, txMeta *txmetastore.Data, subtreeNode util.SubtreeNode, txMetaStore txmetastore.Store, currentChainIDsMap map[uint32]struct{}) error {
-	var parentTxHash chainhash.Hash
-	var parentTxIdx uint64
-	var ok bool
-	var parentTxMeta *txmetastore.Data
-	var err error
-	var blockID uint32
-	for _, parentTxHash = range txMeta.ParentTxHashes {
-		// parent tx was found in the same block as our tx, check idx
-		if parentTxIdx, ok = b.txMap.Get(parentTxHash); ok {
-			if parentTxIdx > txIdx {
-				return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
-			}
-		} else { // check whether the parent is in a block on our chain
-			parentTxMeta, err = txMetaStore.Get(gCtx, &parentTxHash)
-			if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-				return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
-			}
-
-			// if there is no parentTx Metadata, continue
-			if parentTxMeta == nil {
-				continue
-			}
-
-			// if length of blockIDs is 0, the parentTx is not on our chain
-			if len(parentTxMeta.BlockIDs) == 0 {
-				return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
-			}
-
-			// check if all blockIDs of the parentTxs are on our chain
-			for _, blockID = range parentTxMeta.BlockIDs {
-				if _, ok = currentChainIDsMap[blockID]; !ok {
-					return fmt.Errorf("parent transaction %s of %s is not on our chain", parentTxHash.String(), subtreeNode.Hash.String())
-				}
-			}
-		}
 	}
 
 	return nil
