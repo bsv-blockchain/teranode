@@ -47,7 +47,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
-			return err
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
