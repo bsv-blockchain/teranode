@@ -315,7 +315,7 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 
 						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
 					} else {
-						s.logger.Debugf("[PeerConnection][%s] Connected to topic %s", p.String(), topicName)
+						s.logger.Infof("[PeerConnection][%s] Connected to topic %s", p.String(), topicName)
 					}
 				}
 				time.Sleep(5 * time.Second)
