@@ -318,6 +318,7 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 							continue
 						}
 
+						/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
 						go func(pChan peer.AddrInfo, topicName string) {
 							// s.logger.Debugf("[PeerConnection]%+v[%s] Connecting for topic %s", p, p.String(), topicName)
 							err = s.host.Connect(ctx, pChan)
