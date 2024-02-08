@@ -37,6 +37,7 @@ type PeerConnection struct {
 	bitcoinProtocolId string
 	usePrivateDHT     bool
 	handlerByTopic    map[string]Handler
+	startTime         time.Time
 }
 
 type Handler func(msg []byte, from string)
@@ -94,10 +95,10 @@ func NewPeerConnection(logger ulogger.Logger, config PeerConfig) *PeerConnection
 		}
 	}
 
-	logger.Debugf("[PeerConnection] peer ID: %s", h.ID().Pretty())
-	logger.Debugf("[PeerConnection] Connect to me on:")
+	logger.Infof("[PeerConnection] peer ID: %s", h.ID().Pretty())
+	logger.Infof("[PeerConnection] Connect to me on:")
 	for _, addr := range h.Addrs() {
-		logger.Debugf("[PeerConnection]   %s/p2p/%s", addr, h.ID().Pretty())
+		logger.Infof("[PeerConnection]   %s/p2p/%s", addr, h.ID().Pretty())
 	}
 
 	return &PeerConnection{
@@ -106,6 +107,7 @@ func NewPeerConnection(logger ulogger.Logger, config PeerConfig) *PeerConnection
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		usePrivateDHT:     config.UsePrivateDHT,
 		handlerByTopic:    make(map[string]Handler),
+		startTime:         time.Now(),
 	}
 }
 
@@ -313,9 +315,9 @@ func (s *PeerConnection) discoverPeers(ctx context.Context, topicNames []string)
 						// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
 						// Logging each attempt to connect to these peers is too noisy
 
-						// s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
+						s.logger.Debugf("[PeerConnection][%s] Failed connecting for topic %s: %+v", p.String(), topicName, err)
 					} else {
-						s.logger.Infof("[PeerConnection][%s] Connected to topic %s", p.String(), topicName)
+						s.logger.Infof("[PeerConnection][%s] Connected to topic %s : discovered and connected %s after startup", p.String(), topicName, time.Since(s.startTime))
 					}
 				}
 				time.Sleep(5 * time.Second)

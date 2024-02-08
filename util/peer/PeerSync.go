@@ -99,14 +99,14 @@ func (p *PeerSync) miningOnHandler(msg []byte, from string) {
  * HaveAllPeersReachedMinHeight checks if all peers are mining at the given block height or higher.
  * Very crude implementation, we need to allow for natural forks and reorgs.
  */
-func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool) bool {
-	if len(p.lastMsgByPeerId) == 0 {
-		// no peers to check
-		return true
-	}
-
+func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
 	if len(p.lastMsgByPeerId) < p.numberOfExpectedPeers {
-		p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
+		if first {
+			p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
+			for _, miningon := range p.lastMsgByPeerId {
+				p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
+			}
+		}
 		return false
 	}
 
@@ -116,7 +116,7 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > miningon.Height {
-			p.logger.Infof("[PeerSync] Height is %d. However, peer %s is %d. Not in sync.", height, miningon.PeerId, miningon.Height)
+			p.logger.Infof("[PeerSync][%s] Not in sync, %s=%d vs %d", miningon.PeerId, miningon.Miner, miningon.Height, height)
 			result = false
 
 			if !testAllPeers {
@@ -140,14 +140,16 @@ func (p *PeerSync) WaitForAllPeers(ctx context.Context, height uint32, testAllPe
 		defer cancel()
 	}
 
+	first := true
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.New("[PeerSync] WaitForAllPeers cancelled due to timeout or context cancellation")
 		default:
-			if p.HaveAllPeersReachedMinHeight(height, testAllPeers) {
+			if p.HaveAllPeersReachedMinHeight(height, testAllPeers, first) {
 				return nil
 			}
+			first = false
 			time.Sleep(1 * time.Second)
 		}
 	}
