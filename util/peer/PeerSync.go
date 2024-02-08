@@ -116,7 +116,7 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > miningon.Height {
-			p.logger.Infof("[PeerSync] Height is %d. However, peer %s is %d. Not in sync.", height, miningon.PeerId, miningon.Height)
+			p.logger.Infof("[PeerSync][%s] Not in sync, %s=%d vs %d", miningon.PeerId, miningon.Miner, miningon.Height, height)
 			result = false
 
 			if !testAllPeers {
