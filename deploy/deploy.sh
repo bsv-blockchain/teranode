@@ -140,7 +140,7 @@ cd $DIR/k8s/$REGION/$ENVIRONMENT
 kustomize build . $@
 
 cd $DIR/k8s/base/${ENVIRONMENT}-miner
-exit
+
 yq eval 'del(.images)' -i kustomization.yaml
 
 cd $DIR
