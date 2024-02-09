@@ -180,20 +180,6 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
 	defer setSpan.Finish()
 
-	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
-	if err != nil {
-		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
-			// stop all processing, this transaction has already been validated and passed into the block assembly
-			v.logger.Debugf("[Validate][%s] tx already exists in meta utxoStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
-			return nil
-		}
-
-		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
-		}
-		return errors.Join(ErrInternal, fmt.Errorf("error registering tx in meta utxoStore: %v", err))
-	}
-
 	// if the block assembly creates utxos, then we don't need to do it here
 	if !v.blockAssemblyCreatesUTXOs {
 		// then we store the new utxos from the tx
@@ -210,6 +196,20 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			setSpan.RecordError(err)
 			return err
 		}
+	}
+
+	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
+	if err != nil {
+		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
+			// stop all processing, this transaction has already been validated and passed into the block assembly
+			v.logger.Debugf("[Validate][%s] tx already exists in meta utxoStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+			return nil
+		}
+
+		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
+			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
+		}
+		return errors.Join(ErrInternal, fmt.Errorf("error registering tx in meta utxoStore: %v", err))
 	}
 
 	if !v.blockAssemblyDisabled {
