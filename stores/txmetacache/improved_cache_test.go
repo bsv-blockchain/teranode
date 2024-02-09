@@ -36,11 +36,14 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 	require.Equal(t, value, dst)
 }
 
-func TestImprovedCache_SetMulti(t *testing.T) {
+func TestImprovedCache_SetMultiKeys(t *testing.T) {
 	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
-	value := []byte("value")
-	for i := 0; i < bucketsCount*1_000; i++ {
+	value := []byte("first")
+	valueSecond := []byte("second")
+	numberOfKeys := 2_000 * bucketsCount
+
+	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
 		_, err := rand.Read(key)
 		require.NoError(t, err)
@@ -48,12 +51,50 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	}
 
 	startTime := time.Now()
-	_ = cache.SetMulti(allKeys, value, chainhash.HashSize)
+	cache.SetMulti(allKeys, value, chainhash.HashSize)
 	t.Log("SetMulti took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
 		_ = cache.Get(&dst, allKeys[i:i+chainhash.HashSize])
 		require.Equal(t, value, dst)
+	}
+
+	//startTime = time.Now()
+	cache.SetMulti(allKeys, valueSecond, chainhash.HashSize)
+	//t.Log("SetMulti took:", time.Since(startTime))
+
+	for i := 0; i < len(allKeys); i += chainhash.HashSize {
+		dst := make([]byte, 0)
+		_ = cache.Get(&dst, allKeys[i:i+chainhash.HashSize])
+		require.Equal(t, []byte("secondfirst"), dst)
+	}
+
+}
+
+func TestImprovedCache_SetKeyAppended(t *testing.T) {
+	cache := NewImprovedCache(100 * 1024 * 1024)
+	allKeys := make([][]byte, 0)
+	key := make([]byte, 32)
+	numberOfKeys := 2_000 * bucketsCount
+
+	for i := 0; i < numberOfKeys; i++ {
+		_, err := rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key)
+	}
+	startTime := time.Now()
+	//var prevValue []byte
+	for i := 0; i < numberOfKeys; i++ {
+		val := make([]byte, 0) // Create a new slice for each iteration
+		cache.Get(&val, allKeys[i])
+		cache.Set(allKeys[i], []byte("valuevalue"))
+	}
+	t.Log("Set took:", time.Since(startTime))
+
+	for i := 0; i < numberOfKeys; i++ {
+		dst := make([]byte, 0)
+		_ = cache.Get(&dst, allKeys[i])
+		require.Equal(t, []byte("valuevalue"), dst)
 	}
 }

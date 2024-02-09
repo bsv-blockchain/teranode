@@ -99,12 +99,12 @@ func (c *ImprovedCache) Set(k, v []byte) {
 // Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
 // Value bytes are appended to the end of the previous value bytes.
 func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
-	if len(keys)%keySize != 0 {
-		return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
-	}
+	// if len(keys)%keySize != 0 {
+	// 	return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+	// }
 
 	batchedKeys := make([][][]byte, bucketsCount)
-	hashes := make([][]uint64, bucketsCount)
+	//hashes := make([][]uint64, bucketsCount)
 
 	var key []byte
 	var bucketIdx uint64
@@ -116,7 +116,7 @@ func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
 		h = xxhash.Sum64(key)
 		bucketIdx = h % bucketsCount
 		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
-		hashes[bucketIdx] = append(hashes[bucketIdx], h)
+		//	hashes[bucketIdx] = append(hashes[bucketIdx], h)
 	}
 
 	g := errgroup.Group{}
@@ -128,7 +128,8 @@ func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			return c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], value, hashes[bucketIdx])
+			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			return nil
 		})
 	}
 
@@ -281,18 +282,20 @@ func (b *bucket) UpdateStats(s *Stats) {
 }
 
 // SetMulti stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
-func (b *bucket) SetMulti(keys [][]byte, value []byte, hashes []uint64) error {
+func (b *bucket) SetMulti(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var prevValue []byte
+	var hash uint64
 
-	for idx, key := range keys {
+	for _, key := range keys {
 		prevValue = value
-		b.Get(&prevValue, key, hashes[idx], false, true)
-		b.Set(key, prevValue, hashes[idx], true)
+		hash = xxhash.Sum64(key)
+		b.Get(&prevValue, key, hash, true, true)
+		b.Set(key, prevValue, hash, true)
 	}
 
-	return nil
+	return
 }
 
 // Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
