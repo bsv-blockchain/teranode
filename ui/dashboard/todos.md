@@ -14,6 +14,7 @@
 - [x] Fix refresh button
 - [x] Smooth sidebar transition
 - [x] Make spinner cover fill whole screen (not just content area)
+- [x] Create keyboard shortcut for refresh
 - [ ] Look at correct table column sorting, depending on field type
 - [ ] Serve webfonts with efficient cache policy [Server]
 - [ ] Serve responses with text compression, setting `Content-Encoding` [Server]

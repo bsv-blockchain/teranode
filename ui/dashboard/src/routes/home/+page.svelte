@@ -101,6 +101,16 @@
 
     return () => clearTimeout(timeoutId)
   })
+
+  function onKeyDown(e) {
+    if (!e) e = window.event
+    const keyCode = e.code || e.key
+    switch (keyCode) {
+      case 'KeyR':
+        getStatsData()
+      default:
+    }
+  }
 </script>
 
 <PageWithMenu>
@@ -111,6 +121,8 @@
     {/if}
   </div>
 </PageWithMenu>
+
+<svelte:window on:keydown|preventDefault={onKeyDown} />
 
 <style>
   .content {

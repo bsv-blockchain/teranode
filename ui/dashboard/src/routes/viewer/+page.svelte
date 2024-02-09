@@ -82,11 +82,23 @@
       console.error(err)
     }
   }
+
+  function onKeyDown(e) {
+    if (!e) e = window.event
+    const keyCode = e.code || e.key
+    switch (keyCode) {
+      case 'KeyR':
+        fetchData()
+      default:
+    }
+  }
 </script>
 
 <PageWithMenu>
   <BlocksTableCard data={blocks} pageSize={20} refresh={fetchData} />
 </PageWithMenu>
+
+<svelte:window on:keydown|preventDefault={onKeyDown} />
 
 <style>
 </style>
