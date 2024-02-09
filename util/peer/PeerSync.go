@@ -13,7 +13,7 @@ import (
 
 type PeerSync struct {
 	logger                ulogger.Logger
-	PeerConnection        PeerConnection
+	PeerConnection        PeerNode
 	numberOfExpectedPeers int
 	lastMsgByPeerId       map[string]MiningOnMessage
 	defaultTimeout        time.Duration
@@ -42,7 +42,7 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 		SharedKey:     sharedKey,
 		UsePrivateDHT: usePrivateDht,
 	}
-	peerConnection := NewPeerConnection(logger, config)
+	peerConnection := NewPeerNode(logger, config)
 
 	peerStatus := &PeerSync{
 		logger:                logger,
