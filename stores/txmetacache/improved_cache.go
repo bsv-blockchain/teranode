@@ -294,8 +294,6 @@ func (b *bucket) SetMulti(keys [][]byte, value []byte) { //, hashes []uint64) { 
 		b.Get(&prevValue, key, hash, true, true)
 		b.Set(key, prevValue, hash, true)
 	}
-
-	return
 }
 
 // Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.

@@ -51,7 +51,7 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 	}
 
 	startTime := time.Now()
-	cache.SetMulti(allKeys, value, chainhash.HashSize)
+	_ = cache.SetMulti(allKeys, value, chainhash.HashSize)
 	t.Log("SetMulti took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
@@ -61,7 +61,7 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 	}
 
 	//startTime = time.Now()
-	cache.SetMulti(allKeys, valueSecond, chainhash.HashSize)
+	_ = cache.SetMulti(allKeys, valueSecond, chainhash.HashSize)
 	//t.Log("SetMulti took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
@@ -87,7 +87,7 @@ func TestImprovedCache_SetKeyAppended(t *testing.T) {
 	//var prevValue []byte
 	for i := 0; i < numberOfKeys; i++ {
 		val := make([]byte, 0) // Create a new slice for each iteration
-		cache.Get(&val, allKeys[i])
+		_ = cache.Get(&val, allKeys[i])
 		cache.Set(allKeys[i], []byte("valuevalue"))
 	}
 	t.Log("Set took:", time.Since(startTime))
