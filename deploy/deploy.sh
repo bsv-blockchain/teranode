@@ -76,41 +76,70 @@ case $ENVIRONMENT in
 esac
 
 if [[ $IMAGE_TAG == "latest" ]]; then
-    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest-arm64"
+    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest"
 else
     IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
 fi
 
+echo "Using image tag: $IMAGE_TAG" >&2
+
 REGION=$(kubectl config view --minify --output 'jsonpath={..name}' | cut -d ' ' -f1 | cut -d ':' -f 4)
 NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
 
+case $REGION in
+    "docker-desktop")
+        if [[ $NAMESPACE != "miner-lo-1" ]]; then
+            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-lo-1 namespace to continue."
+            exit 1
+        fi
+
+        TRAEFIK=$(kubectl get namespaces traefik --output 'jsonpath={..name}' 2> /dev/null)
+        if [[ -z $TRAEFIK ]]; then
+            echo "Traefik is not installed, installing it now..." >&2
+            helm repo add traefik https://traefik.github.io/charts >&2
+            helm repo update >&2
+            kubectl create namespace traefik >&2
+            helm install --namespace traefik -f $DIR/deploy-traefik-extra.yaml traefik traefik/traefik >&2
+        fi
+
+        docker pull $IMAGE_NAME > /dev/null
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to pull image: $IMAGE_NAME"
+            echo "Login to ECR and try again."
+            # Force authentication to ECR...
+            echo "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com"
+            exit 1
+        fi
+
+        ;;
+esac
 
 # Check the folders exist...
-if [[ ! -d $DIR/deploy/k8s/base/${ENVIRONMENT}-miner ]]; then
+if [[ ! -d $DIR/k8s/base/${ENVIRONMENT}-miner ]]; then
     echo ""
     echo "Configuration mismatch.  It is not possible to process region $REGION in $ENVIRONMENT with the $NAMESPACE namespace"
-    echo "The folder $DIR/deploy/k8s/base/${ENVIRONMENT}-miner does not exist."
+    echo "The folder $DIR/k8s/base/${ENVIRONMENT}-miner does not exist."
     echo ""
     exit 1
 fi
 
-if [[ ! -d $DIR/deploy/k8s/$REGION/$ENVIRONMENT ]]; then
+if [[ ! -d $DIR/k8s/$REGION/$ENVIRONMENT ]]; then
     echo ""
     echo "Configuration mismatch.  It is not possible to process region $REGION in $ENVIRONMENT with the $NAMESPACE namespace"
-    echo "The folder $DIR/deploy/k8s/$REGION/$ENVIRONMENT does not exist."
+    echo "The folder $DIR/k8s/$REGION/$ENVIRONMENT does not exist."
     echo ""
     exit 1
 fi
 
-cd $DIR/deploy/k8s/base/${ENVIRONMENT}-miner
+cd $DIR/k8s/base/${ENVIRONMENT}-miner
 
 kustomize edit set image REPO:IMAGE:TAG=$IMAGE_NAME
 
-cd $DIR/deploy/k8s/$REGION/$ENVIRONMENT
+cd $DIR/k8s/$REGION/$ENVIRONMENT
 
 kustomize build . $@
 
-cd $DIR/deploy/k8s/base/${ENVIRONMENT}-miner
+cd $DIR/k8s/base/${ENVIRONMENT}-miner
 exit
 yq eval 'del(.images)' -i kustomization.yaml
 
