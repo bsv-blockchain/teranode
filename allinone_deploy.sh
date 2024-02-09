@@ -30,78 +30,88 @@ fi
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-if [[ -n $1 ]]; then
-    echo "Using image tag: $1-arm64." >&2
-    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$1-arm64"
-    shift
-else
-    echo "No image tag provided, using latest." >&2
+usage() {
+    echo ""
+    echo "Usage:   $0 --image <image_tag> --environment <environment>"
+    echo "Example: $0 --image latest --environment allinone"
+    echo "         $0 --image 5079e0084db92a0f635e5d8d15df207108e8e401 --environment scaling"
+    echo ""
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        --image)
+            IMAGE_TAG="$2"
+            shift
+            shift
+            ;;
+        --environment)
+            ENVIRONMENT="$2"
+            shift
+            shift
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+
+if [[ -z $IMAGE_TAG || -z $ENVIRONMENT ]]; then
+    usage
+fi
+
+case $ENVIRONMENT in
+    "docker-desktop")
+        ;;
+    "allinone")
+        ;;
+    "scaling")
+        ;;
+    *)
+        echo "Invalid environment. Please specify 'docker-desktop', 'allinone' or 'scaling'."
+        exit 1
+        ;;
+esac
+
+if [[ $IMAGE_TAG == "latest" ]]; then
     IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest-arm64"
+else
+    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
 fi
 
 REGION=$(kubectl config view --minify --output 'jsonpath={..name}' | cut -d ' ' -f1 | cut -d ':' -f 4)
 NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
 
-case $REGION in
-    "docker-desktop")
-        if [[ $NAMESPACE != "miner-lo-1" ]]; then
-            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-lo-1 namespace to continue."
-            exit 1
-        fi
 
-        TRAEFIK=$(kubectl get namespaces traefik --output 'jsonpath={..name}')
-        if [[ -z $TRAEFIK ]]; then
-            echo "Traefik is not installed, installing it now..."
-            helm repo add traefik https://traefik.github.io/charts
-            helm repo update
-            kubectl create namespace traefik
-            helm install --namespace traefik -f ./allinone-traefik-extra.yaml traefik traefik/traefik
-        fi
+# Check the folders exist...
+if [[ ! -d $DIR/deploy/k8s/base/${ENVIRONMENT}-miner ]]; then
+    echo ""
+    echo "Configuration mismatch.  It is not possible to process region $REGION in $ENVIRONMENT with the $NAMESPACE namespace"
+    echo "The folder $DIR/deploy/k8s/base/${ENVIRONMENT}-miner does not exist."
+    echo ""
+    exit 1
+fi
 
-        docker pull $IMAGE_NAME > /dev/null
-        if [[ $? -ne 0 ]]; then
-            echo "Failed to pull image: $IMAGE_NAME"
-            echo "Login to ECR and try again."
-            # Force authentication to ECR...
-            echo "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com"
-            exit 1
-        fi
+if [[ ! -d $DIR/deploy/k8s/$REGION/$ENVIRONMENT ]]; then
+    echo ""
+    echo "Configuration mismatch.  It is not possible to process region $REGION in $ENVIRONMENT with the $NAMESPACE namespace"
+    echo "The folder $DIR/deploy/k8s/$REGION/$ENVIRONMENT does not exist."
+    echo ""
+    exit 1
+fi
 
-        ;;
-    "eu-west-1")
-        if [[ $NAMESPACE != "miner-eu-1" ]]; then
-            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-eu-1 namespace to continue."
-            exit 1
-        fi
-        ;;
-    "us-east-1")
-        if [[ $NAMESPACE != "miner-us-1" ]]; then
-            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-us-1 namespace to continue."
-            exit 1
-        fi
-        ;;
-    "ap-northeast-1")
-        if [[ $NAMESPACE != "miner-eu-1" ]]; then
-            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-ap-1 namespace to continue."
-            exit 1
-        fi
-        ;;
-    *)
-        echo "Unknown region: $REGION"
-        exit 1
-        ;;
-esac
-
-cd $DIR/deploy/k8s/base/allinone-miner
+cd $DIR/deploy/k8s/base/${ENVIRONMENT}-miner
 
 kustomize edit set image REPO:IMAGE:TAG=$IMAGE_NAME
 
-cd $DIR/deploy/k8s/$REGION/allinone
+cd $DIR/deploy/k8s/$REGION/$ENVIRONMENT
 
 kustomize build . $@
 
-cd $DIR/deploy/k8s/base/allinone-miner
-
+cd $DIR/deploy/k8s/base/${ENVIRONMENT}-miner
+exit
 yq eval 'del(.images)' -i kustomization.yaml
 
 cd $DIR
