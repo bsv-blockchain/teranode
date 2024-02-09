@@ -95,14 +95,33 @@ func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error
 	}
 
 	for _, hash := range utxoHashes {
-		_, found := m.m[*hash]
+		_, found := m.m[hash]
 		if found {
 			return utxostore.ErrAlreadyExists
 		}
 
-		m.m[*hash] = UTXO{
+		m.m[hash] = UTXO{
 			SpendingTxID: nil,
 			LockTime:     storeLockTime,
+		}
+	}
+
+	return nil
+}
+
+func (m *Memory) StoreFromHashes(_ context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, hash := range hashes {
+		_, found := m.m[hash]
+		if found {
+			return utxostore.ErrAlreadyExists
+		}
+
+		m.m[hash] = UTXO{
+			SpendingTxID: nil,
+			LockTime:     lockTime,
 		}
 	}
 

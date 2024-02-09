@@ -32,6 +32,14 @@ func TestSQL(t *testing.T) {
 		tests.Store(t, db)
 	})
 
+	t.Run("sql store from hashes", func(t *testing.T) {
+		ctx, db := newDB(t)
+		err := db.delete(ctx, tests.Hash)
+		require.NoError(t, err)
+
+		tests.StoreFromHashes(t, db)
+	})
+
 	t.Run("sql spend", func(t *testing.T) {
 		ctx, db := newDB(t)
 		err := db.delete(ctx, tests.Hash)

@@ -27,6 +27,7 @@ var (
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheKafka   prometheus.Histogram
 	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
 	prometheusBlockValidationSetMinedMulti         prometheus.Counter
@@ -188,6 +189,15 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "set_tx_meta_cache_frpc",
 			Help:      "Number of tx meta cache sets with frpc",
+		},
+	)
+
+	prometheusBlockValidationSetTXMetaCacheKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_meta_cache_kafka_micros",
+			Help:      "Duration of setting tx meta cache from kafka",
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 

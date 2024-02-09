@@ -17,6 +17,14 @@ func TestMemory(t *testing.T) {
 		tests.Store(t, db)
 	})
 
+	t.Run("memory store from hashes", func(t *testing.T) {
+		db := New(false)
+		err := db.delete(tests.Hash)
+		require.NoError(t, err)
+
+		tests.StoreFromHashes(t, db)
+	})
+
 	t.Run("memory spend", func(t *testing.T) {
 		db := New(false)
 		err := db.delete(tests.Hash)

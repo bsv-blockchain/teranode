@@ -317,9 +317,8 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
+func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
 	b.subtreeProcessor.Add(node)
-	return nil
 }
 
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {

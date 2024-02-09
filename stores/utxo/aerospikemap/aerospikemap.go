@@ -312,6 +312,11 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	return nil
 }
 
+func (s *Store) StoreFromHashes(_ context.Context, _ chainhash.Hash, _ []chainhash.Hash, _ uint32) error {
+	// not supported in aerospikemap implementation
+	return nil
+}
+
 func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error) {
 	if s.dbTimeout > 0 {
 		var cancel context.CancelFunc

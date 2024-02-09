@@ -128,8 +128,8 @@ func init() {
 
 type storeUtxo struct {
 	idx        int
-	utxoHash   *chainhash.Hash
-	txHash     *chainhash.Hash
+	utxoHash   chainhash.Hash
+	txHash     chainhash.Hash
 	lockTime   uint32
 	retryCount int
 }
@@ -389,6 +389,10 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 		return nil
 	}
 
+	return s.storeUtxosInternal(*tx.TxIDChainHash(), utxoHashes, storeLockTime)
+}
+
+func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.Hash, storeLockTime uint32) (err error) {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, 0)
@@ -405,7 +409,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			return err
 		}
 
-		bin = aerospike.NewBin("locktime", tx.LockTime)
+		bin = aerospike.NewBin("locktime", storeLockTime)
 		record := aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(bin))
 		batchRecords[idx] = record
 	}
@@ -443,7 +447,7 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 			s.storeRetryCh <- &storeUtxo{
 				idx:      idx,
 				utxoHash: utxoHashes[idx],
-				txHash:   tx.TxIDChainHash(),
+				txHash:   txID,
 				lockTime: storeLockTime,
 			}
 		}
@@ -459,7 +463,11 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	return nil
 }
 
-func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash *chainhash.Hash, nLockTime uint32) error {
+func (s *Store) StoreFromHashes(_ context.Context, txID chainhash.Hash, utxoHashes []chainhash.Hash, lockTime uint32) error {
+	return s.storeUtxosInternal(txID, utxoHashes, lockTime)
+}
+
+func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash chainhash.Hash, nLockTime uint32) error {
 	key, err := aerospike.NewKey(s.namespace, "utxo", hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
@@ -701,7 +709,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 
 	prometheusUtxoReset.Inc()
 
-	return s.storeUtxo(nil, spend.Hash, uint32(nLockTime))
+	return s.storeUtxo(nil, *spend.Hash, uint32(nLockTime))
 }
 
 func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
