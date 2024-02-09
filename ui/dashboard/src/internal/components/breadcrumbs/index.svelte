@@ -9,8 +9,6 @@
   const baseKey = 'comp.breadcrumbs.page'
 
   let ready = false
-  $: searchParams = ready ? new URLSearchParams($page.url.search) : null
-
   beforeUpdate(() => {
     ready = true
   })
@@ -39,7 +37,7 @@
             selected: paths.length === 1,
           })
           const type = paths[1]
-          const hash = searchParams ? searchParams.get('hash') || '' : ''
+          const hash = ready ? $page.url.searchParams.get('hash') ?? '' : ''
           if (paths.length === 2 && hash) {
             tmp.push({
               label: $i18n.t(`${baseKey}.viewer.page.${type}.title`),

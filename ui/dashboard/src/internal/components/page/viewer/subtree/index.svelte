@@ -12,19 +12,19 @@
   import * as api from '$internal/api'
 
   let ready = false
-  const type = 'subtree'
-
-  export let hash = ''
-
-  $: blockHash = ready ? $page.url.searchParams.get('blockHash') : ''
-
   beforeUpdate(() => {
     ready = true
   })
 
+  const type = 'subtree'
+
+  export let hash = ''
+
+  $: blockHash = ready ? $page.url.searchParams.get('blockHash') ?? '' : ''
+
   let display: DetailTab
 
-  $: tab = ready ? new URLSearchParams($page.url.search).get('tab') || '' : ''
+  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
   $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
 
   let result: any = null

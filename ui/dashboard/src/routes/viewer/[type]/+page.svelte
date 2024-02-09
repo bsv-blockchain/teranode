@@ -7,13 +7,12 @@
   import { page } from '$app/stores'
 
   let ready = false
-
-  $: type = $page.params.type
-  $: hash = ready ? new URLSearchParams($page.url.search).get('hash') || '' : ''
-
   beforeUpdate(() => {
     ready = true
   })
+
+  $: type = $page.params.type
+  $: hash = ready ? $page.url.searchParams.get('hash') ?? '' : ''
 </script>
 
 <PageWithMenu>

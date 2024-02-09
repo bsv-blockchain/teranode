@@ -12,18 +12,18 @@
   import * as api from '$internal/api'
 
   let ready = false
+  beforeUpdate(() => {
+    ready = true
+  })
+
   const type = 'block'
 
   export let hash = ''
 
   let display: DetailTab
 
-  $: tab = ready ? new URLSearchParams($page.url.search).get('tab') || '' : ''
+  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
   $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
-
-  beforeUpdate(() => {
-    ready = true
-  })
 
   let result: any = null
 
