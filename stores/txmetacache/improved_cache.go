@@ -10,9 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// 1024 buckets, 100 in a batch, 1000 in a batch, 10000 in a batch. does it make sense?
-// only for bigger batches?
-
 const maxValueSizeKB = 2
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
@@ -94,11 +91,13 @@ func (c *ImprovedCache) Set(k, v []byte) {
 	c.buckets[idx].Set(k, v, h)
 }
 
-// lots of key value pairs at once
-// decides which bucket, for lots of items
-// [0..31 -b0, 32..63 -b1, 64..95 -b2, 96..127 -b3, 128..159 -b4, 160..191 -b5, 192..223 -b6, 224..255 -b7, 256..287 -b0, 288..319 -b1, 320..351 -b2, 352..383 -b3, 384..415 -b4, 416..447 -b5, 448..479 -b6, 480..511 -b7]
-// Value is a byte slice per key. 4 bytes for each block ID, can have more than one block ID per key.
-// a single block id is sent for all keys
+// SetMulti stores multiple (k, v) entries in the cache, for the same v.
+//
+// Logic: decides which bucket, for lots of items. All keys are distributed to buckets. All buckets are populated via goroutines.
+// Keys: a single byte slice containing many appended keys.
+// - key to bucket: [0..31 -b0, 32..63 -b1, 64..95 -b2, 96..127 -b3, 128..159 -b4, 160..191 -b5, 192..223 -b6, 224..255 -b7, 256..287 -b0, 288..319 -b1, 320..351 -b2, 352..383 -b3, 384..415 -b4, 416..447 -b5, 448..479 -b6, 480..511 -b7]
+// Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
+// Value bytes are appended to the end of the previous value bytes.
 func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
 	if len(keys)%keySize != 0 {
 		return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
@@ -123,7 +122,8 @@ func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
 	g := errgroup.Group{}
 
 	for bucketIdx := range batchedKeys {
-		if len(batchedKeys[bucketIdx]) == 0 { // there is no key for this bucket
+		// if there is no key for this bucket
+		if len(batchedKeys[bucketIdx]) == 0 {
 			continue
 		}
 		bucketIdx := bucketIdx
@@ -280,6 +280,7 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
+// SetMulti stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
 func (b *bucket) SetMulti(keys [][]byte, value []byte, hashes []uint64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -294,6 +295,7 @@ func (b *bucket) SetMulti(keys [][]byte, value []byte, hashes []uint64) error {
 	return nil
 }
 
+// Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
@@ -357,6 +359,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	}
 }
 
+// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
 	chunks := b.chunks
