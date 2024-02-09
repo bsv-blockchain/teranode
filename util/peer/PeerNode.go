@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -52,7 +51,7 @@ type PeerConfig struct {
 }
 
 func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
-	logger.Debugf("[PeerNode] Creating node")
+	logger.Infof("[PeerNode] Creating node")
 
 	var pk *crypto.PrivKey
 	var err error
@@ -274,7 +273,7 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 	if s.usePrivateDHT {
 		kademliaDHT = initPrivateDHT(ctx, s.host)
 	} else {
-		kademliaDHT = p2p.InitDHT(ctx, s.host)
+		kademliaDHT = initDHT(ctx, s.host)
 	}
 	routingDiscovery := dRouting.NewRoutingDiscovery(kademliaDHT)
 	for _, topicName := range topicNames {
@@ -305,6 +304,8 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 				// search for everything all at once
 				go func(topicName string) {
+					defer g.Done()
+
 					addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
 						s.logger.Errorf("[PeerNode] error finding peers: %+v", err)
@@ -322,8 +323,26 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 						}
 
 						if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
-							// peer id mismatch is where the node has started using a new private key, no point trying to connect to it
+
+							if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
+								numAddresses := len(addr.Addrs)
+								switch numAddresses {
+								case 0:
+									// peer has no addresses, no point trying to connect to it
+									continue
+								case 1:
+									address := addr.Addrs[0].String()
+									if strings.Contains(address, "127.0.0.1") {
+										// Peer has a single localhost address and it failed on first attempt
+										// You aren't allowed to dial 'yourself' and there are no other addresses available
+										continue
+									}
+								}
+							}
+
 							if strings.Contains(peerConnectionErrorString.(string), "peer id mismatch") {
+								// "peer id mismatch" is where the node has started using a new private key
+								// No point trying to connect to it
 								continue
 							}
 						}
@@ -331,7 +350,6 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 						peerAddrMap.Store(addr.ID.String(), addr)
 					}
 
-					g.Done()
 				}(topicName)
 
 			}
@@ -358,11 +376,44 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 				}(peerAddr.(peer.AddrInfo))
 
 				return true
+
 			})
 
 			time.Sleep(5 * time.Second)
 		}
 	}
+}
+
+func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
+	// Start a DHT, for use in peer discovery. We can't just make a new DHT
+	// client because we want each peer to maintain its own local copy of the
+	// DHT, so that the bootstrapping node of the DHT can go down without
+	// inhibiting future peer discovery.
+	var options []dht.Option
+
+	options = append(options, dht.Mode(dht.ModeAutoServer))
+
+	kademliaDHT, err := dht.New(ctx, h, options...)
+	if err != nil {
+		panic(err)
+	}
+	if err = kademliaDHT.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
+	var wg sync.WaitGroup
+	for _, peerAddr := range dht.DefaultBootstrapPeers {
+		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := h.Connect(ctx, *peerinfo); err != nil {
+				fmt.Println("DHT Bootstrap warning:", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	return kademliaDHT
 }
 
 func initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
