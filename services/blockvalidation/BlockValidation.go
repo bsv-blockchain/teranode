@@ -408,8 +408,8 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
-	var ids []uint32
-	if ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1); err != nil || len(ids) != 1 {
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
+	if err != nil {
 		return fmt.Errorf("failed to get block header ids: %w", err)
 	}
 	blockID := ids[0]
