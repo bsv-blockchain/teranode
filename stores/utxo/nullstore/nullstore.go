@@ -2,6 +2,7 @@ package nullstore
 
 import (
 	"context"
+	"github.com/libsv/go-bt/v2/chainhash"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
@@ -33,6 +34,10 @@ func (m *NullStore) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.R
 }
 
 func (m *NullStore) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
+	return nil
+}
+
+func (m *NullStore) StoreFromHashes(_ context.Context, txID chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
 	return nil
 }
 

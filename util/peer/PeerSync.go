@@ -34,13 +34,15 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 		panic(fmt.Errorf("[PeerSync] error getting p2p_shared_key"))
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
+	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
 
 	config := PeerConfig{
-		ProcessName:   processName,
-		IP:            p2pIp,
-		Port:          p2pPort,
-		SharedKey:     sharedKey,
-		UsePrivateDHT: usePrivateDht,
+		ProcessName:     processName,
+		IP:              p2pIp,
+		Port:            p2pPort,
+		SharedKey:       sharedKey,
+		UsePrivateDHT:   usePrivateDht,
+		OptimiseRetries: optimiseRetries,
 	}
 	peerConnection := NewPeerNode(logger, config)
 

@@ -137,17 +137,24 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	}()
 }
 
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash, parentTxHashes []*chainhash.Hash) (bool, error) {
 	utxoBytes := make([][]byte, len(utxoHashes))
 	for i, h := range utxoHashes {
 		utxoBytes[i] = h[:]
 	}
+
+	parentBytes := make([][]byte, len(parentTxHashes))
+	for i, h := range parentTxHashes {
+		parentBytes[i] = h[:]
+	}
+
 	req := &blockassembly_api.AddTxRequest{
 		Txid:     hash[:],
 		Fee:      fee,
 		Size:     size,
 		Locktime: locktime,
 		Utxos:    utxoBytes,
+		Parents:  parentBytes,
 	}
 
 	if s.batchSize == 0 {
@@ -160,6 +167,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 				Size:     size,
 				Locktime: locktime,
 				Utxos:    utxoBytes,
+				Parents:  parentBytes,
 			}); err != nil {
 				return false, err
 			}

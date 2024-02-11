@@ -30,12 +30,12 @@ import (
 )
 
 type PeerNode struct {
+	config            PeerConfig
 	host              host.Host
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
 	logger            ulogger.Logger
 	bitcoinProtocolId string
-	usePrivateDHT     bool
 	handlerByTopic    map[string]Handler
 	startTime         time.Time
 }
@@ -43,11 +43,12 @@ type PeerNode struct {
 type Handler func(msg []byte, from string)
 
 type PeerConfig struct {
-	ProcessName   string
-	IP            string
-	Port          int
-	SharedKey     string
-	UsePrivateDHT bool
+	ProcessName     string
+	IP              string
+	Port            int
+	SharedKey       string
+	UsePrivateDHT   bool
+	OptimiseRetries bool
 }
 
 func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
@@ -105,10 +106,10 @@ func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
 	}
 
 	return &PeerNode{
+		config:            config,
 		logger:            logger,
 		host:              h,
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
-		usePrivateDHT:     config.UsePrivateDHT,
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
 	}
@@ -270,7 +271,7 @@ func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 	var kademliaDHT *dht.IpfsDHT
 
-	if s.usePrivateDHT {
+	if s.config.UsePrivateDHT {
 		kademliaDHT = initPrivateDHT(ctx, s.host)
 	} else {
 		kademliaDHT = initDHT(ctx, s.host)
@@ -322,29 +323,33 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 							continue
 						}
 
-						if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
+						if s.config.OptimiseRetries {
 
-							if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
-								numAddresses := len(addr.Addrs)
-								switch numAddresses {
-								case 0:
-									// peer has no addresses, no point trying to connect to it
-									continue
-								case 1:
-									address := addr.Addrs[0].String()
-									if strings.Contains(address, "127.0.0.1") {
-										// Peer has a single localhost address and it failed on first attempt
-										// You aren't allowed to dial 'yourself' and there are no other addresses available
+							if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
+
+								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
+									numAddresses := len(addr.Addrs)
+									switch numAddresses {
+									case 0:
+										// peer has no addresses, no point trying to connect to it
 										continue
+									case 1:
+										address := addr.Addrs[0].String()
+										if strings.Contains(address, "127.0.0.1") {
+											// Peer has a single localhost address and it failed on first attempt
+											// You aren't allowed to dial 'yourself' and there are no other addresses available
+											continue
+										}
 									}
+								}
+
+								if strings.Contains(peerConnectionErrorString.(string), "peer id mismatch") {
+									// "peer id mismatch" is where the node has started using a new private key
+									// No point trying to connect to it
+									continue
 								}
 							}
 
-							if strings.Contains(peerConnectionErrorString.(string), "peer id mismatch") {
-								// "peer id mismatch" is where the node has started using a new private key
-								// No point trying to connect to it
-								continue
-							}
 						}
 
 						peerAddrMap.Store(addr.ID.String(), addr)

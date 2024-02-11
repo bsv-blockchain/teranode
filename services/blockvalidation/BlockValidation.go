@@ -810,7 +810,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 						// collect all missing transactions for processing in order
 						// that is why we use an indexed slice instead of just a slice append
 						// don't add the coinbase placeholder to the missing transactions
-						if !txHash.IsEqual(model.CoinbasePlaceholderHash) {
+						if !txHash.Equal(*model.CoinbasePlaceholderHash) {
 							missingTxHashes[i+j] = &txHash
 							nrOfMissingTransactions++
 						}
@@ -870,7 +870,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	u.logger.Infof("[validateSubtree][%s] adding %d nodes to subtree instance", subtreeHash.String(), len(txHashes))
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
-		if idx == 0 && txHash.IsEqual(model.CoinbasePlaceholderHash) {
+		if idx == 0 && txHash.Equal(*model.CoinbasePlaceholderHash) {
 			err = subtree.AddNode(txHash, 0, 0)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to add coinbase placeholder node to subtree", subtreeHash.String()), err)

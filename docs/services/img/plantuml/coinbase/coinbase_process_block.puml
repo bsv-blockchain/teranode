@@ -1,0 +1,43 @@
+@startuml
+
+participant "Coinbase Server" as Co
+participant "AssetClient" as AC
+participant "Blockchain Store" as St
+participant "Coinbase Store" as Cs
+
+Co -> AC: Subscribe(ctx, "")
+note right: Subscription request
+
+Co -> Co: Wait for notification
+alt notification type is Block
+    Co -> Co: processBlockFound(hash, baseURL)
+    activate Co
+    Co -> St: GetBlock(ctx, blockHash)
+    alt Parent Block Known
+
+        Co -> Co: storeBlock(ctx, block)
+        activate Co
+        Co -> St: StoreBlock(ctx, block, "")
+        St --> Co
+        Co -> Co: processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+        activate Co
+        Co -> Cs: insertCoinbaseUTXOs(ctx, blockId, coinbaseTx)
+        Cs --> Co
+        Co -> Cs: Update matured UTXOs to spendable
+        Cs --> Co
+        Co -> Cs: createSpendingUtxos(ctx, blockId, coinbaseTx)
+        Cs --> Co
+
+
+    deactivate Co
+    deactivate Co
+    deactivate Co
+
+    else Parent Block Unknown
+        Co -> Co: Request catch up
+        note right: Triggers a "catch up" recovery cycle
+    end
+
+end
+
+@enduml

@@ -34,9 +34,8 @@ func (f *fRPC_BlockAssembly) NewChaintipAndHeight(_ context.Context, _ *blockass
 	panic("implement me")
 }
 
-func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (resp *blockassembly_api.BlockassemblyApiAddTxResponse, err error) {
+func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) (resp *blockassembly_api.BlockassemblyApiAddTxResponse, err error) {
 	startTime := time.Now()
-	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblerQueuedTransactions.Set(float64(f.ba.blockAssembler.QueueLength()))
@@ -48,22 +47,24 @@ func (f *fRPC_BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.Blo
 		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
 	}
 
-	if err = f.ba.blockAssembler.AddTx(util.SubtreeNode{
+	if f.ba.blockAssemblyCreatesUTXOs {
+		if err = f.storeUtxos(ctx, req); err != nil {
+			return nil, fmt.Errorf("failed to store utxos: %s", err)
+		}
+	}
+
+	f.ba.blockAssembler.AddTx(util.SubtreeNode{
 		Hash:        chainhash.Hash(req.Txid),
 		Fee:         req.Fee,
 		SizeInBytes: req.Size,
-	}); err != nil {
-		return &blockassembly_api.BlockassemblyApiAddTxResponse{
-			Ok: false,
-		}, err
-	}
+	})
 
 	return &blockassembly_api.BlockassemblyApiAddTxResponse{
 		Ok: true,
 	}, nil
 }
 
-func (f *fRPC_BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {
+func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.BlockassemblyApiAddTxBatchRequest) (resp *blockassembly_api.BlockassemblyApiAddTxBatchResponse, err error) {
 	startTime := time.Now()
 	defer func() {
 		prometheusBlockAssemblerTransactions.Set(float64(f.ba.blockAssembler.TxCount()))
@@ -74,15 +75,18 @@ func (f *fRPC_BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_
 	var req *blockassembly_api.BlockassemblyApiAddTxRequest
 	var txIdErrors [][]byte
 	for _, req = range batch.TxRequests {
-		prometheusBlockAssemblyAddTx.Inc()
+		if f.ba.blockAssemblyCreatesUTXOs {
+			if err = f.storeUtxos(ctx, req); err != nil {
+				txIdErrors = append(txIdErrors, req.Txid)
+				continue
+			}
+		}
 
-		if err = f.ba.blockAssembler.AddTx(util.SubtreeNode{
+		f.ba.blockAssembler.AddTx(util.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
-		}); err != nil {
-			txIdErrors = append(txIdErrors, req.Txid)
-		}
+		})
 
 		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}
@@ -91,6 +95,19 @@ func (f *fRPC_BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_
 		Ok:         true,
 		TxIdErrors: txIdErrors,
 	}, err
+}
+
+func (f *fRPC_BlockAssembly) storeUtxos(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) error {
+	utxoHashes := make([]chainhash.Hash, len(req.Utxos))
+	for i, hash := range req.Utxos {
+		utxoHashes[i] = chainhash.Hash(hash)
+	}
+
+	if err := f.ba.utxoStore.StoreFromHashes(ctx, chainhash.Hash(req.Txid), utxoHashes, req.Locktime); err != nil {
+		return fmt.Errorf("failed to store utxos: %s", err)
+	}
+
+	return nil
 }
 
 func (f *fRPC_BlockAssembly) RemoveTx(_ context.Context, request *blockassembly_api.BlockassemblyApiRemoveTxRequest) (*blockassembly_api.BlockassemblyApiEmptyMessage, error) {

@@ -18,6 +18,7 @@ var (
 	prometheusTransactionDuration          prometheus.Histogram
 	prometheusTransactionSize              prometheus.Histogram
 	prometheusValidatorSendToBlockAssembly prometheus.Histogram
+	prometheusValidatorSendToKafka         prometheus.Histogram
 	prometheusValidatorSetTxMeta           prometheus.Histogram
 	prometheusValidatorSetTxMetaCache      prometheus.Histogram
 )
@@ -111,6 +112,14 @@ func initPrometheusMetrics() {
 			Namespace: "validator",
 			Name:      "validator_send_to_block_assembly_micros",
 			Help:      "Duration of sending transactions to block assembly",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+	prometheusValidatorSendToKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "validator",
+			Name:      "validator_send_to_kafka_micros",
+			Help:      "Duration of sending transactions to kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

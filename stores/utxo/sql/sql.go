@@ -300,6 +300,98 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	return nil
 }
 
+// StoreFromHashes stores the utxos of the tx in aerospike
+// TODO not tested for SQL
+func (s *Store) StoreFromHashes(cntxt context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
+	defer cancelTimeout()
+
+	switch s.engine {
+	case "postgres":
+
+		// Prepare the copy operation
+		txn, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			_ = txn.Rollback()
+		}()
+
+		stmt, err := txn.Prepare(pq.CopyIn("utxos", "lock_time", "hash"))
+		if err != nil {
+			return err
+		}
+
+		for _, hash := range hashes {
+			if _, err := stmt.ExecContext(ctx, lockTime, hash[:]); err != nil {
+				s.logger.Errorf("error storing utxo: %s", err.Error())
+				return err
+			}
+		}
+
+		// Execute the batch transaction
+		_, err = stmt.ExecContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+		if err := txn.Commit(); err != nil {
+			return err
+		}
+
+	case "sqlite", "sqlitememory":
+		// Prepare the copy operation
+		const batchSize = 500
+
+		qBase := `
+			INSERT INTO utxos
+				(lock_time, hash)
+			VALUES
+		`
+		qRow := fmt.Sprintf("(%d, ?)", lockTime)
+
+		for i := 0; i < len(hashes); i += batchSize {
+			var valuesStrings []string
+			var valuesArgs []interface{}
+
+			end := i + batchSize
+			if end > len(hashes) {
+				end = len(hashes)
+			}
+
+			for j := i; j < end; j++ {
+				valuesStrings = append(valuesStrings, qRow)
+				valuesArgs = append(valuesArgs, hashes[j][:])
+			}
+
+			q := qBase + strings.Join(valuesStrings, ",")
+
+			select {
+			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return fmt.Errorf("[sql.go.StoreFromHashes] context timeout, managed to get through %d of %d", i, len(hashes))
+				}
+				return fmt.Errorf("[sql.go.StoreFromHashes] context cancelled, managed to get through %d of %d", i, len(hashes))
+			default:
+				_, err := s.db.ExecContext(ctx, q, valuesArgs...)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("unknown database engine: %s", s.engine)
+	}
+
+	prometheusUtxoStore.Add(float64(len(hashes)))
+	return nil
+}
+
 func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
