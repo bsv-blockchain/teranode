@@ -6,13 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/ordishs/go-utils/expiringmap"
 	"io"
 	"math"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ordishs/go-utils/expiringmap"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -128,19 +129,13 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 		block = cachedBlock
 	} else {
 		// get the block from the blockchain
-		block, err = u.blockchainClient.GetBlock(ctx, blockHash)
-		if err != nil {
+		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
 			return fmt.Errorf("[localSetMined][%s] failed to get block from blockchain: %v", blockHash.String(), err)
 		}
 	}
 
-	ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1)
-	if err != nil {
+	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
 		return fmt.Errorf("[localSetMined][%s] failed to get block header ids: %v", blockHash.String(), err)
-	}
-
-	if len(ids) != 1 {
-		return fmt.Errorf("[localSetMined][%s] failed to get block header id: %v", blockHash.String(), err)
 	}
 
 	// add the transactions in this block to the txMeta block hashes
@@ -150,9 +145,9 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
-	for idx, subtree := range block.Subtrees {
-		subtreeIdx := idx
-		subtreeHash := subtree
+	for subtreeIdx, subtreeHash := range block.Subtrees {
+		subtreeIdx := subtreeIdx
+		subtreeHash := subtreeHash
 		g.Go(func() error {
 			var subtreeTxIDBytes []byte
 			var reader io.ReadCloser
@@ -162,20 +157,18 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 				subtreeTxIDBytes, err = block.SubtreeSlices[subtreeIdx].SerializeNodes()
 				if err != nil {
 					// we don't want to return here, since we can get the subtree from the store if needed
-					u.logger.Errorf("[localSetMined][%s] failed to serialize subtree from slice: %v", blockHash.String(), err)
+					u.logger.Errorf("[localSetMined][%s] failed to serialize subtree from slice: %v, will request from the subtree store", blockHash.String(), err)
 				}
 			}
 
 			if len(subtreeTxIDBytes) == 0 {
 				// get the subtree, it was not loaded in the block
-				reader, err = u.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-				if err != nil {
+				if reader, err = u.subtreeStore.GetIoReader(gCtx, subtreeHash[:]); err != nil {
 					return fmt.Errorf("[localSetMined][%s] failed to get subtree from store: %v", blockHash.String(), err)
 				}
 				defer reader.Close()
 
-				subtreeTxIDBytes, err = util.DeserializeNodesFromReader(reader)
-				if err != nil {
+				if subtreeTxIDBytes, err = util.DeserializeNodesFromReader(reader); err != nil {
 					return fmt.Errorf("[localSetMined][%s] failed to deserialize subtree from reader: %v", blockHash.String(), err)
 				}
 			}
@@ -266,8 +259,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	// validate all the subtrees in the block
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
-	err := u.validateBlockSubtrees(spanCtx, block, baseUrl)
-	if err != nil {
+	if err := u.validateBlockSubtrees(spanCtx, block, baseUrl); err != nil {
 		return err
 	}
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
@@ -278,6 +270,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	if err != nil {
 		return err
 	}
+
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
 	if err != nil {
 		return err
@@ -415,8 +408,8 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	g, gCtx := errgroup.WithContext(setCtx)
 	g.SetLimit(util.Max(4, runtime.NumCPU()-8))
 
-	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
-	if err != nil {
+	var ids []uint32
+	if ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1); err != nil || len(ids) != 1 {
 		return fmt.Errorf("failed to get block header ids: %w", err)
 	}
 	blockID := ids[0]
@@ -439,11 +432,10 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 			u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
 			if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, blockSubtrees, blockID); err != nil {
 				// TODO this should be a fatal error, but for now we just log it
-				//return nil, fmt.Errorf("[BlockAssembly] error updating tx mined status: %w", err)
+				//return nil, fmt.Errorf("[ValidateBlock] error updating tx mined status: %w", err)
 				u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
 			}
 			u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
-
 			return nil
 		})
 	}
