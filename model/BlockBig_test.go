@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,11 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	loadMetaToMemoryOnce sync.Once
+	cachedTxMetaStore    txmeta.Store
 )
 
 const (
@@ -49,10 +55,11 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
-
-	err = loadTxMetaIntoMemory(cachedTxMetaStore)
-	require.NoError(t, err)
+	loadMetaToMemoryOnce.Do(func() {
+		cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+		err = loadTxMetaIntoMemory(cachedTxMetaStore)
+		require.NoError(t, err)
+	})
 
 	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
