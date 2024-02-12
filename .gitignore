@@ -31,7 +31,8 @@ vite.config.ts.timestamp-*
 coverage.out
 
 *.prof
-/model/generated_test_data/
+/model/test-generated_test_data/
+/model/big-test-generated_test_data/
 bins/
 
 .sentryclirc
