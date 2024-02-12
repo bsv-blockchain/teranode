@@ -21,8 +21,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
 
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-
 	"github.com/ordishs/gocore"
 )
 
@@ -492,14 +490,13 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Debugf("handleBlockTopic")
 
-	var pubSubMessage *pubsub.Message
 	var blockMessage BlockMessage
 	var hash *chainhash.Hash
 	var err error
 
 	// decode request
 	blockMessage = BlockMessage{}
-	err = json.Unmarshal(pubSubMessage.Data, &blockMessage)
+	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
 		return
@@ -513,30 +510,24 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		PeerId:    blockMessage.PeerId,
 	}
 
-	if pubSubMessage.ReceivedFrom != s.P2PNode.HostID() {
-		s.logger.Debugf("BLOCK: topic: %s - from: %s - message: %s\n", *pubSubMessage.Message.Topic, pubSubMessage.ReceivedFrom.ShortString(), blockMessage)
-		hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
-		if err != nil {
-			s.logger.Errorf("error getting chainhash from string %s", blockMessage.Hash, err)
-			return
-		}
-		if err = s.blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl); err != nil {
-			s.logger.Errorf("[p2p] error validating block from %s: %s", blockMessage.DataHubUrl, err)
-		}
-	} else {
-		s.logger.Debugf("block message received from myself %s- ignoring\n", pubSubMessage.ReceivedFrom.ShortString())
+	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
+	if err != nil {
+		s.logger.Errorf("error getting chainhash from string %s", blockMessage.Hash, err)
+		return
+	}
+	if err = s.blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl); err != nil {
+		s.logger.Errorf("[p2p] error validating block from %s: %s", blockMessage.DataHubUrl, err)
 	}
 }
 
 func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
-	var pubSubMessage *pubsub.Message
 	var subtreeMessage SubtreeMessage
 	var hash *chainhash.Hash
 	var err error
 
 	// decode request
 	subtreeMessage = SubtreeMessage{}
-	err = json.Unmarshal(pubSubMessage.Data, &subtreeMessage)
+	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
 		return
@@ -550,29 +541,23 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		PeerId:    subtreeMessage.PeerId,
 	}
 
-	if pubSubMessage.ReceivedFrom != s.P2PNode.HostID() {
-		s.logger.Debugf("SUBTREE: topic: %s - from: %s - message: %s\n", *pubSubMessage.Message.Topic, pubSubMessage.ReceivedFrom.ShortString(), subtreeMessage)
-		hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
-		if err != nil {
-			s.logger.Errorf("error getting chainhash from string %s", subtreeMessage.Hash, err)
-			return
-		}
-		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
-			s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
-		}
-	} else {
-		s.logger.Debugf("subtree message received from myself %s- ignoring\n", pubSubMessage.ReceivedFrom.ShortString())
+	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
+	if err != nil {
+		s.logger.Errorf("error getting chainhash from string %s", subtreeMessage.Hash, err)
+		return
+	}
+	if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
+		s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
 	}
 }
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {
-	var pubSubMessage *pubsub.Message
 	var miningOnMessage MiningOnMessage
 	var err error
 
 	// decode request
 	miningOnMessage = MiningOnMessage{}
-	err = json.Unmarshal(pubSubMessage.Data, &miningOnMessage)
+	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
 		return
