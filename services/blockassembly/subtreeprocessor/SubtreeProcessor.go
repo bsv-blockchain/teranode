@@ -256,32 +256,18 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 
 		oldSubtree := stp.currentSubtree
-
-		// save the oldSubtree ???
+		oldSubtreeHash := oldSubtree.RootHash()
 
 		// create a new subtree with the same height as the previous subtree
 		stp.currentSubtree, err = util.NewTree(stp.currentSubtree.Height)
 		if err != nil {
-			return fmt.Errorf("[%s] error creating new subtree: %s", oldSubtree.RootHash().String(), err.Error())
+			return fmt.Errorf("[%s] error creating new subtree: %s", oldSubtreeHash.String(), err.Error())
 		}
 
 		if !skipNotification {
 			// Send the subtree to the newSubtreeChan
 			stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree}
 		}
-
-		go func(subtree *util.Subtree) {
-			// TODO this is temp code to store all the subtrees
-			// there is a bug that a subtree is not stored and bad things happens and things fork
-			subtreeBytes, err := subtree.Serialize()
-			if err != nil {
-				stp.logger.Errorf("[%s] error serializing subtree: %s", subtree.RootHash().String(), err.Error())
-			} else {
-				if err = stp.subtreeStore.Set(context.Background(), subtree.RootHash().CloneBytes(), subtreeBytes); err != nil {
-					stp.logger.Errorf("[%s] error storing subtree: %s", subtree.RootHash().String(), err.Error())
-				}
-			}
-		}(oldSubtree)
 	}
 
 	return nil
