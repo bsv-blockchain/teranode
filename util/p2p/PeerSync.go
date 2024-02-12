@@ -1,4 +1,4 @@
-package peer
+package p2p
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 type PeerSync struct {
 	logger                ulogger.Logger
-	PeerConnection        PeerNode
+	P2PNode               P2PNode
 	numberOfExpectedPeers int
 	lastMsgByPeerId       map[string]MiningOnMessage
 	defaultTimeout        time.Duration
@@ -36,7 +36,7 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
 
-	config := PeerConfig{
+	config := P2PConfig{
 		ProcessName:     processName,
 		IP:              p2pIp,
 		Port:            p2pPort,
@@ -44,11 +44,11 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 		UsePrivateDHT:   usePrivateDht,
 		OptimiseRetries: optimiseRetries,
 	}
-	peerConnection := NewPeerNode(logger, config)
+	peerConnection := NewP2PNode(logger, config)
 
 	peerStatus := &PeerSync{
 		logger:                logger,
-		PeerConnection:        *peerConnection,
+		P2PNode:               *peerConnection,
 		numberOfExpectedPeers: numberOfExpectedPeers,
 		lastMsgByPeerId:       make(map[string]MiningOnMessage),
 		defaultTimeout:        defaultTimeout,
@@ -67,12 +67,12 @@ func (p *PeerSync) Start(ctx context.Context) error {
 
 	topicName := fmt.Sprintf("%s-%s", topicPrefix, topic)
 
-	err := p.PeerConnection.Start(ctx, topicName)
+	err := p.P2PNode.Start(ctx, topicName)
 	if err != nil {
 		return err
 	}
 
-	err = p.PeerConnection.SetTopicHandler(ctx, topicName, p.miningOnHandler)
+	err = p.P2PNode.SetTopicHandler(ctx, topicName, p.miningOnHandler)
 	if err != nil {
 		return err
 	}
@@ -81,11 +81,11 @@ func (p *PeerSync) Start(ctx context.Context) error {
 }
 
 func (p *PeerSync) Stop(ctx context.Context) error {
-	err := p.PeerConnection.Stop(ctx)
+	err := p.P2PNode.Stop(ctx)
 	return err
 }
 
-func (p *PeerSync) miningOnHandler(msg []byte, from string) {
+func (p *PeerSync) miningOnHandler(ctx context.Context, msg []byte, from string) {
 	miningOnMessage := MiningOnMessage{}
 	err := json.Unmarshal(msg, &miningOnMessage)
 	if err != nil {

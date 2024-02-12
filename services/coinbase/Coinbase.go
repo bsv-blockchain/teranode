@@ -15,7 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
-	"github.com/bitcoin-sv/ubsv/util/peer"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bk/bec"
@@ -52,7 +52,7 @@ type Coinbase struct {
 	logger       ulogger.Logger
 	address      string
 	dbTimeout    time.Duration
-	peerSync     *peer.PeerSync
+	peerSync     *p2p.PeerSync
 	waitForPeers bool
 }
 
@@ -121,7 +121,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		privateKey:   privateKey.PrivKey,
 		address:      coinbaseAddr.AddressString,
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		peerSync:     peer.NewPeerSync(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		peerSync:     p2p.NewPeerSync(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
 		waitForPeers: waitForPeers,
 	}
 

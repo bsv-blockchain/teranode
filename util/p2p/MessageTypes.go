@@ -1,4 +1,4 @@
-package peer
+package p2p
 
 type BestBlockMessage struct {
 	PeerId string

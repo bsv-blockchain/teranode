@@ -1,4 +1,4 @@
-package peer
+package p2p
 
 import (
 	"bytes"
@@ -29,9 +29,10 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-type PeerNode struct {
-	config            PeerConfig
+type P2PNode struct {
+	config            P2PConfig
 	host              host.Host
+	pubSub            *pubsub.PubSub
 	topics            map[string]*pubsub.Topic
 	subscriptions     map[string]*pubsub.Subscription
 	logger            ulogger.Logger
@@ -40,9 +41,9 @@ type PeerNode struct {
 	startTime         time.Time
 }
 
-type Handler func(msg []byte, from string)
+type Handler func(ctx context.Context, msg []byte, from string)
 
-type PeerConfig struct {
+type P2PConfig struct {
 	ProcessName     string
 	IP              string
 	Port            int
@@ -51,8 +52,8 @@ type PeerConfig struct {
 	OptimiseRetries bool
 }
 
-func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
-	logger.Infof("[PeerNode] Creating node")
+func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
+	logger.Infof("[P2PNode] Creating node")
 
 	var pk *crypto.PrivKey
 	var err error
@@ -99,13 +100,13 @@ func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
 		}
 	}
 
-	logger.Infof("[PeerNode] peer ID: %s", h.ID().Pretty())
-	logger.Infof("[PeerNode] Connect to me on:")
+	logger.Infof("[P2PNode] peer ID: %s", h.ID().Pretty())
+	logger.Infof("[P2PNode] Connect to me on:")
 	for _, addr := range h.Addrs() {
-		logger.Infof("[PeerNode]   %s/p2p/%s", addr, h.ID().Pretty())
+		logger.Infof("[P2PNode]   %s/p2p/%s", addr, h.ID().Pretty())
 	}
 
-	return &PeerNode{
+	return &P2PNode{
 		config:            config,
 		logger:            logger,
 		host:              h,
@@ -115,8 +116,8 @@ func NewPeerNode(logger ulogger.Logger, config PeerConfig) *PeerNode {
 	}
 }
 
-func (s *PeerNode) Start(ctx context.Context, topicNames ...string) error {
-	s.logger.Infof("[PeerNode] starting")
+func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
+	s.logger.Infof("[P2PNode] starting")
 
 	go s.discoverPeers(ctx, topicNames)
 
@@ -129,22 +130,14 @@ func (s *PeerNode) Start(ctx context.Context, topicNames ...string) error {
 	subscriptions := map[string]*pubsub.Subscription{}
 
 	var topic *pubsub.Topic
-	var sub *pubsub.Subscription
 	for _, topicName := range topicNames {
 		topic, err = ps.Join(topicName)
 		if err != nil {
 			return err
 		}
 		topics[topicName] = topic
-		// don't subscribe to rejectedTxTopicName
-		// if topicName != rejectedTxTopicName {
-		sub, err = topic.Subscribe()
-		if err != nil {
-			return err
-		}
-		subscriptions[topicName] = sub
-		// }
 	}
+	s.pubSub = ps
 	s.topics = topics
 	s.subscriptions = subscriptions
 
@@ -153,29 +146,36 @@ func (s *PeerNode) Start(ctx context.Context, topicNames ...string) error {
 	return nil
 }
 
-func (s *PeerNode) Stop(ctx context.Context) error {
-	s.logger.Infof("[PeerNode] stopping")
+func (s *P2PNode) Stop(ctx context.Context) error {
+	s.logger.Infof("[P2PNode] stopping")
 	return nil
 }
 
-func (s *PeerNode) SetTopicHandler(ctx context.Context, topicName string, handler Handler) error {
+func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler Handler) error {
 	_, ok := s.handlerByTopic[topicName]
 	if ok {
-		return fmt.Errorf("[PeerNode][SetTopicHandler] handler already exists for topic: %s", topicName)
+		return fmt.Errorf("[P2PNode][SetTopicHandler] handler already exists for topic: %s", topicName)
 	}
 
+	topic := s.topics[topicName]
+	sub, err := topic.Subscribe()
+	if err != nil {
+		return err
+	}
+
+	s.subscriptions[topicName] = sub
 	s.handlerByTopic[topicName] = handler
 
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				s.logger.Infof("[PeerNode][SetTopicHandler] shutting down")
+				s.logger.Infof("[P2PNode][SetTopicHandler] shutting down")
 				return
 			default:
 				m, err := s.subscriptions[topicName].Next(ctx)
 				if err != nil {
-					s.logger.Errorf("[PeerNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
+					s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
 					continue
 				}
 
@@ -183,8 +183,8 @@ func (s *PeerNode) SetTopicHandler(ctx context.Context, topicName string, handle
 					continue
 				}
 
-				s.logger.Debugf("[PeerNode][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
-				handler(m.Data, m.ReceivedFrom.String())
+				s.logger.Debugf("[P2PNode][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
+				handler(ctx, m.Data, m.ReceivedFrom.String())
 			}
 		}
 	}()
@@ -192,18 +192,27 @@ func (s *PeerNode) SetTopicHandler(ctx context.Context, topicName string, handle
 	return nil
 }
 
-func (s *PeerNode) Publish(ctx context.Context, topicName string, msgBytes []byte) {
+func (s *P2PNode) HostID() peer.ID {
+	return s.host.ID()
+}
+
+func (s *P2PNode) GetTopic(topicName string) *pubsub.Topic {
+	return s.topics[topicName]
+}
+
+func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte) error {
 	if err := s.topics[topicName].Publish(ctx, msgBytes); err != nil {
-		s.logger.Errorf("[PeerNode][Publish] publish error:", err)
+		return fmt.Errorf("[P2PNode][Publish] publish error: %v", err)
 	}
+	return nil
 }
 
 /* SendToPeer sends a message to a peer. It will attempt to connect to the peer if not already connected. */
-func (s *PeerNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err error) {
+func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err error) {
 	h2pi := s.host.Peerstore().PeerInfo(pid)
-	s.logger.Infof("[PeerNode][SendToPeer] dialing %s", h2pi.Addrs)
+	s.logger.Infof("[P2PNode][SendToPeer] dialing %s", h2pi.Addrs)
 	if err = s.host.Connect(ctx, h2pi); err != nil {
-		s.logger.Errorf("[PeerNode][SendToPeer] failed to connect: %+v", err)
+		s.logger.Errorf("[P2PNode][SendToPeer] failed to connect: %+v", err)
 	}
 
 	var st network.Stream
@@ -218,7 +227,7 @@ func (s *PeerNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err
 	defer func() {
 		err = st.Close()
 		if err != nil {
-			s.logger.Errorf("[PeerNode][SendToPeer] error closing stream: %s", err)
+			s.logger.Errorf("[P2PNode][SendToPeer] error closing stream: %s", err)
 		}
 	}()
 
@@ -268,7 +277,7 @@ func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 	return &priv, nil
 }
 
-func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
+func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	var kademliaDHT *dht.IpfsDHT
 
 	if s.config.UsePrivateDHT {
@@ -280,8 +289,8 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 	for _, topicName := range topicNames {
 		dUtil.Advertise(ctx, routingDiscovery, topicName)
 	}
-	s.logger.Debugf("[PeerNode] connected to %d peers\n", len(s.host.Network().Peers()))
-	s.logger.Debugf("[PeerNode] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
+	s.logger.Debugf("[P2PNode] connected to %d peers\n", len(s.host.Network().Peers()))
+	s.logger.Debugf("[P2PNode] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
 
 	ctx = network.WithSimultaneousConnect(ctx, true, "hole punching")
 	peerAddrErrorMap := sync.Map{}
@@ -290,7 +299,7 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("[PeerNode] shutting down")
+			s.logger.Infof("[P2PNode] shutting down")
 			return
 		default:
 
@@ -309,7 +318,7 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 					addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
 					if err != nil {
-						s.logger.Errorf("[PeerNode] error finding peers: %+v", err)
+						s.logger.Errorf("[P2PNode] error finding peers: %+v", err)
 					}
 
 					for addr := range addrChan {
@@ -323,11 +332,13 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 							continue
 						}
 
+						// s.logger.Debugf("[P2PNode] found peer: %s, %+v", addr.ID.String(), addr.Addrs)
+
 						if s.config.OptimiseRetries {
 
 							if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
 
-								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
+								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") || strings.Contains(peerConnectionErrorString.(string), "no addresses") {
 									numAddresses := len(addr.Addrs)
 									switch numAddresses {
 									case 0:
@@ -352,7 +363,27 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 						}
 
-						peerAddrMap.Store(addr.ID.String(), addr)
+						peerAddr, loaded := peerAddrMap.LoadOrStore(addr.ID.String(), addr)
+
+						if !loaded {
+
+							/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
+							go func(addr peer.AddrInfo) {
+								err := s.host.Connect(ctx, addr)
+								if err != nil {
+									// A peer may not be available at the time of discovery.
+									// A peer stays in the DHT for around 24 hours (according to ChatGPT) before it is removed from the peerstore
+									// Logging each attempt to connect to these peers is too noisy
+
+									s.logger.Debugf("[P2PNode][%s] Connection failed : %+v", addr.String(), err)
+									peerAddrErrorMap.Store(addr.ID.String(), err.Error())
+								} else {
+									s.logger.Infof("[P2PNode][%s] Connected in %s", addr.String(), time.Since(s.startTime))
+								}
+							}(peerAddr.(peer.AddrInfo))
+
+						}
+
 					}
 
 				}(topicName)
@@ -361,28 +392,7 @@ func (s *PeerNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 			g.Wait()
 
-			s.logger.Infof("[PeerNode] Concurrent peer search completed in %s", time.Since(start))
-
-			peerAddrMap.Range(func(_, peerAddr interface{}) bool {
-
-				/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
-				go func(addr peer.AddrInfo) {
-					err := s.host.Connect(ctx, addr)
-					if err != nil {
-						// A peer may not be available at the time of discovery.
-						// A peer stays in the DHT for around 24 hours before it is removed from the peerstore
-						// Logging each attempt to connect to these peers is too noisy
-
-						s.logger.Debugf("[PeerNode][%s] Connection failed : %+v", addr.String(), err)
-						peerAddrErrorMap.Store(addr.ID.String(), err.Error())
-					} else {
-						s.logger.Infof("[PeerNode][%s] Connected in %s", addr.String(), time.Since(s.startTime))
-					}
-				}(peerAddr.(peer.AddrInfo))
-
-				return true
-
-			})
+			s.logger.Infof("[P2PNode] Completed discovery process in %v", time.Since(start))
 
 			time.Sleep(5 * time.Second)
 		}
@@ -424,28 +434,28 @@ func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 func initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
 	if len(bootstrapAddresses) == 0 {
-		panic(fmt.Errorf("[PeerNode] bootstrapAddresses not set in config"))
+		panic(fmt.Errorf("[P2PNode] bootstrapAddresses not set in config"))
 	}
 	for _, ba := range bootstrapAddresses {
 		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
-			panic(fmt.Sprintf("[PeerNode] failed to create bootstrap multiaddress %s: %v", ba, err))
+			panic(fmt.Sprintf("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err))
 		}
 
 		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
 		if err != nil {
-			panic(fmt.Sprintf("[PeerNode] failed to get peerInfo from  %s: %v", ba, err))
+			panic(fmt.Sprintf("[P2PNode] failed to get peerInfo from  %s: %v", ba, err))
 		}
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
-			panic(fmt.Sprintf("[PeerNode] failed to connect to bootstrap address %s: %v", ba, err))
+			panic(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
 		}
 	}
 
 	dhtProtocolIdStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
 	if !ok {
-		panic(fmt.Errorf("[PeerNode] error getting p2p_dht_protocol_id"))
+		panic(fmt.Errorf("[P2PNode] error getting p2p_dht_protocol_id"))
 	}
 	dhtProtocolID := protocol.ID(dhtProtocolIdStr)
 
@@ -466,15 +476,15 @@ func initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	return kademliaDHT
 }
 
-func (s *PeerNode) streamHandler(ns network.Stream) {
+func (s *P2PNode) streamHandler(ns network.Stream) {
 	buf, err := io.ReadAll(ns)
 	if err != nil {
 		_ = ns.Reset()
-		s.logger.Errorf("[PeerNode] failed to read network stream: %+v              ", err.Error())
+		s.logger.Errorf("[P2PNode] failed to read network stream: %+v              ", err.Error())
 		return
 	}
 	_ = ns.Close()
 	if len(buf) > 0 {
-		s.logger.Debugf("[PeerNode] Received message: %s", string(buf))
+		s.logger.Debugf("[P2PNode] Received message: %s", string(buf))
 	}
 }
