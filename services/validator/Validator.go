@@ -69,6 +69,12 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		blockValidationBatcherEnabled: enabled,
 	}
 
+	timeoutStr, _ := gocore.Config().Get("blockvalidation_txMetaCacheBatcherSendTimeout", "1s")
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration like 1s or 5000ms (%s)", timeoutStr))
+	}
+
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
 		sendBatch := func(batch []*txmeta.Data) {
 			startTime := gocore.CurrentTime()
@@ -77,7 +83,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}()
 
-			ctxTimeout, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
 			// add data to block validation cache
