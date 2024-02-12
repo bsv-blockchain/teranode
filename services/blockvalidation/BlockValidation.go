@@ -153,7 +153,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 			var reader io.ReadCloser
 
 			// check whether the subtree has already been loaded in the block
-			if block.SubtreeSlices[subtreeIdx] != nil {
+			if len(block.SubtreeSlices) > 0 && block.SubtreeSlices[subtreeIdx] != nil {
 				subtreeTxIDBytes, err = block.SubtreeSlices[subtreeIdx].SerializeNodes()
 				if err != nil {
 					// we don't want to return here, since we can get the subtree from the store if needed
