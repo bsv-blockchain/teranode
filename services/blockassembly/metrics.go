@@ -10,7 +10,6 @@ var (
 
 	// in Server
 	prometheusBlockAssemblyHealth                       prometheus.Counter
-	prometheusBlockAssemblyAddTx                        prometheus.Counter
 	prometheusBlockAssemblyAddTxDuration                prometheus.Histogram
 	prometheusBlockAssemblyRemoveTx                     prometheus.Counter
 	prometheusBlockAssemblyRemoveTxDuration             prometheus.Histogram
@@ -50,14 +49,6 @@ func initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "health",
 			Help:      "Number of calls to the health endpoint of the blockassembly service",
-		},
-	)
-
-	prometheusBlockAssemblyAddTx = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "add_tx",
-			Help:      "Number of txs added to the blockassembly service",
 		},
 	)
 

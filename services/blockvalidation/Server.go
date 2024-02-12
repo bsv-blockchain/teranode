@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -140,6 +142,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+
+	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockvalidation_kafkaBrokers")
+	if err == nil && ok {
+		u.startKafkaListener(ctx, kafkaBrokersURL)
+	}
 
 	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
 	if ok {
@@ -621,12 +628,11 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
 
-			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
-			if err != nil {
-				u.logger.Errorf("failed to create tx meta data from bytes: %v", err)
-			}
+			data := meta[32:]
+			txMetaData := &txmeta_store.Data{}
+			txmeta_store.NewMetaDataFromBytes(&data, txMetaData)
 
-			if err = u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {
+			if err := u.blockValidation.SetTxMetaCache(ctx, &hash, txMetaData); err != nil {
 				u.logger.Errorf("failed to set tx meta data: %v", err)
 			}
 		}(meta)
@@ -680,4 +686,36 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	return &blockvalidation_api.SetMinedMultiResponse{
 		Ok: true,
 	}, nil
+}
+
+func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+	workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
+	if workers < 1 {
+		// no workers, nothing to do
+		return
+	}
+
+	u.logger.Infof("[BlockValidation] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+
+	util.StartKafkaListener(ctx, u.logger, kafkaBrokersURL, workers, "BlockValidation", "blockvalidation", func(ctx context.Context, dataBytes []byte) error {
+		startTime := time.Now()
+		defer func() {
+			prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		}()
+
+		data, err := blockassembly.NewFromBytes(dataBytes)
+		if err != nil {
+			return fmt.Errorf("[BlockValidation] Failed to decode kafka message: %s", err)
+		}
+
+		if err = u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
+			Fee:            data.Fee,
+			SizeInBytes:    data.Size,
+			ParentTxHashes: data.ParentTxHashes,
+		}); err != nil {
+			u.logger.Errorf("failed to set tx meta data: %v", err)
+		}
+
+		return nil
+	})
 }

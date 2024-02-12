@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -73,6 +74,10 @@ func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostor
 
 func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
 	// fmt.Printf("Store(%s)\n", hash.String())
+	return nil
+}
+
+func (ns *NullStore) StoreFromHashes(ctx context.Context, txID chainhash.Hash, utxoHashes []chainhash.Hash, lockTime uint32) error {
 	return nil
 }
 

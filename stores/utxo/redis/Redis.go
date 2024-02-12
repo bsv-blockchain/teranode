@@ -247,6 +247,42 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	return nil
 }
 
+// StoreFromHashes stores the utxos of the tx in aerospike
+// TODO not tested for Redis
+func (r *Redis) StoreFromHashes(ctx context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
+	v := &Value{
+		LockTime: lockTime,
+	}
+	value := v.String()
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(16) // TODO what is a safe number here?
+
+	var nrStored = atomic.Uint64{}
+	for _, hash := range hashes {
+		hash := hash
+		g.Go(func() error {
+			if err := r.storeUtxo(gCtx, &hash, value); err != nil {
+				return err
+			}
+
+			nrStored.Add(1)
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("timeout storing %d of %d utxos", nrStored.Load(), len(hashes))
+		}
+
+		return err
+	}
+
+	return nil
+}
+
 func (r *Redis) storeUtxo(ctx context.Context, hash *chainhash.Hash, value string) error {
 	res := r.rdb.SetNX(ctx, hash.String(), value, 0)
 	if res.Err() != nil {

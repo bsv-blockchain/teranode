@@ -65,12 +65,12 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 		Tx: &bt.Tx{},
 	}
 
-	bb := data.Bytes()
+	dataBytes := data.Bytes()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = NewMetaDataFromBytes(bb)
+		NewMetaDataFromBytes(&dataBytes, data)
 	}
 }
 

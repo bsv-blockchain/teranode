@@ -97,28 +97,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, err := testItems.txMetaStore.Create(ctx, tx1)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx2)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx3)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx4)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx5)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 
 		wg.Wait()
 		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)

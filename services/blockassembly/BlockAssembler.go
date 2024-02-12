@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -149,18 +148,18 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
 
+					// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
 						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
-						// we already have this block, nothing to do
 						continue
-					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
+					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
 						b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
 						}
-					} else {
+					} else { // if the bestBlockchainBlockHeader's previous block is the same as the current best block header, move up
 						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
@@ -318,9 +317,8 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
+func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
 	b.subtreeProcessor.Add(node)
-	return nil
 }
 
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
@@ -362,8 +360,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
-		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree, err := util.NewTree(height)
+		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
 		}

@@ -26,12 +26,13 @@ vite.config.js.timestamp-*
 
 vite.config.ts.timestamp-*
 
-private_key
+*.private_key
 
 coverage.out
 
 *.prof
-/model/generated_test_data/
+/model/test-generated_test_data/
+/model/big-test-generated_test_data/
 bins/
 
 .sentryclirc

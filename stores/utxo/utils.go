@@ -66,8 +66,8 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 }
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
-func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
-	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
+func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
+	utxoHashes := make([]chainhash.Hash, 0, len(tx.Outputs))
 	utxoHashesMu := sync.Mutex{}
 
 	g := errgroup.Group{}
@@ -83,7 +83,7 @@ func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
 				}
 
 				utxoHashesMu.Lock()
-				utxoHashes = append(utxoHashes, utxoHash)
+				utxoHashes = append(utxoHashes, *utxoHash)
 				utxoHashesMu.Unlock()
 
 				return nil

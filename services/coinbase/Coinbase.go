@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bk/bec"
@@ -51,6 +52,8 @@ type Coinbase struct {
 	logger       ulogger.Logger
 	address      string
 	dbTimeout    time.Duration
+	peerSync     *p2p.PeerSync
+	waitForPeers bool
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -93,6 +96,20 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("blockchain_store_dbTimeoutMillis", 5000)
 
+	addresses, ok := gocore.Config().Get("propagation_grpcAddresses")
+	if !ok {
+		panic("[PeerStatus] propagation_grpcAddresses not found")
+	}
+	numberOfExpectedPeers := 1 + strings.Count(addresses, "|") // each | is a ip:port separator
+
+	timeout, _ := gocore.Config().Get("peerStatus_timeout", "30s")
+	peerStatusTimeout, err := time.ParseDuration(timeout)
+	if err != nil {
+		panic(fmt.Sprintf("[PeerStatus] failed to parse peerStatus_timeout: %s", err))
+	}
+
+	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
+
 	c := &Coinbase{
 		store:        store,
 		db:           store.GetDB(),
@@ -104,6 +121,8 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		privateKey:   privateKey.PrivKey,
 		address:      coinbaseAddr.AddressString,
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
+		peerSync:     p2p.NewPeerSync(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		waitForPeers: waitForPeers,
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -405,6 +424,16 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	// first check whether we are in sync with the blob server, otherwise we wait for the next block
 	_, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
 	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
+
+	if c.waitForPeers {
+		/* Wait until all nodes are at least on same block height as this coinbase block */
+		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
+		err = c.peerSync.WaitForAllPeers(ctx, blobBestBlockHeight, true)
+		if err != nil {
+			return fmt.Errorf("peers are not in sync: %s", err)
+		}
+	}
+
 	if blobBestBlockHeight >= coinbaseBestBlockMeta.Height {
 		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
 		if err != nil {

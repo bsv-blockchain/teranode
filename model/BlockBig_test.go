@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,13 +28,20 @@ import (
 )
 
 const (
-	subtreeSize                  = 1024 * 1024
-	txIdCount                    = 10 * 1024 * 1024
-	fileDir                      = "./generated_test_data/"
-	fileNameTemplate             = fileDir + "subtree-%d.bin"
-	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
-	fileNameTemplateBlock        = fileDir + "block.bin"
-	txMetafileNameTemplate       = fileDir + "txMeta.bin"
+	subtreeSize = 1024 * 1024
+	txIdCount   = 10 * 1024 * 1024
+)
+
+var (
+	loadMetaToMemoryOnce sync.Once
+	// cachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
+	cachedTxMetaStore txmeta.Store
+	// following variables are used to store the file names for the testdata
+	fileDir                      string
+	fileNameTemplate             string
+	fileNameTemplateMerkleHashes string
+	fileNameTemplateBlock        string
+	txMetafileNameTemplate       string
 )
 
 // This test runs a large block.Valid() test with a large number of txids
@@ -41,7 +49,11 @@ const (
 func TestBigBlock_Valid(t *testing.T) {
 	// Comment this out to run the test, it is commented, so it does not run in GitHub Actions
 	util.SkipVeryLongTests(t)
-
+	fileDir = "./big-test-generated_test_data/"
+	fileNameTemplate = fileDir + "subtree-%d.bin"
+	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
+	fileNameTemplateBlock = fileDir + "block.bin"
+	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
 
 	// delete all the data in the ./testdata folder to regenerate the testdata
@@ -49,11 +61,13 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	loadMetaToMemoryOnce.Do(func() {
+		cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+		err = loadTxMetaIntoMemory()
+		require.NoError(t, err)
+	})
 
-	err = loadTxMetaIntoMemory(cachedTxMetaStore)
-	require.NoError(t, err)
-
+	// check if the first txid is in the txMetaStore
 	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
 
@@ -89,7 +103,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
-	v, err := block.Valid(context.Background(), subtreeStore, cachedTxMetaStore, currentChain, currentChainIDs)
+	v, err := block.Valid(context.Background(), subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 
@@ -104,7 +118,7 @@ func Test_loadTxMetaIntoMemory(t *testing.T) {
 	util.SkipVeryLongTests(t)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	cachedTxMetaStore := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()
@@ -112,7 +126,7 @@ func Test_loadTxMetaIntoMemory(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	err := loadTxMetaIntoMemory(cachedTxMetaStore)
+	err := loadTxMetaIntoMemory()
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")
@@ -120,7 +134,7 @@ func Test_loadTxMetaIntoMemory(t *testing.T) {
 	_ = pprof.WriteHeapProfile(f)
 }
 
-func loadTxMetaIntoMemory(cachedTxMetaStore txmeta.Store) error {
+func loadTxMetaIntoMemory() error {
 	// create a reader from the txmetacache file
 	file, err := os.Open(txMetafileNameTemplate)
 	if err != nil {
@@ -168,6 +182,7 @@ func generateTestSets(nrOfIds int, subtreeStore *localSubtreeStore) (*Block, err
 	if err != nil {
 		return nil, err
 	}
+
 	txMetastoreWriter := bufio.NewWriter(txMetastoreFile)
 	defer func() {
 		_ = txMetastoreWriter.Flush() // Ensure all data is written to the underlying writer

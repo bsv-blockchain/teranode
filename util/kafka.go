@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/Shopify/sarama"
@@ -70,6 +71,60 @@ func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokersURL *url.URL, workers int,
+	service string, groupID string, workerFn func(ctx context.Context, data []byte) error) {
+
+	// create the workers to process all messages
+	n := atomic.Uint64{}
+	workerCh := make(chan []byte)
+	for i := 0; i < workers; i++ {
+		go func() {
+			var err error
+			for {
+				select {
+				case <-ctx.Done():
+					logger.Infof("[%s] Stopping Kafka worker", service)
+					return
+				case dataBytes := <-workerCh:
+					if err = workerFn(ctx, dataBytes); err != nil {
+						logger.Errorf("[%s] Failed to add tx to block assembly: %s", service, err)
+					} else {
+						n.Add(1)
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		clusterAdmin, _, err := ConnectToKafka(kafkaBrokersURL)
+		if err != nil {
+			logger.Fatalf("[%s] unable to connect to kafka: %s", service, err)
+		}
+		defer func() { _ = clusterAdmin.Close() }()
+
+		topic := kafkaBrokersURL.Path[1:]
+		var partitions int
+		if partitions, err = strconv.Atoi(kafkaBrokersURL.Query().Get("partitions")); err != nil {
+			logger.Fatalf("[%s] unable to parse Kafka partitions: %s", service, err)
+		}
+
+		var replicationFactor int
+		if replicationFactor, err = strconv.Atoi(kafkaBrokersURL.Query().Get("replication")); err != nil {
+			logger.Fatalf("[%s] unable to parse Kafka replication factor: %s", service, err)
+		}
+
+		_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     int32(partitions),
+			ReplicationFactor: int16(replicationFactor),
+		}, false)
+
+		if err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh); err != nil {
+			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
+		}
+	}()
 }
 
 func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan []byte) error {

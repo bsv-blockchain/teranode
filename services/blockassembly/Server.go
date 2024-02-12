@@ -3,13 +3,11 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"go.uber.org/atomic"
 	"math"
 	"net/url"
-	"strconv"
-	"sync/atomic"
 	"time"
 
-	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -45,18 +43,19 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         ulogger.Logger
 
-	blockchainClient      blockchain.ClientI
-	txStore               blob.Store
-	utxoStore             utxostore.Interface
-	txMetaStore           txmeta_store.Store
-	subtreeStore          blob.Store
-	subtreeTTL            time.Duration
-	assetClient           WrapperInterface
-	blockValidationClient WrapperInterface
-	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan   chan *blockassembly_api.SubmitMiningSolutionRequest
-	blockAssemblyDisabled bool
-	localSetMined         bool
+	blockchainClient          blockchain.ClientI
+	txStore                   blob.Store
+	utxoStore                 utxostore.Interface
+	txMetaStore               txmeta_store.Store
+	subtreeStore              blob.Store
+	subtreeTTL                time.Duration
+	assetClient               WrapperInterface
+	blockValidationClient     WrapperInterface
+	jobStore                  *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	blockSubmissionChan       chan *blockassembly_api.SubmitMiningSolutionRequest
+	blockAssemblyDisabled     bool
+	blockAssemblyCreatesUTXOs bool
+	localSetMined             bool
 }
 
 type subtreeRetrySend struct {
@@ -81,19 +80,20 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	ba := &BlockAssembly{
-		logger:                logger,
-		blockchainClient:      blockchainClient,
-		txStore:               txStore,
-		utxoStore:             utxoStore,
-		txMetaStore:           txMetaStore,
-		subtreeStore:          subtreeStore,
-		subtreeTTL:            subtreeTTL,
-		assetClient:           AssetClient,
-		blockValidationClient: blockValidationClient,
-		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		blockSubmissionChan:   make(chan *blockassembly_api.SubmitMiningSolutionRequest),
-		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
-		localSetMined:         gocore.Config().GetBool("blockvalidation_localSetMined", false),
+		logger:                    logger,
+		blockchainClient:          blockchainClient,
+		txStore:                   txStore,
+		utxoStore:                 utxoStore,
+		txMetaStore:               txMetaStore,
+		subtreeStore:              subtreeStore,
+		subtreeTTL:                subtreeTTL,
+		assetClient:               AssetClient,
+		blockValidationClient:     blockValidationClient,
+		jobStore:                  ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		blockSubmissionChan:       make(chan *blockassembly_api.SubmitMiningSolutionRequest),
+		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
+		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
+		localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
 	}
 
 	go ba.jobStore.Start()
@@ -348,61 +348,45 @@ func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) err
 }
 
 func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.URL) {
-	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s", kafkaBrokersURL.String())
-
 	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
-	ba.logger.Infof("[BlockAssembly] Kafka consumer starting with %d workers", workers)
-
-	// create the workers to process all messages
-	n := atomic.Uint64{}
-	workerCh := make(chan []byte)
-	for i := 0; i < workers; i++ {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					ba.logger.Infof("[BlockAssembly] Stopping Kafka worker")
-					return
-				case txIDBytes := <-workerCh:
-					if _, err := ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-						Txid: txIDBytes,
-					}); err != nil {
-						ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
-					} else {
-						n.Add(1)
-					}
-				}
-			}
-		}()
+	if workers < 1 {
+		// no workers, nothing to do
+		return
 	}
 
-	go func() {
-		clusterAdmin, _, err := util.ConnectToKafka(kafkaBrokersURL)
+	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+
+	util.StartKafkaListener(ctx, ba.logger, kafkaBrokersURL, workers, "BlockAssembly", "blockassembly", func(ctx context.Context, dataBytes []byte) error {
+		startTime := time.Now()
+		defer func() {
+			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+			prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		}()
+
+		data, err := NewFromBytes(dataBytes)
 		if err != nil {
-			ba.logger.Fatalf("[BlockAssembly] unable to connect to kafka: ", err)
-		}
-		defer func() { _ = clusterAdmin.Close() }()
-
-		topic := kafkaBrokersURL.Path[1:]
-		var partitions int
-		if partitions, err = strconv.Atoi(kafkaBrokersURL.Query().Get("partitions")); err != nil {
-			ba.logger.Fatalf("[BlockAssembly] unable to parse Kafka partitions: ", err)
+			return fmt.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
 		}
 
-		var replicationFactor int
-		if replicationFactor, err = strconv.Atoi(kafkaBrokersURL.Query().Get("replication")); err != nil {
-			ba.logger.Fatalf("[BlockAssembly] unable to parse Kafka replication factor: ", err)
+		utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
+		for i, hash := range data.UtxoHashes {
+			utxoHashesBytes[i] = hash.CloneBytes()
 		}
 
-		_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-			NumPartitions:     int32(partitions),
-			ReplicationFactor: int16(replicationFactor),
-		}, false)
-
-		if err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "validators", workerCh); err != nil {
-			ba.logger.Errorf("[BlockAssembly] Kafka listener failed to start: %s", err)
+		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
+			Txid:     data.TxIDChainHash.CloneBytes(),
+			Fee:      data.Fee,
+			Size:     data.Size,
+			Locktime: data.LockTime,
+			Utxos:    utxoHashesBytes,
+		}); err != nil {
+			return fmt.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
 		}
-	}()
+
+		return nil
+	})
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
@@ -424,20 +408,20 @@ func (ba *BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.Empt
 	}, nil
 }
 
+var txsProcessed = atomic.Uint64{}
+
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
-	// startTime, stat, _ := util.NewStatFromContext(ctx, "AddTx_grpc", blockAssemblyStat)
 	startTime := time.Now()
-
-	//traceSpan := tracing.Start(ctx, "BlockAssembly:AddTx")
-
-	prometheusBlockAssemblyAddTx.Inc()
 	defer func() {
-		//traceSpan.Finish()
-		// stat.AddTime(startTime)
-		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+		if txsProcessed.Load()%1000 == 0 {
+			// we should NOT be setting this on every call, it's a waste of resources
+			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+		}
+
 		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		txsProcessed.Inc()
 	}()
 
 	if len(req.Txid) != 32 {
@@ -445,13 +429,17 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.blockAssemblyDisabled {
-		if err = ba.blockAssembler.AddTx(util.SubtreeNode{
+		if ba.blockAssemblyCreatesUTXOs {
+			if err = ba.storeUtxos(ctx, req); err != nil {
+				return nil, err
+			}
+		}
+
+		ba.blockAssembler.AddTx(util.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
-		}); err != nil {
-			return nil, err
-		}
+		})
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -507,24 +495,40 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		startTxTime := time.Now()
 		// create the subtree node
 		if !ba.blockAssemblyDisabled {
-			prometheusBlockAssemblyAddTx.Inc()
+			if ba.blockAssemblyCreatesUTXOs {
+				if err = ba.storeUtxos(ctx, req); err != nil {
+					batchError = err
+					txIdErrors = append(txIdErrors, req.Txid)
+				}
+			}
 
-			if err = ba.blockAssembler.AddTx(util.SubtreeNode{
+			ba.blockAssembler.AddTx(util.SubtreeNode{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
 				SizeInBytes: req.Size,
-			}); err != nil {
-				batchError = err
-				txIdErrors = append(txIdErrors, req.Txid)
-			}
+			})
 
 			prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
 		}
 	}
+
 	return &blockassembly_api.AddTxBatchResponse{
 		Ok:         true,
 		TxIdErrors: txIdErrors,
 	}, batchError
+}
+
+func (ba *BlockAssembly) storeUtxos(ctx context.Context, req *blockassembly_api.AddTxRequest) error {
+	utxoHashes := make([]chainhash.Hash, len(req.Utxos))
+	for i, hash := range req.Utxos {
+		utxoHashes[i] = chainhash.Hash(hash)
+	}
+
+	if err := ba.utxoStore.StoreFromHashes(ctx, chainhash.Hash(req.Txid), utxoHashes, req.Locktime); err != nil {
+		return fmt.Errorf("failed to store utxos: %s", err)
+	}
+
+	return nil
 }
 
 func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
@@ -726,7 +730,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	startTime := time.Now()
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(cntxt, nil, nil, nil, nil); !ok {
+	if ok, err := block.Valid(cntxt, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}

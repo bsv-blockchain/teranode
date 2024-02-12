@@ -13,7 +13,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -111,7 +113,6 @@ func TestBlock_Bytes(t *testing.T) {
 }
 
 func TestMedianTimestamp(t *testing.T) {
-
 	timestamps := make([]time.Time, 11)
 	for i := range timestamps {
 		timestamps[i] = time.Unix(int64(i), 0)
@@ -141,6 +142,7 @@ func TestMedianTimestamp(t *testing.T) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
 	})
+
 	t.Run("test for correct median time unsorted 2", func(t *testing.T) {
 		expected := timestamps[4]
 		// add a new low timestamp out of sequence
@@ -153,6 +155,7 @@ func TestMedianTimestamp(t *testing.T) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
 	})
+
 	t.Run("test for less than 11 timestamps", func(t *testing.T) {
 		expected := timestamps[5]
 		median, err := medianTimestamp(timestamps[:10])
@@ -165,8 +168,7 @@ func TestMedianTimestamp(t *testing.T) {
 	})
 }
 
-func TestBlock_Valid(t *testing.T) {
-
+func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	blockHeaderBytes, _ := hex.DecodeString(block1Header)
 	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 	require.NoError(t, err)
@@ -198,10 +200,299 @@ func TestBlock_Valid(t *testing.T) {
 		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, currentChain, currentChainIDs)
+	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, nil, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	require.True(t, v)
+}
 
+func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
+	leafCount := 8
+	subtree, err := util.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+
+	fileDir = "./test-generated_test_data/"
+	fileNameTemplate = fileDir + "subtree-%d.bin"
+	subtreeStore := newLocalSubtreeStore()
+	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
+
+	if _, err := os.Stat(fileDir); os.IsNotExist(err) {
+		err = os.Mkdir(fileDir, 0755)
+		require.NoError(t, err)
+	}
+
+	// create a slice of random hashes, for the leaves
+	hashes := make([]*chainhash.Hash, leafCount)
+	for i := 0; i < leafCount-1; i++ {
+		// create random 32 bytes
+		bytes := make([]byte, 32)
+		_, _ = rand.Read(bytes)
+		hashes[i], _ = chainhash.NewHash(bytes)
+	}
+
+	// first transaction is the coinbase transaction
+	_ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
+
+	// rest of transactions are random
+	for i := 0; i < leafCount-1; i++ {
+		_ = subtree.AddNode(*hashes[i], 111, 0)
+		err = txMetaCache.SetCache(hashes[i], &txmeta.Data{Fee: 111, SizeInBytes: 1})
+		require.NoError(t, err)
+	}
+
+	// check if cachedTxMetaStore has the correct data
+	data, err := cachedTxMetaStore.Get(context.Background(), hashes[0])
+	require.NoError(t, err)
+	require.Equal(t, &txmeta.Data{
+		Fee:            111,
+		SizeInBytes:    1,
+		ParentTxHashes: []chainhash.Hash{},
+	}, data)
+
+	// create a subtree file
+	subtreeFile, err := os.Create(fmt.Sprintf(fileNameTemplate, 0))
+	require.NoError(t, err)
+
+	// serialize the subtree
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	// write the subtree to the file
+	_, err = subtreeFile.Write(subtreeBytes)
+	require.NoError(t, err)
+
+	// create a coinbase transaction
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	// add a P2PKH output to the coinbase transaction with fees
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1)+subtree.Fees)
+	nBits := NewNBitFromString("2000ffff")
+
+	// get subtree root hash
+	subtreeHash := subtree.RootHash()
+
+	// store subtree hash in the subtreeStore map
+	subtreeStore.files[*subtreeHash] = 0
+
+	// create a new subtree for replaced coinbase transaction
+	replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, err)
+
+	// close the subtree file
+	err = subtreeFile.Close()
+	require.NoError(t, err)
+
+	// deserialize the replaced coinbase subtree
+	err = replacedCoinbaseSubtree.Deserialize(subtreeBytes)
+	require.NoError(t, err)
+
+	// replace the root node with the coinbase transaction
+	replacedCoinbaseSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	// calculate the root hash of the replaced coinbase subtree
+	rootHash := replacedCoinbaseSubtree.RootHash()
+
+	// create a block header with the replaced coinbase subtree root hash
+	blockHeader := &BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: rootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           nBits,
+		Nonce:          0,
+	}
+
+	// mine block header to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	// initialize the block with the coinbase tx, block header and the subtree
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(leafCount),
+		SizeInBytes:      123,
+		Subtrees: []*chainhash.Hash{
+			subtreeHash,
+		},
+	}
+
+	currentChain := make([]*BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			// set the last 11 block header timestamps to be less than the current timestamps
+			Timestamp: 1231469665 - uint32(i),
+		}
+		currentChainIDs[i] = uint32(i)
+	}
+	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+
+	// check if the block is valid, we expect an error because of the duplicate transaction
+	v, err := b.Valid(context.Background(), subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
+	require.NoError(t, err)
+	require.True(t, v)
+}
+
+func TestBlock_WithDuplicateTransaction(t *testing.T) {
+	leafCount := 8
+	subtree, err := util.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+
+	fileDir = "./test-generated_test_data/"
+	fileNameTemplate = fileDir + "subtree-%d.bin"
+	subtreeStore := newLocalSubtreeStore()
+	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
+
+	if _, err := os.Stat(fileDir); os.IsNotExist(err) {
+		err = os.Mkdir(fileDir, 0755)
+		require.NoError(t, err)
+	}
+
+	// create a slice of random hashes, for the leaves
+	hashes := make([]*chainhash.Hash, leafCount)
+	for i := 0; i < leafCount-2; i++ {
+		// create random 32 bytes
+		bytes := make([]byte, 32)
+		_, _ = rand.Read(bytes)
+		hashes[i], _ = chainhash.NewHash(bytes)
+	}
+
+	// first transaction is the coinbase transaction
+	_ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
+
+	// rest of transactions are random
+	for i := 0; i < leafCount-2; i++ {
+		_ = subtree.AddNode(*hashes[i], 111, 0)
+		err = txMetaCache.SetCache(hashes[i], &txmeta.Data{Fee: 111, SizeInBytes: 1})
+		require.NoError(t, err)
+	}
+
+	// last transaction is a duplicate of the previous transaction
+	_ = subtree.AddNode(*hashes[leafCount-3], 111, 0)
+
+	// check if cachedTxMetaStore has the correct data
+	data, err := cachedTxMetaStore.Get(context.Background(), hashes[0])
+	require.NoError(t, err)
+	require.Equal(t, &txmeta.Data{
+		Fee:            111,
+		SizeInBytes:    1,
+		ParentTxHashes: []chainhash.Hash{},
+	}, data)
+
+	// create a subtree file
+	subtreeFile, err := os.Create(fmt.Sprintf(fileNameTemplate, 0))
+	require.NoError(t, err)
+
+	// serialize the subtree
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	// write the subtree to the file
+	_, err = subtreeFile.Write(subtreeBytes)
+	require.NoError(t, err)
+
+	// create a coinbase transaction
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	// add a P2PKH output to the coinbase transaction with fees
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1)+subtree.Fees)
+	nBits := NewNBitFromString("2000ffff")
+
+	// get subtree root hash
+	subtreeHash := subtree.RootHash()
+
+	// store subtree hash in the subtreeStore map
+	subtreeStore.files[*subtreeHash] = 0
+
+	// create a new subtree for replaced coinbase transaction
+	replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, err)
+
+	// close the subtree file
+	err = subtreeFile.Close()
+	require.NoError(t, err)
+
+	// deserialize the replaced coinbase subtree
+	err = replacedCoinbaseSubtree.Deserialize(subtreeBytes)
+	require.NoError(t, err)
+
+	// replace the root node with the coinbase transaction
+	replacedCoinbaseSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	// calculate the root hash of the replaced coinbase subtree
+	rootHash := replacedCoinbaseSubtree.RootHash()
+
+	// create a block header with the replaced coinbase subtree root hash
+	blockHeader := &BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: rootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           nBits,
+		Nonce:          0,
+	}
+
+	// mine block header to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	// initialize the block with the coinbase tx, block header and the subtree
+	b := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(leafCount),
+		SizeInBytes:      123,
+		Subtrees: []*chainhash.Hash{
+			subtreeHash,
+		},
+	}
+
+	currentChain := make([]*BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			// set the last 11 block header timestamps to be less than the current timestamps
+			Timestamp: 1231469665 - uint32(i),
+		}
+		currentChainIDs[i] = uint32(i)
+	}
+	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+
+	// check if the block is valid, we expect an error because of the duplicate transaction
+	_, _ = b.Valid(context.Background(), subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
+	// TODO reactivate this test when we have a way to check for duplicate transactions
+	// require.Error(t, err)
+	// require.False(t, v)
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {

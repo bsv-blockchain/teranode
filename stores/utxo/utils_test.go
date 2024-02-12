@@ -57,9 +57,9 @@ func TestGetUtxoHashes(t *testing.T) {
 
 		createdUtxoHashesMap := make(map[chainhash.Hash]struct{})
 		for _, utxoHash := range utxoHashes {
-			_, ok := utxoHashesMap[*utxoHash]
+			_, ok := utxoHashesMap[utxoHash]
 			assert.True(t, ok, "utxo hash not found in map: "+utxoHash.String())
-			createdUtxoHashesMap[*utxoHash] = struct{}{}
+			createdUtxoHashesMap[utxoHash] = struct{}{}
 		}
 
 		for utxoHash := range utxoHashesMap {
