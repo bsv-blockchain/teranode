@@ -252,21 +252,36 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 	if stp.currentSubtree.IsComplete() {
 		// Add the subtree to the chain
 		// this needs to happen here, so we can wait for the append action to complete
-		stp.logger.Infof("[SubtreeProcessor] append subtree: %s", stp.currentSubtree.RootHash().String())
+		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 
 		oldSubtree := stp.currentSubtree
 
+		// save the oldSubtree ???
+
 		// create a new subtree with the same height as the previous subtree
 		stp.currentSubtree, err = util.NewTree(stp.currentSubtree.Height)
 		if err != nil {
-			return fmt.Errorf("error creating new subtree: %s", err.Error())
+			return fmt.Errorf("[%s] error creating new subtree: %s", oldSubtree.RootHash().String(), err.Error())
 		}
 
 		if !skipNotification {
 			// Send the subtree to the newSubtreeChan
 			stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree}
 		}
+
+		go func(subtree *util.Subtree) {
+			// TODO this is temp code to store all the subtrees
+			// there is a bug that a subtree is not stored and bad things happens and things fork
+			subtreeBytes, err := subtree.Serialize()
+			if err != nil {
+				stp.logger.Errorf("[%s] error serializing subtree: %s", subtree.RootHash().String(), err.Error())
+			} else {
+				if err = stp.subtreeStore.Set(context.Background(), subtree.RootHash().CloneBytes(), subtreeBytes); err != nil {
+					stp.logger.Errorf("[%s] error storing subtree: %s", subtree.RootHash().String(), err.Error())
+				}
+			}
+		}(oldSubtree)
 	}
 
 	return nil
@@ -341,13 +356,18 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		}
 	}
 
-	for idx, block := range moveUpBlocks {
-		// we skip the notifications for all but the last block
-		lastBlock := idx == len(moveUpBlocks)-1
-		err := stp.moveUpBlock(ctx, block, !lastBlock)
+	for _, block := range moveUpBlocks {
+		// we skip the notifications for and do them all at the end
+		err := stp.moveUpBlock(ctx, block, false)
 		if err != nil {
 			return err
 		}
+	}
+
+	// announce all the subtrees to the network
+	// this will also store it by the Server in the subtree store
+	for _, subtree := range stp.chainedSubtrees {
+		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree}
 	}
 
 	stp.setTxCount()

@@ -71,18 +71,18 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
-		return fmt.Errorf("failed to get file name: %w", err)
+		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return fmt.Errorf("[%s] failed to create file: %w", fileName, err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
+		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
 	}
 
 	return nil
@@ -93,12 +93,12 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
-		return fmt.Errorf("failed to get file name: %w", err)
+		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
 
 	// write bytes to file
 	if err = os.WriteFile(fileName, value, 0644); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
+		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
 	}
 
 	return nil
@@ -111,7 +111,7 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error
 		// check whether the persisted file exists
 		_, err := os.Stat(persistedFilename)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("unable to stat file %q, %v", persistedFilename, err)
+			return fmt.Errorf("[%s] unable to stat file, %v", persistedFilename, err)
 		}
 
 		// the file should be persisted
@@ -128,6 +128,7 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, e
 	file, err := os.Open(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 			// check the persist sub dir
 			file, err = os.Open(s.getFileNameForPersist(fileName))
 			if err != nil {
@@ -138,15 +139,15 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, e
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, ubsverrors.ErrNotFound
 						}
-						return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 					}
 					return fileReader, nil
 				}
-				return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+				return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 			}
 			return file, nil
 		}
-		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+		return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 	}
 
 	return file, nil
@@ -159,6 +160,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
@@ -169,15 +171,15 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, ubsverrors.ErrNotFound
 						}
-						return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 					}
 					return bytes, nil
 				}
-				return nil, fmt.Errorf("failed to read data from file: %w", err)
+				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
 			}
 			return bytes, nil
 		}
-		return nil, fmt.Errorf("failed to read data from file: %w", err)
+		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
 	}
 
 	return bytes, err
