@@ -43,6 +43,7 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 		SharedKey:       sharedKey,
 		UsePrivateDHT:   usePrivateDht,
 		OptimiseRetries: optimiseRetries,
+		Advertise:       false, // no one need to discover or connect to us, we just listen
 	}
 	peerConnection := NewP2PNode(logger, config)
 

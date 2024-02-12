@@ -134,6 +134,7 @@ func NewServer(logger ulogger.Logger) *Server {
 		SharedKey:       sharedKey,
 		UsePrivateDHT:   usePrivateDht,
 		OptimiseRetries: optimiseRetries,
+		Advertise:       true,
 	}
 
 	p2pNode := p2p.NewP2PNode(logger, config)

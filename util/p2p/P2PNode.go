@@ -50,6 +50,7 @@ type P2PConfig struct {
 	SharedKey       string
 	UsePrivateDHT   bool
 	OptimiseRetries bool
+	Advertise       bool
 }
 
 func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
@@ -286,9 +287,13 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 		kademliaDHT = initDHT(ctx, s.host)
 	}
 	routingDiscovery := dRouting.NewRoutingDiscovery(kademliaDHT)
-	for _, topicName := range topicNames {
-		dUtil.Advertise(ctx, routingDiscovery, topicName)
+
+	if s.config.Advertise {
+		for _, topicName := range topicNames {
+			dUtil.Advertise(ctx, routingDiscovery, topicName)
+		}
 	}
+
 	s.logger.Debugf("[P2PNode] connected to %d peers\n", len(s.host.Network().Peers()))
 	s.logger.Debugf("[P2PNode] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
 
