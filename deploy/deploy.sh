@@ -111,6 +111,10 @@ case $REGION in
             exit 1
         fi
 
+        # Create the secret if it does not exist...
+        kubectl delete secret ecr-secret >&2
+        kubectl create secret docker-registry ecr-secret --docker-server=434394763103.dkr.ecr.eu-north-1.amazonaws.com --docker-username=AWS --docker-password=$(aws ecr get-login-password --region eu-north-1) >&2
+
         ;;
 esac
 
