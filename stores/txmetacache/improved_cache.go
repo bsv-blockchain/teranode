@@ -10,14 +10,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxValueSizeKB = 2
+const maxValueSizeKB = 2   // 2KB
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
 const chunksPerAlloc = 1024
 
 const bucketsCount = 512
 
-const chunkSize = maxValueSizeKB * 1024
+const chunkSize = maxValueSizeKB * 1024 * 32
 
 const bucketSizeBits = 40
 
@@ -213,6 +213,10 @@ type bucket struct {
 
 	// gen is the generation of chunks.
 	gen uint64
+
+	// free chunks per bucket
+	freeChunks []*[chunkSize]byte
+	//freeChunksLock sync.Mutex
 }
 
 func (b *bucket) Init(maxBytes uint64) {
@@ -232,7 +236,7 @@ func (b *bucket) Reset() {
 	b.mu.Lock()
 	chunks := b.chunks
 	for i := range chunks {
-		putChunk(chunks[i])
+		b.putChunk(chunks[i])
 		chunks[i] = nil
 	}
 	b.m = make(map[uint64]uint64)
@@ -272,12 +276,6 @@ func (b *bucket) cleanLocked() {
 func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
-	// bytesSize := uint64(0)
-	// for _, chunk := range b.chunks {
-	// 	bytesSize += uint64(cap(chunk))
-	// }
-	//s.BytesSize += bytesSize
-	//s.MaxBytesSize += uint64(len(b.chunks)) * chunkSize
 	b.mu.RUnlock()
 }
 
@@ -346,7 +344,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	}
 	chunk := chunks[chunkIdx]
 	if chunk == nil {
-		chunk = getChunk()
+		chunk = b.getChunk()
 		chunk = chunk[:0]
 	}
 	chunk = append(chunk, kvLenBuf[:]...)
@@ -413,14 +411,14 @@ func (b *bucket) Del(h uint64) {
 	b.mu.Unlock()
 }
 
-var (
-	freeChunks     []*[chunkSize]byte
-	freeChunksLock sync.Mutex
-)
+// var (
+// 	freeChunks     []*[chunkSize]byte
+// 	freeChunksLock sync.Mutex
+// )
 
-func getChunk() []byte {
-	freeChunksLock.Lock()
-	if len(freeChunks) == 0 {
+func (b *bucket) getChunk() []byte {
+	//b.freeChunksLock.Lock()
+	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
 		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
@@ -429,26 +427,26 @@ func getChunk() []byte {
 		}
 		for len(data) > 0 {
 			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
-			freeChunks = append(freeChunks, p)
+			b.freeChunks = append(b.freeChunks, p)
 			data = data[chunkSize:]
 		}
 	}
-	n := len(freeChunks) - 1
-	p := freeChunks[n]
-	freeChunks[n] = nil
-	freeChunks = freeChunks[:n]
-	freeChunksLock.Unlock()
+	n := len(b.freeChunks) - 1
+	p := b.freeChunks[n]
+	b.freeChunks[n] = nil
+	b.freeChunks = b.freeChunks[:n]
+	//b.freeChunksLock.Unlock()
 	return p[:]
 }
 
-func putChunk(chunk []byte) {
+func (b *bucket) putChunk(chunk []byte) {
 	if chunk == nil {
 		return
 	}
 	chunk = chunk[:chunkSize]
 	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
 
-	freeChunksLock.Lock()
-	freeChunks = append(freeChunks, p)
-	freeChunksLock.Unlock()
+	//b.freeChunksLock.Lock()
+	b.freeChunks = append(b.freeChunks, p)
+	//b.freeChunksLock.Unlock()
 }

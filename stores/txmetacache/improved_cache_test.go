@@ -60,9 +60,7 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 		require.Equal(t, value, dst)
 	}
 
-	//startTime = time.Now()
 	_ = cache.SetMulti(allKeys, valueSecond, chainhash.HashSize)
-	//t.Log("SetMulti took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
