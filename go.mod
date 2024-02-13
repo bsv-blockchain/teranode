@@ -7,13 +7,13 @@ replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.5
 require (
 	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
-	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aerospike/aerospike-client-go/v6 v6.14.1
 	github.com/archdx/zerolog-sentry v1.8.2
 	github.com/aws/aws-sdk-go-v2 v1.24.1
 	github.com/aws/aws-sdk-go-v2/config v1.26.3
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.15.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.0
+	github.com/cespare/xxhash v1.1.0
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dolthub/swiss v0.2.1
 	github.com/gorilla/websocket v1.5.0
@@ -52,6 +52,7 @@ require (
 	golang.org/x/exp v0.0.0-20230817173708-d852ddb80c63
 	golang.org/x/net v0.18.0
 	golang.org/x/sync v0.5.0
+	golang.org/x/sys v0.15.0
 	golang.org/x/time v0.3.0
 	google.golang.org/grpc v1.59.0
 	google.golang.org/protobuf v1.31.0
@@ -84,7 +85,6 @@ require (
 	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 // indirect
 	github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/containerd/cgroups v1.1.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
@@ -228,7 +228,6 @@ require (
 	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/mod v0.12.0 // indirect
 	golang.org/x/oauth2 v0.13.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/term v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.12.1-0.20230815132531-74c255bcf846 // indirect

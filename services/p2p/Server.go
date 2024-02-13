@@ -199,7 +199,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/ws", s.HandleWebSocket(s.notificationCh))
+	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh))
 
 	go func() {
 		err := s.StartHttp(ctx)

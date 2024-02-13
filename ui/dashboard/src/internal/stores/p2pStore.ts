@@ -14,7 +14,7 @@ export function connectToP2PServer() {
     const url = new URL(window.location.href)
     url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
     url.port = url.protocol === 'ws:' ? '9906' : '9904'
-    url.pathname = '/ws'
+    url.pathname = '/p2p-ws'
 
     wsUrl.set(url)
     error.set(null)

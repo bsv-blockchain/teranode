@@ -67,7 +67,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 		AllowMethods: []string{echo.GET},
 	}))
 
-	e.GET("/ws", s.HandleWebSocket())
+	e.GET("/asset-ws", s.HandleWebSocket())
 
 	e.GET("/nodes", func(c echo.Context) error {
 		type node struct {

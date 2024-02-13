@@ -7,8 +7,6 @@
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { sock as p2pSock } from '$internal/stores/p2pStore'
-  //   import { sock as nodeSock } from '$internal/stores/nodeStore'
-  ///   import { sock as bootstrapSock } from '$internal/stores/bootstrapStore'
 
   let loading = true
   let data = {}

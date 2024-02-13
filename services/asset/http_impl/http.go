@@ -109,7 +109,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
-	e.GET("/ws", h.HandleWebSocket(h.notificationCh))
+	e.GET("/asset-ws", h.HandleWebSocket(h.notificationCh))
 
 	prefix := gocore.GetStatPrefix()
 	e.GET(prefix+"stats", AdaptStdHandler(gocore.HandleStats))
