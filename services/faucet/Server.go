@@ -68,7 +68,7 @@ func (f *Faucet) Init(ctx context.Context) error {
 		return fmt.Errorf("could not create distributor: %v", err)
 	}
 
-	f.e.POST("/faucet", f.faucetHandler)
+	f.e.POST("/faucet/request", f.faucetHandler)
 	f.e.POST("/faucet/submit", f.submitHandler)
 
 	f.e.GET("/faucet/*", f.staticHandler)

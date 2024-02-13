@@ -30,7 +30,7 @@ window.onload = function() {
     e.preventDefault()
 
     const address = addressControl.value
-    const response = await postData('/faucet', { address })
+    const response = await postData('/faucet/request', { address })
     
     txControl.value = response.tx
   })
