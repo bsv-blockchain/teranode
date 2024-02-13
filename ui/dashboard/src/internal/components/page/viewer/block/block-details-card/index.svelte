@@ -9,6 +9,8 @@
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
 
   import { Button, Icon } from '$lib/components'
+  import { getDifficultyFromBits } from '$lib/utils/difficulty'
+  import { formatNumberExp } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
@@ -42,6 +44,8 @@
       goto(getDetailsUrl(DetailType.block, hash))
     }
   }
+
+  $: difficultyDisplay = formatNumberExp(getDifficultyFromBits(expandedHeader.bits))
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedHeader.height })}>
@@ -123,7 +127,9 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.difficulty`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">
+              {@html difficultyDisplay.value + difficultyDisplay.exp}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>

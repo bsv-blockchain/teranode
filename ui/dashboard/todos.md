@@ -22,7 +22,7 @@
   - [ ] often shows M1 or M2 twice with different details?
   - [ ] shows other miner briefly then disappears again?
 - [ ] Improve block summary fields
-  - [ ] `difficulty` - Ask WoC: use block `bits` to calculate it
+  - [x] `difficulty` - Ask WoC: use block `bits` to calculate it
   - [ ] `confirmation` = latest block height - block height of block being inspected
 - [ ] Improve subtree summary fields
   - [x] Show static entry for coinbase always - data for it was removed from DB
