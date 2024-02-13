@@ -30,7 +30,7 @@ window.onload = function() {
     e.preventDefault()
 
     const address = addressControl.value
-    const response = await postData('/api/faucet', { address })
+    const response = await postData('/faucet', { address })
     
     txControl.value = response.tx
   })
@@ -40,7 +40,7 @@ window.onload = function() {
     e.preventDefault()
 
     const tx = txControl.value
-    const response = await postData('/api/submit', { tx })
+    const response = await postData('/faucet/submit', { tx })
 
     alert(JSON.stringify(response, null, 2))
   })

@@ -460,6 +460,14 @@ func shouldStart(app string) bool {
 		}
 	}
 
+	// Add option to stop all services from running if -all=0 is passed
+	// except for the services that are explicitly enabled above
+	for _, cmd := range os.Args[1:] {
+		if cmd == "-all=0" {
+			return false
+		}
+	}
+
 	// If the app was not specified on the command line, see if it is enabled in the config
 	varArg := fmt.Sprintf("start%s", app)
 
