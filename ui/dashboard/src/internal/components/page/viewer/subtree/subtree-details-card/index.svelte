@@ -109,6 +109,12 @@
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
             <div class="value">{expandedData.fee}</div>
           </div>
+          <!-- <div class="entry">
+            <div class="label">{t(`${fieldKey}.nonce`)}</div>
+            <div class="value">TBD</div>
+          </div> -->
+        </div>
+        <div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
             <div class="value">{expandedData.fee / expandedData.transactionCount}</div>
@@ -117,12 +123,6 @@
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">{t('unit.value.kb', { value: expandedData.size / 1000 })}</div>
           </div>
-          <!-- <div class="entry">
-            <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">TBD</div>
-          </div> -->
-        </div>
-        <div>
           <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.bits`)}</div>
             <div class="value">TBD</div>
