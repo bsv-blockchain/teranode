@@ -81,27 +81,36 @@
             tmpData.Nodes[0].txid ===
               'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
           ) {
-            if (tmpData.expandedBlockData) {
-              const coinbase_tx = tmpData.expandedBlockData.coinbase_tx
-              return {
-                index: i,
-                inputsCount: coinbase_tx.inputs.length,
-                kbFee: tmpData.Nodes[i].fee,
-                outputsCount: coinbase_tx.outputs.length,
-                size: tmpData.Nodes[i].size,
-                timestamp: 0, // TBD
-                txid: coinbase_tx.txid,
-              }
-            } else {
-              return {
-                index: i,
-                inputsCount: 0,
-                kbFee: 0,
-                outputsCount: 0,
-                size: 0,
-                timestamp: 0,
-                txid: 'COINBASE',
-              }
+            // if (tmpData.expandedBlockData) {
+            //   const coinbase_tx = tmpData.expandedBlockData.coinbase_tx
+            //   return {
+            //     index: i,
+            //     inputsCount: coinbase_tx.inputs.length,
+            //     kbFee: tmpData.Nodes[i].fee,
+            //     outputsCount: coinbase_tx.outputs.length,
+            //     size: tmpData.Nodes[i].size,
+            //     timestamp: 0, // TBD
+            //     txid: coinbase_tx.txid,
+            //   }
+            // } else {
+            //   return {
+            //     index: i,
+            //     inputsCount: 0,
+            //     kbFee: 0,
+            //     outputsCount: 0,
+            //     size: 0,
+            //     timestamp: 0,
+            //     txid: 'COINBASE',
+            //   }
+            // }
+            return {
+              index: i,
+              inputsCount: 0,
+              kbFee: 0,
+              outputsCount: 0,
+              size: 0,
+              timestamp: 0,
+              txid: 'COINBASE',
             }
           } else {
             const txResult: any = await api.getItemData({ type: api.ItemType.tx, hash: node.txid })
@@ -143,7 +152,7 @@
 </script>
 
 {#if result}
-  <SubtreeDetailsCard data={result} {display} on:display={onDisplay} />
+  <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
   {#if display === 'overview'}
     <div style="height: 20px" />
     <SubtreeTxsCard subtree={result} data={result.expandedTransactionData} />

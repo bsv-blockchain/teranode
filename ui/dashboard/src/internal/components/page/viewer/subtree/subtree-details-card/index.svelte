@@ -31,6 +31,7 @@
 
   export let data: any = {}
   export let display: DetailTab = DetailTab.overview
+  export let blockHash = ''
 
   $: expandedData = data?.expandedData
   $: isOverview = display === DetailTab.overview
@@ -93,10 +94,8 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.block`)}</div>
             <div class="value">
-              {#if data?.expandedBlockData}
-                <LinkHashCopy
-                  {...getHashLinkProps(DetailType.block, data?.expandedBlockData.hash, t)}
-                />
+              {#if blockHash}
+                <LinkHashCopy {...getHashLinkProps(DetailType.block, blockHash, t)} />
               {:else}
                 {t('data.not_available')}
               {/if}
