@@ -99,14 +99,11 @@ func (f *Faucet) Start(ctx context.Context) error {
 		}
 	}()
 
+	var err error
+
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTP listening on %s", addr))
-		go func() {
-			err := f.e.Start(addr)
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				f.logger.Errorf("Faucet HTTP server error: %s", err)
-			}
-		}()
+		err = f.e.Start(addr)
 
 	} else {
 
@@ -120,13 +117,11 @@ func (f *Faucet) Start(ctx context.Context) error {
 		}
 
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTPS listening on %s", addr))
+		err = f.e.StartTLS(addr, certFile, keyFile)
+	}
 
-		go func() {
-			err := f.e.StartTLS(addr, certFile, keyFile)
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				f.logger.Errorf("Faucet HTTPS server error: %s", err)
-			}
-		}()
+	if err != http.ErrServerClosed {
+		return err
 	}
 
 	return nil
