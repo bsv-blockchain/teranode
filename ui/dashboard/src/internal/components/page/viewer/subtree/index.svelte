@@ -55,21 +55,21 @@
     }
 
     // get block data if blockHash is defined
-    if (blockHash) {
-      const r2: any = await api.getItemData({ type: api.ItemType.block, hash: blockHash })
-      if (r2.ok) {
-        tmpData = {
-          ...tmpData,
-          expandedBlockData: {
-            ...r2.data,
-            hash: blockHash,
-          },
-        }
-      } else {
-        failed = true
-        failure(r2.error.message)
-      }
-    }
+    // if (blockHash) {
+    //   const r2: any = await api.getItemData({ type: api.ItemType.block, hash: blockHash })
+    //   if (r2.ok) {
+    //     tmpData = {
+    //       ...tmpData,
+    //       expandedBlockData: {
+    //         ...r2.data,
+    //         hash: blockHash,
+    //       },
+    //     }
+    //   } else {
+    //     failed = true
+    //     failure(r2.error.message)
+    //   }
+    // }
 
     // expand subtree data
     let expandedTransactionData: any[] = []
