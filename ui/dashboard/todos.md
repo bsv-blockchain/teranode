@@ -26,8 +26,8 @@
   - [ ] `confirmation` = latest block height - block height of block being inspected
 - [ ] Improve subtree summary fields
   - [ ] Show static entry for coinbase always - data for it was removed from DB
-  - [ ] `Total Fee` should be `Fees` value from header
-  - [ ] `AVG fee` should be total divided by number of tx's
+  - [x] `Total Fee` should be `Fees` value from header
+  - [x] `AVG fee` should be total divided by number of tx's
   - [ ] wish for later: explore option to obtain `miner` field value (where to get it from ..)
 - [ ] Serve webfonts with efficient cache policy [Server]
 - [ ] Serve responses with text compression, setting `Content-Encoding` [Server]

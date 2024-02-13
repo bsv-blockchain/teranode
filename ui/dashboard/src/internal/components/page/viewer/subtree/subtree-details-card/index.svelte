@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import { goto } from '$app/navigation'
+  // import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
@@ -44,11 +44,11 @@
     reverseHashParam(hash)
   }
 
-  function navToSubtree(hash) {
-    if (hash) {
-      goto(getDetailsUrl(DetailType.subtree, hash))
-    }
-  }
+  // function navToSubtree(hash) {
+  //   if (hash) {
+  //     goto(getDetailsUrl(DetailType.subtree, hash))
+  //   }
+  // }
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
@@ -108,23 +108,23 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">{expandedData.fee}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">{expandedData.fee / expandedData.transactionCount}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{expandedData.size / 1000} KB</div>
+            <div class="value">{t('unit.value.kb', { value: expandedData.size / 1000 })}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
         <div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.bits`)}</div>
             <div class="value">TBD</div>
           </div>
@@ -143,7 +143,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.miner`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
       </div>
     {:else if isJson}

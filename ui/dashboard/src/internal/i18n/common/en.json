@@ -343,5 +343,10 @@
       "date": "Date",
       "tx_count": "Tx Count"
     }
+  },
+  "unit": {
+    "value": {
+      "kb": "{{ value }} KB"
+    }
   }
 }
