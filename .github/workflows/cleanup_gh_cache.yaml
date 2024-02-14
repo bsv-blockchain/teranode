@@ -1,0 +1,27 @@
+name: cleanup-gh-cache
+on:
+  push:
+    branches:
+      - master
+      - staging
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: apt-get install -y jq
+      - name: Cleanup
+        run: |
+          echo "Getting list of cache keys"
+          echo "---------------------------------------"
+          cacheKeys=$(gh cache -R $REPO list -O asc -S created_at -L 100 --json id,createdAt)
+          echo "Listing cache keys older than $DAYS day"
+          echo "---------------------------------------"
+          echo $json_caches | jq --arg DAYS "$DAYS"
+          'def daysAgo(days): (now | floor) - (days * 86400);
+          .[] | select(.createdAt | .[0:19] +"Z"
+          | fromdateiso8601 < daysAgo($DAYS | tonumber)).id'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DAYS: 1
