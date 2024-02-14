@@ -499,7 +499,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-8) * 2)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
