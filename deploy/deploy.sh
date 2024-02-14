@@ -141,6 +141,7 @@ cd $DIR/k8s/base/${ENVIRONMENT}-miner
 
 if [[ -n $FILTER ]]; then
     mv kustomization.yaml kustomization.yaml.bak
+    FILTER="$FILTER|config-map"
 
     in_resources=0
 
