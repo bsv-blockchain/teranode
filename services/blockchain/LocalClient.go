@@ -89,6 +89,10 @@ func (c LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.H
 	return c.store.InvalidateBlock(ctx, blockHash)
 }
 
+func (c LocalClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.RevalidateBlock(ctx, blockHash)
+}
+
 func (c LocalClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	return c.store.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }

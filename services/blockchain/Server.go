@@ -579,6 +579,28 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	return &emptypb.Empty{}, nil
 }
 
+func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "RevalidateBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainSetState.Inc()
+
+	blockHash, err := chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	// invalidate block will also invalidate all child blocks
+	err = b.store.RevalidateBlock(ctx1, blockHash)
+	if err != nil {
+		return nil, ubsverrors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
 	start, stat, _ := util.NewStatFromContext(context.Background(), "SendNotification", stats)
 	defer func() {
