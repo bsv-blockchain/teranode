@@ -274,3 +274,8 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*blockass
 
 	}
 }
+
+func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
+	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
+	return err
+}

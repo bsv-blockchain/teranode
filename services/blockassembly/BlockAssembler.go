@@ -546,3 +546,8 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		return b.defaultMiningNBits, nil
 	}
 }
+
+func (b *BlockAssembler) DeDuplicate() {
+	// this wall add a call to de-duplicate on the channel, which will run after all other tasks are done
+	b.subtreeProcessor.DeDuplicateTransactions()
+}

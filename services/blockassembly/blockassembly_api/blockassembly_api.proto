@@ -27,6 +27,9 @@ service BlockAssemblyAPI {
 
   // Submits a mining solution to the blockchain.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
+
+  // De-duplicate transaction in block assembly subtree processor.
+  rpc DeDuplicateBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.

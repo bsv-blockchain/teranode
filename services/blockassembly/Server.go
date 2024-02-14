@@ -866,3 +866,8 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 
 	return nil
 }
+
+func (ba *BlockAssembly) DeDuplicateBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	ba.blockAssembler.DeDuplicate()
+	return &blockassembly_api.EmptyMessage{}, nil
+}
