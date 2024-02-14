@@ -21,12 +21,6 @@ then
     exit 1
 fi
 
-# Check if yq is installed
-if ! command -v yq &> /dev/null
-then
-    echo "yq could not be found, please install it to continue (brew install yq)."
-    exit 1
-fi
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
@@ -35,6 +29,8 @@ usage() {
     echo "Usage:   $0 --image <image_tag> --environment <environment>"
     echo "Example: $0 --image latest --environment allinone"
     echo "         $0 --image 5079e0084db92a0f635e5d8d15df207108e8e401 --environment scaling"
+    echo ""
+    echo "         --filter <filter>  Filter the output of kustomize"
     echo ""
     exit 1
 }
@@ -49,6 +45,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --environment)
             ENVIRONMENT="$2"
+            shift
+            shift
+            ;;
+        --filter)
+            FILTER="$2"
             shift
             shift
             ;;
@@ -137,6 +138,34 @@ fi
 
 cd $DIR/k8s/base/${ENVIRONMENT}-miner
 
+
+if [[ -n $FILTER ]]; then
+    mv kustomization.yaml kustomization.yaml.bak
+
+    in_resources=0
+
+    while IFS= read -r line; do
+    if [[ "$line" == "resources:"* ]]; then
+        # We are entering the resources section
+        in_resources=1
+        echo "$line" >> kustomization.yaml
+    elif [[ $in_resources -eq 1 && "$line" == "  - "* ]]; then
+        # We are in the resources section, check if the line matches the regex pattern
+        if echo "$line" | grep -qE "$FILTER"; then
+            echo "$line" >> kustomization.yaml
+        fi
+    else
+        # We are not in the resources section or have exited it
+        if [[ $in_resources -eq 1 && "$line" != "  - "* ]]; then
+            in_resources=0
+        fi
+        echo "$line" >> kustomization.yaml
+    fi
+    done < kustomization.yaml.bak
+else
+    cp kustomization.yaml kustomization.yaml.bak
+fi
+
 kustomize edit set image REPO:IMAGE:TAG=$IMAGE_NAME
 
 cd $DIR/k8s/$REGION/$ENVIRONMENT
@@ -145,6 +174,6 @@ kustomize build . $@
 
 cd $DIR/k8s/base/${ENVIRONMENT}-miner
 
-yq eval 'del(.images)' -i kustomization.yaml
+cp kustomization.yaml.bak kustomization.yaml
 
 cd $DIR
