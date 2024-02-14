@@ -52,19 +52,21 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	}
 
 	duration := time.Duration(sendBatchTimeout) * time.Millisecond
-	batchCh := make(chan []*blockassembly_api.AddTxRequest)
-	sendBatch := func(batch []*blockassembly_api.AddTxRequest) {
-		batchCh <- batch
-	}
-	batcherInstance := *batcher.New[blockassembly_api.AddTxRequest](batchSize, duration, sendBatch, false)
 
 	client := &Client{
 		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
 		logger:    logger,
 		batchSize: batchSize,
-		batchCh:   batchCh,
-		batcher:   batcherInstance,
+		batchCh:   make(chan []*blockassembly_api.AddTxRequest),
 	}
+
+	sendBatch := func(batch []*blockassembly_api.AddTxRequest) {
+		if client.batchCh == nil {
+			return
+		}
+		client.batchCh <- batch
+	}
+	client.batcher = *batcher.New[blockassembly_api.AddTxRequest](batchSize, duration, sendBatch, false)
 
 	client.NewFRPCClient()
 
@@ -220,6 +222,11 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 }
 
 func (s *Client) batchWorker(ctx context.Context, timeout time.Duration) {
+	defer func() {
+		close(s.batchCh)
+		s.batchCh = nil
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
