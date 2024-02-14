@@ -13,7 +13,9 @@ export function connectToP2PServer() {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
     url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
-    url.port = url.protocol === 'ws:' ? '9906' : '9904'
+    if (url.port !== '8000') { // TODO - SAO: This is a hack to get around the nginx reverse proxy
+      url.port = url.protocol === 'ws:' ? '9906' : '9904'
+    }
     url.pathname = '/p2p-ws'
 
     wsUrl.set(url)
