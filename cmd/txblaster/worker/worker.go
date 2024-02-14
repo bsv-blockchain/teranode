@@ -134,7 +134,7 @@ type Worker struct {
 	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributors      []*distributor.Distributor
-	kafkaProducer     sarama.SyncProducer
+	kafkaProducer     sarama.AsyncProducer
 	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
 	ipv6MulticastChan chan Ipv6MulticastMsg
@@ -156,7 +156,7 @@ func NewWorker(
 	iterations int,
 	coinbaseClient *coinbase.Client,
 	txDistributors []*distributor.Distributor,
-	kafkaProducer sarama.SyncProducer,
+	kafkaProducer sarama.AsyncProducer,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,

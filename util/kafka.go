@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"fmt"
+	"github.com/ordishs/gocore"
 	"net/url"
 	"os"
 	"os/signal"
@@ -16,7 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, sarama.SyncProducer, error) {
+func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, sarama.AsyncProducer, error) {
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 
 	config := sarama.NewConfig()
@@ -59,14 +60,18 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, sarama.SyncProducer
 	return clusterAdmin, producer, nil
 }
 
-func ConnectProducer(brokersUrl []string) (sarama.SyncProducer, error) {
+func ConnectProducer(brokersUrl []string) (sarama.AsyncProducer, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Retry.Max = 5
 	config.Producer.Partitioner = sarama.NewManualPartitioner
+
+	kafkaFlushBytes, _ := gocore.Config().GetInt("kafkaFlushBytes", 16*1024) // 16KB = around 100 tx meta messages
+	config.Producer.Flush.Bytes = kafkaFlushBytes
+
 	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.
-	conn, err := sarama.NewSyncProducer(brokersUrl, config)
+	conn, err := sarama.NewAsyncProducer(brokersUrl, config)
 	if err != nil {
 		return nil, err
 	}

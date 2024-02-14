@@ -44,7 +44,7 @@ type Validator struct {
 	txMetaStore                   txmeta.Store
 	blockValidationClient         blockValidationTxMetaClient
 	blockValidationBatcher        batcher.Batcher[txmeta.Data]
-	kafkaProducer                 sarama.SyncProducer
+	kafkaProducer                 sarama.AsyncProducer
 	kafkaTopic                    string
 	kafkaPartitions               int
 	saveInParallel                bool
@@ -512,14 +512,11 @@ func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.
 
 	// partition is the first byte of the txid - max 2^8 partitions = 256
 	partition := binary.LittleEndian.Uint32(bData.TxIDChainHash[:]) % uint32(v.kafkaPartitions)
-	_, _, err := v.kafkaProducer.SendMessage(&sarama.ProducerMessage{
+	v.kafkaProducer.Input() <- &sarama.ProducerMessage{
 		Topic:     v.kafkaTopic,
 		Partition: int32(partition),
 		Key:       sarama.ByteEncoder(bData.TxIDChainHash[:]),
 		Value:     sarama.ByteEncoder(bData.Bytes()),
-	})
-	if err != nil {
-		return err
 	}
 
 	return nil

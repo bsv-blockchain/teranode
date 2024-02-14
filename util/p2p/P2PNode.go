@@ -288,7 +288,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	}
 	routingDiscovery := dRouting.NewRoutingDiscovery(kademliaDHT)
 
-	if s.config.Advertise == true {
+	if s.config.Advertise {
 		for _, topicName := range topicNames {
 			s.logger.Infof("[P2PNode] advertising topic: %s", topicName)
 			dUtil.Advertise(ctx, routingDiscovery, topicName)
