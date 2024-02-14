@@ -295,8 +295,8 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 		}
 	}
 
-	s.logger.Debugf("[P2PNode] connected to %d peers\n", len(s.host.Network().Peers()))
-	s.logger.Debugf("[P2PNode] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
+	s.logger.Debugf("[P2PNode] %d peer connections\n", len(s.host.Network().Peers()))
+	s.logger.Debugf("[P2PNode] %d peers in peerstore\n", len(s.host.Peerstore().Peers()))
 
 	ctx = network.WithSimultaneousConnect(ctx, true, "hole punching")
 	peerAddrErrorMap := sync.Map{}
