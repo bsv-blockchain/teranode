@@ -209,7 +209,7 @@ export const formatNumberExp = (val: number) => {
     const index = str.indexOf('e')
     if (index !== -1) {
       val = parseFloat(str.substring(0, index))
-      exp = ` x 10<sup>${str.substring(index, str.length)}</sup>`
+      exp = ` x 10<sup>${str.substring(index + 1, str.length)}</sup>`
     }
   }
 
