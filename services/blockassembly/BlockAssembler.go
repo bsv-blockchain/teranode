@@ -404,6 +404,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Height:        b.bestBlockHeight + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
+		SubtreeCount:  uint32(len(subtrees)),
 	}
 
 	return miningCandidate, subtrees, nil

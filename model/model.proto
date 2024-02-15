@@ -16,6 +16,7 @@ message MiningCandidate {
   uint32 time = 6;
   uint32 height = 7;
   repeated bytes merkle_proof = 8;
+  uint32 subtreeCount = 9;
 }
 
 // swagger:model MiningSolution
