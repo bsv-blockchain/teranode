@@ -29,6 +29,8 @@ AWS EKS (Kubernetes) is used to run services in all instances. Aerospike has bee
 
 Please note that exact instance count under the Main Pool, Propagation Servers, Proxies, TX Blaster and Aerospike groups can vary during the test.
 
+Additionally, a Teranode node can have a number of other servers and containers related to secondary services, such as monitoring (prometheus, datadog). Such secondary instances are out of the scope of this document.
+
 ### 3. Instance Group Definitions
 
 Here's a structured table summarizing the instance groups, their descriptions, and purposes based on the provided details:
