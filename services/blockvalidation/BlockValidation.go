@@ -798,7 +798,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 				txHash := txHashes[i+j]
 				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 				if err != nil {
-					if errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) {
+					if errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
 						// collect all missing transactions for processing in order
 						// that is why we use an indexed slice instead of just a slice append
 						// don't add the coinbase placeholder to the missing transactions
