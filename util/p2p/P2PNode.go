@@ -3,11 +3,9 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -257,44 +255,6 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 	}
 
 	return nil
-}
-
-func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
-	// Generate a new key pair
-	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert private key to bytes
-	privBytes, err := crypto.MarshalPrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save private key to a file
-	err = os.WriteFile(privateKeyFilename, privBytes, 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	return &priv, nil
-}
-
-func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
-	// Read private key from a file
-	privBytes, err := os.ReadFile(privateKeyFilename)
-	if err != nil {
-		return nil, err
-	}
-
-	// Unmarshal the private key bytes into a key
-	priv, err := crypto.UnmarshalPrivateKey(privBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	return &priv, nil
 }
 
 func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (crypto.PrivKey, error) {
