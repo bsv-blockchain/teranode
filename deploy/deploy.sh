@@ -76,9 +76,15 @@ case $ENVIRONMENT in
         ;;
 esac
 
+# Check if the image tag is "latest" or a valid SHA1 hash
+if [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ ]]; then
+    echo "Invalid image tag. Please specify 'latest' or a valid SHA1 hash."
+    exit 1
+fi
+
 if [[ $IMAGE_TAG == "latest" ]]; then
     # Extract the git commit hash by querying the ECR repository with this horrible command...
-    IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | grep -B 1 latest-arm64 | head -1 | cut -d '"' -f 2 | cut -d '-' -f 1)
+    IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | grep -B 1 latest-arm64 | head -1 | tr -d '", ' | sed 's/-arm64//')
 fi
 
 IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
