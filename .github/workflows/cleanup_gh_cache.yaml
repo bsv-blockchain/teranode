@@ -1,9 +1,7 @@
 name: cleanup-gh-cache
 on:
-  push:
-    branches:
-      - master
-      - staging
+  schedule:
+    - cron: '0 22 * * *'
 jobs:
   cleanup:
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-name: deploy_eks
+name: deploy-eks
 on:
   workflow_call:
     inputs:

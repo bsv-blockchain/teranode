@@ -1,4 +1,4 @@
-name: build_manifest
+name: build-manifest
 on:
   workflow_call:
     inputs:
