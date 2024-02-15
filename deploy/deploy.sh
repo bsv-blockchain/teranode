@@ -29,6 +29,7 @@ usage() {
     echo "Usage:   $0 --image <image_tag> --environment <environment>"
     echo "Example: $0 --image latest --environment allinone"
     echo "         $0 --image 5079e0084db92a0f635e5d8d15df207108e8e401 --environment scaling"
+    echo "         $0 --image scaling-v0.1.2 --environment scaling"
     echo ""
     echo "         --filter <filter>  Filter the output of kustomize"
     echo ""
