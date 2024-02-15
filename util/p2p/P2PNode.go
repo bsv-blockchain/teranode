@@ -3,9 +3,11 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -57,9 +59,23 @@ type P2PConfig struct {
 func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 	logger.Infof("[P2PNode] Creating node")
 
-	pk, err := decodeHexEd25519PrivateKey(config.PrivateKey)
-	if err != nil {
-		panic(err)
+	var pk *crypto.PrivKey
+	var err error
+
+	if config.PrivateKey == "" {
+		privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
+		pk, err = readPrivateKey(privateKeyFilename)
+		if err != nil {
+			pk, err = generatePrivateKey(privateKeyFilename)
+			if err != nil {
+				panic(err)
+			}
+		}
+	} else {
+		pk, err = decodeHexEd25519PrivateKey(config.PrivateKey)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	var h host.Host
@@ -75,7 +91,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		}
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
-			libp2p.Identity(pk),
+			libp2p.Identity(*pk),
 			libp2p.PrivateNetwork(psk),
 		)
 		if err != nil {
@@ -88,7 +104,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		// p2p service did this
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
-			libp2p.Identity(pk),
+			libp2p.Identity(*pk),
 		)
 		if err != nil {
 			panic(err)
@@ -257,7 +273,39 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 	return nil
 }
 
-func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (crypto.PrivKey, error) {
+func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
+	// Generate a new key pair
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	// Convert private key to bytes
+	privBytes, err := crypto.MarshalPrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	// Save private key to a file
+	err = os.WriteFile(privateKeyFilename, privBytes, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return &priv, nil
+}
+func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
+	// Read private key from a file
+	privBytes, err := os.ReadFile(privateKeyFilename)
+	if err != nil {
+		return nil, err
+	}
+	// Unmarshal the private key bytes into a key
+	priv, err := crypto.UnmarshalPrivateKey(privBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &priv, nil
+}
+
+func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (*crypto.PrivKey, error) {
 	privKeyBytes, err := hex.DecodeString(hexEncodedPrivateKey)
 	if err != nil {
 		return nil, err
@@ -268,7 +316,7 @@ func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (crypto.PrivKey, er
 		return nil, err
 	}
 
-	return privKey, nil
+	return &privKey, nil
 }
 
 func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string) bool {
