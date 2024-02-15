@@ -135,6 +135,7 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	} else {
 
 		go func(ctx context.Context) {
+			logged := false
 			for {
 				select {
 				case <-ctx.Done():
@@ -143,6 +144,13 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 				default:
 					allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
 					if allConnected {
+
+						if !logged {
+							s.logger.Infof("[P2PNode] all static peers connected")
+							logged = true
+						}
+
+						// it is possible that a peer disconnects, so we need to keep checking
 						time.Sleep(30 * time.Second)
 					} else {
 						time.Sleep(5 * time.Second)
