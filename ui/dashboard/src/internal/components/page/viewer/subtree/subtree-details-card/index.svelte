@@ -19,6 +19,7 @@
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -55,11 +56,19 @@
 <Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{expandedData.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={expandedData.hash}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
         size={15}
       />
     </div>

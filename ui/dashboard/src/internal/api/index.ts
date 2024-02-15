@@ -109,6 +109,10 @@ assetHTTPAddress.subscribe((value) => {
   baseUrl = value
 })
 
+export const getItemApiUrl = (type: ItemType, hash: string) => {
+  return `${baseUrl}/${type}/${hash}/json`
+}
+
 // api methods
 
 export function getLastBlocks(data = {}, done?, fail?) {
@@ -116,7 +120,7 @@ export function getLastBlocks(data = {}, done?, fail?) {
 }
 
 export function getItemData(data: { type: ItemType; hash: string }, done?, fail?) {
-  return get(`${baseUrl}/${data.type}/${data.hash}/json`, {}, done, fail)
+  return get(getItemApiUrl(data.type, data.hash), {}, done, fail)
 }
 
 export function searchItem(data: { q: string }, done?, fail?) {

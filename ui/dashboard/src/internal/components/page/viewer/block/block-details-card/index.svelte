@@ -14,6 +14,7 @@
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -51,11 +52,19 @@
 <Card title={t(`${baseKey}.title`, { height: expandedHeader.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{expandedHeader.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={expandedHeader.hash}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.block, expandedHeader.hash)}
         size={15}
       />
     </div>
@@ -123,7 +132,9 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{expandedHeader.sizeInBytes / 1000} KB</div>
+            <div class="value">
+              {t('unit.value.kb', { value: expandedHeader.sizeInBytes / 1000 })}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.difficulty`)}</div>

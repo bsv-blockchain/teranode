@@ -332,7 +332,8 @@
     "not-available": "N/A"
   },
   "tooltip": {
-    "copy-to-clipboard": "Copy to clipboard",
+    "copy-hash-to-clipboard": "Copy hash",
+    "copy-url-to-clipboard": "Copy URL",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",

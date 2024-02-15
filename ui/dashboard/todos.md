@@ -16,7 +16,7 @@
 - [x] Make spinner cover fill whole screen (not just content area)
 - [x] Create keyboard shortcut for refresh
 - [ ] Look at correct table column sorting, depending on field type
-- [ ] Add "Copy to clipboard" button for full url to use in CURL
+- [x] Add "Copy URL" button for API url to use in CURL
 - [ ] Confirm "Peer selector" is working on P2P page
 - [ ] Confirm network page data stays in sync with the real status of a node
   - [ ] often shows M1 or M2 twice with different details?
