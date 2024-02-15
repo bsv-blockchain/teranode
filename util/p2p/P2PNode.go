@@ -213,10 +213,6 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 					continue
 				}
 
-				if m.ReceivedFrom == s.host.ID() {
-					continue
-				}
-
 				s.logger.Debugf("[P2PNode][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
 				handler(ctx, m.Data, m.ReceivedFrom.String())
 			}
@@ -463,7 +459,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 			g.Wait()
 
-			s.logger.Infof("[P2PNode] Completed discovery process in %v", time.Since(start))
+			s.logger.Debugf("[P2PNode] Completed discovery process in %v", time.Since(start))
 
 			time.Sleep(5 * time.Second)
 		}

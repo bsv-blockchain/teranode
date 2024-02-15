@@ -450,6 +450,10 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	var blockMessage BlockMessage
 	var msgBytes []byte
 
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
 	// decode request
 	bestBlockMessage = BestBlockMessage{}
 	err := json.Unmarshal(m, &bestBlockMessage)
@@ -516,6 +520,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		PeerId:    blockMessage.PeerId,
 	}
 
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
 	if err != nil {
 		s.logger.Errorf("error getting chainhash from string %s", blockMessage.Hash, err)
@@ -545,6 +553,10 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		Hash:      subtreeMessage.Hash,
 		BaseURL:   subtreeMessage.DataHubUrl,
 		PeerId:    subtreeMessage.PeerId,
+	}
+
+	if from == s.P2PNode.HostID().String() {
+		return
 	}
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
