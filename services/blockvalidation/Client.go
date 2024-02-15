@@ -194,6 +194,14 @@ func (s *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 }
 
 func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data) error {
+	func() {
+		// frpc throws a segmentation violation when the blockvalidation service is not available :-(
+		err := recover()
+		if err != nil {
+			s.logger.Errorf("Recovered from panic: %v", err)
+		}
+	}()
+
 	txMetaDataSlice := make([][]byte, 0, len(txMetaData))
 
 	for _, data := range txMetaData {
