@@ -405,7 +405,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 							if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
 
-								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") || strings.Contains(peerConnectionErrorString.(string), "no addresses") {
+								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
 									numAddresses := len(addr.Addrs)
 									switch numAddresses {
 									case 0:
