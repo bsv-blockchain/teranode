@@ -144,10 +144,14 @@ func (m *Miner) Start(ctx context.Context) error {
 			}
 			previousCandidate = candidate
 
+			maxSubtreeCount := m.maxSubtreeCount
+			// vary the max subtree count by 10% to avoid all miners mining at the same time
+			maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
+
 			waitSeconds := m.waitSeconds
-			if candidate.SubtreeCount > uint32(m.maxSubtreeCount) {
+			if candidate.SubtreeCount > uint32(maxSubtreeCount) {
 				// mine without waiting
-				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, m.maxSubtreeCount)
+				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, maxSubtreeCount)
 				waitSeconds = 1
 			}
 			// start mining in a new goroutine, so we can cancel it if we need to
