@@ -95,11 +95,24 @@ REGION=$(kubectl config view --minify --output 'jsonpath={..name}' | cut -d ' ' 
 NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
 
 case $REGION in
+    "eu-west-1")
+        LEGAL_NAMESPACES=("miner-eu-1" "m1")
+        LEGAL_ENVIRONMENT=("allinone" "scaling")
+        ;;
+
+    "us-east-1")
+        LEGAL_NAMESPACES=("miner-us-1" "m2")
+        LEGAL_ENVIRONMENT=("allinone" "scaling")
+        ;;
+
+    "ap-northeast-1")
+        LEGAL_NAMESPACES=("miner-ap-1" "m3")
+        LEGAL_ENVIRONMENT=("allinone" "scaling")
+        ;;
+
     "docker-desktop")
-        if [[ $NAMESPACE != "miner-lo-1" ]]; then
-            echo "You are in $REGION region with a namespace of $NAMESPACE.  Please switch to miner-lo-1 namespace to continue."
-            exit 1
-        fi
+        LEGAL_NAMESPACES=("miner-lo-1")
+        LEGAL_ENVIRONMENT=("docker-desktop")
 
         TRAEFIK=$(kubectl get namespaces traefik --output 'jsonpath={..name}' 2> /dev/null)
         if [[ -z $TRAEFIK ]]; then
@@ -125,6 +138,23 @@ case $REGION in
 
         ;;
 esac
+
+# Check if the current namespace is in the list of legal namespaces
+if [[ " ${LEGAL_NAMESPACES[@]} " =~ " ${NAMESPACE} " ]]; then
+    echo "Namespace is legal" >&2
+else
+    echo "NAMESPACE mismatch. You are in $REGION region with a namespace of $NAMESPACE." >&2
+    exit 1
+fi
+
+# Check if the current namespace is in the list of legal namespaces
+if [[ " ${LEGAL_ENVIRONMENT[@]} " =~ " ${ENVIRONMENT} " ]]; then
+    echo "Environment is legal" >&2
+else
+    echo "ENVIRONMENT mismatch. You are in $REGION region with an environment of $ENVIRONMENT." >&2
+    exit 1
+fi
+
 
 # Check the folders exist...
 if [[ ! -d $DIR/k8s/base/${ENVIRONMENT}-miner ]]; then
