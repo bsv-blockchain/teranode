@@ -77,8 +77,8 @@ case $ENVIRONMENT in
 esac
 
 # Check if the image tag is "latest" or a valid SHA1 hash
-if [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ ]]; then
-    echo "Invalid image tag. Please specify 'latest' or a valid SHA1 hash."
+if [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ && ! $IMAGE_TAG =~ ^(scaling-){0,1}v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid image tag. Please specify 'latest', a valid SHA1 hash, or a version tag."
     exit 1
 fi
 
