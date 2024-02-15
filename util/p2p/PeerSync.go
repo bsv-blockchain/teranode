@@ -36,14 +36,19 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
 
+	staticPeers, _ := gocore.Config().GetMulti(fmt.Sprintf("%s_p2p_static_peers", processName), "|")
+	privateKey, _ := gocore.Config().Get(fmt.Sprintf("%s_p2p_private_key", processName))
+
 	config := P2PConfig{
 		ProcessName:     processName,
 		IP:              p2pIp,
 		Port:            p2pPort,
+		PrivateKey:      privateKey,
 		SharedKey:       sharedKey,
 		UsePrivateDHT:   usePrivateDht,
 		OptimiseRetries: optimiseRetries,
 		Advertise:       false, // no one need to discover or connect to us, we just listen
+		StaticPeers:     staticPeers,
 	}
 	peerConnection := NewP2PNode(logger, config)
 

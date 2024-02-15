@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -47,25 +48,20 @@ type P2PConfig struct {
 	ProcessName     string
 	IP              string
 	Port            int
+	PrivateKey      string
 	SharedKey       string
 	UsePrivateDHT   bool
 	OptimiseRetries bool
 	Advertise       bool
+	StaticPeers     []string
 }
 
 func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 	logger.Infof("[P2PNode] Creating node")
 
-	var pk *crypto.PrivKey
-	var err error
-	privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
-
-	pk, err = readPrivateKey(privateKeyFilename)
+	pk, err := decodeHexEd25519PrivateKey(config.PrivateKey)
 	if err != nil {
-		pk, err = generatePrivateKey(privateKeyFilename)
-		if err != nil {
-			panic(err)
-		}
+		panic(err)
 	}
 
 	var h host.Host
@@ -81,7 +77,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		}
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
-			libp2p.Identity(*pk),
+			libp2p.Identity(pk),
 			libp2p.PrivateNetwork(psk),
 		)
 		if err != nil {
@@ -94,7 +90,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		// p2p service did this
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
-			libp2p.Identity(*pk),
+			libp2p.Identity(pk),
 		)
 		if err != nil {
 			panic(err)
@@ -119,6 +115,29 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	s.logger.Infof("[P2PNode] starting")
+
+	if len(s.config.StaticPeers) == 0 {
+		s.logger.Infof("[P2PNode] no static peers to connect to - skipping connection attempt")
+	} else {
+
+		go func(ctx context.Context) {
+			for {
+				select {
+				case <-ctx.Done():
+					s.logger.Infof("[P2PNode] shutting down")
+					return
+				default:
+					allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
+					if allConnected {
+						time.Sleep(30 * time.Second)
+					} else {
+						time.Sleep(5 * time.Second)
+					}
+				}
+			}
+		}(ctx)
+
+	}
 
 	go s.discoverPeers(ctx, topicNames)
 
@@ -278,6 +297,44 @@ func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 	return &priv, nil
 }
 
+func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (crypto.PrivKey, error) {
+	privKeyBytes, err := hex.DecodeString(hexEncodedPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	privKey, err := crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return privKey, nil
+}
+
+func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string) bool {
+	i := len(staticPeers)
+	for _, peerAddr := range staticPeers {
+		peerInfo, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(peerAddr))
+		if err != nil {
+			s.logger.Errorf("[P2PNode] failed to get peerInfo from  %s: %v", peerAddr, err)
+			continue
+		}
+
+		if s.host.Network().Connectedness(peerInfo.ID) == network.Connected {
+			i--
+			continue
+		}
+
+		err = s.host.Connect(ctx, *peerInfo)
+		if err != nil {
+			s.logger.Debugf("[P2PNode] failed to connect to static peer %s: %v", peerAddr, err)
+		} else {
+			i--
+			s.logger.Infof("[P2PNode] connected to static peer: %s", peerAddr)
+		}
+	}
+	return i == 0
+}
 func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	var kademliaDHT *dht.IpfsDHT
 
