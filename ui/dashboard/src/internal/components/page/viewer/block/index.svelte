@@ -52,6 +52,18 @@
       failure(blockResult.error.message)
     }
 
+    // get latest block hash
+    const latestBlockData: any = await api.getLastBlocks({ n: 1 })
+    if (latestBlockData.ok) {
+      tmpData = {
+        ...tmpData,
+        latestBlockData: latestBlockData.data[0],
+      }
+    } else {
+      failed = true
+      failure(latestBlockData.error.message)
+    }
+
     // add extra block header data (needed for block summary display)
     const blockHeaderResult: any = await api.getItemData({
       type: api.ItemType.header,

@@ -144,7 +144,7 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">{formatSatoshi(expandedHeader.nonce)} BSV</div>
+            <div class="value">{t('unit.value.nonce_bsv', { value: expandedHeader.nonce })}</div>
           </div>
         </div>
         <div>
@@ -154,7 +154,7 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">{data.latestBlockData.height - expandedHeader.height}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>

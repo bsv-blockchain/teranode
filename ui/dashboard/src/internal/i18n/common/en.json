@@ -347,7 +347,8 @@
   },
   "unit": {
     "value": {
-      "kb": "{{ value }} KB"
+      "kb": "{{ value }} KB",
+      "nonce_bsv": "{{ value }} BSV"
     }
   }
 }
