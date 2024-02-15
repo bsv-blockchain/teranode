@@ -147,12 +147,13 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 
 						if !logged {
 							s.logger.Infof("[P2PNode] all static peers connected")
-							logged = true
 						}
 
+						logged = true
 						// it is possible that a peer disconnects, so we need to keep checking
 						time.Sleep(30 * time.Second)
 					} else {
+						logged = false
 						time.Sleep(5 * time.Second)
 					}
 				}
