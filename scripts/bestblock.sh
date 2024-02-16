@@ -23,8 +23,14 @@ while true; do
   echo -ne "\033c"
   echo $(date -u)
   echo ""
-  echo "m1: $(cat $tmp1)"
-  echo "m2: $(cat $tmp2)"
+  
+  if [[ $(cat $tmp1) == $(cat $tmp2) ]]; then
+    echo -e "\033[32m  m1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[32m  m2: $(cat $tmp2)  \033[0m"
+  else
+    echo -e "\033[31m  m1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[31m  m2: $(cat $tmp2)  \033[0m"
+  fi
   echo ""
 
   # Clean up temporary files

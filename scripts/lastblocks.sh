@@ -18,6 +18,7 @@ tmp2=$(mktemp)
 sorted1=$(mktemp)
 sorted2=$(mktemp)
 joined=$(mktemp)
+joined.coloured=$(mktemp)
 
 # Fetch data in parallel
 get_lastblocks m1 "$n" "$tmp1" &
@@ -40,7 +41,7 @@ awk '{
     print "\033[32m" $0 "\033[0m";
   else
     print "\033[31m" $0 "\033[0m";
-}' "$joined" > "$joined.colored"
+}' "$joined" > "$joined.coloured"
 
 # Cleanup
 rm "$tmp1" "$tmp2" "$sorted1" "$sorted2" "$joined"
@@ -48,8 +49,8 @@ rm "$tmp1" "$tmp2" "$sorted1" "$sorted2" "$joined"
 # Display the results with colors
 echo $(date -u)
 echo ""
-cat "$joined.colored" | column -t
+cat "$joined.coloured" | column -t
 echo ""
 
 # Remove the colored joined file
-rm "$joined.colored"
+rm "$joined.coloured"
