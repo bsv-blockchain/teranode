@@ -35,7 +35,6 @@ type P2PNode struct {
 	host              host.Host
 	pubSub            *pubsub.PubSub
 	topics            map[string]*pubsub.Topic
-	subscriptions     map[string]*pubsub.Subscription
 	logger            ulogger.Logger
 	bitcoinProtocolId string
 	handlerByTopic    map[string]Handler
@@ -170,7 +169,6 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	}
 
 	topics := map[string]*pubsub.Topic{}
-	subscriptions := map[string]*pubsub.Subscription{}
 
 	var topic *pubsub.Topic
 	for _, topicName := range topicNames {
@@ -182,7 +180,6 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	}
 	s.pubSub = ps
 	s.topics = topics
-	s.subscriptions = subscriptions
 
 	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolId), s.streamHandler)
 
@@ -206,7 +203,6 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 		return err
 	}
 
-	s.subscriptions[topicName] = sub
 	s.handlerByTopic[topicName] = handler
 
 	go func() {
@@ -216,7 +212,7 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 				s.logger.Infof("[P2PNode][SetTopicHandler] shutting down")
 				return
 			default:
-				m, err := s.subscriptions[topicName].Next(ctx)
+				m, err := sub.Next(ctx)
 				if err != nil {
 					s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
 					continue
