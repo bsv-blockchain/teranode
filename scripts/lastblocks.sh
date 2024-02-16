@@ -2,9 +2,15 @@
 
 function get_lastblocks() {
   local node=$1
-  local url="https://$node.scaling.ubsv.dev/lastblocks"
-  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$2"
+  local n=$2
+  local url="https://$node.scaling.ubsv.dev/lastblocks?n=$n"
+  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$3"
 }
+
+n=10
+if [ -n "$1" ]; then
+  n=$1
+fi
 
 # Prepare temporary files
 tmp1=$(mktemp)
@@ -14,9 +20,9 @@ sorted2=$(mktemp)
 joined=$(mktemp)
 
 # Fetch data in parallel
-get_lastblocks m1 "$tmp1" &
+get_lastblocks m1 "$n" "$tmp1" &
 pid1=$!
-get_lastblocks m2 "$tmp2" &
+get_lastblocks m2 "$n" "$tmp2" &
 pid2=$!
 
 wait $pid1 $pid2
