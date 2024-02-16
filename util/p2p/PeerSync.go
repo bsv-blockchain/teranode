@@ -119,7 +119,7 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 		if first {
 			p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
 			for _, miningon := range p.lastMsgByPeerId {
-				p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
+				p.logger.Infof("[PeerSync] peer=%s %s=%d", miningon.PeerId, miningon.Miner, miningon.Height)
 			}
 		}
 		return false
