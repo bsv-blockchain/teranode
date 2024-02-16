@@ -408,9 +408,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	g, gCtx := errgroup.WithContext(setCtx)
+
+	// make a clone to pass to the go func to avoid race condition where Validate does potentially modify the tx!!!!!
+	cloneTx, err := bt.NewTxFromBytes(req.Tx)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+	}
+
 	g.Go(func() error {
-		if err := ps.storeTransaction(gCtx, btTx); err != nil {
-			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
+		if err := ps.storeTransaction(gCtx, cloneTx); err != nil {
+			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", cloneTx.TxIDChainHash(), err, ErrInternal)
 		}
 		return nil
 	})
