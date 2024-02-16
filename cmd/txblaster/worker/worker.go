@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/util"
 	"math/rand"
 	"net"
 	"sync/atomic"
 	"time"
 
-	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
@@ -134,7 +134,7 @@ type Worker struct {
 	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributors      []*distributor.Distributor
-	kafkaProducer     sarama.AsyncProducer
+	kafkaProducer     util.KafkaProducerI
 	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
 	ipv6MulticastChan chan Ipv6MulticastMsg
@@ -156,7 +156,7 @@ func NewWorker(
 	iterations int,
 	coinbaseClient *coinbase.Client,
 	txDistributors []*distributor.Distributor,
-	kafkaProducer sarama.AsyncProducer,
+	kafkaProducer util.KafkaProducerI,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,

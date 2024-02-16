@@ -105,20 +105,20 @@ func (v *Server) Start(ctx context.Context) error {
 			var clusterAdmin sarama.ClusterAdmin
 
 			n := atomic.Uint64{}
-			workerCh := make(chan []byte)
+			workerCh := make(chan *sarama.ConsumerMessage)
 			for i := 0; i < workers; i++ {
 				go func() {
 					var response *validator_api.ValidateTransactionResponse
-					for txBytes := range workerCh {
+					for msg := range workerCh {
 						response, err = v.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-							TransactionData: txBytes,
+							TransactionData: msg.Value,
 						})
 						if err != nil {
 							v.logger.Errorf("[Validator] Error validating transaction: %s", err)
 
 						}
 						if !response.Valid {
-							tx, err := bt.NewTxFromBytes(txBytes)
+							tx, err := bt.NewTxFromBytes(msg.Value)
 							if err == nil {
 								v.sendInvalidTxNotification(tx.TxID(), response.Reason)
 							}

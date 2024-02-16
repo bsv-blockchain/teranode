@@ -2,14 +2,11 @@ package validator
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"time"
 
-	"github.com/Shopify/sarama"
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -44,7 +41,7 @@ type Validator struct {
 	txMetaStore                   txmeta.Store
 	blockValidationClient         blockValidationTxMetaClient
 	blockValidationBatcher        batcher.Batcher[txmeta.Data]
-	kafkaProducer                 sarama.AsyncProducer
+	kafkaProducer                 util.KafkaProducerI
 	kafkaTopic                    string
 	kafkaPartitions               int
 	saveInParallel                bool
@@ -105,16 +102,9 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			_, producer, err := util.ConnectToKafka(kafkaURL)
+			_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
 			if err != nil {
 				return nil, fmt.Errorf("unable to connect to kafka: %v", err)
-			}
-
-			validator.kafkaProducer = producer
-			validator.kafkaTopic = kafkaURL.Path[1:]
-			validator.kafkaPartitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions"))
-			if err != nil {
-				return nil, fmt.Errorf("unable to parse partitions: %v", err)
 			}
 
 			logger.Infof("[VALIDATOR] connected to kafka at %s", kafkaURL.Host)
@@ -510,14 +500,5 @@ func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.
 	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()
 
-	// partition is the first byte of the txid - max 2^8 partitions = 256
-	partition := binary.LittleEndian.Uint32(bData.TxIDChainHash[:]) % uint32(v.kafkaPartitions)
-	v.kafkaProducer.Input() <- &sarama.ProducerMessage{
-		Topic:     v.kafkaTopic,
-		Partition: int32(partition),
-		Key:       sarama.ByteEncoder(bData.TxIDChainHash[:]),
-		Value:     sarama.ByteEncoder(bData.Bytes()),
-	}
-
-	return nil
+	return v.kafkaProducer.Send(bData.TxIDChainHash[:], bData.Bytes())
 }

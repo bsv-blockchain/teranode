@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -125,6 +126,7 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
+	startSubtreeAssembly := shouldStart("SubtreeAssembly")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -218,6 +220,22 @@ func main() {
 	var blockValidationClient *blockvalidation.Client
 	if startBlockAssembly || startPropagation || startValidator {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
+	}
+
+	if startSubtreeAssembly {
+		blockchainClient, err := blockchain.NewClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		if err = sm.AddService("SubtreeAssembly", subtreeassembly.New(
+			logger,
+			blockchainClient,
+			getSubtreeStore(logger),
+			getTxMetaStore(logger),
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// blockAssembly

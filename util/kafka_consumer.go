@@ -7,7 +7,7 @@ import (
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
 	ready    chan bool
-	workerCh chan []byte
+	workerCh chan *sarama.ConsumerMessage
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
@@ -31,7 +31,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	for {
 		select {
 		case message := <-claim.Messages():
-			kc.workerCh <- message.Value
+			kc.workerCh <- message
 			//log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s", string(message.Value), message.Timestamp, message.Topic)
 			session.MarkMessage(message, "")
 

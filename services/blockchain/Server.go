@@ -41,6 +41,7 @@ type Blockchain struct {
 	subscriptionCtx     context.Context
 	cancelSubscriptions context.CancelFunc
 	difficulty          *Difficulty
+	blockKafkaProducer  util.KafkaProducerI
 }
 
 func Enabled() bool {
@@ -98,6 +99,13 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
+
+	blockKafkaBrokersURL, err, ok := gocore.Config().GetURL("block_kafkaBrokers")
+	if err == nil && ok {
+		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+		_, b.blockKafkaProducer, err = util.ConnectToKafka(blockKafkaBrokersURL)
+	}
+
 	go func() {
 		for {
 			select {
@@ -201,6 +209,22 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
 	if err != nil {
 		return nil, err
+	}
+
+	b.logger.Warnf("[SubtreeAssembly] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	if b.blockKafkaProducer != nil {
+		// TODO add a retry mechanism
+		go func(block *model.Block) {
+			blockBytes, err := block.Bytes()
+			if err != nil {
+				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
+			} else {
+				b.logger.Warnf("[SubtreeAssembly] sending block to kafka: %s", block.String())
+				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
+					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
+				}
+			}
+		}(block)
 	}
 
 	// if !request.External {

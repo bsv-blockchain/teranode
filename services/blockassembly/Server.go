@@ -356,7 +356,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 
 	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
 
-	util.StartKafkaListener(ctx, ba.logger, kafkaBrokersURL, workers, "BlockAssembly", "blockassembly", func(ctx context.Context, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, ba.logger, kafkaBrokersURL, workers, "BlockAssembly", "blockassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
 			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))

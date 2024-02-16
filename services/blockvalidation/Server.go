@@ -44,16 +44,17 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger           ulogger.Logger
-	blockchainClient blockchain.ClientI
-	utxoStore        utxostore.Interface
-	subtreeStore     blob.Store
-	txStore          blob.Store
-	txMetaStore      txmeta_store.Store
-	validatorClient  validator.Interface
-	blockFoundCh     chan processBlockFound
-	catchupCh        chan processBlockCatchup
-	blockValidation  *BlockValidation
+	logger                       ulogger.Logger
+	blockchainClient             blockchain.ClientI
+	utxoStore                    utxostore.Interface
+	subtreeStore                 blob.Store
+	txStore                      blob.Store
+	txMetaStore                  txmeta_store.Store
+	validatorClient              validator.Interface
+	blockFoundCh                 chan processBlockFound
+	catchupCh                    chan processBlockCatchup
+	blockValidation              *BlockValidation
+	subtreeAssemblyKafkaProducer util.KafkaProducerI
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -152,7 +153,7 @@ func (u *Server) Start(ctx context.Context) error {
 	if ok {
 		err := u.frpcServer(ctx, frpcAddress)
 		if err != nil {
-			u.logger.Errorf("[Block Validation] failed to start fRPC server: %v", err)
+			u.logger.Errorf("[BlockValidation] failed to start fRPC server: %v", err)
 		}
 	}
 
@@ -160,7 +161,47 @@ func (u *Server) Start(ctx context.Context) error {
 	if ok {
 		err := u.httpServer(ctx, httpAddress)
 		if err != nil {
-			u.logger.Errorf("[Block Validation] failed to start http server: %v", err)
+			u.logger.Errorf("[BlockValidation] failed to start http server: %v", err)
+		}
+	}
+
+	subtreeAssemblyKafkaBrokersURL, err, ok := gocore.Config().GetURL("subtreeassembly_kafkaBrokers")
+	if err == nil && ok {
+		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreeAssemblyKafkaBrokersURL)
+		if err != nil {
+			u.logger.Errorf("[BlockValidation] unable to connect to kafka for subtree assembly: %v", err)
+		} else {
+			// start the blockchain subscriber
+			go func() {
+				subscription, err := u.blockchainClient.Subscribe(ctx, "subtreeassembly")
+				if err != nil {
+					u.logger.Errorf("[BlockValidation] failed starting subtree assembly subscription")
+				}
+
+				var block *model.Block
+				for {
+					select {
+					case <-ctx.Done():
+						u.logger.Infof("[BlockValidation] closing subtree assembly kafka producer")
+						return
+					case notification := <-subscription:
+						if notification.Type == model.NotificationType_Block {
+							block, err = u.blockchainClient.GetBlock(ctx, notification.Hash)
+							if err != nil {
+								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service")
+							}
+
+							u.logger.Infof("[BlockValidation][%s] processing block into subtreeassembly kafka producer", block.Hash().String())
+
+							for _, subtreeHash := range block.Subtrees {
+								subtreeBytes := subtreeHash.CloneBytes()
+								u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into subtreeassembly kafka producer", block.Hash().String(), subtreeHash.String())
+								u.subtreeAssemblyKafkaProducer.Send(subtreeBytes, subtreeBytes)
+							}
+						}
+					}
+				}
+			}()
 		}
 	}
 
@@ -697,7 +738,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 
 	u.logger.Infof("[BlockValidation] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
 
-	util.StartKafkaListener(ctx, u.logger, kafkaBrokersURL, workers, "BlockValidation", "blockvalidation", func(ctx context.Context, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, u.logger, kafkaBrokersURL, workers, "BlockValidation", "blockvalidation", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
 			prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
