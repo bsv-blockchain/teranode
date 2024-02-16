@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -80,14 +79,11 @@ type Store struct {
 	logger     ulogger.Logger
 }
 
-var initMu sync.Mutex
+func init() {
+	asl.Logger.SetLevel(asl.DEBUG)
+}
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	// this is weird, but if we are starting 2 connections (utxo, txmeta) at the same time, this fails
-	initMu.Lock()
-	asl.Logger.SetLevel(asl.DEBUG)
-	initMu.Unlock()
-
 	logger = logger.New("aero_store")
 
 	namespace := u.Path[1:]
