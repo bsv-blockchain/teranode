@@ -95,9 +95,7 @@ func (s *File) loadTTLs() error {
 				continue
 			}
 
-			s.fileTTLsMu.Lock()
 			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
-			s.fileTTLsMu.Unlock()
 		}
 	}
 
