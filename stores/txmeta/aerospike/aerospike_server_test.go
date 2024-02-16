@@ -1,4 +1,4 @@
-// //go:build aerospike
+//go:build aerospike
 
 package aerospike
 
@@ -273,7 +273,7 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{2}, value.BlockIDs)
 
-		value, err = db.Get(ctx, blockHash)
+		_, err = db.Get(ctx, blockHash)
 		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(blockHash))
 	})
 

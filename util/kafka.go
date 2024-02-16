@@ -161,7 +161,7 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 	config.Producer.Partitioner = sarama.NewManualPartitioner
 
 	flush := 16 * 1024
-	if flushBytes != nil && len(flushBytes) > 0 {
+	if len(flushBytes) > 0 {
 		flush = flushBytes[0]
 	}
 	config.Producer.Flush.Bytes = flush
