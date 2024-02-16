@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospike
 
@@ -167,6 +167,45 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(101), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{2}, value.BlockIDs)
+	})
+
+	t.Run("aerospike get multi", func(t *testing.T) {
+		cleanDB(t, client)
+		_, err = db.Create(ctx, tx)
+		require.NoError(t, err)
+		_, err = db.Create(ctx, tx2)
+		require.NoError(t, err)
+		_, err = db.Create(ctx, tx3)
+		require.NoError(t, err)
+
+		var value map[chainhash.Hash]*txmeta.Data
+		value, err = db.GetMulti(ctx, []*chainhash.Hash{hash, hash2, hash3})
+		require.NoError(t, err)
+
+		assert.Len(t, value, 3)
+
+		for h, data := range value {
+			switch h.String() {
+			case hash.String():
+				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash.String())
+				//assert.Equal(t, uint64(101), data.Fee)
+				//assert.Equal(t, uint64(60), data.SizeInBytes)
+				//assert.Len(t, data.ParentTxHashes, 1)
+				//assert.Equal(t, []chainhash.Hash{*parentTxHash}, data.ParentTxHashes)
+				//assert.Len(t, data.BlockIDs, 0)
+				//assert.Nil(t, data.BlockIDs)
+			case hash2.String():
+				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash2.String())
+				//assert.Equal(t, uint64(102), data.Fee)
+				//assert.Len(t, data.BlockIDs, 0)
+				//assert.Nil(t, data.BlockIDs)
+			case hash3.String():
+				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash3.String())
+				//assert.Equal(t, uint64(103), data.Fee)
+				//assert.Len(t, data.BlockIDs, 0)
+				//assert.Nil(t, data.BlockIDs)
+			}
+		}
 	})
 
 	t.Run("aerospike get - expired", func(t *testing.T) {

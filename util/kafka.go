@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/ordishs/gocore"
+	"github.com/ordishs/go-utils"
 	"net/url"
 	"os"
 	"os/signal"
@@ -26,7 +26,13 @@ kafka-topics.sh --describe --bootstrap-server localhost:9092
 kafka-console-consumer.sh --topic blocks --bootstrap-server localhost:9092 --from-beginning
 */
 
+type KafkaMessage struct {
+	Message *sarama.ConsumerMessage
+	Session sarama.ConsumerGroupSession
+}
+
 type KafkaProducerI interface {
+	GetClient() sarama.ConsumerGroup
 	Send(key []byte, data []byte) error
 	Close() error
 }
@@ -35,6 +41,7 @@ type AsyncKafkaProducer struct {
 	Producer   sarama.AsyncProducer
 	Topic      string
 	Partitions int32
+	client     sarama.ConsumerGroup
 }
 
 func (k *AsyncKafkaProducer) Close() error {
@@ -43,6 +50,10 @@ func (k *AsyncKafkaProducer) Close() error {
 	}
 
 	return nil
+}
+
+func (k *AsyncKafkaProducer) GetClient() sarama.ConsumerGroup {
+	return k.client
 }
 
 func (k *AsyncKafkaProducer) Send(key []byte, data []byte) error {
@@ -61,6 +72,7 @@ type SyncKafkaProducer struct {
 	Producer   sarama.SyncProducer
 	Topic      string
 	Partitions int32
+	client     sarama.ConsumerGroup
 }
 
 func (k *SyncKafkaProducer) Close() error {
@@ -71,14 +83,22 @@ func (k *SyncKafkaProducer) Close() error {
 	return nil
 }
 
+func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
+	return k.client
+}
+
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
+	fmt.Printf("Sending message to Kafka: %s => %d\n", utils.ReverseAndHexEncodeSlice(key), len(data))
+
 	partition := binary.LittleEndian.Uint32(key) % uint32(k.Partitions)
-	_, _, err := k.Producer.SendMessage(&sarama.ProducerMessage{
+	p, o, err := k.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic:     k.Topic,
 		Key:       sarama.ByteEncoder(key),
 		Value:     sarama.ByteEncoder(data),
 		Partition: int32(partition),
 	})
+
+	fmt.Printf("Sent message to Kafka partition: %d, Offset: %d, Error: %v\n", p, o, err)
 
 	return err
 }
@@ -118,7 +138,13 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 		ReplicationFactor: int16(replicationFactor),
 	}, false)
 
-	producer, err := ConnectProducer(brokersUrl, kafkaURL.Path[1:], int32(partitions))
+	flushBytes := 16 * 1024
+	fb, err := strconv.Atoi(kafkaURL.Query().Get("flush"))
+	if err == nil {
+		flushBytes = fb
+	}
+
+	producer, err := ConnectProducer(brokersUrl, kafkaURL.Path[1:], int32(partitions), flushBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to connect to kafka: %v", err)
 	}
@@ -126,15 +152,19 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 	return clusterAdmin, producer, nil
 }
 
-func ConnectProducer(brokersUrl []string, topic string, partitions int32) (KafkaProducerI, error) {
+func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
+	config.Producer.Return.Errors = true
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Retry.Max = 5
 	config.Producer.Partitioner = sarama.NewManualPartitioner
 
-	kafkaFlushBytes, _ := gocore.Config().GetInt("kafkaFlushBytes", 16*1024) // 16KB = around 100 tx meta messages
-	config.Producer.Flush.Bytes = kafkaFlushBytes
+	flush := 16 * 1024
+	if flushBytes != nil && len(flushBytes) > 0 {
+		flush = flushBytes[0]
+	}
+	config.Producer.Flush.Bytes = flush
 
 	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.
 	conn, err := sarama.NewSyncProducer(brokersUrl, config)
@@ -165,7 +195,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 
 	// create the workers to process all messages
 	n := atomic.Uint64{}
-	workerCh := make(chan *sarama.ConsumerMessage)
+	workerCh := make(chan KafkaMessage)
 	for i := 0; i < workers; i++ {
 		go func() {
 			var err error
@@ -175,9 +205,12 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 					logger.Infof("[%s] Stopping Kafka worker", service)
 					return
 				case msg := <-workerCh:
-					if err = workerFn(ctx, msg.Key, msg.Value); err != nil {
+					if err = workerFn(ctx, msg.Message.Key, msg.Message.Value); err != nil {
 						logger.Errorf("[%s] Failed to add tx to block assembly: %s", service, err)
 					} else {
+						// mark the message after no error
+						msg.Session.MarkMessage(msg.Message, "")
+						msg.Session.Commit()
 						n.Add(1)
 					}
 				}
@@ -208,13 +241,14 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 			ReplicationFactor: int16(replicationFactor),
 		}, false)
 
-		if err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh); err != nil {
+		err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh)
+		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
 	}()
 }
 
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan *sarama.ConsumerMessage) error {
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
