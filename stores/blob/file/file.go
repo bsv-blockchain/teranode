@@ -95,7 +95,9 @@ func (s *File) loadTTLs() error {
 				continue
 			}
 
+			s.fileTTLsMu.Lock()
 			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+			s.fileTTLsMu.Unlock()
 		}
 	}
 
@@ -112,8 +114,8 @@ func (s *File) ttlCleaner(ctx context.Context) {
 		default:
 			s.logger.Debugf("Cleaning file TTLs")
 
-			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			s.fileTTLsMu.Lock()
+			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			for fileName, ttl := range s.fileTTLs {
 				if ttl.Before(time.Now()) {
 					filesToRemove = append(filesToRemove, fileName)
