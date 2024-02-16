@@ -42,8 +42,6 @@ type Validator struct {
 	blockValidationClient         blockValidationTxMetaClient
 	blockValidationBatcher        batcher.Batcher[txmeta.Data]
 	kafkaProducer                 util.KafkaProducerI
-	kafkaTopic                    string
-	kafkaPartitions               int
 	saveInParallel                bool
 	blockAssemblyDisabled         bool
 	blockAssemblyCreatesUTXOs     bool

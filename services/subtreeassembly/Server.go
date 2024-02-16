@@ -57,7 +57,9 @@ func (ps *Server) Start(ctx context.Context) (err error) {
 
 	subtreeKafkaBrokersURL, err, ok := gocore.Config().GetURL("subtree_kafkaBrokers")
 	if err == nil && ok {
-		_, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreeKafkaBrokersURL)
+		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreeKafkaBrokersURL); err != nil {
+			return fmt.Errorf("[SubtreeAssembly] error connecting to kafka: %s", err)
+		}
 		ps.startKafkaSubtreesListener(ctx, subtreeKafkaBrokersURL)
 	}
 

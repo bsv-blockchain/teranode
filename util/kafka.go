@@ -160,11 +160,6 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32) (Kafka
 	//}, nil
 }
 
-type kafkaMsg struct {
-	key   []byte
-	value []byte
-}
-
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokersURL *url.URL, workers int,
 	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 

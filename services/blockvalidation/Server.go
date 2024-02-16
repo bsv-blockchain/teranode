@@ -196,7 +196,9 @@ func (u *Server) Start(ctx context.Context) error {
 							for _, subtreeHash := range block.Subtrees {
 								subtreeBytes := subtreeHash.CloneBytes()
 								u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into subtreeassembly kafka producer", block.Hash().String(), subtreeHash.String())
-								u.subtreeAssemblyKafkaProducer.Send(subtreeBytes, subtreeBytes)
+								if err = u.subtreeAssemblyKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
+									u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into subtreeassembly kafka producer", block.Hash().String(), subtreeHash.String())
+								}
 							}
 						}
 					}
