@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -603,7 +604,7 @@ func (u *Server) SubtreeFound(ctx context.Context, req *blockvalidation_api.Subt
 	// validate the subtree in the background
 	go func() {
 		// start a new span for the subtree validation
-		start = gocore.CurrentTime()
+		start := gocore.CurrentTime()
 		subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
 		defer func() {
 			goroutineStat.AddTime(start)
