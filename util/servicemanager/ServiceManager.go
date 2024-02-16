@@ -115,7 +115,13 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	sm.logger.Infof("🟢 Starting service %s...", name)
 
 	sm.g.Go(func() error {
-		sm.waitForPreviousServiceToStart(sw)
+		if sw.index > 0 {
+			sm.dependencyChannelsMux.Lock()
+			channel := sm.dependencyChannels[sw.index-1]
+			sm.dependencyChannelsMux.Unlock()
+
+			sm.waitForPreviousServiceToStart(sw, channel)
+		}
 		sm.dependencyChannelsMux.Lock()
 		close(sm.dependencyChannels[sw.index])
 		sm.dependencyChannelsMux.Unlock()
@@ -130,18 +136,16 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	return nil
 }
 
-func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper) {
-	if sw.index > 0 {
-		timer := time.NewTimer(5 * time.Second)
+func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) {
+	timer := time.NewTimer(5 * time.Second)
 
-		// Wait for previous service to start
-		select {
-		case <-sm.dependencyChannels[sw.index-1]:
-			// Previous service has started
-			return
-		case <-timer.C:
-			sm.logger.Fatalf("%s (index %d) timed out waiting for previous service to start", sw.name, sw.index)
-		}
+	// Wait for previous service to start
+	select {
+	case <-channel:
+		// Previous service has started
+		return
+	case <-timer.C:
+		sm.logger.Fatalf("%s (index %d) timed out waiting for previous service to start", sw.name, sw.index)
 	}
 }
 
