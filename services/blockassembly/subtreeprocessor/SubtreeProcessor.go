@@ -52,7 +52,7 @@ type SubtreeProcessor struct {
 	reorgBlockChan            chan reorgBlocksRequest
 	deDuplicateTransactionsCh chan struct{}
 	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
-	chainedSubtrees           atomic.Pointer[[]*util.Subtree]
+	chainedSubtrees           []*util.Subtree
 	currentSubtree            *util.Subtree
 	currentBlockHeader        *model.BlockHeader
 	sync.Mutex
@@ -109,7 +109,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		reorgBlockChan:            make(chan reorgBlocksRequest),
 		deDuplicateTransactionsCh: make(chan struct{}),
 		newSubtreeChan:            newSubtreeChan,
-		chainedSubtrees:           atomic.Pointer[[]*util.Subtree]{},
+		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		currentSubtree:            firstSubtree,
 		batcher:                   newTxIDAndFeeBatch(batcherSize),
 		queue:                     queue,
@@ -125,9 +125,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		opts(stp)
 	}
 
-	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.chainedSubtrees.Store(&chainedSubtrees)
-
 	go func() {
 		var txReq *txIDAndFee
 		var err error
@@ -135,14 +132,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				logger.Infof("[SubtreeProcessor] get current subtrees")
-
-				chainedSubtrees := *stp.chainedSubtrees.Load()
-				size := len(chainedSubtrees)
-				completeSubtrees := make([]*util.Subtree, 0, size)
-				completeSubtrees = append(completeSubtrees, chainedSubtrees...)
+				completeSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees))
+				completeSubtrees = append(completeSubtrees, stp.chainedSubtrees...)
 
 				// incomplete subtrees ?
-				if size == 0 && stp.currentSubtree.Length() > 1 {
+				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
 					incompleteSubtree, err := util.NewTreeByLeafCount(stp.currentItemsPerFile)
 					if err != nil {
 						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
@@ -244,8 +238,7 @@ func (stp *SubtreeProcessor) QueueLength() int64 {
 }
 
 func (stp *SubtreeProcessor) SubtreeCount() int {
-	chainedSubtrees := *stp.chainedSubtrees.Load()
-	return len(chainedSubtrees) + 1
+	return len(stp.chainedSubtrees) + 1
 }
 
 func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification bool) (err error) {
@@ -260,9 +253,7 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		// Add the subtree to the chain
 		// this needs to happen here, so we can wait for the append action to complete
 		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
-		chainedSubtrees := *stp.chainedSubtrees.Load()
-		chainedSubtrees = append(chainedSubtrees, stp.currentSubtree)
-		stp.chainedSubtrees.Store(&chainedSubtrees)
+		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 
 		oldSubtree := stp.currentSubtree
 		oldSubtreeHash := oldSubtree.RootHash()
@@ -361,8 +352,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 
 	// announce all the subtrees to the network
 	// this will also store it by the Server in the subtree store
-	chainedSubtrees := *stp.chainedSubtrees.Load()
-	for _, subtree := range chainedSubtrees {
+	for _, subtree := range stp.chainedSubtrees {
 		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree}
 	}
 
@@ -373,8 +363,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 
 func (stp *SubtreeProcessor) setTxCount() {
 	stp.txCount.Store(0)
-	chainedSubtrees := *stp.chainedSubtrees.Load()
-	for _, subtree := range chainedSubtrees {
+	for _, subtree := range stp.chainedSubtrees {
 		stp.txCount.Add(uint64(subtree.Length()))
 	}
 	stp.txCount.Add(uint64(stp.currentSubtree.Length()))
@@ -402,7 +391,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	}()
 
 	lastIncompleteSubtree := stp.currentSubtree
-	chainedSubtrees := stp.chainedSubtrees.Load()
+	chainedSubtrees := stp.chainedSubtrees
+
 	// TODO add check for the correct parent block
 
 	// reset the subtree processor
@@ -410,9 +400,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	if err != nil {
 		return fmt.Errorf("[moveDownBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
-	cs := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	chainedSubtrees = &cs
-	stp.chainedSubtrees.Store(chainedSubtrees)
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
@@ -472,7 +460,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 
 	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: add previous nodes to subtrees", block.String(), len(block.Subtrees))
 	// add all the transactions from the previous state
-	for _, subtree := range *chainedSubtrees {
+	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
 			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
 				_ = stp.addNode(node, true)
@@ -539,7 +527,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// this should clear out all subtrees from our own blocks, giving an empty blockSubtreesMap as a result
 	// and preventing processing of the map
 	chainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	for _, subtree := range *stp.chainedSubtrees.Load() {
+	for _, subtree := range stp.chainedSubtrees {
 		id := *subtree.RootHash()
 		if _, ok := blockSubtreesMap[id]; !ok {
 			// only add the subtrees that were not in the block
@@ -568,8 +556,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	if err != nil {
 		return fmt.Errorf("[moveUpBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
-	chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.chainedSubtrees.Store(&chainedSubtrees)
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
@@ -681,7 +668,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions")
 
 	currentSubtree := stp.currentSubtree
-	chainedSubtrees := stp.chainedSubtrees.Load()
+	chainedSubtrees := stp.chainedSubtrees
 
 	// reset the current subtree
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
@@ -690,13 +677,12 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 		return
 	}
 
-	newChainedSubtrees := make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.chainedSubtrees.Store(&newChainedSubtrees)
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 
 	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load()))
 	removeMapLength := stp.removeMap.Length()
 
-	for subtreeIdx, subtree := range *chainedSubtrees {
+	for subtreeIdx, subtree := range chainedSubtrees {
 		for nodeIdx, node := range subtree.Nodes {
 			if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 				if err = stp.removeMap.Delete(node.Hash); err != nil {
