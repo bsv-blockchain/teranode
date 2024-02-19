@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -15,7 +16,7 @@ type PeerSync struct {
 	logger                ulogger.Logger
 	P2PNode               P2PNode
 	numberOfExpectedPeers int
-	lastMsgByPeerId       map[string]MiningOnMessage
+	lastMsgByPeerId       sync.Map
 	defaultTimeout        time.Duration
 }
 
@@ -56,7 +57,7 @@ func NewPeerSync(logger ulogger.Logger, processName string, numberOfExpectedPeer
 		logger:                logger,
 		P2PNode:               *peerConnection,
 		numberOfExpectedPeers: numberOfExpectedPeers,
-		lastMsgByPeerId:       make(map[string]MiningOnMessage),
+		lastMsgByPeerId:       sync.Map{},
 		defaultTimeout:        defaultTimeout,
 	}
 
@@ -100,13 +101,23 @@ func (p *PeerSync) miningOnHandler(ctx context.Context, msg []byte, from string)
 		p.logger.Debugf("[PeerSync] Received miningon message from %s: %v", from, miningOnMessage)
 	}
 
-	before := len(p.lastMsgByPeerId)
+	before := 0
+	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+		before++
+		return true // continue iterating
+	})
 
-	p.lastMsgByPeerId[from] = miningOnMessage
+	p.lastMsgByPeerId.Store(from, miningOnMessage)
+
+	after := 0
+	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+		after++
+		return true // continue iterating
+	})
 
 	// log if we have received a miningon message from all expected peers. but only once
-	if len(p.lastMsgByPeerId) > before && len(p.lastMsgByPeerId) >= p.numberOfExpectedPeers {
-		p.logger.Infof("[PeerSync] Received a miningon message from %d peers. Startup complete for checking things are in sync.", len(p.lastMsgByPeerId))
+	if after > before && after >= p.numberOfExpectedPeers {
+		p.logger.Infof("[PeerSync] Received a miningon message from %d peers. Startup complete for checking things are in sync.", after)
 	}
 }
 
@@ -115,19 +126,27 @@ func (p *PeerSync) miningOnHandler(ctx context.Context, msg []byte, from string)
  * Very crude implementation, we need to allow for natural forks and reorgs.
  */
 func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
-	if len(p.lastMsgByPeerId) < p.numberOfExpectedPeers {
+	size := 0
+	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+		size++
+		return true // continue iterating
+	})
+	if size < p.numberOfExpectedPeers {
 		if first {
-			p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", len(p.lastMsgByPeerId), p.numberOfExpectedPeers)
-			for _, miningon := range p.lastMsgByPeerId {
-				p.logger.Infof("[PeerSync] %s=%d", miningon.Miner, miningon.Height)
-			}
+			p.logger.Infof("[PeerSync] Not enough peers to check if in sync %d/%d", size, p.numberOfExpectedPeers)
+			p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+				miningon := value.(MiningOnMessage)
+				p.logger.Infof("[PeerSync] peer=%s %s=%d", miningon.PeerId, miningon.Miner, miningon.Height)
+				return true
+			})
 		}
 		return false
 	}
 
 	result := true
 
-	for _, miningon := range p.lastMsgByPeerId {
+	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+		miningon := value.(MiningOnMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > miningon.Height {
@@ -138,8 +157,8 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 				return false
 			}
 		}
-
-	}
+		return true
+	})
 
 	p.logger.Debugf("[PeerSync] Peers are all at block height %d or higher", height)
 	return result

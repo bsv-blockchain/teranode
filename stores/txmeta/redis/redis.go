@@ -169,6 +169,21 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 	return data, nil
 }
 
+func (r *Redis) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+
+	// TODO make this into a batch call
+	for _, hash := range hashes {
+		data, err := r.Get(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		results[*hash] = data
+	}
+
+	return results, nil
+}
+
 func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	data, err := util.TxMetaDataFromTx(tx)
 	if err != nil {

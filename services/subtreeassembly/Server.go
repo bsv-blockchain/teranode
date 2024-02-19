@@ -13,6 +13,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"net/url"
 	"runtime"
 	"time"
@@ -57,7 +58,9 @@ func (ps *Server) Start(ctx context.Context) (err error) {
 
 	subtreeKafkaBrokersURL, err, ok := gocore.Config().GetURL("subtree_kafkaBrokers")
 	if err == nil && ok {
-		_, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreeKafkaBrokersURL)
+		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreeKafkaBrokersURL); err != nil {
+			return fmt.Errorf("[SubtreeAssembly] error connecting to kafka: %s", err)
+		}
 		ps.startKafkaSubtreesListener(ctx, subtreeKafkaBrokersURL)
 	}
 
@@ -85,15 +88,49 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 	}
 
 	subtreeBlob := make([]byte, 0, 250*1024*1024)
-	for _, txHash := range subtree.Nodes {
-		// get the tx meta from the tx meta store
-		// TODO get the data in batches
-		txMeta, err := ps.txMetaStore.Get(ctx, &txHash.Hash)
-		if err != nil {
-			return fmt.Errorf("[SubtreeAssembly] error getting tx meta from store: %s", err)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()-2))
+
+	batchSize := 1024
+	results := make([][]byte, len(subtree.Nodes))
+	// get the tx metas from the tx meta store in batches of N
+	for i := 0; i < len(subtree.Nodes); i += batchSize {
+		i := i
+		end := i + batchSize
+		if end > len(subtree.Nodes) {
+			end = len(subtree.Nodes)
 		}
 
-		subtreeBlob = append(subtreeBlob, txMeta.Tx.Bytes()...)
+		g.Go(func() error {
+			txHashes := make([]*chainhash.Hash, 0, batchSize)
+			for _, txHash := range subtree.Nodes[i:end] {
+				if !txHash.Hash.Equal(model.CoinbasePlaceholder) {
+					txHashes = append(txHashes, &txHash.Hash)
+				}
+			}
+
+			txMetas, err := ps.txMetaStore.GetMulti(gCtx, txHashes)
+			if err != nil {
+				return fmt.Errorf("[SubtreeAssembly] error getting tx metas from store: %s", err)
+			}
+
+			for n := i; n < end; n++ {
+				txMeta, ok := txMetas[subtree.Nodes[n].Hash]
+				if !ok {
+					return fmt.Errorf("[SubtreeAssembly] error getting tx meta from store: %s", err)
+				}
+				results[n] = txMeta.Tx.Bytes()
+			}
+
+			return nil
+		})
+	}
+
+	// get the tx bytes in order
+	for _, txBytes := range results {
+		// get the tx meta from the tx meta store
+		subtreeBlob = append(subtreeBlob, txBytes...)
 	}
 
 	// store the subtree blob to the blob store
@@ -127,7 +164,7 @@ func (ps *Server) startKafkaBlocksListener(ctx context.Context, kafkaBrokersURL 
 			return fmt.Errorf("[SubtreeAssembly][%s] error deserializing block: %s", keyStr, err)
 		}
 
-		ps.logger.Warnf("[SubtreeAssembly][%s] sending block subtrees to kafka: %s", keyStr, block.String())
+		ps.logger.Warnf("[SubtreeAssembly][%s] sending block subtrees to kafka: %s:%d", keyStr, block.String(), len(block.Subtrees))
 
 		// store all the subtree hashes of the block in the subtrees topic
 		for _, subtreeHash := range block.Subtrees {

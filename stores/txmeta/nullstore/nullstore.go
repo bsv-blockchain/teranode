@@ -26,6 +26,21 @@ func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
+func (m *NullStore) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+
+	// TODO make this into a batch call
+	for _, hash := range hashes {
+		data, err := m.Get(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		results[*hash] = data
+	}
+
+	return results, nil
+}
+
 func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {

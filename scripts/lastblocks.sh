@@ -2,9 +2,15 @@
 
 function get_lastblocks() {
   local node=$1
-  local url="https://$node.scaling.ubsv.dev/lastblocks"
-  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$2"
+  local n=$2
+  local url="https://$node.scaling.ubsv.dev/lastblocks?n=$n"
+  curl -s "$url" | jq -r '.[] | "\(.height) \(.height): \(.hash)"' > "$3"
 }
+
+n=10
+if [ -n "$1" ]; then
+  n=$1
+fi
 
 # Prepare temporary files
 tmp1=$(mktemp)
@@ -12,11 +18,12 @@ tmp2=$(mktemp)
 sorted1=$(mktemp)
 sorted2=$(mktemp)
 joined=$(mktemp)
+joined.coloured=$(mktemp)
 
 # Fetch data in parallel
-get_lastblocks m1 "$tmp1" &
+get_lastblocks m1 "$n" "$tmp1" &
 pid1=$!
-get_lastblocks m2 "$tmp2" &
+get_lastblocks m2 "$n" "$tmp2" &
 pid2=$!
 
 wait $pid1 $pid2
@@ -34,7 +41,7 @@ awk '{
     print "\033[32m" $0 "\033[0m";
   else
     print "\033[31m" $0 "\033[0m";
-}' "$joined" > "$joined.colored"
+}' "$joined" > "$joined.coloured"
 
 # Cleanup
 rm "$tmp1" "$tmp2" "$sorted1" "$sorted2" "$joined"
@@ -42,8 +49,8 @@ rm "$tmp1" "$tmp2" "$sorted1" "$sorted2" "$joined"
 # Display the results with colors
 echo $(date -u)
 echo ""
-cat "$joined.colored" | column -t
+cat "$joined.coloured" | column -t
 echo ""
 
 # Remove the colored joined file
-rm "$joined.colored"
+rm "$joined.coloured"

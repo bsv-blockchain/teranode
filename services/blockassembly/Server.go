@@ -3,10 +3,11 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"go.uber.org/atomic"
 	"math"
 	"net/url"
 	"time"
+
+	"go.uber.org/atomic"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
@@ -217,7 +218,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case blockSubmission := <-ba.blockSubmissionChan:
 				// _, _, c := util.NewStatFromContext(ctx, "blockSubmissionChan", channelStats, false)
-				if _, err = ba.submitMiningSolution(ctx, blockSubmission); err != nil {
+				if _, err := ba.submitMiningSolution(ctx, blockSubmission); err != nil {
 					ba.logger.Warnf("Failed to submit block [%s]", err)
 				}
 				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
@@ -776,7 +777,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 			timeStart := time.Now()
 			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees TTL", jobID, block.Header.Hash())
 
-			if err = ba.removeSubtreesTTL(gCtx, block); err != nil {
+			if err := ba.removeSubtreesTTL(gCtx, block); err != nil {
 				// TODO retry
 				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to remove subtrees TTL: %v", jobID, block.Header.Hash(), err)
 			}
@@ -792,7 +793,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 				// add the transactions in this block to the txMeta block hashes
 				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
 
-				if err = model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
+				if err := model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
 					// TODO retry
 					ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
 				}

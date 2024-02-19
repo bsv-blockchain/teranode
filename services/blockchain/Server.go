@@ -103,7 +103,9 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	blockKafkaBrokersURL, err, ok := gocore.Config().GetURL("block_kafkaBrokers")
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
-		_, b.blockKafkaProducer, err = util.ConnectToKafka(blockKafkaBrokersURL)
+		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blockKafkaBrokersURL); err != nil {
+			return fmt.Errorf("[Blockchain] error connecting to kafka: %s", err)
+		}
 	}
 
 	go func() {

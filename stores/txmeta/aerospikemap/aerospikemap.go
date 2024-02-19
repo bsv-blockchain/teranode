@@ -150,6 +150,21 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
+func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+
+	// TODO make this into a batch call
+	for _, hash := range hashes {
+		data, err := s.Get(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		results[*hash] = data
+	}
+
+	return results, nil
+}
+
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	prometheusTxMetaSet.Inc()
 

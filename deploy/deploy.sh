@@ -85,10 +85,10 @@ fi
 
 if [[ $IMAGE_TAG == "latest" ]]; then
     # Extract the git commit hash by querying the ECR repository with this horrible command...
-    IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | grep -B 1 latest-arm64 | head -1 | tr -d '", ' | sed 's/-arm64//')
+    IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
 fi
 
-IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
+IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG-arm64"
 
 echo "Using image tag: $IMAGE_TAG" >&2
 
@@ -111,6 +111,11 @@ case $REGION in
         LEGAL_ENVIRONMENT=("allinone" "scaling")
         ;;
 
+    "ap-south-1")
+        LEGAL_NAMESPACES=("miner-ap-1" "m3")
+        LEGAL_ENVIRONMENT=("allinone" "scaling")
+        ;;
+
     "docker-desktop")
         LEGAL_NAMESPACES=("miner-lo-1")
         LEGAL_ENVIRONMENT=("docker-desktop")
@@ -124,17 +129,18 @@ case $REGION in
             helm install --namespace traefik -f $DIR/deploy-traefik-extra.yaml traefik traefik/traefik >&2
         fi
 
-        docker pull $IMAGE_NAME > /dev/null
-        if [[ $? -ne 0 ]]; then
-            echo "Failed to pull image: $IMAGE_NAME" >&2
-            echo "Login to ECR and try again." >&2
-            # Force authentication to ECR...
-            echo "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com" >&2
-            exit 1
-        fi
+        # docker pull $IMAGE_NAME > /dev/null
+        # if [[ $? -ne 0 ]]; then
+        #     echo "Failed to pull image: $IMAGE_NAME" >&2
+        #     echo "Login to ECR and try again." >&2
+        #     # Force authentication to ECR...
+        #     echo "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com" >&2
+        #     exit 1
+        # fi
 
         # Create the secret for local k8s to pull from ECR
         kubectl delete secret ecr-secret >&2
+        kubectl create namespace $NAMESPACE >&2
         kubectl create secret docker-registry ecr-secret --docker-server=434394763103.dkr.ecr.eu-north-1.amazonaws.com --docker-username=AWS --docker-password=$(aws ecr get-login-password --region eu-north-1) >&2
 
         ;;
