@@ -24,6 +24,7 @@
 
   let page = 1
   let pageSize = 10
+  let totalItems = 0
 
   function onPage(e) {
     const data = e.detail
@@ -55,6 +56,10 @@
     })
     if (blockSubtrees.ok) {
       data = blockSubtrees.data.data
+      const pagination = blockSubtrees.pagination
+      pageSize = pagination.limit
+      page = Math.floor(pagination.offset / pageSize) + 1
+      totalItems = pagination.totalRecords
     } else {
       failure(blockSubtrees.error.message)
     }
@@ -79,7 +84,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={false}
       showQuickNav={false}
       showNav={showPagerNav}
@@ -106,6 +111,7 @@
     i18n={i18nLocal}
     expandUp={true}
     pager={false}
+    useServerPagination={true}
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
@@ -115,7 +121,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={showPagerSize}
       showQuickNav={showPagerNav}
       showNav={showPagerNav}
