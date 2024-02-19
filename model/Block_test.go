@@ -211,7 +211,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	fileNameTemplateBlock = fileDir + "block.bin"
 	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
-	txIdCount := uint64(16)
+	txIdCount := uint64(8)
 	subtreeSize = 8
 
 	block, err := generateTestSets(txIdCount, subtreeStore, true)

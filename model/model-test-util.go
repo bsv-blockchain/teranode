@@ -220,14 +220,14 @@ func generateTestSets(transactionIdCount uint64, subtreeStore *localSubtreeStore
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
-	if len(subtreeHashes) == 1 {
-		fmt.Println("heree")
-		calculatedMerkleRootHash = subtreeHashes[0]
-	} else {
-		if calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
-			return nil, err
-		}
+	//if len(subtreeHashes) == 1 {
+	//	fmt.Println("heree")
+	//	calculatedMerkleRootHash = subtreeHashes[0]
+	//} else {
+	if calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
+		return nil, err
 	}
+	//}
 
 	blockHeader := &BlockHeader{
 		Version:        1,
