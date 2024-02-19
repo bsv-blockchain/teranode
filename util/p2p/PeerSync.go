@@ -144,12 +144,15 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 	}
 
 	result := true
+	failures := 0
 
 	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
 		miningon := value.(MiningOnMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > miningon.Height {
+			failures++
+
 			p.logger.Infof("[PeerSync][%s] Not in sync, %s=%d vs %d", miningon.PeerId, miningon.Miner, miningon.Height, height)
 			result = false
 
@@ -157,6 +160,11 @@ func (p *PeerSync) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool
 				return false
 			}
 		}
+
+		if failures > 0 {
+			p.logger.Infof("[PeerSync] Peers are now in sync after %d attempts", failures)
+		}
+
 		return true
 	})
 
