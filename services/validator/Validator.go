@@ -127,6 +127,7 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 	return v.utxoStore.GetBlockHeight()
 }
 
+// TODO try to break this
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", stats)
 	defer func() {

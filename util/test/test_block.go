@@ -8,26 +8,32 @@ import (
 	"os"
 	"time"
 
-	//"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConfig) (*model.Block, error) {
+func GenerateTestBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConfig) (*model.Block, error) {
+	FileDir = config.FileDir
+	FileNameTemplate = config.FileNameTemplate
+	FileNameTemplateMerkleHashes = config.FileNameTemplateMerkleHashes
+	FileNameTemplateBlock = config.FileNameTemplateBlock
+	TxMetafileNameTemplate = config.TxMetafileNameTemplate
+	SubtreeSize = config.SubtreeSize
+	TxCount = config.TxCount
+	GenerateNewTestData = config.GenerateNewTestData
 
 	// create test dir of not exists
-	if _, err := os.Stat(config.FileDir); os.IsNotExist(err) {
-		err = os.Mkdir(config.FileDir, 0755)
-		if err != nil {
+	if _, err := os.Stat(FileDir); os.IsNotExist(err) {
+		if err = os.Mkdir(FileDir, 0755); err != nil {
 			return nil, err
 		}
 	}
 
 	// read block from file and return if exists
-	blockFile, err := os.Open(config.FileNameTemplateBlock)
-	if err == nil {
+	blockFile, err := os.Open(FileNameTemplateBlock)
+	if err == nil && !GenerateNewTestData {
 		blockBytes, err := io.ReadAll(blockFile)
 		if err != nil {
 			return nil, err
@@ -42,7 +48,7 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 		return block, nil
 	}
 
-	txMetastoreFile, err := os.Create(config.TxMetafileNameTemplate)
+	txMetastoreFile, err := os.Create(TxMetafileNameTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +60,7 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 	}()
 
 	var subtreeBytes []byte
-	subtree, err := util.NewTreeByLeafCount(config.SubtreeSize)
+	subtree, err := util.NewTreeByLeafCount(SubtreeSize)
 	if err != nil {
 		return nil, err
 	}
@@ -65,11 +71,11 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 	subtreeCount := 0
 
 	// create the first files
-	subtreeFile, err = os.Create(fmt.Sprintf(config.FileNameTemplate, subtreeCount))
+	subtreeFile, err = os.Create(fmt.Sprintf(FileNameTemplate, subtreeCount))
 	if err != nil {
 		return nil, err
 	}
-	subtreeFileMerkleHashes, err = os.Create(config.FileNameTemplateMerkleHashes)
+	subtreeFileMerkleHashes, err = os.Create(FileNameTemplateMerkleHashes)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +86,7 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 	var hash chainhash.Hash
 	fees := uint64(0)
 	var n int
-	for i := 1; i < nrOfTxs; i++ {
+	for i := 1; i < int(TxCount); i++ {
 		binary.LittleEndian.PutUint64(txId, uint64(i))
 		hash = chainhash.Hash(txId)
 
@@ -116,12 +122,12 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 
 			subtreeCount++
 
-			if subtreeFile, err = os.Create(fmt.Sprintf(config.FileNameTemplate, subtreeCount)); err != nil {
+			if subtreeFile, err = os.Create(fmt.Sprintf(FileNameTemplate, subtreeCount)); err != nil {
 				return nil, err
 			}
 
 			// create new tree
-			subtree, err = util.NewTreeByLeafCount(config.SubtreeSize)
+			subtree, err = util.NewTreeByLeafCount(SubtreeSize)
 			if err != nil {
 				return nil, err
 			}
@@ -146,16 +152,13 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 			return nil, err
 		}
 	}
-
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	if err != nil {
 		return nil, err
 	}
 	coinbase.Outputs = nil
-	// TODO there seems to be an error with the fees calculation
-	//_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+fees)
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 54980576145920)
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+fees)
 
 	nBits := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -167,11 +170,11 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 
 		if i == 0 {
 			// read the first subtree into file, replace the coinbase placeholder with the coinbase txid and calculate the merkle root
-			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(config.SubtreeSize)
+			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(SubtreeSize)
 			if err != nil {
 				return nil, err
 			}
-			subtreeFile, err = os.Open(fmt.Sprintf(config.FileNameTemplate, i))
+			subtreeFile, err = os.Open(fmt.Sprintf(FileNameTemplate, i))
 			if err != nil {
 				return nil, err
 			}
@@ -207,12 +210,8 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
-	if len(subtreeHashes) == 1 {
-		calculatedMerkleRootHash = subtreeHashes[0]
-	} else {
-		if calculatedMerkleRootHash, err = CalculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
-			return nil, err
-		}
+	if calculatedMerkleRootHash, err = CalculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
+		return nil, err
 	}
 
 	blockHeader := &model.BlockHeader{
@@ -243,12 +242,12 @@ func GenerateBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConf
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: config.TxIdCount,
+		TransactionCount: TxCount,
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes,
 	}
 
-	blockFile, err = os.Create(config.FileNameTemplateBlock)
+	blockFile, err = os.Create(FileNameTemplateBlock)
 	if err != nil {
 		return nil, err
 	}

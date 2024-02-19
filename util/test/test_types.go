@@ -7,25 +7,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// const (
-// 	subtreeSize = 1024 * 1024
-// 	txIdCount   = 10 * 1024 * 1024
-// )
-
-// var (
-// 	loadMetaToMemoryOnce sync.Once
-// 	// cachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
-// 	cachedTxMetaStore txmeta.Store
-// 	// following variables are used to store the file names for the testdata
-// 	fileDir                      string
-// 	fileNameTemplate             string
-// 	fileNameTemplateMerkleHashes string
-// 	fileNameTemplateBlock        string
-// 	txMetafileNameTemplate       string
-// 	subtreeSize                  int // 1024 * 1024
-// 	txIdCount                    int // 10 * 1024 * 1024
-// )
-
 var (
 	LoadMetaToMemoryOnce         sync.Once
 	CachedTxMetaStore            txmeta.Store
@@ -34,8 +15,9 @@ var (
 	FileNameTemplateMerkleHashes string
 	FileNameTemplateBlock        string
 	TxMetafileNameTemplate       string
+	GenerateNewTestData          bool
 	SubtreeSize                  int
-	TxIdCount                    int
+	TxCount                      uint64
 )
 
 type TestConfig struct {
@@ -45,7 +27,8 @@ type TestConfig struct {
 	FileNameTemplateBlock        string
 	TxMetafileNameTemplate       string
 	SubtreeSize                  int
-	TxIdCount                    uint64
+	TxCount                      uint64
+	GenerateNewTestData          bool
 }
 
 type FeeAndSize struct {

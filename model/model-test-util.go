@@ -20,6 +20,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// TODO: this test util is here as importing util/test in the model package causes a circular dependency. Fix this
+
 var (
 	loadMetaToMemoryOnce sync.Once
 	// cachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
@@ -220,14 +222,9 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
-	//if len(subtreeHashes) == 1 {
-	//	fmt.Println("heree")
-	//	calculatedMerkleRootHash = subtreeHashes[0]
-	//} else {
 	if calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
 		return nil, err
 	}
-	//}
 
 	blockHeader := &BlockHeader{
 		Version:        1,
