@@ -76,6 +76,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 			defer func() {
 				blockValidationStat.AddTime(startTime)
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+
+				if err := recover(); err != nil {
+					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				}
 			}()
 
 			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
@@ -83,7 +87,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 
 			// add data to block validation cache
 			if err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch); err != nil {
-				validator.logger.Errorf("error sending tx meta batch to block validation cache: %v", err)
+				validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
 			}
 		}
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
@@ -102,10 +106,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		if workers > 0 {
 			_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
 			if err != nil {
-				return nil, fmt.Errorf("unable to connect to kafka: %v", err)
+				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
 
-			logger.Infof("[VALIDATOR] connected to kafka at %s", kafkaURL.Host)
+			logger.Infof("[Validator] connected to kafka at %s", kafkaURL.Host)
 		}
 	}
 
