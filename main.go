@@ -223,14 +223,8 @@ func main() {
 	}
 
 	if startSubtreeAssembly {
-		blockchainClient, err := blockchain.NewClient(ctx, logger)
-		if err != nil {
-			panic(err)
-		}
-
 		if err = sm.AddService("SubtreeAssembly", subtreeassembly.New(
 			logger,
-			blockchainClient,
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
 		)); err != nil {

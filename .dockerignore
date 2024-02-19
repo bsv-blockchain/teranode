@@ -9,3 +9,5 @@ poc/
 scripts/
 3rdparty/
 .github/
+*.run
+*.private_key

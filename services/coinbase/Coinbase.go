@@ -52,7 +52,7 @@ type Coinbase struct {
 	logger       ulogger.Logger
 	address      string
 	dbTimeout    time.Duration
-	peerSync     *p2p.PeerSync
+	peerSync     *p2p.PeerHeight
 	waitForPeers bool
 }
 
@@ -121,7 +121,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		privateKey:   privateKey.PrivKey,
 		address:      coinbaseAddr.AddressString,
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		peerSync:     p2p.NewPeerSync(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		peerSync:     p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
 		waitForPeers: waitForPeers,
 	}
 

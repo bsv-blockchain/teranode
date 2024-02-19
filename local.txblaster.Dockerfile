@@ -40,13 +40,13 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 
 # Build the Go libraries of the project
 # todo change to make build
-RUN make build-tx-blaster
+RUN RACE=true make build-tx-blaster
 
 FROM --platform=linux/amd64 debian:latest
 
 RUN apt update && \
-    apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
-    rm -rf /var/lib/apt/lists/*
+  apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
+  rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -57,8 +57,6 @@ COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/blaster.run .
-# COPY --from=0 /app/blockchainstatus.run .
-COPY --from=0 /app/ubsv.run .
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
   ln -s libsecp256k1.so.0.0.0 libsecp256k1.so

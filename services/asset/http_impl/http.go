@@ -67,50 +67,54 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 		return c.String(http.StatusOK, details)
 	})
 
-	e.GET("/tx/:hash", h.GetTransaction(BINARY_STREAM))
-	e.GET("/tx/:hash/hex", h.GetTransaction(HEX))
-	e.GET("/tx/:hash/json", h.GetTransaction(JSON))
+	apiPrefix, _ := gocore.Config().Get("asset_apiPrefix", "/api/v1")
+	apiGroup := e.Group(apiPrefix)
 
-	e.POST("/txs", h.GetTransactions()) // BINARY_STREAM
+	apiGroup.GET("/tx/:hash", h.GetTransaction(BINARY_STREAM))
+	apiGroup.GET("/tx/:hash/hex", h.GetTransaction(HEX))
+	apiGroup.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
-	e.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
+	apiGroup.POST("/txs", h.GetTransactions()) // BINARY_STREAM
 
-	e.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
-	e.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
-	e.GET("/subtree/:hash/json", h.GetSubtree(JSON))
+	apiGroup.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
-	e.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
-	e.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
-	e.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
+	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
+	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
+	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
-	e.GET("/header/:hash", h.GetBlockHeader(BINARY_STREAM))
-	e.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
-	e.GET("/header/:hash/json", h.GetBlockHeader(JSON))
+	apiGroup.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
+	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
+	apiGroup.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
 
-	e.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
-	e.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
-	e.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+	apiGroup.GET("/header/:hash", h.GetBlockHeader(BINARY_STREAM))
+	apiGroup.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
+	apiGroup.GET("/header/:hash/json", h.GetBlockHeader(JSON))
 
-	e.GET("/search", h.Search)
-	e.GET("/blockstats", h.GetBlockStats)
-	e.GET("/blockgraphdata", h.GetBlockGraphData)
+	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
+	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
+	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
 
-	e.GET("/lastblocks", h.GetLastNBlocks)
+	apiGroup.GET("/search", h.Search)
+	apiGroup.GET("/blockstats", h.GetBlockStats)
+	apiGroup.GET("/blockgraphdata", h.GetBlockGraphData)
 
-	e.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
-	e.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
-	e.GET("/utxo/:hash/json", h.GetUTXO(JSON))
+	apiGroup.GET("/lastblocks", h.GetLastNBlocks)
 
-	e.GET("/utxos/:hash/json", h.GetUTXOsByTXID(JSON))
+	apiGroup.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))
+	apiGroup.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
+	apiGroup.GET("/utxo/:hash/json", h.GetUTXO(JSON))
 
-	e.GET("/balance", h.GetBalance)
+	apiGroup.GET("/utxos/:hash/json", h.GetUTXOsByTXID(JSON))
 
-	e.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
-	e.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
-	e.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
+	apiGroup.GET("/balance", h.GetBalance)
 
-	e.GET("/asset-ws", h.HandleWebSocket(h.notificationCh))
+	apiGroup.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
+	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
+	apiGroup.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
+	apiGroup.GET("/asset-ws", h.HandleWebSocket(h.notificationCh))
+
+	// TODO make configurable, whether stats are enabled
 	prefix := gocore.GetStatPrefix()
 	e.GET(prefix+"stats", AdaptStdHandler(gocore.HandleStats))
 	e.GET(prefix+"reset", AdaptStdHandler(gocore.ResetStats))

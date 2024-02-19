@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -22,21 +21,19 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	logger               ulogger.Logger
-	blockchainClient     blockchain.ClientI
 	subtreeStore         blob.Store
 	txMetaStore          txmeta.Store
 	subtreeKafkaProducer util.KafkaProducerI
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store, txMetaStore txmeta.Store) *Server {
+func New(logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmeta.Store) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		txMetaStore:      txMetaStore,
+		logger:       logger,
+		subtreeStore: subtreeStore,
+		txMetaStore:  txMetaStore,
 	}
 }
 
