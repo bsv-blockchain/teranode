@@ -272,6 +272,7 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
+
 func TestBlockValidation_validateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
