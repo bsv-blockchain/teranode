@@ -18,6 +18,12 @@ export function connectToP2PServer() {
       url.port = url.protocol === 'ws:' ? '9906' : '9904'
     }
 
+    if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
+        url.protocol = 'ws:'
+        url.host = 'localhost'
+        url.port = '9906'
+    }
+
     url.pathname = '/p2p-ws'
 
     wsUrl.set(url)

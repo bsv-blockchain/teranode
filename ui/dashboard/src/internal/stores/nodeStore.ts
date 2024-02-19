@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store'
 
-
+// TODO get this from the server / config
+const apiPathname = '/api/v1'
 
 export const assetHTTPAddress = writable('', (set: any) => {
   if (!import.meta.env.SSR && window && window.location) {
@@ -11,10 +12,11 @@ export const assetHTTPAddress = writable('', (set: any) => {
       url.host = 'localhost'
       url.port = '8090'
     }
+
     if (url.port === '') {
-      set(`${url.protocol}//${url.hostname}`)
+      set(`${url.protocol}//${url.hostname}${apiPathname}`)
     } else {
-      set(`${url.protocol}//${url.hostname}:${url.port}`)
+      set(`${url.protocol}//${url.hostname}:${url.port}${apiPathname}`)
     }
   }
 
