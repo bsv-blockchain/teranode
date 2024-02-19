@@ -845,9 +845,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		}
 
 		if len(missingTxHashes) == 1 {
-			u.logger.Infof("[validateSubtree][%s] processing missing tx %s for subtree instance", subtreeHash.String(), missingTxHashes[0].String())
+			u.logger.Infof("[validateSubtree][%s] processing missing tx: %s for subtree instance", subtreeHash.String(), missingTxHashes[0].String())
 		} else {
-			u.logger.Infof("[validateSubtree][%s] processing %d missing tx for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
+			u.logger.Infof("[validateSubtree][%s] processing %d missing txs for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
 		}
 
 		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
