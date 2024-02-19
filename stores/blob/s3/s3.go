@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net"
 	"net/http"
@@ -197,6 +198,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 		Key:    objectKey,
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "NoSuchKey") {
+			return nil, ubsverrors.ErrNotFound
+		}
 		return nil, fmt.Errorf("failed to get s3 data: %w", err)
 	}
 
@@ -231,6 +235,9 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 			Key:    objectKey,
 		})
 	if err != nil {
+		if strings.Contains(err.Error(), "NoSuchKey") {
+			return nil, ubsverrors.ErrNotFound
+		}
 		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get data: %w", err)
 	}

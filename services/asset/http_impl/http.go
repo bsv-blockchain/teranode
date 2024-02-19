@@ -82,6 +82,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
+	apiGroup.GET("/subtree/:hash/extended/json", h.GetSubtreeExtended(JSON))
+
 	apiGroup.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
 	apiGroup.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
@@ -93,6 +95,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+
+	apiGroup.GET("/block/:hash/subtrees/json", h.GetBlockSubtrees(JSON))
 
 	apiGroup.GET("/search", h.Search)
 	apiGroup.GET("/blockstats", h.GetBlockStats)
