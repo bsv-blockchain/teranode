@@ -88,7 +88,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "INFO"
-      startCoinbase: false
       asset_httpAddress: "http://ubsv-1:8090"
       # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -129,7 +128,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "INFO"
-      startCoinbase: false
       asset_httpAddress: "http://ubsv-2:8090"
       # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -169,7 +167,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "INFO"
-      startCoinbase: false
       asset_httpAddress: "http://ubsv-3:8090"
       # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
@@ -177,7 +174,6 @@ services:
       txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      startTxMetaStore: "true"
       startTxStore: "true"
       txstore: file:///data/ubsv3/txstore
       subtreestore: file:///data/ubsv3/subtreestore
