@@ -34,6 +34,7 @@ type Store interface {
 	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error)
 	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
+	RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 	GetState(ctx context.Context, key string) ([]byte, error)
 	SetState(ctx context.Context, key string, data []byte) error

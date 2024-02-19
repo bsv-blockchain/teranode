@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BlockAssemblyAPI_HealthGRPC_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
-	BlockAssemblyAPI_AddTx_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/AddTx"
-	BlockAssemblyAPI_RemoveTx_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
-	BlockAssemblyAPI_AddTxBatch_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
-	BlockAssemblyAPI_GetMiningCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
-	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
+	BlockAssemblyAPI_HealthGRPC_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
+	BlockAssemblyAPI_AddTx_FullMethodName                    = "/blockassembly_api.BlockAssemblyAPI/AddTx"
+	BlockAssemblyAPI_RemoveTx_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
+	BlockAssemblyAPI_AddTxBatch_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
+	BlockAssemblyAPI_GetMiningCandidate_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
+	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
+	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -44,6 +45,8 @@ type BlockAssemblyAPIClient interface {
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*model.MiningCandidate, error)
 	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
+	// De-duplicate transaction in block assembly subtree processor.
+	DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -108,6 +111,15 @@ func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *S
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility
@@ -124,6 +136,8 @@ type BlockAssemblyAPIServer interface {
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
 	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
+	// De-duplicate transaction in block assembly subtree processor.
+	DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -148,6 +162,9 @@ func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *
 }
 func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitMiningSolution not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeDuplicateBlockAssembly not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 
@@ -270,6 +287,24 @@ func _BlockAssemblyAPI_SubmitMiningSolution_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_DeDuplicateBlockAssembly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).DeDuplicateBlockAssembly(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).DeDuplicateBlockAssembly(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -300,6 +335,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SubmitMiningSolution",
 			Handler:    _BlockAssemblyAPI_SubmitMiningSolution_Handler,
+		},
+		{
+			MethodName: "DeDuplicateBlockAssembly",
+			Handler:    _BlockAssemblyAPI_DeDuplicateBlockAssembly_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

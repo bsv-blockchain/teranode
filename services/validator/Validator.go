@@ -2,14 +2,11 @@ package validator
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"time"
 
-	"github.com/Shopify/sarama"
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -44,9 +41,7 @@ type Validator struct {
 	txMetaStore                   txmeta.Store
 	blockValidationClient         blockValidationTxMetaClient
 	blockValidationBatcher        batcher.Batcher[txmeta.Data]
-	kafkaProducer                 sarama.SyncProducer
-	kafkaTopic                    string
-	kafkaPartitions               int
+	kafkaProducer                 util.KafkaProducerI
 	saveInParallel                bool
 	blockAssemblyDisabled         bool
 	blockAssemblyCreatesUTXOs     bool
@@ -81,6 +76,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 			defer func() {
 				blockValidationStat.AddTime(startTime)
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+
+				if err := recover(); err != nil {
+					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				}
 			}()
 
 			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
@@ -88,7 +87,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 
 			// add data to block validation cache
 			if err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch); err != nil {
-				validator.logger.Errorf("error sending tx meta batch to block validation cache: %v", err)
+				validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
 			}
 		}
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
@@ -105,19 +104,12 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			_, producer, err := util.ConnectToKafka(kafkaURL)
+			_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
 			if err != nil {
-				return nil, fmt.Errorf("unable to connect to kafka: %v", err)
+				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
 
-			validator.kafkaProducer = producer
-			validator.kafkaTopic = kafkaURL.Path[1:]
-			validator.kafkaPartitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions"))
-			if err != nil {
-				return nil, fmt.Errorf("unable to parse partitions: %v", err)
-			}
-
-			logger.Infof("[VALIDATOR] connected to kafka at %s", kafkaURL.Host)
+			logger.Infof("[Validator] connected to kafka at %s", kafkaURL.Host)
 		}
 	}
 
@@ -510,17 +502,5 @@ func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.
 	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()
 
-	// partition is the first byte of the txid - max 2^8 partitions = 256
-	partition := binary.LittleEndian.Uint32(bData.TxIDChainHash[:]) % uint32(v.kafkaPartitions)
-	_, _, err := v.kafkaProducer.SendMessage(&sarama.ProducerMessage{
-		Topic:     v.kafkaTopic,
-		Partition: int32(partition),
-		Key:       sarama.ByteEncoder(bData.TxIDChainHash[:]),
-		Value:     sarama.ByteEncoder(bData.Bytes()),
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return v.kafkaProducer.Send(bData.TxIDChainHash[:], bData.Bytes())
 }

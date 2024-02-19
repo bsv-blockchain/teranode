@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -34,7 +35,6 @@ type P2PNode struct {
 	host              host.Host
 	pubSub            *pubsub.PubSub
 	topics            map[string]*pubsub.Topic
-	subscriptions     map[string]*pubsub.Subscription
 	logger            ulogger.Logger
 	bitcoinProtocolId string
 	handlerByTopic    map[string]Handler
@@ -47,10 +47,12 @@ type P2PConfig struct {
 	ProcessName     string
 	IP              string
 	Port            int
+	PrivateKey      string
 	SharedKey       string
 	UsePrivateDHT   bool
 	OptimiseRetries bool
 	Advertise       bool
+	StaticPeers     []string
 }
 
 func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
@@ -58,11 +60,18 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 
 	var pk *crypto.PrivKey
 	var err error
-	privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
 
-	pk, err = readPrivateKey(privateKeyFilename)
-	if err != nil {
-		pk, err = generatePrivateKey(privateKeyFilename)
+	if config.PrivateKey == "" {
+		privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
+		pk, err = readPrivateKey(privateKeyFilename)
+		if err != nil {
+			pk, err = generatePrivateKey(privateKeyFilename)
+			if err != nil {
+				panic(err)
+			}
+		}
+	} else {
+		pk, err = decodeHexEd25519PrivateKey(config.PrivateKey)
 		if err != nil {
 			panic(err)
 		}
@@ -120,6 +129,38 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	s.logger.Infof("[P2PNode] starting")
 
+	if len(s.config.StaticPeers) == 0 {
+		s.logger.Infof("[P2PNode] no static peers to connect to - skipping connection attempt")
+	} else {
+
+		go func(ctx context.Context) {
+			logged := false
+			for {
+				select {
+				case <-ctx.Done():
+					s.logger.Infof("[P2PNode] shutting down")
+					return
+				default:
+					allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
+					if allConnected {
+
+						if !logged {
+							s.logger.Infof("[P2PNode] all static peers connected")
+						}
+
+						logged = true
+						// it is possible that a peer disconnects, so we need to keep checking
+						time.Sleep(30 * time.Second)
+					} else {
+						logged = false
+						time.Sleep(5 * time.Second)
+					}
+				}
+			}
+		}(ctx)
+
+	}
+
 	go s.discoverPeers(ctx, topicNames)
 
 	ps, err := pubsub.NewGossipSub(ctx, s.host)
@@ -128,7 +169,6 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	}
 
 	topics := map[string]*pubsub.Topic{}
-	subscriptions := map[string]*pubsub.Subscription{}
 
 	var topic *pubsub.Topic
 	for _, topicName := range topicNames {
@@ -140,7 +180,6 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	}
 	s.pubSub = ps
 	s.topics = topics
-	s.subscriptions = subscriptions
 
 	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolId), s.streamHandler)
 
@@ -164,7 +203,6 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 		return err
 	}
 
-	s.subscriptions[topicName] = sub
 	s.handlerByTopic[topicName] = handler
 
 	go func() {
@@ -174,13 +212,9 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 				s.logger.Infof("[P2PNode][SetTopicHandler] shutting down")
 				return
 			default:
-				m, err := s.subscriptions[topicName].Next(ctx)
+				m, err := sub.Next(ctx)
 				if err != nil {
 					s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
-					continue
-				}
-
-				if m.ReceivedFrom == s.host.ID() {
 					continue
 				}
 
@@ -246,38 +280,70 @@ func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// Convert private key to bytes
 	privBytes, err := crypto.MarshalPrivateKey(priv)
 	if err != nil {
 		return nil, err
 	}
-
 	// Save private key to a file
 	err = os.WriteFile(privateKeyFilename, privBytes, 0644)
 	if err != nil {
 		return nil, err
 	}
-
 	return &priv, nil
 }
-
 func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 	// Read private key from a file
 	privBytes, err := os.ReadFile(privateKeyFilename)
 	if err != nil {
 		return nil, err
 	}
-
 	// Unmarshal the private key bytes into a key
 	priv, err := crypto.UnmarshalPrivateKey(privBytes)
 	if err != nil {
 		return nil, err
 	}
-
 	return &priv, nil
 }
 
+func decodeHexEd25519PrivateKey(hexEncodedPrivateKey string) (*crypto.PrivKey, error) {
+	privKeyBytes, err := hex.DecodeString(hexEncodedPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	privKey, err := crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &privKey, nil
+}
+
+func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string) bool {
+	i := len(staticPeers)
+	for _, peerAddr := range staticPeers {
+		peerInfo, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(peerAddr))
+		if err != nil {
+			s.logger.Errorf("[P2PNode] failed to get peerInfo from  %s: %v", peerAddr, err)
+			continue
+		}
+
+		if s.host.Network().Connectedness(peerInfo.ID) == network.Connected {
+			i--
+			continue
+		}
+
+		err = s.host.Connect(ctx, *peerInfo)
+		if err != nil {
+			s.logger.Debugf("[P2PNode] failed to connect to static peer %s: %v", peerAddr, err)
+		} else {
+			i--
+			s.logger.Infof("[P2PNode] connected to static peer: %s", peerAddr)
+		}
+	}
+	return i == 0
+}
 func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	var kademliaDHT *dht.IpfsDHT
 
@@ -290,12 +356,13 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 	if s.config.Advertise {
 		for _, topicName := range topicNames {
+			s.logger.Infof("[P2PNode] advertising topic: %s", topicName)
 			dUtil.Advertise(ctx, routingDiscovery, topicName)
 		}
 	}
 
-	s.logger.Debugf("[P2PNode] connected to %d peers\n", len(s.host.Network().Peers()))
-	s.logger.Debugf("[P2PNode] peerstore has %d peers\n", len(s.host.Peerstore().Peers()))
+	s.logger.Debugf("[P2PNode] %d peer connections\n", len(s.host.Network().Peers()))
+	s.logger.Debugf("[P2PNode] %d peers in peerstore\n", len(s.host.Peerstore().Peers()))
 
 	ctx = network.WithSimultaneousConnect(ctx, true, "hole punching")
 	peerAddrErrorMap := sync.Map{}
@@ -343,7 +410,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 							if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
 
-								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") || strings.Contains(peerConnectionErrorString.(string), "no addresses") {
+								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
 									numAddresses := len(addr.Addrs)
 									switch numAddresses {
 									case 0:
@@ -397,7 +464,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 
 			g.Wait()
 
-			s.logger.Infof("[P2PNode] Completed discovery process in %v", time.Since(start))
+			s.logger.Debugf("[P2PNode] Completed discovery process in %v", time.Since(start))
 
 			time.Sleep(5 * time.Second)
 		}

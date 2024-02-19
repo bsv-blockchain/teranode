@@ -24,6 +24,7 @@ type ClientI interface {
 	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error)
 	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
+	RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 	Subscribe(ctx context.Context, source string) (chan *model.Notification, error)
 	GetState(ctx context.Context, key string) ([]byte, error)

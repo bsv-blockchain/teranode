@@ -7,7 +7,7 @@ import (
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
 	ready    chan bool
-	workerCh chan []byte
+	workerCh chan KafkaMessage
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
@@ -31,9 +31,9 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	for {
 		select {
 		case message := <-claim.Messages():
-			kc.workerCh <- message.Value
+			kc.workerCh <- KafkaMessage{Message: message, Session: session}
 			//log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s", string(message.Value), message.Timestamp, message.Topic)
-			session.MarkMessage(message, "")
+			//session.MarkMessage(message, "")
 
 		// Should return when `session.Context()` is done.
 		// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:

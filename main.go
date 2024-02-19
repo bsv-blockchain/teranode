@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -125,6 +126,7 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startP2P := shouldStart("P2P")
+	startSubtreeAssembly := shouldStart("SubtreeAssembly")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -218,6 +220,16 @@ func main() {
 	var blockValidationClient *blockvalidation.Client
 	if startBlockAssembly || startPropagation || startValidator {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
+	}
+
+	if startSubtreeAssembly {
+		if err = sm.AddService("SubtreeAssembly", subtreeassembly.New(
+			logger,
+			getSubtreeStore(logger),
+			getTxMetaStore(logger),
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// blockAssembly
@@ -456,6 +468,14 @@ func shouldStart(app string) bool {
 	cmdArg = fmt.Sprintf("-%s=0", strings.ToLower(app))
 	for _, cmd := range os.Args[1:] {
 		if cmd == cmdArg {
+			return false
+		}
+	}
+
+	// Add option to stop all services from running if -all=0 is passed
+	// except for the services that are explicitly enabled above
+	for _, cmd := range os.Args[1:] {
+		if cmd == "-all=0" {
 			return false
 		}
 	}

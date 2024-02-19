@@ -143,6 +143,19 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
+func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+
+	var err error
+	for _, hash := range hashes {
+		if results[*hash], err = t.Get(ctx, hash); err != nil {
+			return nil, err
+		}
+	}
+
+	return results, nil
+}
+
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	txMeta, err := t.txMetaStore.Create(ctx, tx)
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -80,14 +79,11 @@ type Store struct {
 	logger     ulogger.Logger
 }
 
-var initMu sync.Mutex
+func init() {
+	asl.Logger.SetLevel(asl.DEBUG)
+}
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	// this is weird, but if we are starting 2 connections (utxo, txmeta) at the same time, this fails
-	initMu.Lock()
-	asl.Logger.SetLevel(asl.DEBUG)
-	initMu.Unlock()
-
 	logger = logger.New("aero_store")
 
 	namespace := u.Path[1:]
@@ -196,6 +192,59 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
+func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+	batchPolicy := util.GetAerospikeBatchPolicy()
+
+	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+	//policy := util.GetAerospikeBatchReadPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+
+	for idx, hash := range hashes {
+		key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+		if err != nil {
+			return nil, err
+		}
+
+		record := aerospike.NewBatchRead(key, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
+		// Add to batch
+		batchRecords[idx] = record
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return nil, err
+	}
+
+	prometheusTxMetaSetMinedBatch.Inc()
+
+	for idx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+		if err != nil {
+			results[*hashes[idx]] = nil
+			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hashes[idx].String(), err)
+		} else {
+			bins := batchRecord.BatchRec().Record.Bins
+			// TODO add the rest of the bins
+			if bins["tx"] != nil {
+				txBytes, ok := bins["tx"].([]byte)
+				if ok {
+					tx, err := bt.NewTxFromBytes(txBytes)
+					if err != nil {
+						return nil, errors.Join(errors.New("could not convert tx bytes to bt.Tx"), err)
+					}
+
+					results[*hashes[idx]] = &txmeta.Data{Tx: tx}
+				} else {
+					results[*hashes[idx]] = nil
+				}
+			}
+		}
+	}
+
+	return results, nil
+}
+
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	start := time.Now()
 	var e error
@@ -232,7 +281,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, s.expiration)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	maxRetries := 5

@@ -13,8 +13,18 @@ export function connectToP2PServer() {
   if (!import.meta.env.SSR && window && window.location) {
     const url = new URL(window.location.href)
     url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
-    url.port = url.protocol === 'ws:' ? '9906' : '9904'
-    url.pathname = '/ws'
+
+    if (url.hostname.includes('ubsv.dev')) {
+      url.port = url.protocol === 'ws:' ? '9906' : '9904'
+    }
+
+    if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
+        url.protocol = 'ws:'
+        url.host = 'localhost'
+        url.port = '9906'
+    }
+
+    url.pathname = '/p2p-ws'
 
     wsUrl.set(url)
     error.set(null)

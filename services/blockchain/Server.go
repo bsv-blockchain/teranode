@@ -41,6 +41,7 @@ type Blockchain struct {
 	subscriptionCtx     context.Context
 	cancelSubscriptions context.CancelFunc
 	difficulty          *Difficulty
+	blockKafkaProducer  util.KafkaProducerI
 }
 
 func Enabled() bool {
@@ -98,6 +99,15 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
+
+	blockKafkaBrokersURL, err, ok := gocore.Config().GetURL("block_kafkaBrokers")
+	if err == nil && ok {
+		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blockKafkaBrokersURL); err != nil {
+			return fmt.Errorf("[Blockchain] error connecting to kafka: %s", err)
+		}
+	}
+
 	go func() {
 		for {
 			select {
@@ -201,6 +211,22 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
 	if err != nil {
 		return nil, err
+	}
+
+	b.logger.Warnf("[SubtreeAssembly] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	if b.blockKafkaProducer != nil {
+		// TODO add a retry mechanism
+		go func(block *model.Block) {
+			blockBytes, err := block.Bytes()
+			if err != nil {
+				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
+			} else {
+				b.logger.Warnf("[SubtreeAssembly] sending block to kafka: %s", block.String())
+				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
+					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
+				}
+			}
+		}(block)
 	}
 
 	// if !request.External {
@@ -574,6 +600,28 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 			Type: model.NotificationType_Block,
 			Hash: bestBlock.Hash().CloneBytes(),
 		})
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "RevalidateBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainSetState.Inc()
+
+	blockHash, err := chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	// invalidate block will also invalidate all child blocks
+	err = b.store.RevalidateBlock(ctx1, blockHash)
+	if err != nil {
+		return nil, ubsverrors.WrapGRPC(err)
 	}
 
 	return &emptypb.Empty{}, nil

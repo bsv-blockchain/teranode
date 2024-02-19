@@ -31,6 +31,7 @@ type Miner struct {
 	candidateRequestInterval         time.Duration
 	difficultyAdjustment             bool
 	initialBlockFinalWaitDuration    time.Duration
+	maxSubtreeCount                  int
 }
 
 const (
@@ -55,12 +56,15 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_final_wait: %v", err)
 	}
 
+	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+
 	return &Miner{
 		logger:                        logger,
 		blockAssemblyClient:           blockassembly.NewClient(ctx, logger),
 		candidateRequestInterval:      time.Duration(candidateRequestInterval),
 		difficultyAdjustment:          difficultyAdjustment,
 		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
+		maxSubtreeCount:               maxSubtreeCount,
 	}
 }
 
@@ -140,9 +144,19 @@ func (m *Miner) Start(ctx context.Context) error {
 			}
 			previousCandidate = candidate
 
+			maxSubtreeCount := m.maxSubtreeCount
+			// vary the max subtree count by 10% to avoid all miners mining at the same time
+			maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
+
+			waitSeconds := m.waitSeconds
+			if candidate.SubtreeCount > uint32(maxSubtreeCount) {
+				// mine without waiting
+				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, maxSubtreeCount)
+				waitSeconds = 1
+			}
 			// start mining in a new goroutine, so we can cancel it if we need to
 			go func(ctx context.Context) {
-				err := m.mine(ctx, candidate, m.waitSeconds)
+				err := m.mine(ctx, candidate, waitSeconds)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")

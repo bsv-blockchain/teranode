@@ -68,10 +68,11 @@ func (f *Faucet) Init(ctx context.Context) error {
 		return fmt.Errorf("could not create distributor: %v", err)
 	}
 
-	f.e.POST("/api/faucet", f.faucetHandler)
-	f.e.POST("/api/submit", f.submitHandler)
+	f.e.POST("/faucet/request", f.faucetHandler)
+	f.e.POST("/faucet/submit", f.submitHandler)
 
-	f.e.GET("*", f.staticHandler)
+	f.e.GET("/faucet/*", f.staticHandler)
+	f.e.GET("/faucet", f.staticHandler)
 
 	return nil
 }
@@ -97,11 +98,6 @@ func (f *Faucet) Start(ctx context.Context) error {
 			f.logger.Errorf("[Faucet] %s service shutdown error: %s", mode, err)
 		}
 	}()
-
-	// err := h.e.Start(addr)
-	// if err != nil && !errors.Is(err, http.ErrServerClosed) {
-	// 	return err
-	// }
 
 	var err error
 
@@ -203,10 +199,10 @@ func (f *Faucet) staticHandler(c echo.Context) error {
 
 	path := c.Request().URL.Path
 
-	if path == "/" {
+	if path == "/faucet" {
 		resource = "public/index.html"
 	} else {
-		resource = fmt.Sprintf("public%s", path)
+		resource = fmt.Sprintf("public%s", path[7:])
 	}
 
 	// Remove trailing slash if present

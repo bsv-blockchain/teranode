@@ -304,6 +304,14 @@ func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) 
 	return ubsverrors.UnwrapGRPC(err)
 }
 
+func (c Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return ubsverrors.UnwrapGRPC(err)
+}
+
 func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),

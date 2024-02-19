@@ -55,6 +55,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, getPeers func() []s
 	}
 
 	if !found {
+		// TODO is this block of code correct?
 		remoteAddress, err := utils.GetPublicIPAddress()
 		if err != nil {
 			logger.Fatalf("Failed to get public IP address: %v", err)

@@ -404,6 +404,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Height:        b.bestBlockHeight + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
+		SubtreeCount:  uint32(len(subtrees)),
 	}
 
 	return miningCandidate, subtrees, nil
@@ -545,4 +546,9 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		b.logger.Debugf("setting difficulty to default mining bits")
 		return b.defaultMiningNBits, nil
 	}
+}
+
+func (b *BlockAssembler) DeDuplicate() {
+	// this wall add a call to de-duplicate on the channel, which will run after all other tasks are done
+	b.subtreeProcessor.DeDuplicateTransactions()
 }

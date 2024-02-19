@@ -27,6 +27,7 @@ service BlockchainAPI {
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc InvalidateBlock(InvalidateBlockRequest) returns (google.protobuf.Empty) {}
+  rpc RevalidateBlock(RevalidateBlockRequest) returns (google.protobuf.Empty) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
   rpc GetState(GetStateRequest) returns (StateResponse) {}
@@ -110,6 +111,11 @@ message GetBlockHeaderRequest {
 
 // swagger:model InvalidateBlockRequest
 message InvalidateBlockRequest {
+  bytes blockHash = 1;
+}
+
+// swagger:model RevalidateBlockRequest
+message RevalidateBlockRequest {
   bytes blockHash = 1;
 }
 

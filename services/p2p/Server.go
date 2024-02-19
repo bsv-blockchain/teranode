@@ -127,14 +127,19 @@ func NewServer(logger ulogger.Logger) *Server {
 	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
 	rejectedTxTopicName = fmt.Sprintf("%s-%s", topicPrefix, rtn)
 
+	staticPeers, _ := gocore.Config().GetMulti("p2p_static_peers", "|")
+	privateKey, _ := gocore.Config().Get("p2p_private_key")
+
 	config := p2p.P2PConfig{
 		ProcessName:     "peer",
 		IP:              p2pIp,
 		Port:            p2pPort,
+		PrivateKey:      privateKey,
 		SharedKey:       sharedKey,
 		UsePrivateDHT:   usePrivateDht,
 		OptimiseRetries: optimiseRetries,
 		Advertise:       true,
+		StaticPeers:     staticPeers,
 	}
 
 	p2pNode := p2p.NewP2PNode(logger, config)
@@ -199,7 +204,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/ws", s.HandleWebSocket(s.notificationCh))
+	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh))
 
 	go func() {
 		err := s.StartHttp(ctx)
@@ -445,6 +450,10 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	var blockMessage BlockMessage
 	var msgBytes []byte
 
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
 	// decode request
 	bestBlockMessage = BestBlockMessage{}
 	err := json.Unmarshal(m, &bestBlockMessage)
@@ -511,6 +520,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		PeerId:    blockMessage.PeerId,
 	}
 
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
 	if err != nil {
 		s.logger.Errorf("error getting chainhash from string %s", blockMessage.Hash, err)
@@ -540,6 +553,10 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		Hash:      subtreeMessage.Hash,
 		BaseURL:   subtreeMessage.DataHubUrl,
 		PeerId:    subtreeMessage.PeerId,
+	}
+
+	if from == s.P2PNode.HostID().String() {
+		return
 	}
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)

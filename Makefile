@@ -8,6 +8,12 @@ ifeq ($(DEBUG),true)
 	$(eval DEBUG_FLAGS = -N -l)
 endif
 
+.PHONY: set_race_flag
+set_race_flag:
+ifeq ($(RACE),true)
+	$(eval RACE_FLAG = -race)
+endif
+
 .PHONY: all
 all: deps install lint build test
 
@@ -37,7 +43,7 @@ build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
 build-ubsv: build-dashboard set_debug_flags
-	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	go build $(RACE_FLAG) -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
@@ -45,31 +51,31 @@ build-chainintegrity: set_debug_flags
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+	go build $(RACE_FLAG) -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
-.PHONY: build-propagation-blaster
-build-propagation-blaster: set_debug_flags
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
+# .PHONY: build-propagation-blaster
+# build-propagation-blaster: set_debug_flags
+# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
 
-.PHONY: build-utxostore-blaster
-build-utxostore-blaster: set_debug_flags
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o utxostoreblaster.run ./cmd/utxostore_blaster/
+# .PHONY: build-utxostore-blaster
+# build-utxostore-blaster: set_debug_flags
+# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o utxostoreblaster.run ./cmd/utxostore_blaster/
 
-.PHONY: build-s3-blaster
-build-s3-blaster: set_debug_flags
-	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o s3blaster.run ./cmd/s3_blaster/
+# .PHONY: build-s3-blaster
+# build-s3-blaster: set_debug_flags
+# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o s3blaster.run ./cmd/s3_blaster/
 
-.PHONY: build-blockassembly-blaster
-build-blockassembly-blaster: set_debug_flags
-	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
+# .PHONY: build-blockassembly-blaster
+# build-blockassembly-blaster: set_debug_flags
+# 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
 
 .PHONY: build-blockchainstatus
 build-blockchainstatus:
 	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
-.PHONY: build-aerospiketest
-build-aerospiketest:
-	go build -o aerospiketest.run ./cmd/aerospiketest/
+# .PHONY: build-aerospiketest
+# build-aerospiketest:
+# 	go build -o aerospiketest.run ./cmd/aerospiketest/
 
 .PHONY: build-dashboard
 build-dashboard:
@@ -77,15 +83,15 @@ build-dashboard:
 
 .PHONY: test
 test:
-	SETTINGS_CONTEXT=test go test -race -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: longtests
 longtests:
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: racetest
 racetest:
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest -race -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
 
 .PHONY: testall
 testall:

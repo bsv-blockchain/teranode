@@ -466,3 +466,13 @@ func GetAerospikeBatchWritePolicy(generation, expiration uint32) *aerospike.Batc
 
 	return batchWritePolicy
 }
+
+func GetAerospikeBatchReadPolicy() *aerospike.BatchReadPolicy {
+	batchReadPolicy := aerospike.NewBatchReadPolicy()
+
+	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+		return batchReadPolicy
+	}
+
+	return batchReadPolicy
+}

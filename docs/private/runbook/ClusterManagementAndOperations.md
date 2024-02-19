@@ -4,9 +4,9 @@
 
 ## Introduction
 
-This runbook is designed to guide the engineering team through the processes involved in configuring, deploying, and managing the Teranode BSV services using Docker, Kubernetes (k8s), and AWS. It covers the initial setup, common commands, and troubleshooting steps necessary for efficient microservice operation.
+This document describes the processes involved in configuring, deploying, and managing the Teranode BSV services using Docker, Kubernetes (k8s), and AWS. It covers the initial setup, common commands, and troubleshooting steps necessary for efficient microservice operation.
 
-**Note:** This runbook has been created and tested using macOS. Some of the commands will differ for other operating systems.
+**Note:** This document has been created and tested using macOS. Some of the commands will differ for other operating systems.
 
 ## Docker and Kubernetes Setup
 
@@ -155,9 +155,9 @@ kcn m1
 ```
 
 
-#### Viewing Pods in a Specific Node
+#### Viewing Pods in a Specific Cluster
 
-- **`kgp`**: Displays all current services running in a node.
+- **`kgp`**: Displays all current services running in a cluster.
 
 #### Listing All Services
 
