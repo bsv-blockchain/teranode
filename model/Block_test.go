@@ -212,7 +212,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	fileNameTemplateBlock = fileDir + "block.bin"
 	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
-	txIdCount := uint64(8)
+	txIdCount := uint64(16)
 	subtreeSize = 8
 
 	block, err := generateTestSets(txIdCount, subtreeStore)
@@ -238,127 +238,6 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	for idx, subtreeHash := range block.Subtrees {
 		subtreeStore.files[*subtreeHash] = idx
 	}
-
-	/*
-		// fileDir = "./test-generated_test_data/"
-		// fileNameTemplate = fileDir + "subtree-%d.bin"
-		// subtreeStore := newLocalSubtreeStore()
-		// txMetaStore := memory.New(ulogger.TestLogger{}, true)
-		// cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
-		// txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
-
-		// if _, err := os.Stat(fileDir); os.IsNotExist(err) {
-		// 	err = os.Mkdir(fileDir, 0755)
-		// 	require.NoError(t, err)
-		// }
-
-		// // create a slice of random hashes, for the leaves
-		// hashes := make([]*chainhash.Hash, leafCount)
-		// for i := 0; i < leafCount-1; i++ {
-		// 	// create random 32 bytes
-		// 	bytes := make([]byte, 32)
-		// 	_, _ = rand.Read(bytes)
-		// 	hashes[i], _ = chainhash.NewHash(bytes)
-		// }
-
-		// // first transaction is the coinbase transaction
-		// _ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
-
-		// // rest of transactions are random
-		// for i := 0; i < leafCount-1; i++ {
-		// 	_ = subtree.AddNode(*hashes[i], 111, 0)
-		// 	err = txMetaCache.SetCache(hashes[i], &txmeta.Data{Fee: 111, SizeInBytes: 1})
-		// 	require.NoError(t, err)
-		// }
-
-		// // check if cachedTxMetaStore has the correct data
-		// data, err := cachedTxMetaStore.Get(context.Background(), hashes[0])
-		// require.NoError(t, err)
-		// require.Equal(t, &txmeta.Data{
-		// 	Fee:            111,
-		// 	SizeInBytes:    1,
-		// 	ParentTxHashes: []chainhash.Hash{},
-		// }, data)
-
-		// // create a subtree file
-		// subtreeFile, err := os.Create(fmt.Sprintf(fileNameTemplate, 0))
-		// require.NoError(t, err)
-
-		// // serialize the subtree
-		// subtreeBytes, err := subtree.Serialize()
-		// require.NoError(t, err)
-
-		// // write the subtree to the file
-		// _, err = subtreeFile.Write(subtreeBytes)
-		// require.NoError(t, err)
-
-		// // create a coinbase transaction
-		// coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
-		// coinbase, err := bt.NewTxFromString(coinbaseHex)
-		// require.NoError(t, err)
-
-		// // add a P2PKH output to the coinbase transaction with fees
-		// coinbase.Outputs = nil
-		// _ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1)+subtree.Fees)
-		// nBits := NewNBitFromString("2000ffff")
-
-		// // get subtree root hash
-		// subtreeHash := subtree.RootHash()
-
-		// // store subtree hash in the subtreeStore map
-		// subtreeStore.files[*subtreeHash] = 0
-
-		// // create a new subtree for replaced coinbase transaction
-		// replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
-		// require.NoError(t, err)
-
-		// // close the subtree file
-		// err = subtreeFile.Close()
-		// require.NoError(t, err)
-
-		// // deserialize the replaced coinbase subtree
-		// err = replacedCoinbaseSubtree.Deserialize(subtreeBytes)
-		// require.NoError(t, err)
-
-		// // replace the root node with the coinbase transaction
-		// replacedCoinbaseSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
-
-		// // calculate the root hash of the replaced coinbase subtree
-		// rootHash := replacedCoinbaseSubtree.RootHash()
-
-		// // create a block header with the replaced coinbase subtree root hash
-		// blockHeader := &BlockHeader{
-		// 	Version:        1,
-		// 	HashPrevBlock:  &chainhash.Hash{},
-		// 	HashMerkleRoot: rootHash,
-		// 	Timestamp:      uint32(time.Now().Unix()),
-		// 	Bits:           nBits,
-		// 	Nonce:          0,
-		// }
-
-		// // mine block header to the target difficulty
-		// for {
-		// 	if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
-		// 		break
-		// 	}
-		// 	blockHeader.Nonce++
-
-		// 	if blockHeader.Nonce%1000000 == 0 {
-		// 		fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		// 	}
-		// }
-
-		// // initialize the block with the coinbase tx, block header and the subtree
-		// b := &Block{
-		// 	Header:           blockHeader,
-		// 	CoinbaseTx:       coinbase,
-		// 	TransactionCount: uint64(leafCount),
-		// 	SizeInBytes:      123,
-		// 	Subtrees: []*chainhash.Hash{
-		// 		subtreeHash,
-		// 	},
-		// }
-	*/
 
 	currentChain := make([]*BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
