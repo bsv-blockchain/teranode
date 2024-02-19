@@ -138,6 +138,15 @@ export function getBlockSubtrees(
   )
 }
 
+export function getSubtreeTxs(data: { hash: string; offset: number; limit: number }, done?, fail?) {
+  return get(
+    `${baseUrl}/subtree/${data.hash}/txs/json`,
+    { query: { offset: data.offset, limit: data.limit } },
+    done,
+    fail,
+  )
+}
+
 export function searchItem(data: { q: string }, done?, fail?) {
   return get(`${baseUrl}/search?${new URLSearchParams(data)}`, {}, done, fail)
 }

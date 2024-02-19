@@ -1,17 +1,18 @@
 package http_impl
 
 import (
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-type SubtreeTxs struct {
+type SubtreeTx struct {
 	Index        int    `json:"index"`
 	TxID         string `json:"txid"`
 	InputsCount  int    `json:"inputsCount"`
@@ -20,15 +21,7 @@ type SubtreeTxs struct {
 	Fee          int    `json:"fee"`
 }
 
-type SubtreeExtended struct {
-	Hash    string       `json:"hash"`
-	TxCount int          `json:"txCount"`
-	Fees    int          `json:"fees"`
-	Size    int          `json:"size"`
-	Txs     []SubtreeTxs `json:"txs"`
-}
-
-func (h *HTTP) GetSubtreeExtended(mode ReadMode) func(c echo.Context) error {
+func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		var b []byte
 
@@ -70,13 +63,7 @@ func (h *HTTP) GetSubtreeExtended(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
 
-			data := SubtreeExtended{
-				Hash:    hash.String(),
-				TxCount: len(subtree.Nodes),
-				Fees:    int(subtree.Fees),
-				Size:    int(subtree.SizeInBytes),
-				Txs:     make([]SubtreeTxs, 0, limit),
-			}
+			data := make([]SubtreeTx, 0, limit)
 
 			var txMeta *txmeta.Data
 			for i := offset; i < offset+limit; i++ {
@@ -85,7 +72,7 @@ func (h *HTTP) GetSubtreeExtended(mode ReadMode) func(c echo.Context) error {
 				}
 				node := subtree.Nodes[i]
 
-				subtreeData := SubtreeTxs{
+				subtreeData := SubtreeTx{
 					Index: i,
 					TxID:  node.Hash.String(),
 				}
@@ -98,7 +85,7 @@ func (h *HTTP) GetSubtreeExtended(mode ReadMode) func(c echo.Context) error {
 					subtreeData.Fee = int(txMeta.Fee)
 				}
 
-				data.Txs = append(data.Txs, subtreeData)
+				data = append(data, subtreeData)
 			}
 
 			response := ExtendedResponse{

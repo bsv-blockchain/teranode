@@ -71,69 +71,6 @@
     //   }
     // }
 
-    // expand subtree data
-    let expandedTransactionData: any[] = []
-    if (tmpData && tmpData.Nodes && tmpData.Nodes.length > 0) {
-      expandedTransactionData = await Promise.all(
-        tmpData.Nodes.map(async (node, i) => {
-          if (
-            i === 0 &&
-            tmpData.Nodes[0].txid ===
-              'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-          ) {
-            // if (tmpData.expandedBlockData) {
-            //   const coinbase_tx = tmpData.expandedBlockData.coinbase_tx
-            //   return {
-            //     index: i,
-            //     inputsCount: coinbase_tx.inputs.length,
-            //     kbFee: tmpData.Nodes[i].fee,
-            //     outputsCount: coinbase_tx.outputs.length,
-            //     size: tmpData.Nodes[i].size,
-            //     timestamp: 0, // TBD
-            //     txid: coinbase_tx.txid,
-            //   }
-            // } else {
-            //   return {
-            //     index: i,
-            //     inputsCount: 0,
-            //     kbFee: 0,
-            //     outputsCount: 0,
-            //     size: 0,
-            //     timestamp: 0,
-            //     txid: 'COINBASE',
-            //   }
-            // }
-            return {
-              index: i,
-              inputsCount: 0,
-              kbFee: 0,
-              outputsCount: 0,
-              size: 0,
-              timestamp: 0,
-              txid: 'COINBASE',
-            }
-          } else {
-            const txResult: any = await api.getItemData({ type: api.ItemType.tx, hash: node.txid })
-            if (txResult.ok) {
-              return {
-                index: i,
-                inputsCount: txResult.data.inputs.length,
-                kbFee: tmpData.Nodes[i].fee,
-                outputsCount: txResult.data.outputs.length,
-                size: tmpData.Nodes[i].size,
-                timestamp: 0, // TBD
-                txid: txResult.data.txid,
-              }
-            } else {
-              return null
-            }
-          }
-        }),
-      )
-    }
-
-    expandedTransactionData = expandedTransactionData.filter((item) => item !== null)
-
     tmpData = {
       ...tmpData,
       expandedData: {
@@ -143,7 +80,6 @@
         fee: tmpData.Fees,
         size: tmpData.SizeInBytes,
       },
-      expandedTransactionData,
     }
     if (!failed) {
       result = tmpData
@@ -155,7 +91,7 @@
   <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
   {#if display === 'overview'}
     <div style="height: 20px" />
-    <SubtreeTxsCard subtree={result} data={result.expandedTransactionData} />
+    <SubtreeTxsCard subtree={result} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">

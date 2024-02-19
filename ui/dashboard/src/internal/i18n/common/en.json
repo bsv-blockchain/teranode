@@ -242,7 +242,7 @@
           "txid": "Transaction ID",
           "inputsCount": "Inputs",
           "outputsCount": "Outputs",
-          "kbFee": "Fee Per KB",
+          "fee": "Fee",
           "size": "Size",
           "timestamp": "Timestamp"
         }

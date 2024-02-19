@@ -84,7 +84,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
-	apiGroup.GET("/subtree/:hash/extended/json", h.GetSubtreeExtended(JSON))
+	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
 
 	apiGroup.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))

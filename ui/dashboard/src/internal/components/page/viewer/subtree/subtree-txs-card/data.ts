@@ -20,7 +20,7 @@ export const getColDefs = (t) => {
       name: t(`${labelKey}.txid`),
       type: 'string',
       props: {
-        width: '20%',
+        width: '30%',
       },
     },
     {
@@ -28,7 +28,7 @@ export const getColDefs = (t) => {
       name: t(`${labelKey}.inputsCount`),
       type: 'number',
       props: {
-        width: '10%',
+        width: '15%',
       },
     },
     {
@@ -36,12 +36,12 @@ export const getColDefs = (t) => {
       name: t(`${labelKey}.outputsCount`),
       type: 'number',
       props: {
-        width: '10%',
+        width: '15%',
       },
     },
     {
-      id: 'kbFee',
-      name: t(`${labelKey}.kbFee`),
+      id: 'fee',
+      name: t(`${labelKey}.fee`),
       type: 'string',
       props: {
         width: '15%',
@@ -55,14 +55,6 @@ export const getColDefs = (t) => {
         width: '15%',
       },
     },
-    {
-      id: 'timestamp',
-      name: t(`${labelKey}.timestamp`),
-      type: 'dateStr',
-      props: {
-        width: '20%',
-      },
-    },
   ]
 }
 
@@ -71,7 +63,7 @@ export const filters = {}
 export const getRenderCells = (t) => {
   return {
     txid: (idField, item, colId) => {
-      return item.txid === 'COINBASE'
+      return item.txid === 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
         ? { value: 'COINBASE' }
         : {
             component: item[colId] ? LinkHashCopy : null,
