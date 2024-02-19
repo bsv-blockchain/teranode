@@ -25,6 +25,8 @@ services:
       dockerfile: local.Dockerfile
     networks:
     - ubsv-network
+    profiles:
+    - build
 
   tx-blaster-builder:
     image: taal/blaster:latest
@@ -33,7 +35,8 @@ services:
       dockerfile: local.txblaster.Dockerfile
     networks:
     - ubsv-network
-
+    profiles:
+    - build
   postgres:
     container_name: postgres
     image: postgres:latest
@@ -81,7 +84,7 @@ services:
     <<: *ubsv-base
     depends_on:
             - aerospike-1
-    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "INFO"
@@ -122,7 +125,7 @@ services:
     <<: *ubsv-base
     depends_on:
       - aerospike-2
-    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "INFO"
@@ -162,7 +165,7 @@ services:
     <<: *ubsv-base
     depends_on:
       - aerospike-3
-    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "INFO"
@@ -203,9 +206,9 @@ services:
     container_name: tx-blaster-1
     image: taal/blaster:latest
     depends_on:
-      - postgres
       - ubsv-1
       - ubsv-2
+      - ubsv-3
     environment:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
@@ -223,7 +226,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -235,9 +238,9 @@ services:
     container_name: tx-blaster-2
     image: taal/blaster:latest
     depends_on:
-      - postgres
       - ubsv-1
       - ubsv-2
+      - ubsv-3
     environment:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
@@ -255,7 +258,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -267,7 +270,6 @@ services:
     container_name: tx-blaster-3
     image: taal/blaster:latest
     depends_on:
-      - postgres
       - ubsv-1
       - ubsv-2
       - ubsv-3
@@ -288,7 +290,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
