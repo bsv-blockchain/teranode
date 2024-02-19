@@ -26,8 +26,8 @@ export const getColDefs = (t) => {
       },
     },
     {
-      id: 'transactionCount',
-      name: t(`${labelKey}.transactionCount`),
+      id: 'txCount',
+      name: t(`${labelKey}.txCount`),
       type: 'number',
       props: {
         width: '22%',

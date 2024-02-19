@@ -1,18 +1,21 @@
 package http_impl
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"net/http"
-	"strings"
 )
 
 type SubtreeMeta struct {
-	Hash  string `json:"hash"`
-	Index int    `json:"index"`
-	Fee   uint64 `json:"fee"`
-	Size  uint64 `json:"size"`
+	Height  uint64 `json:"height"`
+	TxCount int    `json:"txCount"`
+	Hash    string `json:"hash"`
+	Index   int    `json:"index"`
+	Fee     uint64 `json:"fee"`
+	Size    uint64 `json:"size"`
 }
 
 func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
@@ -63,10 +66,12 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 				// do something with the subtree result
 				data = append(data, SubtreeMeta{
-					Index: i,
-					Hash:  subtreeHash.String(),
-					Fee:   subtreeResult.Fees,
-					Size:  subtreeResult.SizeInBytes,
+					Index:   i,
+					Hash:    subtreeHash.String(),
+					Height:  uint64(subtreeResult.Height),
+					TxCount: len(subtreeResult.Nodes),
+					Fee:     subtreeResult.Fees,
+					Size:    subtreeResult.SizeInBytes,
 				})
 			}
 		}

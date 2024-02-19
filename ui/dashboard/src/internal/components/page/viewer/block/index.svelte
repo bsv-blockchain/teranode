@@ -81,33 +81,6 @@
       failure(blockHeaderResult.error.message)
     }
 
-    // expand subtree data (needed for subtree table display)
-    let expandedSubtreeData: any[] = []
-    if (tmpData && tmpData.subtrees && tmpData.subtrees.length > 0) {
-      expandedSubtreeData = await Promise.all(
-        tmpData.subtrees.map(async (hash) => {
-          const subtreeResult: any = await api.getItemData({ type: api.ItemType.subtree, hash })
-          if (subtreeResult.ok) {
-            return {
-              height: subtreeResult.data.Height,
-              hash,
-              transactionCount: subtreeResult.data.Nodes.length,
-              fee: subtreeResult.data.Fees,
-              size: subtreeResult.data.SizeInBytes,
-            }
-          } else {
-            return null
-          }
-        }),
-      )
-    }
-    expandedSubtreeData = expandedSubtreeData.filter((item) => item !== null)
-
-    tmpData = {
-      ...tmpData,
-      expandedSubtreeData,
-    }
-
     if (!failed) {
       result = tmpData
     }
@@ -118,7 +91,7 @@
   <BlockDetailsCard data={result} {display} on:display={onDisplay} />
   {#if display === 'overview'}
     <div style="height: 20px" />
-    <BlockSubtreesCard block={result} data={result.expandedSubtreeData} />
+    <BlockSubtreesCard block={result} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">

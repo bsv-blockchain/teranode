@@ -205,7 +205,7 @@
         "col-defs-label": {
           "height": "Height",
           "hash": "Subtree Hash",
-          "transactionCount": "Transactions",
+          "txCount": "Transactions",
           "fee": "Fees",
           "size": "Size"
         }

@@ -6,6 +6,8 @@
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
   import { getColDefs, getRenderCells } from './data'
+  import * as api from '$internal/api'
+  import { failure } from '$lib/utils/notifications'
 
   const baseKey = 'page.viewer-block.subtrees'
 
@@ -43,6 +45,23 @@
   function onToggle(e) {
     const value = e.detail.value
     variant = $tableVariant = value
+  }
+
+  async function fetchData(hash, page, pageSize) {
+    const blockSubtrees: any = await api.getBlockSubtrees({
+      hash,
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    })
+    if (blockSubtrees.ok) {
+      data = blockSubtrees.data.data
+    } else {
+      failure(blockSubtrees.error.message)
+    }
+  }
+
+  $: if (block) {
+    fetchData(block.expandedHeader.hash, page, pageSize)
   }
 </script>
 
