@@ -14,7 +14,6 @@ RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesourc
 
 RUN apt-get update && apt-get install -y nodejs
 
-
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
 WORKDIR /app/ui/dashboard
 
@@ -24,6 +23,7 @@ RUN npm install
 
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
+
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -46,10 +46,12 @@ RUN make build-tx-blaster
 FROM --platform=linux/amd64 debian:latest
 
 RUN apt update && \
-    apt install -y vim htop curl lsof iputils-ping net-tools dnsutils postgresql telnet && \
-    rm -rf /var/lib/apt/lists/*
+  apt install -y vim htop curl lsof iputils-ping net-tools netcat-openbsd dnsutils postgresql telnet && \
+  rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+COPY --from=0 /app/wait.sh /app/wait.sh
 
 COPY --from=0 /go/bin/dlv .
 COPY --from=0 /usr/lib/x86_64-linux-gnu/libsecp256k1.so.0.0.0 .

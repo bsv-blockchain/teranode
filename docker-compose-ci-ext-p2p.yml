@@ -63,8 +63,8 @@ services:
   ubsv-1:
     <<: *ubsv-base
     depends_on:
-      - aerospike-1
-    command: ["./ubsv", "-miner=1", "-coinbase=1"]
+            - aerospike-1
+    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "INFO"
@@ -105,7 +105,7 @@ services:
     <<: *ubsv-base
     depends_on:
       - aerospike-2
-    command: ["./ubsv", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "INFO"
@@ -215,7 +215,7 @@ services:
     <<: *ubsv-base
     depends_on:
       - aerospike-3
-    command: ["./ubsv", "-miner=1", "-coinbase=0"]
+    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "1", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "INFO"
