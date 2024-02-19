@@ -42,15 +42,15 @@ dev-dashboard:
 build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
-build-ubsv: build-dashboard set_debug_flags
+build-ubsv: build-dashboard set_debug_flags set_race_flag
 	go build $(RACE_FLAG) -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-chainintegrity
-build-chainintegrity: set_debug_flags
+build-chainintegrity: set_debug_flags set_race_flag
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
-build-tx-blaster: set_debug_flags
+build-tx-blaster: set_debug_flags set_race_flag
 	go build $(RACE_FLAG) -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 # .PHONY: build-propagation-blaster
@@ -82,15 +82,14 @@ build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
 .PHONY: test
-test:
+test: set_race_flag
 	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc)
-
 .PHONY: longtests
-longtests:
+longtests: set_race_flag
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
 
 .PHONY: racetest
-racetest:
+racetest: set_race_flag
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
 
 .PHONY: testall

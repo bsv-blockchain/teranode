@@ -44,6 +44,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 		AllowMethods: []string{echo.GET},
 	}))
 
+	e.Use(middleware.Gzip())
+
 	h := &HTTP{
 		logger:         logger,
 		repository:     repo,
