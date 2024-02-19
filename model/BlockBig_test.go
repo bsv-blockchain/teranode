@@ -31,9 +31,10 @@ func TestBigBlock_Valid(t *testing.T) {
 	subtreeStore := newLocalSubtreeStore()
 	txIdCount := uint64(10 * 1024 * 1024)
 	subtreeSize = 1024 * 1024
+	createNewTestData := false
 
 	// delete all the data in the ./testdata folder to regenerate the testdata
-	block, err := generateTestSets(txIdCount, subtreeStore)
+	block, err := generateTestSets(txIdCount, subtreeStore, createNewTestData)
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
@@ -71,6 +72,7 @@ func TestBigBlock_Valid(t *testing.T) {
 		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+
 	runtime.SetCPUProfileRate(500)
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()
@@ -89,7 +91,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.True(t, v)
 }
 
-func Test_loadTxMetaIntoMemory(t *testing.T) {
+func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	// Comment this out to run the test, it is commented, so it does not run in GitHub Actions
 	util.SkipVeryLongTests(t)
 

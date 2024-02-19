@@ -603,7 +603,6 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		fmt.Println("calculatedMerkleRootHash", calculatedMerkleRootHash.String(), "\nb.Header.HashMerkleRoot", b.Header.HashMerkleRoot.String())
 		return errors.New("merkle root does not match")
 	}
 

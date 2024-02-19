@@ -33,7 +33,7 @@ var (
 	subtreeSize                  int
 )
 
-func generateTestSets(transactionIdCount uint64, subtreeStore *localSubtreeStore) (*Block, error) {
+func generateTestSets(transactionIdCount uint64, subtreeStore *localSubtreeStore, generateNewTestData bool) (*Block, error) {
 	// create test dir of not exists
 	if _, err := os.Stat(fileDir); os.IsNotExist(err) {
 		if err = os.Mkdir(fileDir, 0755); err != nil {
@@ -43,7 +43,7 @@ func generateTestSets(transactionIdCount uint64, subtreeStore *localSubtreeStore
 
 	// read block from file and return if exists
 	blockFile, err := os.Open(fileNameTemplateBlock)
-	if err == nil {
+	if err == nil && !generateNewTestData {
 		blockBytes, err := io.ReadAll(blockFile)
 		if err != nil {
 			return nil, err
