@@ -29,12 +29,12 @@ func TestBigBlock_Valid(t *testing.T) {
 	fileNameTemplateBlock = fileDir + "block.bin"
 	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
-	txIdCount := uint64(10 * 1024 * 1024)
+	txCount := uint64(10 * 1024 * 1024)
 	subtreeSize = 1024 * 1024
 	createNewTestData := false
 
 	// delete all the data in the ./testdata folder to regenerate the testdata
-	block, err := generateTestSets(txIdCount, subtreeStore, createNewTestData)
+	block, err := generateTestBlock(txCount, subtreeStore, createNewTestData)
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)

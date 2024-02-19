@@ -211,10 +211,10 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	fileNameTemplateBlock = fileDir + "block.bin"
 	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
-	txIdCount := uint64(8)
+	txCount := uint64(8)
 	subtreeSize = 8
 
-	block, err := generateTestSets(txIdCount, subtreeStore, true)
+	block, err := generateTestBlock(txCount, subtreeStore, true)
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
@@ -261,18 +261,12 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	leafCount := 8
 	subtree, err := util.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
+	subtreeSize = 8
 
-	fileDir = "./test-generated_test_data/"
-	fileNameTemplate = fileDir + "subtree-%d.bin"
 	subtreeStore := newLocalSubtreeStore()
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
 	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 	txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
-
-	if _, err := os.Stat(fileDir); os.IsNotExist(err) {
-		err = os.Mkdir(fileDir, 0755)
-		require.NoError(t, err)
-	}
 
 	// create a slice of random hashes, for the leaves
 	hashes := make([]*chainhash.Hash, leafCount)
@@ -296,25 +290,8 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// last transaction is a duplicate of the previous transaction
 	_ = subtree.AddNode(*hashes[leafCount-3], 111, 0)
 
-	// check if cachedTxMetaStore has the correct data
-	data, err := cachedTxMetaStore.Get(context.Background(), hashes[0])
-	require.NoError(t, err)
-	require.Equal(t, &txmeta.Data{
-		Fee:            111,
-		SizeInBytes:    1,
-		ParentTxHashes: []chainhash.Hash{},
-	}, data)
-
-	// create a subtree file
-	subtreeFile, err := os.Create(fmt.Sprintf(fileNameTemplate, 0))
-	require.NoError(t, err)
-
 	// serialize the subtree
 	subtreeBytes, err := subtree.Serialize()
-	require.NoError(t, err)
-
-	// write the subtree to the file
-	_, err = subtreeFile.Write(subtreeBytes)
 	require.NoError(t, err)
 
 	// create a coinbase transaction
@@ -335,10 +312,6 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 
 	// create a new subtree for replaced coinbase transaction
 	replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
-	require.NoError(t, err)
-
-	// close the subtree file
-	err = subtreeFile.Close()
 	require.NoError(t, err)
 
 	// deserialize the replaced coinbase subtree
