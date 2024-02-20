@@ -77,6 +77,8 @@ func (s *Client) NewFRPCClient() {
 	if err != nil {
 		s.logger.Fatalf("Error creating new fRPC client in blockvalidation: %s", err)
 	}
+	s.logger.Infof("fRPC blockvalidation client created")
+	s.frpcClientConnected = false
 	s.frpcClient.Store(frpcClient)
 }
 
@@ -126,7 +128,7 @@ func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_ap
 	s.logger.Infof("Listening for close channel on fRPC client")
 	go func() {
 		<-frpcClient.CloseChannel()
-		s.logger.Infof("fRPC client close channel received, reconnecting...")
+		s.logger.Infof("fRPC blockvalidation client closed, reconnecting...")
 		s.NewFRPCClient()
 	}()
 }
