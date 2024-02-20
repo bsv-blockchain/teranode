@@ -1,4 +1,5 @@
 import { formatNum, formatSatoshi } from '$lib/utils/format'
+import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
@@ -58,7 +59,7 @@ export const getRenderCells = (t, blockHash) => {
   return {
     height: (idField, item, colId) => {
       return {
-        component: item[colId] ? RenderLink : null,
+        component: valueSet(item[colId]) ? RenderLink : null,
         props: {
           href: getDetailsUrl(DetailType.subtree, item.hash, { blockHash }),
           external: false,
