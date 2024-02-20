@@ -566,7 +566,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 
 				// revert the spent utxos
 				_ = s.UnSpend(context.Background(), spentSpends)
-				return err
+				return fmt.Errorf("failed to spend utxo %s on tx %s:%d: %w", spend.Hash.String(), spend.TxID.String(), spend.Vout, err)
 			} else {
 				spentSpends = append(spentSpends, spend)
 			}
