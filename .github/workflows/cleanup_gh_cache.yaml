@@ -12,16 +12,17 @@ jobs:
           echo "---------------------------------------"
           cachekeys=$(gh cache -R $REPO list -O asc -S created_at -L 100 --json id,createdAt)
           oldkeys=$($cachekeys | jq --arg DAYS "$DAYS" 'def daysAgo(days): (now | floor) - (days * 86400); .[] | select(.createdAt | .[0:19] +"Z" | fromdateiso8601 < daysAgo($DAYS | tonumber)).id')
-          count=$(echo $oldkeys | wc -l)
-          echo "Found $count expired caches to remove"
-          echo "---------------------------------------"
           echo "Removing expired caches"
           echo "---------------------------------------"
           set +e
+          COUNTER=0
           for cachekey in $oldkeys
           do
             gh cache -R $REPO delete $cachekey --confirm
+            COUNTER=$((COUNTER + 1))
           done
+          echo "Removed $COUNTER expired caches"
+          echo "---------------------------------------"
           echo "Done"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
