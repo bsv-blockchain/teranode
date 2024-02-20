@@ -56,7 +56,7 @@
     })
     if (blockSubtrees.ok) {
       data = blockSubtrees.data.data
-      const pagination = blockSubtrees.pagination
+      const pagination = blockSubtrees.data.pagination
       pageSize = pagination.limit
       page = Math.floor(pagination.offset / pageSize) + 1
       totalItems = pagination.totalRecords

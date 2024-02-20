@@ -56,7 +56,7 @@
     })
     if (subtreeTxs.ok) {
       data = subtreeTxs.data.data
-      const pagination = subtreeTxs.pagination
+      const pagination = subtreeTxs.data.pagination
       pageSize = pagination.limit
       page = Math.floor(pagination.offset / pageSize) + 1
       totalItems = pagination.totalRecords
