@@ -79,6 +79,7 @@
         "title": "Ping",
         "fields": {
           "age": "Age",
+          "base_url": "From",
           "receivedAt": "Received at"
         }
       }

@@ -5,7 +5,7 @@ import type {
   BlockMessage,
   MiningOnMessage,
   SubtreeMessage,
-  MessageSource,
+  MessageSource, PingMessage,
 } from './types'
 import i18n from '../../i18n'
 
@@ -50,7 +50,9 @@ export const getMessageFields = (source: MessageSource, data: Message, age: stri
         fields.push({ label: t(`${key}.peer_id`), value: subtreeMsh.peer_id })
         break
       case msg.MessageType.ping:
+        const pingMsg = data as PingMessage
         fields.push({ label: t(`${key}.age`), value: age })
+        fields.push({ label: t(`${key}.base_url`), value: pingMsg.base_url })
         break
     }
   } else if (source === 'status') {

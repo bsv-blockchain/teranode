@@ -16,13 +16,30 @@
 
   function updateData() {
     const tmp: any[] = []
-    $miningNodes.forEach((node) => {
+
+    const mNodes = []
+    console.log($miningNodes)
+    Object.values($miningNodes).forEach((node) => {
+       mNodes.push(node)
+    })
+    const sorted = mNodes.sort((a: any, b: any) => {
+      if (a.base_url < b.base_url) {
+        return -1
+      } else if (a.base_url > b.base_url) {
+        return 1
+      } else {
+        return 0
+      }
+    })
+
+    sorted.forEach((node) => {
       tmp.push({
         ...node,
         receivedAt: humanTime(node.receivedAt),
       })
     })
     nodes = tmp
+    console.log({tmp})
   }
 
   onMount(() => {

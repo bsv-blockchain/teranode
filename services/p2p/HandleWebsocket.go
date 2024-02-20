@@ -35,7 +35,7 @@ var (
 	}
 )
 
-func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c echo.Context) error {
+func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl string) func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
 	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
@@ -59,6 +59,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 				data, err := json.MarshalIndent(&notificationMsg{
 					Timestamp: time.Now().UTC().Format(isoFormat),
 					Type:      asset_api.Type_PING.String(),
+					BaseURL:   baseUrl,
 				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %v", err)

@@ -25,15 +25,16 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 	}
 
 	// First we find the latest block height
-	latestBlocks, err := h.repository.GetLastNBlocks(c.Request().Context(), 1, includeOrphans, 0)
+	_, blockMeta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 	if err != nil {
-		return err
-	}
-	if len(latestBlocks) == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "Could not find latest blocks")
+		if strings.HasSuffix(err.Error(), " not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
 	}
 
-	latestBlockHeight := latestBlocks[0].Height
+	latestBlockHeight := blockMeta.Height
 	fromHeight := latestBlockHeight - uint32(offset)
 
 	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.Request().RemoteAddr, offset, limit, fromHeight)
