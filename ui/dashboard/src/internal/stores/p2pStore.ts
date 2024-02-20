@@ -19,9 +19,9 @@ export function connectToP2PServer() {
     }
 
     if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
-        url.protocol = 'ws:'
-        url.host = 'localhost'
-        url.port = '9906'
+      url.protocol = 'ws:'
+      url.host = 'localhost'
+      url.port = '9906'
     }
 
     url.pathname = '/p2p-ws'
@@ -49,7 +49,7 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
-        if (json.type === 'mining_on') {
+        if (json.base_url) {
           const uniqueNodes: any = {}
           const mn: any = get(miningNodes)
 
