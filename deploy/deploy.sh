@@ -88,7 +88,7 @@ if [[ $IMAGE_TAG == "latest" ]]; then
     IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
 fi
 
-IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG-arm64"
+IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
 
 echo "Using image tag: $IMAGE_TAG" >&2
 

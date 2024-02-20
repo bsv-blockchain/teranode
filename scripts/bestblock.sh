@@ -2,7 +2,7 @@
 
 function get_block_header() {
   local node=$1
-  local url="https://$node.scaling.ubsv.dev/bestblockheader/json"
+  local url="https://$node.scaling.ubsv.dev/api/v1/bestblockheader/json"
   curl -s "$url" | jq -r '. | "\(.height): \(.hash)"' > "$2" # Write output to temp file
 }
 
