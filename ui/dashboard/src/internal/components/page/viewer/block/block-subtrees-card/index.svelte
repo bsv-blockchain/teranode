@@ -12,7 +12,8 @@
   const baseKey = 'page.viewer-block.subtrees'
 
   export let block: any
-  export let data: any[] = []
+
+  let data: any[] = []
 
   $: t = $i18n.t
   $: i18nLocal = { t, baseKey: 'comp.pager' }
@@ -101,7 +102,7 @@
   <Table
     name="subtrees"
     {variant}
-    idField="height"
+    idField="hash"
     {colDefs}
     {data}
     pagination={{

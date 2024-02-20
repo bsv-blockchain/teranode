@@ -20,7 +20,8 @@
   $: renderCells = getRenderCells(t) || {}
 
   export let subtree: any
-  export let data: any[] = []
+
+  let data: any[] = []
 
   let page = 1
   let pageSize = 10
