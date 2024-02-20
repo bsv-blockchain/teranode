@@ -25,8 +25,7 @@ services:
       dockerfile: local.Dockerfile
     networks:
     - ubsv-network
-    profiles:
-    - build
+    entrypoint: ["pwd"]
 
   tx-blaster-builder:
     image: taal/blaster:latest
@@ -35,8 +34,9 @@ services:
       dockerfile: local.txblaster.Dockerfile
     networks:
     - ubsv-network
-    profiles:
-    - build
+    entrypoint: ["pwd"]
+
+
   postgres:
     container_name: postgres
     image: postgres:latest
@@ -88,11 +88,10 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "INFO"
-      asset_httpAddress: "http://ubsv-1:8090"
       # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      utxostore: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
-      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
+      utxostore: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       startTxStore: "true"
@@ -128,11 +127,10 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "INFO"
-      asset_httpAddress: "http://ubsv-2:8090"
       # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      utxostore: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
-      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
+      utxostore: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
       startTxStore: "true"
@@ -167,11 +165,10 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "INFO"
-      asset_httpAddress: "http://ubsv-3:8090"
       # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
-      utxostore: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
-      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=7200
+      utxostore: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
       startTxStore: "true"

@@ -94,7 +94,7 @@ func TestRotate(t *testing.T) {
 	<-endTestChan
 
 	assert.Equal(t, 0, stp.currentSubtree.Length())
-	assert.Equal(t, 1, len(stp.chainedSubtrees))
+	assert.Equal(t, 1, stp.chainedSubtreeCount)
 
 	// Add one more txid to trigger the rotate
 	//hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
@@ -107,7 +107,7 @@ func TestRotate(t *testing.T) {
 	//assert.Equal(t, 1, stp.currentSubtree.Length())
 
 	// Still 1 because the tree is not yet complete
-	assert.Equal(t, 1, len(stp.chainedSubtrees))
+	assert.Equal(t, 1, stp.chainedSubtreeCount)
 }
 
 func TestGetMerkleProofForCoinbase(t *testing.T) {
@@ -255,7 +255,7 @@ func TestMoveUpBlock(t *testing.T) {
 	}
 
 	// there should be 4 chained subtrees
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtreeCount)
 	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 2, stp.currentSubtree.Length())
 
@@ -279,7 +279,7 @@ func TestMoveUpBlock(t *testing.T) {
 	//wg.Wait()
 
 	// we added the coinbase placeholder
-	assert.Equal(t, 5, len(stp.chainedSubtrees))
+	assert.Equal(t, 5, stp.chainedSubtreeCount)
 	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
@@ -332,7 +332,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	}
 
 	// there should be 4 chained subtrees
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtreeCount)
 	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
 	// and 1 tx in the current subtree
 	assert.Equal(t, 1, stp.currentSubtree.Length())
@@ -355,7 +355,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	})
 	wg.Wait()
 	require.NoError(t, err)
-	assert.Equal(t, 5, len(stp.chainedSubtrees))
+	assert.Equal(t, 5, stp.chainedSubtreeCount)
 	assert.Equal(t, 0, stp.currentSubtree.Length())
 }
 
@@ -406,7 +406,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// there should be 4 chained subtrees
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtreeCount)
 	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
 	// and 0 tx in the current subtree
 	assert.Equal(t, 0, stp.currentSubtree.Length())
@@ -429,7 +429,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	})
 	wg.Wait()
 	require.NoError(t, err)
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtreeCount)
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
@@ -480,7 +480,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// there should be 4 chained subtrees
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
+	assert.Equal(t, 4, stp.chainedSubtreeCount)
 	// one of the subtrees should contain 262144 items
 	assert.Equal(t, 262144, stp.chainedSubtrees[0].Size())
 	// there should be no remaining items in the current subtree
@@ -511,7 +511,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	require.NoError(t, err)
-	assert.Equal(t, 8, len(stp.chainedSubtrees))
+	assert.Equal(t, 8, stp.chainedSubtreeCount)
 	// one of the subtrees should contain 262144 items
 	assert.Equal(t, 65536, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 1001, stp.currentSubtree.Length())
@@ -832,7 +832,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		}
 
 		// there should be 4 chained subtrees
-		assert.Equal(t, 4, len(stp.chainedSubtrees))
+		assert.Equal(t, 4, stp.chainedSubtreeCount)
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
 		assert.Equal(t, 3, stp.currentSubtree.Length())
 
@@ -860,7 +860,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		assert.Equal(t, 6, len(stp.chainedSubtrees))
+		assert.Equal(t, 6, stp.chainedSubtreeCount)
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
 		assert.Equal(t, 2, stp.currentSubtree.Length())
 
@@ -876,7 +876,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		for idx, txHash := range txHashes {
 			shouldBeInSubtree := 2 + idx/4
 			shouldBeInNode := idx % 4
-			if shouldBeInSubtree > len(stp.chainedSubtrees)-1 {
+			if shouldBeInSubtree > stp.chainedSubtreeCount-1 {
 				assert.Equal(t, txHash, stp.currentSubtree.Nodes[shouldBeInNode].Hash)
 			} else {
 				assert.Equal(t, txHash, stp.chainedSubtrees[shouldBeInSubtree].Nodes[shouldBeInNode].Hash)
