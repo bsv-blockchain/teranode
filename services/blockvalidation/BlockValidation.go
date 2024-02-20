@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ordishs/go-utils/expiringmap"
@@ -784,7 +785,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
-	nrOfMissingTransactions := 0
+	nrOfMissingTransactions := atomic.Int32{}
 
 	// cycle through batches of 1024 txHashes at a time
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
@@ -804,7 +805,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 						// don't add the coinbase placeholder to the missing transactions
 						if !txHash.Equal(*model.CoinbasePlaceholderHash) {
 							missingTxHashes[i+j] = &txHash
-							nrOfMissingTransactions++
+							nrOfMissingTransactions.Add(1)
 						}
 						continue
 					} else {
@@ -829,12 +830,12 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
 	}
 
-	if nrOfMissingTransactions > 0 {
+	if nrOfMissingTransactions.Load() > 0 {
 		start, stat5, ctx5 := util.StartStatFromContext(spanCtx, "5. processMissingTransactions")
 		// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
 		// this is done to make sure the order is preserved when getting them in parallel
 		// compact the missingTxHashes to only a list of the missing ones
-		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions)
+		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions.Load())
 		for idx, txHash := range missingTxHashes {
 			if txHash != nil {
 				missingTxHashesCompacted = append(missingTxHashesCompacted, missingTxHash{
