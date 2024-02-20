@@ -133,6 +133,19 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewReader(subtreeBytes)), err
 }
 
+func (r Wrapper) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+	b, err := r.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if nrOfBytes > len(b) {
+		return b, nil
+	}
+
+	return b[:nrOfBytes], nil
+}
+
 func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
 	// first get from local ttl cache
 	if r.localTTLCache != nil {

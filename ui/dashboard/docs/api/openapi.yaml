@@ -9,11 +9,15 @@ info:
     - [The source API definition for the Bitcoin SV, UBSV project](https://github.com/bitcoin-sv/ubsv/tree/feature/ui-refresh/ui_v2/dashboard/docs/api/openapi.yaml)
   termsOfService: https://github.com/bitcoin-sv/ubsv/docs/api/terms/
   version: 0.0.1
+  license:
+    name: Open BSV License
+    url: https://github.com/bitcoin-sv/ubsv/blob/master/LICENSE
 externalDocs:
   description: Find out more about Bitcoin SV, UBSV
   url: https://github.com/bitcoin-sv/ubsv/tree/feature/ui-refresh/ui_v2/dashboard/docs/api/rest.md
 servers:
-  - url: http://localhost:8090
+  - url: https://m1.scaling.ubsv.dev
+  - url: https://m2.scaling.ubsv.dev
 tags:
   - name: search-item
     description: Either a block, subtree or tx
@@ -29,6 +33,7 @@ tags:
     description: Operations on tx
   - name: txmeta
     description: Operations on txmeta
+security: []
 paths:
   /search:
     get:

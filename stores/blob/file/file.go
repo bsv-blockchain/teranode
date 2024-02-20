@@ -245,6 +245,27 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
+func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	fileName := s.filename(hash)
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ubsverrors.ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	bytes := make([]byte, nrOfBytes)
+	nRead, err := file.Read(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data from file: %w", err)
+	}
+
+	return bytes[:nRead], err
+}
+
 func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)

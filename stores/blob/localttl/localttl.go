@@ -20,6 +20,7 @@ type BlobStore interface {
 	Health(ctx context.Context) (int, string, error)
 	Exists(ctx context.Context, key []byte) (bool, error)
 	Get(ctx context.Context, key []byte) ([]byte, error)
+	GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error)
 	GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error
@@ -129,6 +130,17 @@ func (l *LocalTTL) Get(ctx context.Context, key []byte) ([]byte, error) {
 		// couldn't find it in the ttl store, try the blob store
 		l.logger.Errorf("LocalTTL.Get miss for %s", utils.ReverseAndHexEncodeSlice(key))
 		return l.blobStore.Get(ctx, key)
+	}
+
+	return value, nil
+}
+
+func (l *LocalTTL) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+	value, err := l.ttlStore.GetHead(ctx, key, nrOfBytes)
+	if err != nil {
+		// couldn't find it in the ttl store, try the blob store
+		l.logger.Errorf("LocalTTL.Get miss for %s", utils.ReverseAndHexEncodeSlice(key))
+		return l.blobStore.GetHead(ctx, key, nrOfBytes)
 	}
 
 	return value, nil

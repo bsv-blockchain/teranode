@@ -185,3 +185,36 @@ export const link = (
     external ? " target='_blank' rel='noopener noreferrer'" : ''
   }${className ? ` class='${className}'` : ''}>${text || href}</a>`
 }
+
+export const formatNumberExp = (val: number) => {
+  let exp = ''
+
+  if (val >= 1e15) {
+    val = val / 1e15
+    exp = ' x 10<sup>15</sup>'
+  } else if (val >= 1e12) {
+    val = val / 1e12
+    exp = ' x 10<sup>12</sup>'
+  } else if (val >= 1e9) {
+    val = val / 1e9
+    exp = ' x 10<sup>9</sup>'
+  } else if (val >= 1e6) {
+    val = val / 1e6
+    exp = ' x 10<sup>6</sup>'
+  } else if (val >= 1e3) {
+    val = val / 1e3
+    exp = ' x 10<sup>3</sup>'
+  } else {
+    const str = val.toString()
+    const index = str.indexOf('e')
+    if (index !== -1) {
+      val = parseFloat(str.substring(0, index))
+      exp = ` x 10<sup>${str.substring(index + 1, str.length)}</sup>`
+    }
+  }
+
+  return {
+    value: Math.round(val * 1000) / 1000,
+    exp,
+  }
+}

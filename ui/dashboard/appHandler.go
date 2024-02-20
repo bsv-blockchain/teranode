@@ -51,6 +51,8 @@ func AppHandler(c echo.Context) error {
 	switch extension {
 	case ".css":
 		mimeType = "text/css"
+	case ".woff2":
+		mimeType = "font/woff2"
 	case ".js":
 		mimeType = "text/javascript"
 	case ".png":

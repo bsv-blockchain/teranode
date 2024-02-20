@@ -2,7 +2,6 @@
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { SvelteToast } from '@zerodevx/svelte-toast'
-  import 'tippy.js/animations/perspective-subtle.css'
   import { createTippy } from '$lib/actions/tooltip'
   import { pageLinks, spinCount, contentLeft } from '$internal/stores/nav'
   import { query } from '$lib/actions'
@@ -11,7 +10,6 @@
     MediaSize,
     theme,
     themeNs,
-    injectedIcons,
     injectedLogos,
     i18n as i18nStore,
     tippy,
@@ -21,8 +19,8 @@
   import GlobalStyle from '$lib/styles/GlobalStyle.svelte'
   import Spinner from '$lib/components/spinner/index.svelte'
   import i18n from '$internal/i18n'
-  import { icons } from '$internal/assets/icons'
   import { logos } from '$internal/assets/logos'
+  import { init as initLib } from '$lib'
 
   import { connectToP2PServer } from '$internal/stores/p2pStore'
 
@@ -51,7 +49,14 @@
   }
 
   // inject assets
-  $injectedIcons = icons
+  initLib({
+    useLibIcons: false,
+    iconNameOverrides: {
+      'chevron-right': 'icon-chevron-right-line',
+      'chevron-down': 'icon-chevron-down-line',
+      'chevron-up': 'icon-chevron-up-line',
+    },
+  })
   $injectedLogos = logos
 
   $theme = 'dark'
@@ -106,10 +111,10 @@
     const pathname = $page.url.pathname
 
     let items: any[] = []
+
     if ($pageLinks) {
       items = $pageLinks.items.map((route) => ({
         ...route,
-        // selected: route.path === pathname || `${route.path}/` === pathname,
         selected:
           (pathname === '/' && route.path == '/') || pathname.indexOf(`${route.path}/`) === 0,
       }))

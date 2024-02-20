@@ -9,9 +9,12 @@
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
 
   import { Button, Icon } from '$lib/components'
+  import { getDifficultyFromBits } from '$lib/utils/difficulty'
+  import { formatNumberExp } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -42,16 +45,26 @@
       goto(getDetailsUrl(DetailType.block, hash))
     }
   }
+
+  $: difficultyDisplay = formatNumberExp(getDifficultyFromBits(expandedHeader.bits))
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedHeader.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{expandedHeader.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={expandedHeader.hash}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.block, expandedHeader.hash)}
         size={15}
       />
     </div>
@@ -119,15 +132,19 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{expandedHeader.sizeInBytes / 1000} KB</div>
+            <div class="value">
+              {t('unit.value.kb', { value: expandedHeader.sizeInBytes / 1000 })}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.difficulty`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">
+              {@html difficultyDisplay.value + difficultyDisplay.exp}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">{formatSatoshi(expandedHeader.nonce)} BSV</div>
+            <div class="value">{t('unit.value.nonce_bsv', { value: expandedHeader.nonce })}</div>
           </div>
         </div>
         <div>
@@ -137,7 +154,7 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">{data.latestBlockData.height - expandedHeader.height}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>

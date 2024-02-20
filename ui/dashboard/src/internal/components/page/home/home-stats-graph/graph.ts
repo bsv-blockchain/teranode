@@ -102,7 +102,6 @@ export const getGraphObj = (t, data, smooth = true) => {
       xAxis: [
         {
           type: 'time',
-          // boundaryGap: false,
           axisLine: { onZero: true },
           axisLabel: {
             formatter: (value) => ' ' + formatDate(parseInt(value.toString()), false, false),
@@ -110,9 +109,6 @@ export const getGraphObj = (t, data, smooth = true) => {
             hideOverlap: true,
           },
           alignTicks: true,
-          axisTick: {
-            //   interval: 1,
-          },
         },
       ],
       yAxis: [
@@ -148,7 +144,6 @@ export const getGraphObj = (t, data, smooth = true) => {
         }
       }),
       textStyle: {
-        // fontFamily: 'Satoshi',
         fontWeight: 400,
         fontSize: 14,
         lineHeight: 24,
@@ -172,17 +167,6 @@ export const getGraphObj = (t, data, smooth = true) => {
           color: 'rgba(255, 255, 255, 0.66)',
         },
       },
-      // toolbox: {
-      //   feature: {
-      //     dataZoom: {
-      //       yAxisIndex: 'none',
-      //       filterMode: 'none',
-      //       xAxisIndex: [0],
-      //     },
-      //     restore: { show: false },
-      //     saveAsImage: {},
-      //   },
-      // },
     }
   }
   return {

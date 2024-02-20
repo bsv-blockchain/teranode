@@ -203,9 +203,9 @@
         "subtitle": "{{ count }} subtrees found",
         "subtitle_singular": "{{ count }} subtree found",
         "col-defs-label": {
-          "height": "Height",
+          "index": "Index",
           "hash": "Subtree Hash",
-          "transactionCount": "Transactions",
+          "txCount": "Transactions",
           "fee": "Fees",
           "size": "Size"
         }
@@ -242,7 +242,7 @@
           "txid": "Transaction ID",
           "inputsCount": "Inputs",
           "outputsCount": "Outputs",
-          "kbFee": "Fee Per KB",
+          "fee": "Fee",
           "size": "Size",
           "timestamp": "Timestamp"
         }
@@ -332,7 +332,8 @@
     "not-available": "N/A"
   },
   "tooltip": {
-    "copy-to-clipboard": "Copy to clipboard",
+    "copy-hash-to-clipboard": "Copy hash",
+    "copy-url-to-clipboard": "Copy URL",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",
@@ -342,6 +343,12 @@
     "series": {
       "date": "Date",
       "tx_count": "Tx Count"
+    }
+  },
+  "unit": {
+    "value": {
+      "kb": "{{ value }} KB",
+      "nonce_bsv": "{{ value }} BSV"
     }
   }
 }

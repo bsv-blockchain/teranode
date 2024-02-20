@@ -550,6 +550,19 @@ func (l localSubtreeStore) Get(_ context.Context, key []byte) ([]byte, error) {
 	return subtreeBytes, nil
 }
 
+func (l localSubtreeStore) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+	subtreeBytes, err := l.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(subtreeBytes) < nrOfBytes {
+		return subtreeBytes, nil
+	}
+
+	return subtreeBytes[:nrOfBytes], nil
+}
+
 func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte) (io.ReadCloser, error) {
 	file, ok := l.files[chainhash.Hash(key)]
 	if !ok {

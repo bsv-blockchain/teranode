@@ -185,6 +185,38 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
+func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	fileName := s.filename(hash)
+
+	bytes, err := os.ReadFile(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
+			// check the persist sub dir
+			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// check s3
+					bytes, err = s.s3Client.Get(ctx, hash)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return nil, ubsverrors.ErrNotFound
+						}
+						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+					}
+					return bytes, nil
+				}
+				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+			}
+			return bytes, nil
+		}
+		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+	}
+
+	return bytes, err
+}
+
 func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)

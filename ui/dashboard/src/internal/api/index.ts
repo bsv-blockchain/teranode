@@ -1,10 +1,5 @@
-import { env } from '$env/dynamic/public'
 import { spinCount } from '../stores/nav'
 import { assetHTTPAddress } from '$internal/stores/nodeStore'
-
-console.log('env.PUBLIC_BASE_URL = ', env.PUBLIC_BASE_URL)
-
-// const PUBLIC_BASE_URL = env.PUBLIC_BASE_URL
 
 export enum ItemType {
   block = 'block',
@@ -92,8 +87,10 @@ function callApi(url, options: any = {}, done?, fail?) {
     .finally(decSpinCount)
 }
 
-function get(url, options = {}, done?, fail?) {
-  return callApi(url, { ...options, method: 'GET' }, done, fail)
+function get(url, options: any = {}, done?, fail?) {
+  const { query, ...rest } = options
+  const theUrl = query ? url + '?' + new URLSearchParams(query) : url
+  return callApi(theUrl, { options: rest, method: 'GET' }, done, fail)
 }
 
 // function post(url, options = {}, done?, fail?) {
@@ -114,6 +111,10 @@ assetHTTPAddress.subscribe((value) => {
   baseUrl = value
 })
 
+export const getItemApiUrl = (type: ItemType, hash: string) => {
+  return `${baseUrl}/${type}/${hash}/json`
+}
+
 // api methods
 
 export function getLastBlocks(data = {}, done?, fail?) {
@@ -121,7 +122,33 @@ export function getLastBlocks(data = {}, done?, fail?) {
 }
 
 export function getItemData(data: { type: ItemType; hash: string }, done?, fail?) {
-  return get(`${baseUrl}/${data.type}/${data.hash}/json`, {}, done, fail)
+  return get(getItemApiUrl(data.type, data.hash), {}, done, fail)
+}
+
+export function getBlocks(data: { offset: number; limit: number }, done?, fail?) {
+  return get(`${baseUrl}/blocks`, { query: { offset: data.offset, limit: data.limit } }, done, fail)
+}
+
+export function getBlockSubtrees(
+  data: { hash: string; offset: number; limit: number },
+  done?,
+  fail?,
+) {
+  return get(
+    `${baseUrl}/block/${data.hash}/subtrees/json`,
+    { query: { offset: data.offset, limit: data.limit } },
+    done,
+    fail,
+  )
+}
+
+export function getSubtreeTxs(data: { hash: string; offset: number; limit: number }, done?, fail?) {
+  return get(
+    `${baseUrl}/subtree/${data.hash}/txs/json`,
+    { query: { offset: data.offset, limit: data.limit } },
+    done,
+    fail,
+  )
 }
 
 export function searchItem(data: { q: string }, done?, fail?) {
@@ -132,6 +159,6 @@ export function getBlockStats(done?, fail?) {
   return get(`${baseUrl}/blockstats`, {}, done, fail)
 }
 
-export function getBlockGraphData(data: {periodMillis: number}, done?, fail?) {
+export function getBlockGraphData(data: { periodMillis: number }, done?, fail?) {
   return get(`${baseUrl}/blockgraphdata?periodMillis=${data.periodMillis}`, {}, done, fail)
 }

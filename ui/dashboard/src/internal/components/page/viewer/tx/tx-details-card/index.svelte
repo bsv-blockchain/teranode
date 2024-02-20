@@ -11,6 +11,7 @@
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -46,11 +47,19 @@
 <Card title={t(`${baseKey}.title`, { height: d?.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{d?.txid}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={d?.txid}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.tx, d?.txid)}
         size={15}
       />
     </div>
@@ -87,7 +96,7 @@
             <div class="value copy-link">
               {#if d?.blockHashes && d?.blockHashes.length > 0}
                 <a href={`/viewer/block/${d?.blockHashes[0]}/`}>{d?.blockHashes[0]}</a>
-                <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+                <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
                   <ActionStatusIcon
                     icon="icon-duplicate-line"
                     action={copyTextToClipboardVanilla}
