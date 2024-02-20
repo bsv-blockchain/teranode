@@ -203,7 +203,7 @@
         "subtitle": "{{ count }} subtrees found",
         "subtitle_singular": "{{ count }} subtree found",
         "col-defs-label": {
-          "height": "Height",
+          "index": "Index",
           "hash": "Subtree Hash",
           "txCount": "Transactions",
           "fee": "Fees",

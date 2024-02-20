@@ -11,8 +11,8 @@ const labelKey = `${baseKey}.col-defs-label`
 export const getColDefs = (t) => {
   return [
     {
-      id: 'height',
-      name: t(`${labelKey}.height`),
+      id: 'index',
+      name: t(`${labelKey}.index`),
       type: 'number',
       props: {
         width: '18%',
@@ -57,7 +57,7 @@ export const filters = {}
 
 export const getRenderCells = (t, blockHash) => {
   return {
-    height: (idField, item, colId) => {
+    index: (idField, item, colId) => {
       return {
         component: valueSet(item[colId]) ? RenderLink : null,
         props: {

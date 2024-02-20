@@ -2,10 +2,10 @@ package http_impl
 
 import (
 	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
-	"math"
 	"net/http"
 	"strings"
+
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
@@ -13,7 +13,6 @@ import (
 )
 
 type SubtreeMeta struct {
-	Height  uint64 `json:"height"`
 	TxCount int    `json:"txCount"`
 	Hash    string `json:"hash"`
 	Index   int    `json:"index"`
@@ -70,13 +69,10 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
 
-				height := math.Ceil(math.Log2(float64(numNodes)))
-
 				// do something with the subtree result
 				data = append(data, SubtreeMeta{
 					Index:   i,
 					Hash:    subtreeHash.String(),
-					Height:  uint64(height),
 					TxCount: numNodes,
 					Fee:     subtreeHead.Fees,
 					Size:    subtreeHead.SizeInBytes,
