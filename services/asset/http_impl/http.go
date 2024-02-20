@@ -94,6 +94,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
 	apiGroup.GET("/header/:hash/json", h.GetBlockHeader(JSON))
 
+	apiGroup.GET("/blocks", h.GetBlocks)
+
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
