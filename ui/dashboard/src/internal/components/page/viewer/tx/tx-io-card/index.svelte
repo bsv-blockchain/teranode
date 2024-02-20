@@ -44,7 +44,7 @@
             <div class="copy-link">
               <LinkHashCopy {...getHashLinkProps(DetailType.tx, input.txid, t, false)} />
             </div>
-            <span>{`${formatSatoshi(input.vout)} BSV`}</span>
+            <span>{`${input.satoshis ? formatSatoshi(input.satoshis) : '-'} BSV`}</span>
           </div>
         </div>
       {/each}

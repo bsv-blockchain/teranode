@@ -52,7 +52,6 @@ export function connectToP2PServer() {
         json.receivedAt = new Date()
 
         const miningNodeSet: any = get(miningNodes)
-        console.log({miningNodeSet})
         if (json.type === 'mining_on') {
           miningNodeSet[json.base_url] = json
           miningNodes.set(miningNodeSet)
@@ -70,13 +69,12 @@ export function connectToP2PServer() {
               base_url: json.base_url,
             }
           }
-          console.log({res})
           miningNodes.set(miningNodeSet)
         } else if (miningNodeSet[json.base_url]) {
           miningNodeSet[json.base_url].receivedAt = new Date()
           miningNodes.set(miningNodeSet)
         }
-        console.log('miningNodes', miningNodes)
+        //console.log('miningNodes', miningNodes)
 
         let m: any = get(messages)
         m = [json, ...m].slice(0, maxMessages)
