@@ -34,5 +34,8 @@
 - [x] Add pagination [Server]
   - [x] Blocks
   - [x] Subtrees
+- [ ] Support search by block height
+- [ ] Add prev / next buttons to block details page and navigate by block height
+- [ ] Make a UTXO details page displaying the JSON returned by search only
 - [ ] Cleanup [In progress]
 - [ ] Documentation

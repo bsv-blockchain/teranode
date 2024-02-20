@@ -1,7 +1,6 @@
 import { writable, get } from 'svelte/store'
 import type { Writable } from 'svelte/store'
 import * as api from '$internal/api'
-import {getBestBlockHeaderFromServer} from "$internal/api";
 
 export const messages = writable([])
 export const miningNodes: any = writable({})
@@ -51,27 +50,31 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
+        let baseUrl = json.base_url
+        if (!json.base_url.includes('localhost') && json.base_url.includes('http:')) {
+          baseUrl = baseUrl.replace('http:', 'https:')
+        }
+
         const miningNodeSet: any = get(miningNodes)
         if (json.type === 'mining_on') {
-          miningNodeSet[json.base_url] = json
+          miningNodeSet[baseUrl] = json
           miningNodes.set(miningNodeSet)
-        } else if (json.base_url && !miningNodeSet[json.base_url]) {
-          miningNodeSet[json.base_url] = {
-            base_url: json.base_url,
+        } else if (baseUrl && !miningNodeSet[baseUrl]) {
+          miningNodeSet[baseUrl] = {
+            base_url: baseUrl,
           }
-          // TODO get the meta data from a GetBestBlockHeader request
-          const res: any = await api.getBestBlockHeaderFromServer({baseUrl: json.base_url})
+          const res: any = await api.getBestBlockHeaderFromServer({ baseUrl })
           if (res.ok && res.data) {
-            miningNodeSet[json.base_url] = {
+            miningNodeSet[baseUrl] = {
               ...res.data,
               tx_count: res.data.txCount,
               size_in_bytes: res.data.sizeInBytes,
-              base_url: json.base_url,
+              base_url: baseUrl,
             }
           }
           miningNodes.set(miningNodeSet)
-        } else if (miningNodeSet[json.base_url]) {
-          miningNodeSet[json.base_url].receivedAt = new Date()
+        } else if (miningNodeSet[baseUrl]) {
+          miningNodeSet[baseUrl].receivedAt = new Date()
           miningNodes.set(miningNodeSet)
         }
         //console.log('miningNodes', miningNodes)
