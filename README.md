@@ -122,6 +122,7 @@ Additional logs can be produced when the node is run with the following environm
 
 Please check the [Architecture Documentation](docs/architecture/ubsv-architecture.md) for an introduction to the overall architecture of the node.
 
+Additional documentation on the Network Consensus Rules can be found in the [Network Consensus Rules](docs%2FnetworkConsensusRules.md) document.
 
 ---
 
