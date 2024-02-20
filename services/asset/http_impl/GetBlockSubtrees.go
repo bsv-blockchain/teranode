@@ -1,6 +1,9 @@
 package http_impl
 
 import (
+	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
+	"math"
 	"net/http"
 	"strings"
 
@@ -50,7 +53,8 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 		// get all the subtrees for the block
 		data := make([]SubtreeMeta, 0, limit)
-		var subtreeResult *util.Subtree
+		var subtreeHead *util.Subtree
+		var numNodes int
 		if len(block.Subtrees) > 0 {
 			for i := offset; i < offset+limit; i++ {
 				if i >= len(block.Subtrees) {
@@ -58,20 +62,24 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 				}
 
 				subtreeHash := block.Subtrees[i]
-				// TODO this is inefficient, we should only get the meta data of the subtree
-				subtreeResult, err = h.repository.GetSubtree(c.Request().Context(), subtreeHash)
+				subtreeHead, numNodes, err = h.repository.GetSubtreeHead(c.Request().Context(), subtreeHash)
 				if err != nil {
+					if errors.Is(err, ubsverrors.ErrNotFound) {
+						return echo.NewHTTPError(http.StatusNotFound, err.Error())
+					}
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
+
+				height := math.Ceil(math.Log2(float64(numNodes)))
 
 				// do something with the subtree result
 				data = append(data, SubtreeMeta{
 					Index:   i,
 					Hash:    subtreeHash.String(),
-					Height:  uint64(subtreeResult.Height),
-					TxCount: len(subtreeResult.Nodes),
-					Fee:     subtreeResult.Fees,
-					Size:    subtreeResult.SizeInBytes,
+					Height:  uint64(height),
+					TxCount: numNodes,
+					Fee:     subtreeHead.Fees,
+					Size:    subtreeHead.SizeInBytes,
 				})
 			}
 		}

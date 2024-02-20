@@ -245,6 +245,50 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
+		g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(hash))
+	}()
+	traceSpan := tracing.Start(ctx, "s3:GetHead")
+	defer traceSpan.Finish()
+
+	objectKey := g.getObjectKey(hash)
+
+	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
+	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
+
+	// check cache
+	cached, ok := cache.Get(*objectKey)
+	if ok {
+		g.logger.Debugf("Cache hit for: %s", *objectKey)
+
+		if len(cached) < nrOfBytes {
+			return cached, nil
+		}
+
+		return cached[:nrOfBytes], nil
+	}
+
+	buf := manager.NewWriteAtBuffer([]byte{})
+	_, err := g.downloader.Download(traceSpan.Ctx, buf,
+		&s3.GetObjectInput{
+			Bucket: aws.String(g.bucket),
+			Key:    objectKey,
+			Range:  aws.String(fmt.Sprintf("bytes=0-%d", nrOfBytes-1)),
+		})
+	if err != nil {
+		if strings.Contains(err.Error(), "NoSuchKey") {
+			return nil, ubsverrors.ErrNotFound
+		}
+		traceSpan.RecordError(err)
+		return nil, fmt.Errorf("failed to get data head: %w", err)
+	}
+
+	return buf.Bytes(), err
+}
+
 func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {

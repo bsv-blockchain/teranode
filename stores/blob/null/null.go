@@ -51,6 +51,10 @@ func (n *Null) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
 }
 
+func (n *Null) GetHead(_ context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
+}
+
 func (n *Null) Exists(_ context.Context, _ []byte) (bool, error) {
 	return false, nil
 }

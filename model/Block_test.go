@@ -621,6 +621,19 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return subtreeBytes, nil
 }
 
+func (n *BlobStoreStub) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+	subtreeBytes, err := n.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(subtreeBytes) < nrOfBytes {
+		return subtreeBytes, nil
+	}
+
+	return subtreeBytes[:nrOfBytes], nil
+}
+
 func (n *BlobStoreStub) Exists(_ context.Context, _ []byte) (bool, error) {
 	return false, nil
 }
