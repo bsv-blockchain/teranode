@@ -167,6 +167,6 @@ export function getBlockStats(done?, fail?) {
   return get(`${baseUrl}/blockstats`, {}, done, fail)
 }
 
-export function getBlockGraphData(data: { periodMillis: number }, done?, fail?) {
-  return get(`${baseUrl}/blockgraphdata?periodMillis=${data.periodMillis}`, {}, done, fail)
+export function getBlockGraphData(data: { period: string }, done?, fail?) {
+  return get(`${baseUrl}/blockgraphdata/${data.period}`, {}, done, fail)
 }

@@ -104,7 +104,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	apiGroup.GET("/search", h.Search)
 	apiGroup.GET("/blockstats", h.GetBlockStats)
-	apiGroup.GET("/blockgraphdata", h.GetBlockGraphData)
+	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData)
 
 	apiGroup.GET("/lastblocks", h.GetLastNBlocks)
 

@@ -23,6 +23,18 @@
       }
     },
     "range-toggle": {
+      "2h": {
+        "label": "2H",
+        "tooltip": "2 Hours"
+      },
+      "6h": {
+        "label": "6H",
+        "tooltip": "6 Hours"
+      },
+      "12h": {
+        "label": "12H",
+        "tooltip": "12 Hours"
+      },
       "24h": {
         "label": "24H",
         "tooltip": "24 Hours"

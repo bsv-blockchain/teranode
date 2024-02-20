@@ -61,12 +61,10 @@
   }
 
   // graph
-  const oneDayMillis = 1000 * 60 * 60 * 24
-
   export let blockGraphData: any = []
 
-  async function getBlockGraphData(periodMillis: number) {
-    const res: any = await api.getBlockGraphData({ periodMillis })
+  async function getBlockGraphData(period: string) {
+    const res: any = await api.getBlockGraphData({ period })
     if (res.ok) {
       blockGraphData = res.data.data_points
     } else {
@@ -74,16 +72,14 @@
     }
   }
 
-  let rangeMillis
+  let period
 
-  $: if (isMounted && rangeMillis) {
-    let from = new Date().getTime() - rangeMillis
-
-    getBlockGraphData(from)
+  $: if (isMounted && period) {
+    getBlockGraphData(period)
   }
 
-  function onRangeMillis(value: number) {
-    rangeMillis = value
+  function onChangePeriod(value: string) {
+    period = value
   }
 
   let Graph
@@ -93,7 +89,7 @@
 
     // graph
     isMounted = true
-    rangeMillis = oneDayMillis
+    period = "24h"
 
     const timeoutId = setTimeout(async () => {
       Graph = (await import('$internal/components/page/home/home-stats-graph/index.svelte')).default
@@ -115,7 +111,7 @@
   <div class="content">
     <HomeStatsCard loading={statsLoading} data={statsData} onRefresh={getStatsData} />
     {#if Graph}
-      <Graph data={blockGraphData} {rangeMillis} {onRangeMillis} />
+      <Graph data={blockGraphData} {period} {onChangePeriod} />
     {/if}
   </div>
 </PageWithMenu>

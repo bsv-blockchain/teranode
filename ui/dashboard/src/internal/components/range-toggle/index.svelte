@@ -7,34 +7,47 @@
 
   $: t = $i18n.t
 
-  const oneDayMillis = 1000 * 60 * 60 * 24
-
   $: items = t
     ? [
         {
+          label: t(`${baseKey}.2h.label`),
+          tooltip: t(`${baseKey}.2h.tooltip`),
+          value: "2h",
+        },
+        {
+          label: t(`${baseKey}.6h.label`),
+          tooltip: t(`${baseKey}.6h.tooltip`),
+          value: "6h",
+        },
+        {
+          label: t(`${baseKey}.12h.label`),
+          tooltip: t(`${baseKey}.12h.tooltip`),
+          value: "12h",
+        },
+        {
           label: t(`${baseKey}.24h.label`),
           tooltip: t(`${baseKey}.24h.tooltip`),
-          value: oneDayMillis,
+          value: "24h",
         },
         {
           label: t(`${baseKey}.1w.label`),
           tooltip: t(`${baseKey}.1w.tooltip`),
-          value: 7 * oneDayMillis,
+          value: "1w",
         },
         {
           label: t(`${baseKey}.1m.label`),
           tooltip: t(`${baseKey}.1m.tooltip`),
-          value: 30 * oneDayMillis,
+          value: "1m",
         },
         {
           label: t(`${baseKey}.3m.label`),
           tooltip: t(`${baseKey}.3m.tooltip`),
-          value: 90 * oneDayMillis,
+          value: "3m",
         },
       ]
     : []
 
-  export let value = oneDayMillis
+  export let value = "24h"
 
   const dispatch = createEventDispatcher()
 
