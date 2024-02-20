@@ -110,10 +110,8 @@
   function onKeyDown(e) {
     if (!e) e = window.event
     const keyCode = e.code || e.key
-    switch (keyCode) {
-      case 'KeyR':
-        fetchData(page, pageSize)
-      default:
+    if (e.ctrlKey && keyCode === 'KeyR') {
+      fetchData(page, pageSize)
     }
   }
 </script>
@@ -189,4 +187,4 @@
   </div>
 </Card>
 
-<svelte:window on:keydown|preventDefault={onKeyDown} />
+<svelte:window on:keydown={onKeyDown} />

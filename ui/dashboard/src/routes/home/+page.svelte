@@ -105,10 +105,8 @@
   function onKeyDown(e) {
     if (!e) e = window.event
     const keyCode = e.code || e.key
-    switch (keyCode) {
-      case 'KeyR':
-        getStatsData()
-      default:
+    if (e.ctrlKey && keyCode === 'KeyR') {
+      getStatsData()
     }
   }
 </script>
@@ -122,7 +120,7 @@
   </div>
 </PageWithMenu>
 
-<svelte:window on:keydown|preventDefault={onKeyDown} />
+<svelte:window on:keydown={onKeyDown} />
 
 <style>
   .content {
