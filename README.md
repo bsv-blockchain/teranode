@@ -22,7 +22,7 @@
 - [7.2. gRPC](#72-grpc)
 - [7.3. fRPC and DRPC](#73-frpc-and-drpc)
 - [7.4. Protobuf](#74-protobuf)
-- [7.5. IPv6 Multicast ](#75-ipv6-multicast-)
+- [7.5. IPv6 Multicast](#75-ipv6-multicast)
 - [7.6. Stores](#76-stores)
 - [7.7. Docker ](#77-docker-)
 - [7.8. Kubernetes](#78-kubernetes)
@@ -265,6 +265,7 @@ Here are some key points about IPv6 multicast:
 
 6. **Routing:** Multicast routing protocols, such as Protocol Independent Multicast (PIM), are used to manage and control the forwarding of multicast traffic within an IPv6 network. These protocols ensure that multicast data reaches the intended recipients efficiently.
 
+**NOTE:** IPv6 Multicast support is currently not implemented as our current hosting platform, Amazon Web Services, does not support the correct features we require. Specifically, there is no support for MLDv1 or MLDv2 within a VPC subnet, no multicast packets over VPC peering connections, and also strict restrictions on network service architecture which would impose additional costs and require complex engineering to workaround.
 
 ### 7.6. Stores
 
@@ -292,6 +293,26 @@ The system uses a number of different store technologies to store data. Differen
   - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
     - https://www.postgresql.org.
 
+5. **Shared Storage**:
+  - Clustered, high-availability, low-latency shared filesystems provided by AWS FSx for Lustre service.
+  - Subtree Store: For shared subtree data
+    - /data/subtreestore
+  - TX Store: For shared transaction data
+    - /data/txstore
+  - These volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
+  - Files are deleted from the base directory of each file store after 360 minutes (6 hours).
+  - No file-locking is provided, so the application must be aware of when a file-write is completed and it is safe to be read by other services.
+  - Filesystem consistent-state latency should be in the sub-millisecond range.
+  - There is a /s3 subfolder in each filesystem that facilitates automatic transfer of data to an associated S3 bucket.
+  - File data on all objects within the /s3 subfolder are released from the filesystem every hour, within a 30 minute flexible time window. The filesystem metadata will still be available, but the actual file contents will be cleared.
+  - Once data is archived off to S3, the best way to read it again is using S3 direct API calls
+  - Linked S3 archive buckets:
+    - asia-ubsv-subtree-store
+    - asia-ubsv-txstore
+    - eu-ubsv-subtree-store
+    - eu-ubsv-txstore
+    - us-ubsv-subtree-store
+    - us-ubsv-txstore
 
 ### 7.7. Docker
 
