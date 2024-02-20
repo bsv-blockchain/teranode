@@ -14,7 +14,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func GenerateTestBlock(nrOfTxs int, subtreeStore *TestSubtreeStore, config *TestConfig) (*model.Block, error) {
+func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*model.Block, error) {
 	FileDir = config.FileDir
 	FileNameTemplate = config.FileNameTemplate
 	FileNameTemplateMerkleHashes = config.FileNameTemplateMerkleHashes

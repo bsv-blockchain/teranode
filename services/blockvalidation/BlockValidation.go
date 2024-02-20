@@ -255,6 +255,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		prometheusBlockValidationValidateBlock.Inc()
 	}()
 
+	fmt.Println("inside ValidateBlock")
+
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
 	// validate all the subtrees in the block
@@ -731,6 +733,9 @@ func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chai
 }
 
 func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+
+	fmt.Println("validateSubtreeInternal")
+
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
