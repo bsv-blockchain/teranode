@@ -82,7 +82,7 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 2. **Configure kubeconfig for EKS**:
    - Use the `aws eks update-kubeconfig` command to configure kubectl to interact with your Amazon EKS clusters.
    - Example: `aws eks update-kubeconfig --name aws-ubsv-playground --region <region>`
-     - For example, the staging environment supported regions include `ap-northeast-1`, `eu-west-1`, and `us-east-1`.
+     - For example, the staging environment supported regions include `ap-south-1`, `eu-west-1`, and `us-east-1`.
    - Verify the configuration with `kubectl config view`. Alternatively, you can verify the raw data in the `~/.kube/config` file.
 
 3. **Zsh Configuration**:
@@ -263,8 +263,8 @@ lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> ubsv.run
 
 Example:
 ```bash
-# Provides detailed information about the Persistent Volume Claim (PVC) named `fsx-pv`
-k describe pvc fsx-pv
+# Provides detailed information about the Persistent Volume Claim (PVC) named `subtree-lustre-pv`
+k describe pvc subtree-lustre-pv
 ```
 
 #### Forwarding Ports

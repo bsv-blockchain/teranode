@@ -106,7 +106,7 @@ case $REGION in
         LEGAL_ENVIRONMENT=("allinone" "scaling")
         ;;
 
-    "ap-northeast-1")
+    "ap-south-1")
         LEGAL_NAMESPACES=("miner-ap-1" "m3")
         LEGAL_ENVIRONMENT=("allinone" "scaling")
         ;;
