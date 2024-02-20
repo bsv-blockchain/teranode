@@ -2,7 +2,7 @@ module github.com/bitcoin-sv/ubsv
 
 go 1.21
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.5
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
 
 require (
 	github.com/Shopify/sarama v1.38.1
