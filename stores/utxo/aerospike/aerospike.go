@@ -433,13 +433,12 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 			// we assume because it exists, it is OK
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-				e := fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch record: %s - %w", batchId, utxoHashes[idx].String(), err)
-				errorsThrown = append(errorsThrown, e)
+				s.logger.Warnf("[BATCH_ERR][%d] %s already exists, skipping", batchId, utxoHashes[idx].String())
 				continue
 			}
 
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-			e := fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch record: %s - %w", batchId, utxoHashes[idx].String(), err)
+			e := fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch record (will retry): %s - %w", batchId, utxoHashes[idx].String(), err)
 			errorsThrown = append(errorsThrown, e)
 
 			s.logger.Errorf("%s", e.Error())
@@ -455,7 +454,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	if len(errorsThrown) > 0 {
 		prometheusUtxoStoreFail.Add(float64(len(errorsThrown)))
-		return fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch records: %d of %d failed (will retry)", batchId, len(errorsThrown), len(batchRecords))
+		return fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch records: %d of %d failed", batchId, len(errorsThrown), len(batchRecords))
 	}
 
 	prometheusUtxoStore.Add(float64(len(utxoHashes)))
@@ -483,6 +482,7 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash chainhash.Hash, nL
 	if err != nil {
 		var aErr *aerospike.AerospikeError
 		if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+			s.logger.Warnf("%s Key already exists, skipping ", hash[:])
 			return nil
 		}
 
@@ -604,12 +604,13 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		}
 		valueBytes, ok := value.Bins["txid"].([]byte)
 		if ok && len(valueBytes) == 32 {
+			spendingTxHash, err := chainhash.NewHash(valueBytes)
 			if [32]byte(valueBytes) == *spend.SpendingTxID {
 				prometheusUtxoReSpend.Inc()
+				s.logger.Warnf("utxo %s has already been marked as spent (will skip) by %s", spend.Hash.String(), spendingTxHash)
 				return nil
 			} else {
 				prometheusUtxoSpendSpent.Inc()
-				spendingTxHash, err := chainhash.NewHash(valueBytes)
 				if err != nil {
 					return fmt.Errorf("chainhash error: %w", err)
 				}
