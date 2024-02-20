@@ -2,7 +2,6 @@ package http_impl
 
 import (
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -37,11 +36,13 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		h.logger.Debugf("[Asset_http] GetUTXOsByTXID in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {
-			return err
+			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error creating hash: %s", err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		b, err := h.repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
+			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error getting transaction: %s", hash.String(), err.Error())
 			if strings.HasSuffix(err.Error(), " not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
@@ -51,7 +52,8 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 		tx, err := bt.NewTxFromBytes(b)
 		if err != nil {
-			return err
+			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error creating transaction: %s", hash.String(), err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		// Go through all the outputs and get the UTXOHash for each one
@@ -62,17 +64,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 		// Create a channel to receive the results from the goroutines
 		// that will be created.
-		utxoCh := make(chan *UTXOItem)
-		utxos := make([]*UTXOItem, 0, len(tx.Outputs))
-
-		waitCh := make(chan struct{})
-
-		go func() {
-			for utxo := range utxoCh {
-				utxos = append(utxos, utxo)
-			}
-			close(waitCh)
-		}()
+		utxos := make([]*UTXOItem, len(tx.Outputs))
 
 		// Create a goroutine for each output in the transaction.
 		for i, output := range tx.Outputs {
@@ -85,12 +77,6 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 					return err
 				}
 
-				// Get the UTXO for this output.
-				utxoRes, err := h.repository.GetUtxo(ctx, utxoHash)
-				if err != nil {
-					return err
-				}
-
 				utxoItem := &UTXOItem{
 					Txid:          hash,
 					Vout:          uint32(safeI),
@@ -98,6 +84,9 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 					Satoshis:      safeOutput.Satoshis,
 					UtxoHash:      utxoHash,
 				}
+
+				// Get the UTXO for this output.
+				utxoRes, _ := h.repository.GetUtxo(ctx, utxoHash)
 
 				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
 					utxoItem.Status = utxo.Status(utxoRes.Status).String()
@@ -107,26 +96,17 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 					utxoItem.Status = utxo.Status_NOT_FOUND.String()
 				}
 
-				// Send the UTXO to the channel.
-				utxoCh <- utxoItem
+				// this can be set here, but only directly by index
+				utxos[safeI] = utxoItem
 
 				return nil
 			})
 		}
 
 		if err = g.Wait(); err != nil {
-			return err
+			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error: %s", hash.String(), err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-
-		close(utxoCh)
-
-		// Now we have to wait for the answers to be added to the slice.
-		<-waitCh
-
-		// Sort the UTXOs by the vout.
-		sort.SliceStable(utxos, func(i, j int) bool {
-			return utxos[i].Vout < utxos[j].Vout
-		})
 
 		prometheusAssetHttpGetUTXO.WithLabelValues("OK", "200").Inc()
 
@@ -134,6 +114,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		case JSON:
 			return c.JSONPretty(200, utxos, "  ")
 		default:
+			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error: Bad read mode", hash.String())
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}
 	}
