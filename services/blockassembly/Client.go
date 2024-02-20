@@ -2,6 +2,8 @@ package blockassembly
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -14,13 +16,14 @@ import (
 )
 
 type Client struct {
-	client        blockassembly_api.BlockAssemblyAPIClient
-	frpcClient    *blockassembly_api.Client
-	frpcConnected bool
-	logger        ulogger.Logger
-	batchSize     int
-	batchCh       chan []*blockassembly_api.AddTxRequest
-	batcher       batcher.Batcher[blockassembly_api.AddTxRequest]
+	client              blockassembly_api.BlockAssemblyAPIClient
+	frpcClient          atomic.Pointer[blockassembly_api.Client]
+	frpcClientConnected bool
+	frpcClientMux       sync.Mutex
+	logger              ulogger.Logger
+	batchSize           int
+	batchCh             chan []*blockassembly_api.AddTxRequest
+	batcher             batcher.Batcher[blockassembly_api.AddTxRequest]
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -54,10 +57,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	duration := time.Duration(sendBatchTimeout) * time.Millisecond
 
 	client := &Client{
-		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
-		logger:    logger,
-		batchSize: batchSize,
-		batchCh:   make(chan []*blockassembly_api.AddTxRequest),
+		client:              blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		frpcClientConnected: false,
+		frpcClientMux:       sync.Mutex{},
+		logger:              logger,
+		batchSize:           batchSize,
+		batchCh:             make(chan []*blockassembly_api.AddTxRequest),
 	}
 
 	sendBatch := func(batch []*blockassembly_api.AddTxRequest) {
@@ -79,6 +84,17 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
+func (s *Client) getFRPCClient(ctx context.Context) *blockassembly_api.Client {
+	s.frpcClientMux.Lock()
+	defer s.frpcClientMux.Unlock()
+
+	frpcClient := s.frpcClient.Load()
+	if frpcClient != nil {
+		s.connectFRPC(ctx, frpcClient)
+	}
+	return frpcClient
+}
+
 func (s *Client) NewFRPCClient() {
 	_, ok := gocore.Config().Get("blockassembly_frpcAddress")
 	if !ok {
@@ -88,12 +104,15 @@ func (s *Client) NewFRPCClient() {
 	if err != nil {
 		s.logger.Fatalf("Error creating new fRPC client in blockassembly: %s", err)
 	}
-	s.frpcClient = frpcClient
-	s.frpcConnected = false
+	s.frpcClient.Store(frpcClient)
 }
 
-func (s *Client) connectFRPC(ctx context.Context) {
-	if s.frpcConnected {
+func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockassembly_api.Client) {
+	if frpcClient.Closed() {
+		s.logger.Errorf("fRPC connection to blockassembly, closed, will attempt to connect")
+	}
+
+	if s.frpcClientConnected {
 		return
 	}
 
@@ -109,7 +128,7 @@ func (s *Client) connectFRPC(ctx context.Context) {
 	for i := 0; i < maxRetries; i++ {
 		s.logger.Infof("Attempting to create fRPC connection to blockassembly, attempt %d", i+1)
 
-		err := s.frpcClient.Connect(blockAssemblyFRPCAddress)
+		err := frpcClient.Connect(blockAssemblyFRPCAddress)
 		if err != nil {
 			s.logger.Infof("Error connecting to fRPC server in blockassembly: %s", err)
 			if i+1 == maxRetries {
@@ -124,16 +143,16 @@ func (s *Client) connectFRPC(ctx context.Context) {
 		}
 	}
 
+	s.frpcClientConnected = connected
+
 	if !connected {
 		s.logger.Fatalf("Failed to connect to blockassembly fRPC server after %d attempts", maxRetries)
 	}
 
-	s.frpcConnected = true
-
 	/* listen for close channel and reconnect */
 	s.logger.Infof("Listening for close channel on fRPC client")
 	go func() {
-		<-s.frpcClient.CloseChannel()
+		<-frpcClient.CloseChannel()
 		s.logger.Infof("fRPC client close channel received, reconnecting...")
 		s.NewFRPCClient()
 	}()
@@ -160,10 +179,11 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	}
 
 	if s.batchSize == 0 {
-		if s.frpcClient != nil {
 
-			s.connectFRPC(ctx)
-			if _, err := s.frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
+		frpcClient := s.getFRPCClient(ctx)
+		if frpcClient != nil {
+
+			if _, err := frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
 				Txid:     hash[:],
 				Fee:      fee,
 				Size:     size,
@@ -240,9 +260,9 @@ func (s *Client) batchWorker(ctx context.Context, timeout time.Duration) {
 }
 
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*blockassembly_api.AddTxRequest) {
-	if s.frpcClient != nil {
+	frpcClient := s.getFRPCClient(ctx)
+	if frpcClient != nil {
 
-		s.connectFRPC(ctx)
 		fBatch := make([]*blockassembly_api.BlockassemblyApiAddTxRequest, len(batch))
 		for i, req := range batch {
 			fBatch[i] = &blockassembly_api.BlockassemblyApiAddTxRequest{
@@ -256,7 +276,7 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*blockass
 		txBatch := &blockassembly_api.BlockassemblyApiAddTxBatchRequest{
 			TxRequests: fBatch,
 		}
-		resp, err := s.frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, txBatch)
+		resp, err := frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, txBatch)
 		if err != nil {
 			s.logger.Errorf("%v", err)
 			return
