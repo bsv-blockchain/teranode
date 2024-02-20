@@ -6,9 +6,14 @@
   import TableToggle from '$internal/components/table-toggle/index.svelte'
   import i18n from '$internal/i18n'
 
+  import { assetHTTPAddress } from '$internal/stores/nodeStore'
+  import { failure } from '$lib/utils/notifications'
+  import * as api from '$internal/api'
   import { tableVariant } from '$internal/stores/nav'
   import { addNumCommas } from '$lib/utils/format'
   import { getColDefs, getRenderCells } from './data'
+  import { getTps } from '$internal/utils/txs'
+  import { getHumanReadableTime } from '$internal/utils/humanTime'
 
   const baseKey = 'page.viewer'
 
@@ -20,13 +25,13 @@
 
   $: renderCells = getRenderCells(t) || {}
 
-  export let data: any[] = []
-  export let pageSize = 10
-  export let refresh = function () {}
+  let data: any[] = []
 
   $: hasData = data && data.length > 0
 
   let page = 1
+  let pageSize = 20
+  let totalItems = 0
 
   function onPage(e) {
     const data = e.detail
@@ -49,6 +54,68 @@
     const value = e.detail.value
     variant = $tableVariant = value
   }
+
+  async function fetchData(page, pageSize) {
+    try {
+      if (!$assetHTTPAddress) {
+        return
+      }
+
+      let b = []
+
+      const result: any = await api.getBlocks({ offset: (page - 1) * pageSize, limit: pageSize })
+      if (result.ok) {
+        b = result.data.data
+        const pagination = result.data.pagination
+        pageSize = pagination.limit
+        page = Math.floor(pagination.offset / pageSize) + 1
+        totalItems = pagination.totalRecords
+      } else {
+        failure(result.error.message)
+      }
+
+      // Calculate delta time which is the time between blocks
+      b.forEach((block: any, i: number) => {
+        if (i === b.length - 1) {
+          return
+        }
+
+        const prevBlock: any = b[i + 1]
+        const prevBlockTime: any = new Date(prevBlock.timestamp)
+        const blockTime: any = new Date(block.timestamp)
+        const diff = blockTime - prevBlockTime
+
+        block.tps = getTps(block.transactionCount, diff)
+
+        block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
+      })
+
+      // Calculate the age of the block
+      b.forEach((block: any) => {
+        const blockTime: any = new Date(block.timestamp)
+        const now: any = new Date()
+        const diff = now - blockTime
+        block.age = getHumanReadableTime(diff)
+      })
+
+      data = b //b.slice(0, numberOfBlocks) // Only show the last 10 blocks
+    } catch (err: any) {
+      failure(err)
+    }
+  }
+
+  // Fetch data when the selected node changes
+  $: $assetHTTPAddress && fetchData(page, pageSize)
+
+  function onKeyDown(e) {
+    if (!e) e = window.event
+    const keyCode = e.code || e.key
+    switch (keyCode) {
+      case 'KeyR':
+        fetchData(page, pageSize)
+      default:
+    }
+  }
 </script>
 
 <Card title={t(`${baseKey}.title`)} contentPadding="0" showFooter={showTableFooter}>
@@ -63,7 +130,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={false}
       showQuickNav={false}
       showNav={showPagerNav}
@@ -82,7 +149,7 @@
       ico={true}
       icon="icon-refresh-line"
       tooltip={t('tooltip.refresh')}
-      on:click={refresh}
+      on:click={() => fetchData(page, pageSize)}
     />
   </svelte:fragment>
   <Table
@@ -98,6 +165,7 @@
     i18n={i18nLocal}
     expandUp={true}
     pager={false}
+    useServerPagination={true}
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
@@ -107,7 +175,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={showPagerSize}
       showQuickNav={showPagerNav}
       showNav={showPagerNav}
@@ -120,3 +188,5 @@
     />
   </div>
 </Card>
+
+<svelte:window on:keydown|preventDefault={onKeyDown} />

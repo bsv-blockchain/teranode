@@ -125,6 +125,10 @@ export function getItemData(data: { type: ItemType; hash: string }, done?, fail?
   return get(getItemApiUrl(data.type, data.hash), {}, done, fail)
 }
 
+export function getBlocks(data: { offset: number; limit: number }, done?, fail?) {
+  return get(`${baseUrl}/blocks`, { query: { offset: data.offset, limit: data.limit } }, done, fail)
+}
+
 export function getBlockSubtrees(
   data: { hash: string; offset: number; limit: number },
   done?,
