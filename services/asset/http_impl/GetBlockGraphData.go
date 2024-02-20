@@ -3,7 +3,7 @@ package http_impl
 import (
 	"errors"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/ordishs/gocore"
@@ -15,15 +15,24 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 		AssetStat.NewStat("GetBlockGraphData_http").AddTime(start)
 	}()
 
-	periodMillisStr := c.QueryParam("periodMillis")
-
-	if periodMillisStr == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, errors.New("periodMillis is required"))
-	}
-
-	periodMillis, err := strconv.ParseInt(periodMillisStr, 10, 64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	periodMillis := int64(0)
+	switch c.Param("period") {
+	case "2h":
+		periodMillis = time.Now().Add(-2*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "6h":
+		periodMillis = time.Now().Add(-6*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "12h":
+		periodMillis = time.Now().Add(-12*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "24h":
+		periodMillis = time.Now().Add(-24*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "1w":
+		periodMillis = time.Now().Add(-7*24*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "1m":
+		periodMillis = time.Now().Add(-30*24*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "3m":
+		periodMillis = time.Now().Add(-90*24*time.Hour).UnixNano() / int64(time.Millisecond)
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, errors.New("period is required"))
 	}
 
 	dataPoints, err := h.repository.GetBlockGraphData(c.Request().Context(), uint64(periodMillis))

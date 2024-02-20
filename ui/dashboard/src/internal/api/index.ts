@@ -129,6 +129,14 @@ export function getBlocks(data: { offset: number; limit: number }, done?, fail?)
   return get(`${baseUrl}/blocks`, { query: { offset: data.offset, limit: data.limit } }, done, fail)
 }
 
+export function getBestBlockHeader(data: null, done?, fail?) {
+  return get(`${baseUrl}/bestblockheader/json`, { }, done, fail)
+}
+
+export function getBestBlockHeaderFromServer(data: { baseUrl: string }, done?, fail?) {
+  return get(`${data.baseUrl}/bestblockheader/json`, { }, done, fail)
+}
+
 export function getBlockSubtrees(
   data: { hash: string; offset: number; limit: number },
   done?,
@@ -159,6 +167,6 @@ export function getBlockStats(done?, fail?) {
   return get(`${baseUrl}/blockstats`, {}, done, fail)
 }
 
-export function getBlockGraphData(data: { periodMillis: number }, done?, fail?) {
-  return get(`${baseUrl}/blockgraphdata?periodMillis=${data.periodMillis}`, {}, done, fail)
+export function getBlockGraphData(data: { period: string }, done?, fail?) {
+  return get(`${baseUrl}/blockgraphdata/${data.period}`, {}, done, fail)
 }

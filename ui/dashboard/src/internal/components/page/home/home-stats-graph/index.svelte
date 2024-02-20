@@ -10,20 +10,20 @@
   const baseKey = 'page.home.txs'
 
   export let data: any = []
-  export let rangeMillis
-  export let onRangeMillis
+  export let period
+  export let onChangePeriod
 
   let renderKey = ''
   let graphObj
 
   $: if (data) {
-    graphObj = getGraphObj(t, data)
+    graphObj = getGraphObj(t, data, period)
   }
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={true} headerPadding="20px 24px 10px 24px">
   <svelte:fragment slot="header-tools">
-    <RangeToggle value={rangeMillis} on:change={(e) => onRangeMillis(e.detail.value)} />
+    <RangeToggle value={period} on:change={(e) => onChangePeriod(e.detail.value)} />
   </svelte:fragment>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="530px">

@@ -17,22 +17,22 @@
 - [x] Create keyboard shortcut for refresh
 - [ ] Look at correct table column sorting, depending on field type
 - [x] Add "Copy URL" button for API url to use in CURL
-- [ ] Confirm "Peer selector" is working on P2P page
-- [ ] Confirm network page data stays in sync with the real status of a node
-  - [ ] often shows M1 or M2 twice with different details?
-  - [ ] shows other miner briefly then disappears again?
-- [ ] Improve block summary fields
+- [x] Confirm "Peer selector" is working on P2P page
+- [x] Confirm network page data stays in sync with the real status of a node
+  - [x] often shows M1 or M2 twice with different details?
+  - [x] shows other miner briefly then disappears again?
+- [x] Improve block summary fields
   - [x] `difficulty` - Ask WoC: use block `bits` to calculate it
-  - [ ] `confirmation` = latest block height - block height of block being inspected
+  - [x] `confirmation` = latest block height - block height of block being inspected
 - [ ] Improve subtree summary fields
   - [x] Show static entry for coinbase always - data for it was removed from DB
   - [x] `Total Fee` should be `Fees` value from header
   - [x] `AVG fee` should be total divided by number of tx's
   - [ ] wish for later: explore option to obtain `miner` field value (where to get it from ..)
 - [ ] Serve webfonts with efficient cache policy [Server]
-- [ ] Serve responses with text compression, setting `Content-Encoding` [Server]
-- [ ] Add pagination [Server] / [SSR]
-  - [ ] Blocks
-  - [ ] Subtrees
+- [x] Serve responses with text compression, setting `Content-Encoding` [Server]
+- [x] Add pagination [Server]
+  - [x] Blocks
+  - [x] Subtrees
 - [ ] Cleanup [In progress]
 - [ ] Documentation
