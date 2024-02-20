@@ -53,7 +53,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 		Pagination: Pagination{
 			Offset:       offset,
 			Limit:        limit,
-			TotalRecords: int(latestBlockHeight),
+			TotalRecords: int(latestBlockHeight) + 1,
 		},
 	}
 
