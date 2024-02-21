@@ -14,8 +14,6 @@
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { getItemApiUrl, ItemType } from '$internal/api'
-  import { failure } from '$lib/utils/notifications'
-  import * as api from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -32,7 +30,6 @@
   $: expandedHeader = data?.expandedHeader
   $: isOverview = display === DetailTab.overview
   $: isJson = display === DetailTab.json
-  $: hasNextBlock = expandedHeader.height < data?.latestBlockData.height
 
   function onDisplay(value) {
     dispatch('display', { value })
@@ -45,16 +42,6 @@
   function navToBlock(hash) {
     if (hash) {
       goto(getDetailsUrl(DetailType.block, hash))
-    }
-  }
-
-  async function navToBlockByHeight(height) {
-    const result: any = await api.searchItem({ q: height })
-    if (result.ok) {
-      const { type, hash } = result.data
-      goto(getDetailsUrl(type, hash))
-    } else {
-      failure(result.error.message)
     }
   }
 
@@ -101,9 +88,9 @@
       size="small"
       icon="icon-chevron-right-line"
       ico={true}
-      disabled={!hasNextBlock}
-      tooltip={hasNextBlock ? t('tooltip.next-block') : ''}
-      on:click={() => navToBlockByHeight(expandedHeader.height + 1)}
+      disabled={!data?.nextblock}
+      tooltip={data?.nextblock ? t('tooltip.next-block') : ''}
+      on:click={() => navToBlock(data?.nextblock)}
     />
   </div>
   <div class="content">
