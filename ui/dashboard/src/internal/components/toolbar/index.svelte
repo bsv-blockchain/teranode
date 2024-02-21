@@ -56,6 +56,9 @@
     />
   </div>
 </div>
+<div class="warning" {style}>
+ ---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----
+</div>
 
 <style>
   .toolbar {
@@ -76,5 +79,16 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+  }
+
+  .warning {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    background-color: var(--color-warning);
+    color: var(--color-white);
+    font-size: 14px;
   }
 </style>
