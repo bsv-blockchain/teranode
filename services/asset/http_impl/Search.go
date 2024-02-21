@@ -88,7 +88,7 @@ func (h *HTTP) Search(c echo.Context) error {
 	}
 
 	if blockHeight, err := strconv.Atoi(q); err == nil {
-		// We are searching a numner, get latest block height
+		// We are searching a number, get latest block height
 		_, blockMeta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " not found") {
