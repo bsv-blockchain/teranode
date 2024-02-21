@@ -21,7 +21,12 @@
   }
 </script>
 
-<Card title={t(`${baseKey}.title`)} showFooter={true} headerPadding="20px 24px 10px 24px">
+<Card
+  title={t(`${baseKey}.title`)}
+  showFooter={true}
+  headerPadding="20px 24px 10px 24px"
+  wrapHeader={true}
+>
   <svelte:fragment slot="header-tools">
     <RangeToggle value={period} on:change={(e) => onChangePeriod(e.detail.value)} />
   </svelte:fragment>
