@@ -61,6 +61,11 @@ services:
     image: aerospike/aerospike-server:latest
     networks:
       - ubsv-network
+    environment:
+      REPL_FACTOR: 0
+      MEM_GB: 1
+      DEFAULT_TTL: 30d
+      STORAGE_GB: 4
     ports:
       - 3100:3000
 
@@ -69,6 +74,11 @@ services:
     image: aerospike/aerospike-server:latest
     networks:
       - ubsv-network
+    environment:
+      REPL_FACTOR: 0
+      MEM_GB: 1
+      DEFAULT_TTL: 30d
+      STORAGE_GB: 4
     ports:
       - 3200:3000
 
@@ -77,6 +87,11 @@ services:
     image: aerospike/aerospike-server:latest
     networks:
       - ubsv-network
+    environment:
+      REPL_FACTOR: 0
+      MEM_GB: 1
+      DEFAULT_TTL: 30d
+      STORAGE_GB: 4
     ports:
       - 3300:3000
 
@@ -90,8 +105,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      utxostore: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       startTxStore: "true"
@@ -129,8 +144,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      utxostore: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
       startTxStore: "true"
@@ -167,8 +182,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
-      utxostore: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=0&ConnectionQueueSize=32&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
       startTxStore: "true"
