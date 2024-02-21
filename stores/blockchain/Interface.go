@@ -22,6 +22,7 @@ type Store interface {
 	GetDBEngine() util.SQLEngine
 	GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error)
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
+	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)

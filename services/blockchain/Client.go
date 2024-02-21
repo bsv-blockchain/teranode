@@ -23,7 +23,7 @@ import (
 type Client struct {
 	client  blockchain_api.BlockchainAPIClient
 	logger  ulogger.Logger
-	running atomic.Bool
+	running *atomic.Bool
 	conn    *grpc.ClientConn
 }
 
@@ -82,7 +82,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 	return &Client{
 		client:  baClient,
 		logger:  logger,
-		running: running,
+		running: &running,
 		conn:    baConn,
 	}, nil
 }
@@ -103,11 +103,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	}, nil
 }
 
-func (c Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
+func (c *Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
 	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
 }
 
-func (c Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
 	external := peerID != ""
 	req := &blockchain_api.AddBlockRequest{
 		Header:           block.Header.Bytes(),
@@ -130,9 +130,39 @@ func (c Client) AddBlock(ctx context.Context, block *model.Block, peerID string)
 	return nil
 }
 
-func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
 	resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
+	})
+	if err != nil {
+		return nil, ubsverrors.UnwrapGRPC(err)
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.Header)
+	if err != nil {
+		return nil, err
+	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(resp.CoinbaseTx)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
+	for _, subtreeHash := range resp.SubtreeHashes {
+		hash, err := chainhash.NewHash(subtreeHash)
+		if err != nil {
+			return nil, err
+		}
+		subtreeHashes = append(subtreeHashes, hash)
+	}
+
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
+}
+
+func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	resp, err := c.client.GetBlockByHeight(ctx, &blockchain_api.GetBlockByHeightRequest{
+		Height: height,
 	})
 	if err != nil {
 		return nil, ubsverrors.UnwrapGRPC(err)
@@ -173,7 +203,7 @@ func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*m
 	return resp, ubsverrors.UnwrapGRPC(err)
 }
 
-func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
+func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
 		NumberOfBlocks: n,
 		IncludeOrphans: includeOrphans,
@@ -185,7 +215,7 @@ func (c Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool
 
 	return resp.Blocks, nil
 }
-func (c Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	resp, err := c.client.GetSuitableBlock(ctx, &blockchain_api.GetSuitableBlockRequest{
 		Hash: blockHash[:],
 	})
@@ -195,7 +225,7 @@ func (c Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash)
 
 	return resp.Block, nil
 }
-func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
 		Hash:  blockHash[:],
 		Depth: uint32(depth),
@@ -209,7 +239,7 @@ func (c Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash
 	}
 	return hash, nil
 }
-func (c Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
+func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
 	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
 		BlockHash: blockHash[:],
 	})
@@ -223,7 +253,7 @@ func (c Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Ha
 	return &bits, nil
 }
 
-func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+func (c *Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
 	})
@@ -234,7 +264,7 @@ func (c Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (
 	return resp.Exists, nil
 }
 
-func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, nil, ubsverrors.UnwrapGRPC(err)
@@ -255,7 +285,7 @@ func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mo
 	return header, meta, nil
 }
 
-func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
@@ -279,7 +309,7 @@ func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (
 	return header, meta, nil
 }
 
-func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
@@ -300,7 +330,7 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	return headers, resp.Heights, nil
 }
 
-func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),
 	})
@@ -308,7 +338,7 @@ func (c Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) 
 	return ubsverrors.UnwrapGRPC(err)
 }
 
-func (c Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),
 	})
@@ -316,7 +346,7 @@ func (c Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) 
 	return ubsverrors.UnwrapGRPC(err)
 }
 
-func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
@@ -328,7 +358,7 @@ func (c Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash
 	return resp.Ids, nil
 }
 
-func (c Client) SendNotification(ctx context.Context, notification *model.Notification) error {
+func (c *Client) SendNotification(ctx context.Context, notification *model.Notification) error {
 	_, err := c.client.SendNotification(ctx, &blockchain_api.Notification{
 		Type: notification.Type,
 		Hash: notification.Hash[:],
@@ -341,7 +371,7 @@ func (c Client) SendNotification(ctx context.Context, notification *model.Notifi
 	return nil
 }
 
-func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
 	ch := make(chan *model.Notification)
 
 	go func() {
@@ -394,7 +424,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	return ch, nil
 }
 
-func (c Client) GetState(ctx context.Context, key string) ([]byte, error) {
+func (c *Client) GetState(ctx context.Context, key string) ([]byte, error) {
 	resp, err := c.client.GetState(ctx, &blockchain_api.GetStateRequest{
 		Key: key,
 	})
@@ -405,7 +435,7 @@ func (c Client) GetState(ctx context.Context, key string) ([]byte, error) {
 	return resp.Data, nil
 }
 
-func (c Client) SetState(ctx context.Context, key string, data []byte) error {
+func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 	_, err := c.client.SetState(ctx, &blockchain_api.SetStateRequest{
 		Key:  key,
 		Data: data,
