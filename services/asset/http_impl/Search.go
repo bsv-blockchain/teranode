@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -85,7 +87,31 @@ func (h *HTTP) Search(c echo.Context) error {
 		return c.String(http.StatusNotFound, "not found")
 	}
 
-	// TODO: Check if it's a block height (number)
+	if blockHeight, err := strconv.Atoi(q); err == nil {
+		// We are searching a numner, get latest block height
+		_, blockMeta, err := h.repository.GetBestBlockHeader(c.Request().Context())
+		if err != nil {
+			if strings.HasSuffix(err.Error(), " not found") {
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+		}
+		latestBlockHeight := blockMeta.Height
 
-	return sendError(c, http.StatusBadRequest, 7, errors.New("query must be a valid hash"))
+		// Return matching block if height within valid range
+		if blockHeight >= 0 && uint32(blockHeight) <= latestBlockHeight {
+			block, err := h.repository.GetBlockByHeight(c.Request().Context(), uint32(blockHeight))
+			if err != nil {
+				if strings.HasSuffix(err.Error(), " not found") {
+					return echo.NewHTTPError(http.StatusNotFound, err.Error())
+				} else {
+					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+				}
+			}
+			return c.JSONPretty(200, &res{"block", (*block.Hash()).String()}, "  ")
+		}
+	}
+
+	return sendError(c, http.StatusBadRequest, 7, errors.New("query must be a valid hash or block height"))
 }
