@@ -39,8 +39,8 @@ sort -n -r -k1,1 "$tmp2" > "$sorted2"
 sort -n -r -k1,1 "$tmp3" > "$sorted3"
 
 # Join the sorted files on height, handling unpaired lines with placeholders
-join -a1 -a2 -e 'MISSING' -o 0,1.2,2.2 "$sorted1" "$sorted2" > "$intermediate"
-join -a1 -a2 -e 'MISSING' -o 0,1.2,2.2 "$intermediate" "$sorted3" > "$joined"
+join -a1 -a2 -e 'MISSING' -o 1.1,1.3,2.3  "$sorted1" "$sorted2" > "$intermediate"
+join -a1 -a2 -e 'MISSING' -o 1.1,1.2,1.3,2.3 "$intermediate" "$sorted3" > "$joined"
 
 # Process the joined file for matching lines and apply color
 awk '{
