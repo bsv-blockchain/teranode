@@ -206,7 +206,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 					} else {
 						// mark the message after no error
 						msg.Session.MarkMessage(msg.Message, "")
-						msg.Session.Commit()
+						//msg.Session.Commit()
 						n.Add(1)
 					}
 				}
