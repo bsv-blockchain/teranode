@@ -27,7 +27,6 @@ require (
 	github.com/libp2p/go-libp2p-pubsub v0.9.3
 	github.com/libsv/go-bc v0.1.11
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.2
 	github.com/libsv/go-p2p v0.1.3
 	github.com/loopholelabs/frisbee-go v0.7.2

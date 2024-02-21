@@ -442,7 +442,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 								if len(blockIDBytes) > 0 {
 									for i := 0; i < len(blockIDBytes); i += 4 {
 										blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
-										if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
+										if _, ok = currentBlockHeaderIDsMap[blockID]; ok { // if its part last 100 blocks
 											return fmt.Errorf("parent transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
 										}
 									}
