@@ -20,7 +20,7 @@ import (
 
 type Client struct {
 	client       validator_api.ValidatorAPIClient
-	running      atomic.Bool
+	running      *atomic.Bool
 	conn         *grpc.ClientConn
 	logger       ulogger.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
@@ -65,7 +65,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	client := &Client{
 		client:       grpcClient,
 		logger:       logger,
-		running:      running,
+		running:      &running,
 		conn:         conn,
 		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
 		batchSize:    sendBatchSize,

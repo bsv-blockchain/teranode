@@ -21,7 +21,7 @@ type Peer struct {
 	validationClient *blockvalidation.Client
 	logger           ulogger.Logger
 	address          string
-	running          atomic.Bool
+	running          *atomic.Bool
 	notificationCh   chan *asset_api.Notification
 }
 
@@ -34,7 +34,7 @@ func NewPeer(ctx context.Context, logger ulogger.Logger, source string, addr str
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(ctx, logger),
-		running:          running,
+		running:          &running,
 		notificationCh:   notificationCh,
 	}
 }
