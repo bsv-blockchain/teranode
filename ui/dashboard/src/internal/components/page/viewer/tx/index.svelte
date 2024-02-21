@@ -5,7 +5,7 @@
   import TxIoCard from './tx-io-card/index.svelte'
 
   import NoData from '../no-data-card/index.svelte'
-  import { DetailTab, setQueryParam } from '$internal/utils/urls'
+  import { DetailTab, DetailType, setQueryParam } from '$internal/utils/urls'
   import { spinCount } from '$internal/stores/nav'
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
   import { failure } from '$lib/utils/notifications'
@@ -16,7 +16,7 @@
     ready = true
   })
 
-  const type = 'tx'
+  const type = DetailType.tx
 
   export let hash = ''
 
@@ -76,7 +76,7 @@
 
 {#if result}
   <TxDetailsCard data={result} {display} on:display={onDisplay} />
-  {#if display === 'overview'}
+  {#if display === DetailTab.overview}
     <div style="height: 20px" />
     <TxIoCard data={result} />
   {/if}

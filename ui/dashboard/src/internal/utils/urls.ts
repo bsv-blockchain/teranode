@@ -6,6 +6,7 @@ export enum DetailType {
   block = 'block',
   subtree = 'subtree',
   tx = 'tx',
+  utxo = 'utxo',
 }
 
 export enum DetailTab {
