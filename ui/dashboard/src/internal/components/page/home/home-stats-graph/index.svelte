@@ -27,7 +27,7 @@
   </svelte:fragment>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="530px">
-      <Chart options={graphObj?.graphOptions} {renderKey} />
+      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period} />
     </ChartContainer>
   {/if}
 </Card>
