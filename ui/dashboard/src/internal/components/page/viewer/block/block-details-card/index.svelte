@@ -101,7 +101,7 @@
       size="small"
       icon="icon-chevron-right-line"
       ico={true}
-      disabled={hasNextBlock}
+      disabled={!hasNextBlock}
       tooltip={hasNextBlock ? t('tooltip.next-block') : ''}
       on:click={() => navToBlockByHeight(expandedHeader.height + 1)}
     />
