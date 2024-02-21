@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
-  import { formatSatoshi } from '$lib/utils/format'
   import { getDetailsUrl, DetailType, DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
@@ -15,6 +14,8 @@
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { getItemApiUrl, ItemType } from '$internal/api'
+  import { failure } from '$lib/utils/notifications'
+  import * as api from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -31,6 +32,7 @@
   $: expandedHeader = data?.expandedHeader
   $: isOverview = display === DetailTab.overview
   $: isJson = display === DetailTab.json
+  $: hasNextBlock = expandedHeader.height < data?.latestBlockData.height
 
   function onDisplay(value) {
     dispatch('display', { value })
@@ -43,6 +45,16 @@
   function navToBlock(hash) {
     if (hash) {
       goto(getDetailsUrl(DetailType.block, hash))
+    }
+  }
+
+  async function navToBlockByHeight(height) {
+    const result: any = await api.searchItem({ q: height })
+    if (result.ok) {
+      const { type, hash } = result.data
+      goto(getDetailsUrl(type, hash))
+    } else {
+      failure(result.error.message)
     }
   }
 
@@ -89,9 +101,9 @@
       size="small"
       icon="icon-chevron-right-line"
       ico={true}
-      disabled={!expandedHeader.nextblockhash}
-      tooltip={expandedHeader.nextblockhash ? t('tooltip.next-block') : ''}
-      on:click={() => navToBlock(expandedHeader.nextblockhash)}
+      disabled={hasNextBlock}
+      tooltip={hasNextBlock ? t('tooltip.next-block') : ''}
+      on:click={() => navToBlockByHeight(expandedHeader.height + 1)}
     />
   </div>
   <div class="content">
