@@ -228,8 +228,6 @@
     align-items: center;
     justify-content: stretch;
     gap: 4px;
-
-    width: 150px;
   }
 
   .page-size {

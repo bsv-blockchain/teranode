@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { createEventDispatcher } from 'svelte'
-  import { fade, fly } from 'svelte/transition'
+  import { fade } from 'svelte/transition'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import Icon from '../../icon/index.svelte'
 
@@ -75,7 +75,6 @@
   class={`tui-drawer${collapse ? ' collapsed' : ''}`}
   data-test-id={testId}
   style={`${cssVars.join(';')}`}
-  in:fly={{ x: -calcW, duration: 200 }}
 >
   {#if enableCollapse}
     <div class="collapse-icon" on:click={onCollapseClick}>
@@ -116,7 +115,7 @@
     color: var(--comp-color);
     background: var(--comp-bg-color);
     z-index: 4;
-    transition: width 0.2s linear;
+    transition: width var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
     overflow: visible;
   }
 
@@ -143,7 +142,7 @@
   .tui-drawer .content {
     position: absolute;
     width: var(--width);
-    transition: width 0.2s linear;
+    transition: width var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
     top: var(--content-top);
     bottom: var(--content-bottom);
     overflow-y: auto;
@@ -181,9 +180,9 @@
   .tui-drawer .collapse-icon {
     transform: rotate(180deg);
     transition:
-      transform 0.2s linear,
-      background-color 0.2s linear,
-      box-shadow 0.2s linear;
+      transform var(--easing-duration, 0.2s) var(--easing-function, ease-in-out),
+      background-color var(--easing-duration, 0.2s) var(--easing-function, ease-in-out),
+      box-shadow var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
   .tui-drawer.collapsed .collapse-icon {
     transform: rotate(0deg);

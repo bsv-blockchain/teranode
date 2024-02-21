@@ -53,6 +53,7 @@ type SubtreeProcessor struct {
 	deDuplicateTransactionsCh chan struct{}
 	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
 	chainedSubtrees           []*util.Subtree
+	chainedSubtreeCount       atomic.Int32
 	currentSubtree            *util.Subtree
 	currentBlockHeader        *model.BlockHeader
 	sync.Mutex
@@ -110,6 +111,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		deDuplicateTransactionsCh: make(chan struct{}),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
+		chainedSubtreeCount:       atomic.Int32{},
 		currentSubtree:            firstSubtree,
 		batcher:                   newTxIDAndFeeBatch(batcherSize),
 		queue:                     queue,
@@ -217,6 +219,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						break
 					}
 				}
+
+				stp.chainedSubtreeCount.Store(int32(len(stp.chainedSubtrees)))
 			}
 		}
 	}()
@@ -237,8 +241,12 @@ func (stp *SubtreeProcessor) QueueLength() int64 {
 	return stp.queue.length()
 }
 
+/* used to gather prometheus statics */
 func (stp *SubtreeProcessor) SubtreeCount() int {
-	return len(stp.chainedSubtrees) + 1
+	// not using len(chainSubtrees) to avoid Race condition
+	// should we be using locks around all chainSubtree operations instead?
+	// the subtree count isn't mission critical - it's just for statistics
+	return int(stp.chainedSubtreeCount.Load()) + 01
 }
 
 func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification bool) (err error) {

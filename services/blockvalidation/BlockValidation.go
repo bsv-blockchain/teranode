@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ordishs/go-utils/expiringmap"
@@ -143,7 +144,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
 
 	for subtreeIdx, subtreeHash := range block.Subtrees {
 		subtreeIdx := subtreeIdx
@@ -408,7 +409,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	g, gCtx := errgroup.WithContext(setCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
 
 	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
 	if err != nil {
@@ -493,7 +494,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
 
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	missingSubtreesMu := sync.Mutex{}
@@ -784,12 +785,12 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	// validate the subtree
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
-	nrOfMissingTransactions := 0
+	nrOfMissingTransactions := atomic.Int32{}
 
 	// cycle through batches of 1024 txHashes at a time
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
@@ -809,7 +810,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 						// don't add the coinbase placeholder to the missing transactions
 						if !txHash.Equal(*model.CoinbasePlaceholderHash) {
 							missingTxHashes[i+j] = &txHash
-							nrOfMissingTransactions++
+							nrOfMissingTransactions.Add(1)
 						}
 						continue
 					} else {
@@ -834,12 +835,12 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
 	}
 
-	if nrOfMissingTransactions > 0 {
+	if nrOfMissingTransactions.Load() > 0 {
 		start, stat5, ctx5 := util.StartStatFromContext(spanCtx, "5. processMissingTransactions")
 		// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
 		// this is done to make sure the order is preserved when getting them in parallel
 		// compact the missingTxHashes to only a list of the missing ones
-		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions)
+		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions.Load())
 		for idx, txHash := range missingTxHashes {
 			if txHash != nil {
 				missingTxHashesCompacted = append(missingTxHashesCompacted, missingTxHash{
@@ -1050,7 +1051,7 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	missingTxsMu := sync.Mutex{}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()-32)) // keep 32 cores free for other tasks
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)

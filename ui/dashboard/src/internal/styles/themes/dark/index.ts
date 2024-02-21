@@ -11,6 +11,10 @@ import { switchh } from './switch'
 import { tab } from './tab'
 
 export const dark = {
+  easing: {
+    function: 'ease-in-out',
+    duration: '0.2s',
+  },
   focus: {
     rect: {
       color: '#ffffff', //palette.primary[500],

@@ -1,6 +1,11 @@
 import { readable } from 'svelte/store'
+import { browser } from '$app/environment'
 
 export function query(query) {
+  if (!browser) {
+    return null
+  }
+
   // eslint-ignore-next-line
   const mediaQueryList = window.matchMedia(query)
 

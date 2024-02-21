@@ -56,18 +56,18 @@ jobs:
       region: us-east-1
       ubsv_env: scaling
 
-  # eks-deploy-asia-allinone:
-    # uses: ./.github/workflows/deploy-to-region.yaml
-    # secrets: inherit
-    # if: startsWith(github.event.ref, 'refs/tags/v')
-    # with:
-      # region: ap-northeast-1
-      # ubsv_env: allinone
+  eks-deploy-asia-allinone:
+    uses: ./.github/workflows/deploy-to-region.yaml
+    secrets: inherit
+    if: startsWith(github.event.ref, 'refs/tags/v')
+    with:
+      region: ap-south-1
+      ubsv_env: allinone
 
-  # eks-deploy-asia-scaling:
-    # uses: ./.github/workflows/deploy-to-region.yaml
-    # secrets: inherit
-    # if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    # with:
-      # region: ap-northeast-1
-      # ubsv_env: scaling
+  eks-deploy-asia-scaling:
+    uses: ./.github/workflows/deploy-to-region.yaml
+    secrets: inherit
+    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
+    with:
+      region: ap-south-1
+      ubsv_env: scaling

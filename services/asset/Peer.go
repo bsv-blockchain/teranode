@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
@@ -20,17 +21,20 @@ type Peer struct {
 	validationClient *blockvalidation.Client
 	logger           ulogger.Logger
 	address          string
-	running          bool
+	running          atomic.Bool
 	notificationCh   chan *asset_api.Notification
 }
 
 func NewPeer(ctx context.Context, logger ulogger.Logger, source string, addr string, notificationCh chan *asset_api.Notification) *Peer {
+	running := atomic.Bool{}
+	running.Store(true)
+
 	return &Peer{
 		logger:           logger.New("blobC"),
 		address:          addr,
 		source:           source,
 		validationClient: blockvalidation.NewClient(ctx, logger),
-		running:          true,
+		running:          running,
 		notificationCh:   notificationCh,
 	}
 }
@@ -44,7 +48,7 @@ func (c *Peer) Start(ctx context.Context) error {
 	var conn *grpc.ClientConn
 	var err error
 	go func() {
-		for c.running {
+		for c.running.Load() {
 			c.logger.Infof("connecting to blob server at %s", c.address)
 			conn, err = util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{
 				OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -67,7 +71,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				continue
 			}
 
-			for c.running {
+			for c.running.Load() {
 				resp, err = stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) && !strings.Contains(err.Error(), io.EOF.Error()) {
@@ -113,7 +117,7 @@ func (c *Peer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Asset] context done, closing peer")
-		c.running = false
+		c.running.Store(false)
 		if conn != nil {
 			err = conn.Close()
 			if err != nil {
@@ -126,6 +130,6 @@ func (c *Peer) Start(ctx context.Context) error {
 }
 
 func (c *Peer) Stop() error {
-	c.running = false
+	c.running.Store(false)
 	return nil
 }

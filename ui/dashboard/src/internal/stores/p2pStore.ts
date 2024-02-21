@@ -1,8 +1,9 @@
 import { writable, get } from 'svelte/store'
 import type { Writable } from 'svelte/store'
+import * as api from '$internal/api'
 
 export const messages = writable([])
-export const miningNodes: any = writable([])
+export const miningNodes: any = writable({})
 export const wsUrl: Writable<any> = writable('')
 export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
@@ -19,9 +20,9 @@ export function connectToP2PServer() {
     }
 
     if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
-        url.protocol = 'ws:'
-        url.host = 'localhost'
-        url.port = '9906'
+      url.protocol = 'ws:'
+      url.host = 'localhost'
+      url.port = '9906'
     }
 
     url.pathname = '/p2p-ws'
@@ -49,31 +50,34 @@ export function connectToP2PServer() {
 
         json.receivedAt = new Date()
 
-        if (json.type === 'mining_on') {
-          const uniqueNodes: any = {}
-          const mn: any = get(miningNodes)
-
-          for (const node of mn) {
-            uniqueNodes[node.base_url] = node
-          }
-
-          uniqueNodes[json.base_url] = json
-
-          // miningNodes.set(Object.values(uniqueNodes))
-
-          const sorted = Object.values(uniqueNodes).sort((a: any, b: any) => {
-            if (a.base_url < b.base_url) {
-              return -1
-            } else if (a.base_url > b.base_url) {
-              return 1
-            } else {
-              return 0
-            }
-          })
-
-          miningNodes.set(sorted)
-          console.log('miningNodes', sorted)
+        let baseUrl = json.base_url
+        if (!json.base_url.includes('localhost') && json.base_url.includes('http:')) {
+          baseUrl = baseUrl.replace('http:', 'https:')
         }
+
+        const miningNodeSet: any = get(miningNodes)
+        if (json.type === 'mining_on') {
+          miningNodeSet[baseUrl] = json
+          miningNodes.set(miningNodeSet)
+        } else if (baseUrl && !miningNodeSet[baseUrl]) {
+          miningNodeSet[baseUrl] = {
+            base_url: baseUrl,
+          }
+          const res: any = await api.getBestBlockHeaderFromServer({ baseUrl })
+          if (res.ok && res.data) {
+            miningNodeSet[baseUrl] = {
+              ...res.data,
+              tx_count: res.data.txCount,
+              size_in_bytes: res.data.sizeInBytes,
+              base_url: baseUrl,
+            }
+          }
+          miningNodes.set(miningNodeSet)
+        } else if (miningNodeSet[baseUrl]) {
+          miningNodeSet[baseUrl].receivedAt = new Date()
+          miningNodes.set(miningNodeSet)
+        }
+        //console.log('miningNodes', miningNodes)
 
         let m: any = get(messages)
         m = [json, ...m].slice(0, maxMessages)

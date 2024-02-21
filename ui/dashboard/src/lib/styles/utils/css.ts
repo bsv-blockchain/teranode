@@ -1,6 +1,10 @@
 import { rem } from 'polished'
+import { browser } from '$app/environment'
 
 export const setCSSVariablesFromObj = (paths: string[] = [], obj, themeNs) => {
+  if (!browser) {
+    return
+  }
   for (const key in obj) {
     if (typeof obj[key] === 'string' || typeof obj[key] === 'number') {
       document.documentElement.style.setProperty(

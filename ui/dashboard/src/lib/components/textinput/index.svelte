@@ -285,7 +285,7 @@
     background-color: var(--enabled-bg-color);
     border-color: var(--enabled-border-color);
 
-    transition: width 0.2s ease-in-out;
+    transition: width var(--easing-duration, 0.2s) var(--easing-function, var);
   }
   .input.width {
     width: var(--width);

@@ -53,7 +53,7 @@ echarts.use([
   CanvasRenderer,
 ])
 
-export const getGraphObj = (t, data, smooth = true) => {
+export const getGraphObj = (t, data, period, smooth = true) => {
   // graph data
   const graphData: any[] = []
   if (data) {
@@ -89,6 +89,32 @@ export const getGraphObj = (t, data, smooth = true) => {
       },
     },
   ]
+
+  let startDate = +new Date()
+  switch (period) {
+    case '2h':
+      startDate -= 2 * 60 * 60 * 1000
+      break
+    case '6h':
+      startDate -= 6 * 60 * 60 * 1000
+      break
+    case '12h':
+      startDate -= 12 * 60 * 60 * 1000
+      break
+    case '24h':
+      startDate -= 24 * 60 * 60 * 1000
+      break
+    case '1w':
+        startDate -= 7 * 24 * 60 * 60 * 1000
+        break
+    case '1m':
+        startDate -= 30 * 24 * 60 * 60 * 1000
+        break
+    case '3m':
+        startDate -= 90 * 24 * 60 * 60 * 1000
+        break
+  }
+
   // graph options
   let graphOptions: ECOption | null = null
   if (graphData?.length) {
@@ -102,7 +128,6 @@ export const getGraphObj = (t, data, smooth = true) => {
       xAxis: [
         {
           type: 'time',
-          // boundaryGap: false,
           axisLine: { onZero: true },
           axisLabel: {
             formatter: (value) => ' ' + formatDate(parseInt(value.toString()), false, false),
@@ -110,9 +135,8 @@ export const getGraphObj = (t, data, smooth = true) => {
             hideOverlap: true,
           },
           alignTicks: true,
-          axisTick: {
-            //   interval: 1,
-          },
+          min: startDate,
+          max: +new Date(),
         },
       ],
       yAxis: [
@@ -148,7 +172,6 @@ export const getGraphObj = (t, data, smooth = true) => {
         }
       }),
       textStyle: {
-        // fontFamily: 'Satoshi',
         fontWeight: 400,
         fontSize: 14,
         lineHeight: 24,
@@ -172,17 +195,6 @@ export const getGraphObj = (t, data, smooth = true) => {
           color: 'rgba(255, 255, 255, 0.66)',
         },
       },
-      // toolbox: {
-      //   feature: {
-      //     dataZoom: {
-      //       yAxisIndex: 'none',
-      //       filterMode: 'none',
-      //       xAxisIndex: [0],
-      //     },
-      //     restore: { show: false },
-      //     saveAsImage: {},
-      //   },
-      // },
     }
   }
   return {

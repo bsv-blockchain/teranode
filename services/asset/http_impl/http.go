@@ -44,6 +44,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 		AllowMethods: []string{echo.GET},
 	}))
 
+	e.Use(middleware.Gzip())
+
 	h := &HTTP{
 		logger:         logger,
 		repository:     repo,
@@ -82,6 +84,8 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
 
+	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
+
 	apiGroup.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
 	apiGroup.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
@@ -90,13 +94,17 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
 	apiGroup.GET("/header/:hash/json", h.GetBlockHeader(JSON))
 
+	apiGroup.GET("/blocks", h.GetBlocks)
+
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
 
+	apiGroup.GET("/block/:hash/subtrees/json", h.GetBlockSubtrees(JSON))
+
 	apiGroup.GET("/search", h.Search)
 	apiGroup.GET("/blockstats", h.GetBlockStats)
-	apiGroup.GET("/blockgraphdata", h.GetBlockGraphData)
+	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData)
 
 	apiGroup.GET("/lastblocks", h.GetLastNBlocks)
 

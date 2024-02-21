@@ -331,7 +331,7 @@ func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) err
 
 	// run the server
 	go func() {
-		err = s.Start(frpcAddress)
+		err := s.Start(frpcAddress)
 		if err != nil {
 			ba.logger.Errorf("failed to serve frpc: %v", err)
 		}
@@ -339,7 +339,7 @@ func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) err
 
 	go func() {
 		<-ctx.Done()
-		err = s.Shutdown()
+		err := s.Shutdown()
 		if err != nil {
 			ba.logger.Errorf("failed to shutdown frpc server: %v", err)
 		}

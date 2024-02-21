@@ -216,6 +216,10 @@ func (b *Batcher) Get(_ context.Context, _ []byte) ([]byte, error) {
 	return nil, fmt.Errorf("get is not supported in a batcher store")
 }
 
+func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+	return nil, fmt.Errorf("get head is not supported in a batcher store")
+}
+
 func (b *Batcher) Exists(_ context.Context, hash []byte) (bool, error) {
 	return false, fmt.Errorf("exists is not supported in a batcher store")
 }

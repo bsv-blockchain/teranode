@@ -85,6 +85,19 @@ func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, nil
 }
 
+func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	b, err := m.Get(context.Background(), hash)
+	if err != nil {
+		return nil, err
+	}
+
+	if nrOfBytes > len(b) {
+		return b, nil
+	}
+
+	return b[:nrOfBytes], nil
+}
+
 func (m *Memory) Exists(_ context.Context, hash []byte) (bool, error) {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)

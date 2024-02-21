@@ -144,14 +144,12 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 	}
 
 	result := true
-	failures := 0
 
 	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
 		miningon := value.(MiningOnMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > miningon.Height {
-			failures++
 
 			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", miningon.PeerId, miningon.Miner, miningon.Height, height)
 			result = false
@@ -161,14 +159,9 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 			}
 		}
 
-		if failures > 0 {
-			p.logger.Infof("[PeerHeight] Peers are now at same height after %d attempts", failures)
-		}
-
-		return true
+		return true // continue .Range() iteration
 	})
 
-	p.logger.Debugf("[PeerHeight] Peers are all at block height %d or higher", height)
 	return result
 }
 
@@ -189,6 +182,12 @@ func (p *PeerHeight) WaitForAllPeers(ctx context.Context, height uint32, testAll
 			return errors.New("[PeerHeight] WaitForAllPeers cancelled due to timeout or context cancellation")
 		default:
 			if p.HaveAllPeersReachedMinHeight(height, testAllPeers, first) {
+
+				if !first {
+					// only log the success if there was a previous logging of a failure
+					p.logger.Infof("[PeerHeight] Peers are all at block height %d or higher", height)
+				}
+
 				return nil
 			}
 			first = false

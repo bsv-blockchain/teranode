@@ -21,7 +21,8 @@ export const themeNs = localStore('themeNs', '')
 export const i18n = writable<I18n>()
 
 // icons
-export const injectedIcons = writable({})
+export const useLibIcons = writable(true)
+export const iconNameOverrides = writable({})
 
 // logos
 export const injectedLogos = writable({})

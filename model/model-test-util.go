@@ -475,6 +475,10 @@ func (l localSubtreeStore) Del(_ context.Context, _ []byte) error {
 	panic("not implemented")
 }
 
+func (l localSubtreeStore) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+	panic("not implemented")
+}
+
 func (l localSubtreeStore) Close(_ context.Context) error {
 	return nil
 }
@@ -541,4 +545,8 @@ func (n *BlobStoreStub) Exists(_ context.Context, _ []byte) (bool, error) {
 
 func (n *BlobStoreStub) Del(_ context.Context, _ []byte) error {
 	return nil
+}
+
+func (n *BlobStoreStub) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+	return nil, nil
 }

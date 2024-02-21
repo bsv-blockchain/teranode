@@ -219,6 +219,19 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return result, err
 }
 
+func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+	b, err := s.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(b) < nrOfBytes {
+		return b, nil
+	}
+
+	return b[:nrOfBytes], nil
+}
+
 func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()

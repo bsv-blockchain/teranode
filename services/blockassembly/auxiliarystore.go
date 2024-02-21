@@ -69,6 +69,18 @@ func (as *AuxiliaryStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return as.store.Get(ctx, key)
 }
 
+func (as *AuxiliaryStore) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+	data, err := as.auxiliaryStore.GetHead(ctx, key, nrOfBytes)
+	if err == nil && data != nil {
+		return data, nil
+	}
+	if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) {
+		as.logger.Warnf("error reading from auxiliary store: %s", err)
+	}
+
+	return as.store.GetHead(ctx, key, nrOfBytes)
+}
+
 func (as *AuxiliaryStore) SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error {
 	// we only write to our main store, never to our auxiliary store
 	return as.store.SetFromReader(ctx, key, value, opts...)

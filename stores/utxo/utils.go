@@ -3,7 +3,6 @@ package utxo
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
@@ -67,11 +66,9 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
 func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
-	utxoHashes := make([]chainhash.Hash, 0, len(tx.Outputs))
-	utxoHashesMu := sync.Mutex{}
+	utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
 
 	g := errgroup.Group{}
-
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 {
 			i := i
@@ -82,10 +79,7 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 					return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
 				}
 
-				utxoHashesMu.Lock()
-				utxoHashes = append(utxoHashes, *utxoHash)
-				utxoHashesMu.Unlock()
-
+				utxoHashes[i] = *utxoHash
 				return nil
 			})
 		}

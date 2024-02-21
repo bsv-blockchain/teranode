@@ -53,7 +53,9 @@
       bind:value={searchValue}
       width={330}
       focusWidth={570}
-      icon={searchValue === lastSearchCalled ? 'icon-search-line' : 'icon-search-solid'}
+      icon={searchValue === lastSearchCalled || !searchValue
+        ? 'icon-search-line'
+        : 'icon-search-solid'}
       placeholder={$i18n.t('comp.toolbar.placeholder')}
       on:keydown={onSearchKeyDown}
     />

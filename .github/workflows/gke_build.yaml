@@ -72,6 +72,7 @@ jobs:
           build-args: |
             GITHUB_SHA=${{github.sha}}
             DEBUG=true
+            RACE=true
             GITHUB_REF=${{github.ref_name}}
             BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-build-${{ steps.base.outputs.id }}
             RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}

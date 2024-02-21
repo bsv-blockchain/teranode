@@ -1,24 +1,19 @@
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { addNumCommas } from '$lib/utils/format'
-  import { failure } from '$lib/utils/notifications'
-  import * as api from '$internal/api'
   import { Button, Icon } from '$lib/components'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
   import { sock as p2pSock } from '$internal/stores/p2pStore'
 
-  let loading = true
-  let data = {}
+  export let loading = true
+  export let data = {}
+  export let onRefresh = () => {}
 
   const baseKey = 'page.home.stats'
   const fieldKey = `${baseKey}.fields`
 
   $: t = $i18n.t
-
-  // TODO, decide how many connections the "live" indication should depend on
-  //   $: connected =
-  //     $p2pSock !== null && $nodeSock !== null && $statusSock !== null && $bootstrapSock !== null
 
   $: connected = $p2pSock !== null
 
@@ -31,58 +26,7 @@
     'txns_per_second',
   ]
 
-  async function getData() {
-    try {
-      // console.log('call api: search = ', searchValue)
-      const result: any = await api.getBlockStats()
-      if (result.ok) {
-        data = {
-          block_count: {
-            id: 'block_count',
-            icon: 'icon-cube-line',
-            value: result.data.block_count,
-          },
-          tx_count: {
-            id: 'tx_count',
-            icon: 'icon-arrow-transfer-line',
-            value: result.data.tx_count,
-          },
-          max_height: {
-            id: 'max_height',
-            icon: 'icon-network-line',
-            value: result.data.max_height,
-          },
-          avg_block_size: {
-            id: 'avg_block_size',
-            icon: 'icon-scale-line',
-            value: Math.round(result.data.avg_block_size),
-          },
-          avg_tx_count_per_block: {
-            id: 'avg_tx_count_per_block',
-            icon: 'icon-scale-line',
-            value: Math.round(result.data.avg_tx_count_per_block),
-          },
-          txns_per_second: {
-            id: 'txns_per_second',
-            icon: 'icon-binoculars-line',
-            value: Math.round(result.data.tx_count / 24 / 60 / 60),
-          },
-        }
-      } else {
-        failure(result.error.message)
-      }
-    } catch (err: any) {
-      console.error(err)
-      failure(err.message)
-    } finally {
-      loading = false
-    }
-
-    return false
-  }
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
-
-  $: getData()
 </script>
 
 <Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
@@ -98,7 +42,7 @@
       ico={true}
       icon="icon-refresh-line"
       tooltip={t('tooltip.refresh')}
-      on:click={getData}
+      on:click={onRefresh}
     />
   </svelte:fragment>
   <div class="content" style:--grid-template-columns={`repeat(${colCount}, 1fr)`}>

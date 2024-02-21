@@ -7,10 +7,35 @@
   - https://svelte.dev/docs/accessibility-warnings
   - https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA
 - [x] Improve SEO
-- [ ] Fix duplicate entries on p2p page [TODO: verify]
+- [x] Fix duplicate entries on p2p page
 - [x] Fix Safari Teranode logo
 - [x] Fix search input
 - [x] Don't let sidebar icons jump on open/close
 - [x] Fix refresh button
+- [x] Smooth sidebar transition
+- [x] Make spinner cover fill whole screen (not just content area)
+- [x] Create keyboard shortcut for refresh
+- [ ] Look at correct table column sorting, depending on field type
+- [x] Add "Copy URL" button for API url to use in CURL
+- [x] Confirm "Peer selector" is working on P2P page
+- [x] Confirm network page data stays in sync with the real status of a node
+  - [x] often shows M1 or M2 twice with different details?
+  - [x] shows other miner briefly then disappears again?
+- [x] Improve block summary fields
+  - [x] `difficulty` - Ask WoC: use block `bits` to calculate it
+  - [x] `confirmation` = latest block height - block height of block being inspected
+- [ ] Improve subtree summary fields
+  - [x] Show static entry for coinbase always - data for it was removed from DB
+  - [x] `Total Fee` should be `Fees` value from header
+  - [x] `AVG fee` should be total divided by number of tx's
+  - [ ] wish for later: explore option to obtain `miner` field value (where to get it from ..)
+- [ ] Serve webfonts with efficient cache policy [Server]
+- [x] Serve responses with text compression, setting `Content-Encoding` [Server]
+- [x] Add pagination [Server]
+  - [x] Blocks
+  - [x] Subtrees
+- [ ] Support search by block height
+- [ ] Add prev / next buttons to block details page and navigate by block height
+- [ ] Make a UTXO details page displaying the JSON returned by search only
 - [ ] Cleanup [In progress]
 - [ ] Documentation

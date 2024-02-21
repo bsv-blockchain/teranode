@@ -185,8 +185,8 @@
     background-color: var(--enabled-bg-color);
     border-color: var(--enabled-border-color);
     transition:
-      color 0.2s linear,
-      background-color 0.2s linear;
+      color var(--easing-duration, 0.2s) var(--easing-function, ease-in-out),
+      background-color var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
 
     cursor: var(--cursor-local);
   }

@@ -185,9 +185,9 @@ export const getPageSizeOptions = (i18n) => {
       label: getPageSizeLabel(t, baseKey, 100),
       value: 100,
     },
-    {
-      label: getPageSizeLabel(t, baseKey, -1),
-      value: -1,
-    },
+    // {
+    //   label: getPageSizeLabel(t, baseKey, -1),
+    //   value: -1,
+    // },
   ]
 }

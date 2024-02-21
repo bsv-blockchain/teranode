@@ -6,6 +6,8 @@
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
   import { getColDefs, getRenderCells } from './data'
+  import { failure } from '$lib/utils/notifications'
+  import * as api from '$internal/api'
 
   const baseKey = 'page.viewer-subtree.txs'
 
@@ -18,10 +20,12 @@
   $: renderCells = getRenderCells(t) || {}
 
   export let subtree: any
-  export let data: any[] = []
+
+  let data: any[] = []
 
   let page = 1
   let pageSize = 10
+  let totalItems = 0
 
   function onPage(e) {
     const data = e.detail
@@ -44,6 +48,27 @@
     const value = e.detail.value
     variant = $tableVariant = value
   }
+
+  async function fetchData(hash, page, pageSize) {
+    const subtreeTxs: any = await api.getSubtreeTxs({
+      hash,
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    })
+    if (subtreeTxs.ok) {
+      data = subtreeTxs.data.data
+      const pagination = subtreeTxs.data.pagination
+      pageSize = pagination.limit
+      page = Math.floor(pagination.offset / pageSize) + 1
+      totalItems = pagination.totalRecords
+    } else {
+      failure(subtreeTxs.error.message)
+    }
+  }
+
+  $: if (subtree) {
+    fetchData(subtree.expandedData.hash, page, pageSize)
+  }
 </script>
 
 <Card
@@ -60,7 +85,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={false}
       showQuickNav={false}
       showNav={showPagerNav}
@@ -87,6 +112,7 @@
     i18n={i18nLocal}
     expandUp={true}
     pager={false}
+    useServerPagination={true}
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
@@ -96,7 +122,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={showPagerSize}
       showQuickNav={showPagerNav}
       showNav={showPagerNav}

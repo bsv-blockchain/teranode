@@ -15,8 +15,9 @@ import (
 )
 
 func (h *HTTP) GetTransactions() func(c echo.Context) error {
-	nrTxAdded := 0
 	return func(c echo.Context) error {
+		nrTxAdded := 0
+
 		start := gocore.CurrentTime()
 		defer func() {
 			AssetStat.NewStat("GetTransactions_http").AddTime(start)

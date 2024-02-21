@@ -13,15 +13,6 @@
   export let testId: string | undefined | null = null
   export let showGlobalToolbar = true
 
-  let links: { path: string; label: string; selected?: boolean }[] = []
-
-  $: {
-    links = []
-    if ($pageLinks) {
-      links = $pageLinks.items
-    }
-  }
-
   function onLogo() {
     goto('/')
   }
@@ -67,6 +58,8 @@
   function onDrawerClose(e) {
     showMenu = false
   }
+
+  $: menuKey = JSON.stringify($pageLinks.items)
 </script>
 
 {#if showMobileNavbar}
@@ -117,12 +110,14 @@
         <Logo name="teranode-text" height={14} />
       {/if}
     </div>
-    <Menu
-      collapsed={!expanded}
-      idField="path"
-      data={links}
-      on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
-    />
+    {#key menuKey}
+      <Menu
+        collapsed={!expanded}
+        idField="path"
+        data={$pageLinks.items}
+        on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
+      />
+    {/key}
   </Drawer>
 {/if}
 
@@ -148,10 +143,7 @@
     width: calc(100% - var(--offset-left));
     overflow-x: hidden;
     overflow-y: auto;
-    transition:
-      top 0.2s linear,
-      left 0.2s linear,
-      width 0.2s linear;
+    transition: top var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
 
   .logo-container {

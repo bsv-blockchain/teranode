@@ -39,7 +39,7 @@
     height: 100%;
 
     transform: rotate(0deg) scale(var(--scale)) translate(-18px, -9px);
-    transition: 0.5s ease-in-out;
+    transition: var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
     cursor: pointer;
   }
 
@@ -53,7 +53,7 @@
     left: 0;
     top: 1;
     transform: rotate(0deg);
-    transition: 0.25s ease-in-out;
+    transition: var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
 
   .icon span:nth-child(1) {

@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 
@@ -239,7 +242,7 @@ func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 	// run the server
 	go func() {
-		err = s.Start(frpcAddress)
+		err := s.Start(frpcAddress)
 		if err != nil {
 			u.logger.Errorf("[Block Validation] failed to serve frpc: %v", err)
 		}
@@ -247,7 +250,7 @@ func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 	go func() {
 		<-ctx.Done()
-		err = s.Shutdown()
+		err := s.Shutdown()
 		if err != nil {
 			u.logger.Errorf("[Block Validation] failed to shutdown frpc server: %v", err)
 		}
@@ -534,20 +537,41 @@ LOOP:
 
 	u.logger.Infof("[catchup][%s] catching up from [%s] to [%s]", fromBlock.Hash().String(), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
-	// process the catchup block headers in reverse order
-	var block *model.Block
-	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
-		blockHeader := catchupBlockHeaders[i]
+	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
 
-		block, err = u.getBlock(spanCtx, blockHeader.Hash(), baseURL)
-		if err != nil {
-			return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
+	// process the catchup block headers in reverse order and put them on the channel
+	// this will allow the blocks to be validated while getting them from the other node
+	g, gCtx := errgroup.WithContext(spanCtx)
+	g.SetLimit(runtime.NumCPU())
+	g.Go(func() error {
+		var block *model.Block
+		var blockHeader *model.BlockHeader
+		for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
+			blockHeader = catchupBlockHeaders[i]
+
+			// TODO get blocks in batches
+			block, err = u.getBlock(gCtx, blockHeader.Hash(), baseURL)
+			if err != nil {
+				return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
+			}
+
+			validateBlocksChan <- block
 		}
 
+		// close the channel to signal that all blocks have been processed
+		close(validateBlocksChan)
+
+		return nil
+	})
+
+	// validate the blocks while getting them from the other node
+	// this will block until all blocks are validated
+	for block := range validateBlocksChan {
 		if err = u.blockValidation.ValidateBlock(spanCtx, block, baseURL); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}
+
 	return nil
 }
 
