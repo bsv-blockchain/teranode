@@ -360,8 +360,7 @@
   },
   "unit": {
     "value": {
-      "kb": "{{ value }} KB",
-      "nonce_bsv": "{{ value }} BSV"
+      "kb": "{{ value }} KB"
     }
   }
 }

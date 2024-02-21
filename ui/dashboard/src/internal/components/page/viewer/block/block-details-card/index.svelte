@@ -121,14 +121,14 @@
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
             <div class="value">{expandedHeader.txCount}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
             <div class="value">TBD</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
@@ -143,7 +143,7 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">{t('unit.value.nonce_bsv', { value: expandedHeader.nonce })}</div>
+            <div class="value">{expandedHeader.nonce}</div>
           </div>
         </div>
         <div>
@@ -159,10 +159,10 @@
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>
             <div class="value">{expandedHeader.merkleroot}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.chainwork`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.miner`)}</div>
             <div class="value">{expandedHeader.miner}</div>
