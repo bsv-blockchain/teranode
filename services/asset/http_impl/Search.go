@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -49,17 +50,6 @@ func (h *HTTP) Search(c echo.Context) error {
 			return c.JSONPretty(200, &res{"block", hash.String()}, "  ")
 		}
 
-		// Check if it's a subtree
-		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
-		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) {
-			return sendError(c, http.StatusBadRequest, 4, fmt.Errorf("error searching for subtree: %w", err))
-		}
-
-		if subtree != nil {
-			// It's a subtree
-			return c.JSONPretty(200, &res{"subtree", hash.String()}, "  ")
-		}
-
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
 		if err != nil && !errors.Is(err, txmeta.NewErrTxmetaNotFound(hash)) {
@@ -69,6 +59,18 @@ func (h *HTTP) Search(c echo.Context) error {
 		if tx != nil {
 			// It's a transaction
 			return c.JSONPretty(200, &res{"tx", hash.String()}, "  ")
+		}
+
+		// Check if it's a subtree
+		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
+		// TODO error handling is still a bit messy, not all implementations are throwing the ErrNotFound correctly
+		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) && !strings.Contains(err.Error(), "not found") {
+			return sendError(c, http.StatusBadRequest, 4, fmt.Errorf("error searching for subtree: %w", err))
+		}
+
+		if subtree != nil {
+			// It's a subtree
+			return c.JSONPretty(200, &res{"subtree", hash.String()}, "  ")
 		}
 
 		// Check if it's a utxo
