@@ -406,7 +406,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 		key, err = aerospike.NewKey(s.namespace, "utxo", hash[:])
 		if err != nil {
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-			return fmt.Errorf("[BATCH_ERR][%s:%d] failed to init new aerospike key: %w", hash.String(), idx, err)
+			return fmt.Errorf("[BATCH_ERR][%s:%d] failed to init new aerospike key for utxo %s: %w", txID.String(), idx, hash.String(), err)
 		}
 
 		bin = aerospike.NewBin("locktime", storeLockTime)
@@ -418,7 +418,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[BATCH_ERR][%d] Failed to batch store aerospike utxos, adding to retry queue: %v\n", batchId, err)
+		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos, adding to retry queue: %v\n", txID.String(), batchId, err)
 		// don't return, check each record in the batch for errors and process accordingly
 	}
 
@@ -432,12 +432,12 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 			// we assume because it exists, it is OK
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-				s.logger.Warnf("[BATCH_ERR][%s:%d] already exists in batch %d, skipping", utxoHashes[idx].String(), idx, batchId)
+				s.logger.Warnf("[BATCH_ERR][%s:%d] utxo %s already exists in batch %d, skipping", txID.String(), idx, utxoHashes[idx].String(), batchId)
 				continue
 			}
 
 			prometheusUtxoErrors.WithLabelValues("Store", err.Error()).Inc()
-			e := fmt.Errorf("[BATCH_ERR][%s:%d] error in aerospike store batch record (will retry): %d - %w", utxoHashes[idx].String(), idx, batchId, err)
+			e := fmt.Errorf("[BATCH_ERR][%s:%d] error in aerospike store batch record for utxo %s (will retry): %d - %w", txID.String(), idx, utxoHashes[idx].String(), batchId, err)
 			errorsThrown = append(errorsThrown, e)
 
 			s.logger.Errorf("%s", e.Error())
@@ -453,7 +453,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	if len(errorsThrown) > 0 {
 		prometheusUtxoStoreFail.Add(float64(len(errorsThrown)))
-		return fmt.Errorf("[BATCH_ERR][%d] error in aerospike store batch records: %d of %d failed", batchId, len(errorsThrown), len(batchRecords))
+		return fmt.Errorf("[BATCH_ERR][%s] error in aerospike store batch %d records: %d of %d failed", txID.String(), batchId, len(errorsThrown), len(batchRecords))
 	}
 
 	prometheusUtxoStore.Add(float64(len(utxoHashes)))

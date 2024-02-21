@@ -2,16 +2,23 @@ package file
 
 import (
 	"context"
-	"testing"
-
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/util/rand"
+	"os"
+	"testing"
 )
+
+var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
+func cleanup() {
+	_ = os.RemoveAll(testDir)
+}
 
 func TestFile_Get(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests")
+		f, err := New(ulogger.TestLogger{}, testDir)
 		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
@@ -24,20 +31,24 @@ func TestFile_Get(t *testing.T) {
 
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
+
+		cleanup()
 	})
 }
 
 func TestFile_filename(t *testing.T) {
 	t.Run("1 path", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests")
+		f, err := New(ulogger.TestLogger{}, testDir)
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("key"))
-		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
+		assert.Equal(t, testDir+"/79656b", filename)
+
+		cleanup()
 	})
 
 	t.Run("1 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests", []string{"/tmp/ubsv-tests1"})
+		f, err := New(ulogger.TestLogger{}, testDir, []string{"/tmp/ubsv-tests1"})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("1key"))
@@ -51,10 +62,12 @@ func TestFile_filename(t *testing.T) {
 
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
+
+		cleanup()
 	})
 
 	t.Run("2 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests", []string{"/tmp/ubsv-tests1", "/tmp/ubsv-tests2"})
+		f, err := New(ulogger.TestLogger{}, testDir, []string{"/tmp/ubsv-tests1", "/tmp/ubsv-tests2"})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("1key"))
@@ -68,10 +81,12 @@ func TestFile_filename(t *testing.T) {
 
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
+
+		cleanup()
 	})
 
 	t.Run("4 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "/tmp/ubsv-tests", []string{
+		f, err := New(ulogger.TestLogger{}, testDir, []string{
 			"/tmp/ubsv-tests1",
 			"/tmp/ubsv-tests2",
 			"/tmp/ubsv-tests3",
@@ -90,5 +105,7 @@ func TestFile_filename(t *testing.T) {
 
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
+
+		cleanup()
 	})
 }
