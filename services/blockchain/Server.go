@@ -277,6 +277,34 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlock", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainGetBlock.Inc()
+
+	block, err := b.store.GetBlockByHeight(ctx1, request.Height)
+	if err != nil {
+		return nil, ubsverrors.WrapGRPC(err)
+	}
+
+	subtreeHashes := make([][]byte, len(block.Subtrees))
+	for i, subtreeHash := range block.Subtrees {
+		subtreeHashes[i] = subtreeHash[:]
+	}
+
+	return &blockchain_api.GetBlockResponse{
+		Header:           block.Header.Bytes(),
+		Height:           request.Height,
+		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		SubtreeHashes:    subtreeHashes,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockStats", stats)
 	defer func() {
