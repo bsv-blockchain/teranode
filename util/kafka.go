@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/ordishs/go-utils"
 	"net/url"
 	"os"
 	"os/signal"
@@ -88,17 +87,13 @@ func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
 }
 
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
-	fmt.Printf("Sending message to Kafka: %s => %d\n", utils.ReverseAndHexEncodeSlice(key), len(data))
-
 	partition := binary.LittleEndian.Uint32(key) % uint32(k.Partitions)
-	p, o, err := k.Producer.SendMessage(&sarama.ProducerMessage{
+	_, _, err := k.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic:     k.Topic,
 		Key:       sarama.ByteEncoder(key),
 		Value:     sarama.ByteEncoder(data),
 		Partition: int32(partition),
 	})
-
-	fmt.Printf("Sent message to Kafka partition: %d, Offset: %d, Error: %v\n", p, o, err)
 
 	return err
 }
