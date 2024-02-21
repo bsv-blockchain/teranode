@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { humanTime } from '$internal/utils/humanTime'
+  import { humanTime } from '$internal/utils/format'
   import { getMessageFields } from './utils'
   import { MessageType } from './types'
   import type { Message, P2PMessage, StatusMessage, MessageSource, MsgDisplayField } from './types'

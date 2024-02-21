@@ -24,12 +24,6 @@ const formatValue = (value: any, format: string) => {
     case 'petaHash':
       val = petaHash(value)
       break
-    case 'acceptedPercent':
-    case 'badhash':
-    case 'duplicate':
-    case 'totalRejected':
-      val = addNumCommas(value, 2) + '%'
-      break
     default:
       val = addNumCommas(value)
   }
@@ -60,16 +54,6 @@ const formatField = (param, seriesName, mappers, value?) => {
 }
 
 export const seriesTooltipFormatter = (mappers, params, ticket, callback) => {
-  // console.log(
-  //   'formatter: params = ',
-  //   params,
-  //   ' ticket = ',
-  //   ticket,
-  //   ' callback = ',
-  //   callback,
-  //   ' mappers = ',
-  //   mappers
-  // )
   const titleObj = formatField(null, params[0].dimensionNames[0], mappers, parseInt(params[0].name))
   let res = titleObj.value
   for (let i = 0; i < params.length; i++) {
@@ -81,16 +65,6 @@ export const seriesTooltipFormatter = (mappers, params, ticket, callback) => {
 }
 
 export const timeSeriesTooltipFormatter = (mappers, params, ticket, callback) => {
-  // console.log(
-  //   'formatter: params = ',
-  //   params,
-  //   ' ticket = ',
-  //   ticket,
-  //   ' callback = ',
-  //   callback,
-  //   ' mappers = ',
-  //   mappers
-  // )
   const obj = params[0]
   if (!obj.data) {
     return ''
