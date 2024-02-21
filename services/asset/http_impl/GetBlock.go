@@ -2,6 +2,7 @@ package http_impl
 
 import (
 	"encoding/hex"
+	"github.com/bitcoin-sv/ubsv/model"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
+
+type BlockExtended struct {
+	*model.Block
+	NextBlock *chainhash.Hash `json:"nextblock"`
+}
 
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
@@ -37,7 +43,18 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
-			return c.JSONPretty(200, block, "  ")
+			// get next hash to include in response
+			var nextBlockHash *chainhash.Hash
+			nextBlock, _ := h.repository.GetBlockByHeight(c.Request().Context(), uint32(height+1))
+			if nextBlock != nil {
+				nextBlockHash = nextBlock.Hash()
+			}
+
+			blockExtended := BlockExtended{
+				Block:     block,
+				NextBlock: nextBlockHash,
+			}
+			return c.JSONPretty(200, blockExtended, "  ")
 		}
 
 		b, err := block.Bytes()
@@ -76,7 +93,24 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
-			return c.JSONPretty(200, block, "  ")
+			height := uint32(0)
+			_, blockMeta, _ := h.repository.GetBlockHeader(c.Request().Context(), hash)
+			if blockMeta != nil {
+				height = blockMeta.Height
+			}
+
+			// get next hash to include in response
+			var nextBlockHash *chainhash.Hash
+			nextBlock, _ := h.repository.GetBlockByHeight(c.Request().Context(), height+1)
+			if nextBlock != nil {
+				nextBlockHash = nextBlock.Hash()
+			}
+
+			blockExtended := BlockExtended{
+				Block:     block,
+				NextBlock: nextBlockHash,
+			}
+			return c.JSONPretty(200, blockExtended, "  ")
 		}
 
 		b, err := block.Bytes()
