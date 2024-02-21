@@ -129,12 +129,8 @@ export function getBlocks(data: { offset: number; limit: number }, done?, fail?)
   return get(`${baseUrl}/blocks`, { query: { offset: data.offset, limit: data.limit } }, done, fail)
 }
 
-export function getBestBlockHeader(data: null, done?, fail?) {
-  return get(`${baseUrl}/bestblockheader/json`, { }, done, fail)
-}
-
 export function getBestBlockHeaderFromServer(data: { baseUrl: string }, done?, fail?) {
-  return get(`${data.baseUrl}/bestblockheader/json`, { }, done, fail)
+  return get(`${data.baseUrl}/bestblockheader/json`, {}, done, fail)
 }
 
 export function getBlockSubtrees(

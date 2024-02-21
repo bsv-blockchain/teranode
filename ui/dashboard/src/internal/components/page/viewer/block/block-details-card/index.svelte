@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
-  import { formatSatoshi } from '$lib/utils/format'
   import { getDetailsUrl, DetailType, DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
@@ -89,9 +88,9 @@
       size="small"
       icon="icon-chevron-right-line"
       ico={true}
-      disabled={!expandedHeader.nextblockhash}
-      tooltip={expandedHeader.nextblockhash ? t('tooltip.next-block') : ''}
-      on:click={() => navToBlock(expandedHeader.nextblockhash)}
+      disabled={!data?.nextblock}
+      tooltip={data?.nextblock ? t('tooltip.next-block') : ''}
+      on:click={() => navToBlock(data?.nextblock)}
     />
   </div>
   <div class="content">
@@ -122,14 +121,14 @@
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
             <div class="value">{expandedHeader.txCount}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
             <div class="value">TBD</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
@@ -144,7 +143,7 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">{t('unit.value.nonce_bsv', { value: expandedHeader.nonce })}</div>
+            <div class="value">{expandedHeader.nonce}</div>
           </div>
         </div>
         <div>
@@ -160,10 +159,10 @@
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>
             <div class="value">{expandedHeader.merkleroot}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.chainwork`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.miner`)}</div>
             <div class="value">{expandedHeader.miner}</div>

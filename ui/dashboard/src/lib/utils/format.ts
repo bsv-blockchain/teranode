@@ -19,9 +19,6 @@ export const addNumCommas = (value, round = -1, defaultValue = '') => {
     value = value.toFixed(round)
   }
   return new Intl.NumberFormat().format(value)
-  // const parts = value.toString().split('.')
-  // parts[0] = parseInt(parts[0]).toLocaleString('en', { useGrouping: true })
-  // return parts.join('.')
 }
 
 export const formatNum = (value, defaultValue = '') => {
@@ -30,24 +27,6 @@ export const formatNum = (value, defaultValue = '') => {
 
 export const formatSatoshi = (value, defaultValue = '') => {
   return valueSet(value) ? addNumCommas(value / 1e8, 8) : defaultValue
-}
-
-export const getTransactionHashUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/tx/${value}` : defaultValue
-}
-
-export const formatFilename = (value, limit = 20, defaultValue = '') => {
-  let ext = ''
-  if (value?.length > 0 && value.includes('.')) {
-    ext = value.split('.').pop()
-  }
-  return valueSet(value)
-    ? value.length > limit
-      ? ext
-        ? value.substring(0, limit - 3 - ext.length) + '...' + ext
-        : value.substring(0, limit - 3) + '...'
-      : value
-    : defaultValue
 }
 
 export const formatTransactionHash = (value, defaultValue = '') => {
@@ -60,14 +39,6 @@ export const shortHash = (value, defaultValue = '') => {
   return valueSet(value)
     ? `${value.substring(0, 4)}...${value.substring(value.length - 8)}`
     : defaultValue
-}
-
-export const getWalletUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/address/${value}` : defaultValue
-}
-
-export const getBlockUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/block/${value}` : defaultValue
 }
 
 export const humanHash = (val) => {

@@ -40,7 +40,7 @@
                 {:else if key.includes('block') || key === 'hash'}
                   <a href={getDetailsUrl(DetailType.block, value)}>"{value}"</a>
                 {:else if key === 'utxoHash'}
-                  <a href={getDetailsUrl('utxo', value)}>"{value}"</a>
+                  <a href={getDetailsUrl(DetailType.utxo, value)}>"{value}"</a>
                 {:else}
                   <span class="string">"{value}"</span>
                 {/if}
@@ -63,7 +63,7 @@
     {:else if castToArray(data).length === 64 && parentKey.includes('block')}
       <a href={getDetailsUrl(DetailType.block, `${data}`)}>{data}</a>
     {:else if castToArray(data).length === 64 && parentKey.includes('utxo')}
-      <a href={getDetailsUrl('utxo', `${data}`)}>{data}</a>
+      <a href={getDetailsUrl(DetailType.utxo, `${data}`)}>{data}</a>
     {:else if castToArray(data).length === 64 && parentKey.includes('parentTx')}
       <a href={getDetailsUrl(DetailType.tx, `${data}`)}>{data}</a>
     {:else}
@@ -75,15 +75,10 @@
 <style>
   .json-tree {
     font-family: var(--font-family-mono);
-
-    /* color: rgba(255, 255, 255, 0.88); */
-
-    font-family: JetBrains Mono;
     font-size: 13px;
     font-style: normal;
     font-weight: 200;
     line-height: 20px;
-    /* letter-spacing: 0.3px; */
   }
 
   ul {

@@ -7,7 +7,7 @@
   import NoData from '../no-data-card/index.svelte'
   import { spinCount } from '$internal/stores/nav'
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
-  import { DetailTab, setQueryParam } from '$internal/utils/urls'
+  import { DetailTab, DetailType, setQueryParam } from '$internal/utils/urls'
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
@@ -16,7 +16,7 @@
     ready = true
   })
 
-  const type = 'subtree'
+  const type = DetailType.subtree
 
   export let hash = ''
 
@@ -89,7 +89,7 @@
 
 {#if result}
   <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
-  {#if display === 'overview'}
+  {#if display === DetailTab.overview}
     <div style="height: 20px" />
     <SubtreeTxsCard subtree={result} />
   {/if}
