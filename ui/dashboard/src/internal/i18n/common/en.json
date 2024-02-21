@@ -116,6 +116,9 @@
             },
             "tx": {
               "title": "Transaction Details"
+            },
+            "utxo": {
+              "title": "UTXO Details"
             }
           }
         },
@@ -289,6 +292,11 @@
           "total": "Total Output: {{ amount }} BSV"
         },
         "load-more": "Load 10 More"
+      }
+    },
+    "viewer-utxo": {
+      "details": {
+        "title": "UTXO Details"
       }
     },
     "metrics": {
