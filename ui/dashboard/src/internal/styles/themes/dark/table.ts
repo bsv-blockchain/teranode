@@ -25,6 +25,12 @@ export const table = {
       color: '#1F2328',
     },
     color: '#B3B4B7',
+    small: {
+      color: '#898C90',
+      font: {
+        weight: 400,
+      },
+    },
     text: {
       transform: 'none',
     },
