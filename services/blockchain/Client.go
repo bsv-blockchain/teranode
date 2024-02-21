@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -22,7 +23,7 @@ import (
 type Client struct {
 	client  blockchain_api.BlockchainAPIClient
 	logger  ulogger.Logger
-	running bool
+	running atomic.Bool
 	conn    *grpc.ClientConn
 }
 
@@ -75,10 +76,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 		break
 	}
 
+	running := atomic.Bool{}
+	running.Store(true)
+
 	return &Client{
 		client:  baClient,
 		logger:  logger,
-		running: true,
+		running: running,
 		conn:    baConn,
 	}, nil
 }
@@ -343,7 +347,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Blockchain] context done, closing subscription: %s", source)
-		c.running = false
+		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[Blockchain] failed to close connection", err)
@@ -351,7 +355,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	}()
 
 	go func() {
-		for c.running {
+		for c.running.Load() {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
 			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
@@ -362,7 +366,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 				continue
 			}
 
-			for c.running {
+			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {

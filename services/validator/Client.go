@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
@@ -19,7 +20,7 @@ import (
 
 type Client struct {
 	client       validator_api.ValidatorAPIClient
-	running      bool
+	running      atomic.Bool
 	conn         *grpc.ClientConn
 	logger       ulogger.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
@@ -58,10 +59,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		logger.Fatalf("expecting validator_sendBatchWorkers > 0 when validator_sendBatchSize = %d", sendBatchSize)
 	}
 
+	running := atomic.Bool{}
+	running.Store(true)
+
 	client := &Client{
 		client:       grpcClient,
 		logger:       logger,
-		running:      true,
+		running:      running,
 		conn:         conn,
 		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
 		batchSize:    sendBatchSize,
@@ -162,7 +166,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
-		c.running = false
+		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[Asset] failed to close connection", err)
@@ -172,7 +176,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 	go func() {
 		defer close(ch)
 
-		for c.running {
+		for c.running.Load() {
 			stream, err := c.client.Subscribe(ctx, &validator_api.SubscribeRequest{
 				Source: source,
 			})
@@ -181,7 +185,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 				continue
 			}
 
-			for c.running {
+			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {

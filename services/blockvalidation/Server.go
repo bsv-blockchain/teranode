@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"net/http"
 	"net/url"
 	"runtime"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 
@@ -241,7 +242,7 @@ func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 	// run the server
 	go func() {
-		err = s.Start(frpcAddress)
+		err := s.Start(frpcAddress)
 		if err != nil {
 			u.logger.Errorf("[Block Validation] failed to serve frpc: %v", err)
 		}
@@ -249,7 +250,7 @@ func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
 
 	go func() {
 		<-ctx.Done()
-		err = s.Shutdown()
+		err := s.Shutdown()
 		if err != nil {
 			u.logger.Errorf("[Block Validation] failed to shutdown frpc server: %v", err)
 		}
