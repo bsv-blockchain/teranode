@@ -13,7 +13,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.base_url`),
       type: 'string',
       props: {
-        width: '15%',
+        width: '21%',
       },
     },
     {
@@ -21,7 +21,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.height`),
       type: 'number',
       props: {
-        width: '10%',
+        width: '9%',
       },
     },
     {
@@ -45,7 +45,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.miner`),
       type: 'string',
       props: {
-        width: '15%',
+        width: '12%',
       },
     },
     {
@@ -53,7 +53,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.hash`),
       type: 'string',
       props: {
-        width: '15%',
+        width: '14%',
       },
     },
     {
@@ -61,7 +61,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.previousblockhash`),
       type: 'string',
       props: {
-        width: '15%',
+        width: '14%',
       },
     },
     {
