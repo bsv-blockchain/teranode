@@ -8,6 +8,8 @@
   import i18n from '$internal/i18n'
   import * as api from '$internal/api'
 
+  $: t = $i18n.t
+
   export let style = ''
 
   let searchValue = ''
@@ -56,9 +58,7 @@
     />
   </div>
 </div>
-<div class="warning" {style}>
- ---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----
-</div>
+<div class="warning" {style}>{t('global.warning')}</div>
 
 <style>
   .toolbar {

@@ -362,5 +362,8 @@
     "value": {
       "kb": "{{ value }} KB"
     }
+  },
+  "global": {
+    "warning": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }
