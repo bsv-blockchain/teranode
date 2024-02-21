@@ -135,8 +135,6 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
-	fmt.Println("validate is called!")
-
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxostore.Spend
 
