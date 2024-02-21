@@ -6,9 +6,6 @@ x-ubsv-base:
   image: taal/ubsv:latest
   depends_on:
     - postgres
-  build:
-    context: .
-    dockerfile: local.Dockerfile
   networks:
     - ubsv-network
   volumes:
@@ -16,7 +13,30 @@ x-ubsv-base:
   expose:
     - 8081-8093
 
+networks:
+  ubsv-network:
+    name: my-ubsv-network
+
 services:
+  ubsv-builder:
+    image: taal/ubsv:latest
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+    networks:
+    - ubsv-network
+    entrypoint: ["pwd"]
+
+
+  tx-blaster-builder:
+    image: taal/blaster:latest
+    build:
+      context: .
+      dockerfile: local.txblaster.Dockerfile
+    networks:
+    - ubsv-network
+    entrypoint: ["pwd"]
+    
   postgres:
     container_name: postgres
     image: postgres:latest
@@ -79,7 +99,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       startCoinbase: false
-      asset_httpAddress: "http://ubsv-1:8090"
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -117,7 +136,6 @@ services:
     command: ["./ubsv", "-miner=0", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
-      asset_httpAddress: "http://ubsv-1:8090"
       startBlockValidation: false
       startBlockAssembly: false
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -155,7 +173,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       startCoinbase: false
-      asset_httpAddress: "http://ubsv-2:8090"
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -192,7 +209,6 @@ services:
     command: ["./ubsv", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
-      asset_httpAddress: "http://ubsv-2:8090"
       startBlockValidation: false
       startBlockAssembly: false
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
@@ -231,13 +247,9 @@ services:
       - postgres
       - ubsv-1
       - ubsv-2
-    build:
-      context: .
-      dockerfile: local.txblaster.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
-      asset_httpAddress: "http://ubsv-1:8090"
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       coinbase_grpcAddress: ubsv-1-coinbase:8093
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
@@ -267,13 +279,9 @@ services:
       - postgres
       - ubsv-1
       - ubsv-2
-    build:
-      context: .
-      dockerfile: local.txblaster.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
-      asset_httpAddress: "http://ubsv-2:8090"
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       coinbase_grpcAddress: ubsv-2-coinbase:8093
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
@@ -301,7 +309,6 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       startCoinbase: false
-      asset_httpAddress: "http://ubsv-3:8090"
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
@@ -337,7 +344,6 @@ services:
     command: ["./ubsv", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
-      asset_httpAddress: "http://ubsv-3:8090"
       startBlockValidation: false
       startBlockAssembly: false
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
@@ -373,13 +379,9 @@ services:
       - postgres
       - ubsv-1
       - ubsv-2
-    build:
-      context: .
-      dockerfile: local.txblaster.Dockerfile
     environment:
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
-      asset_httpAddress: "http://ubsv-3:8090"
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
       coinbase_grpcAddress: ubsv-3-coinbase:8093
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
@@ -402,7 +404,3 @@ services:
 
 
 # Add more ubsv nodes as needed
-
-networks:
-  ubsv-network:
-    name: my-ubsv-network
