@@ -178,7 +178,13 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			blockIDBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
-			return u.minedBlockStore.SetMultiKeysSingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize)
+			if err = u.minedBlockStore.SetMultiKeysSingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize); err != nil {
+				return fmt.Errorf("[localSetMined][%s] failed to set tx mined for subtree: %v", blockHash.String(), err)
+			}
+
+			prometheusBlockValidationSetMinedLocal.Add(float64(len(subtreeTxIDBytes)) / float64(chainhash.HashSize))
+
+			return nil
 		})
 	}
 
@@ -257,6 +263,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		stat.AddTime(timeStart)
 		prometheusBlockValidationValidateBlock.Inc()
 	}()
+
+	// first check if the block already exists in the blockchain
+	blockExists, err := u.blockchainClient.GetBlockExists(spanCtx, block.Header.Hash())
+	if err == nil && blockExists {
+		u.logger.Warnf("[ValidateBlock][%s] tried to validate existing block", block.Header.Hash().String())
+		return nil
+	}
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 

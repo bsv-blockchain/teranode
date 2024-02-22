@@ -24,7 +24,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	}()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := *blockHash
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("getBlock-%s", blockHash.String())))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*getBlockCache); ok && cacheData != nil {

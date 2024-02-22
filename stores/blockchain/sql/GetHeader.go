@@ -17,7 +17,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		stat.AddTime(start)
 	}()
 
-	cacheId := *blockHash
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetHeader-%s", blockHash.String())))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.BlockHeader); ok && cacheData != nil {

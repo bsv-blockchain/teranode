@@ -124,6 +124,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Infof("[Init] closing block found channel")
 				return
 			case c := <-u.catchupCh:
 				{
@@ -567,6 +568,7 @@ LOOP:
 			if exists {
 				break LOOP
 			}
+			u.logger.Warnf("[catchup][%s] parent block does not exist [%s]", fromBlock.Hash().String(), blockHeader.String())
 
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 
