@@ -17,8 +17,8 @@
   function updateData() {
     const tmp: any[] = []
 
-    const mNodes = []
-    console.log($miningNodes)
+    const mNodes: any[] = []
+    // console.log($miningNodes)
     Object.values($miningNodes).forEach((node) => {
       mNodes.push(node)
     })
@@ -39,7 +39,7 @@
       })
     })
     nodes = tmp
-    console.log({ tmp })
+    // console.log({ tmp })
   }
 
   onMount(() => {

@@ -116,6 +116,9 @@
             },
             "tx": {
               "title": "Transaction Details"
+            },
+            "utxo": {
+              "title": "UTXO Details"
             }
           }
         },
@@ -291,6 +294,11 @@
         "load-more": "Load 10 More"
       }
     },
+    "viewer-utxo": {
+      "details": {
+        "title": "UTXO Details"
+      }
+    },
     "metrics": {
       "menu-label": "Metrics"
     },
@@ -362,5 +370,8 @@
     "value": {
       "kb": "{{ value }} KB"
     }
+  },
+  "global": {
+    "warning": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }
