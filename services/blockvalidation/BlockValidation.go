@@ -855,14 +855,13 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	missingFromCacheG.SetLimit(getMissingSubtreeTxMetaFromCacheConcurrency)
 
 	if len(missingTxHashesFromCache) > 0 {
-		var txMeta *txmeta.Data
 		// process missingTxHashesFromCache
 		for idx, txHash := range missingTxHashesFromCache {
 			if txHash != nil {
 				idx := idx
 				txHash := txHash
 				g.Go(func() error {
-					txMeta, err = u.txMetaStore.GetMeta(missingFromCacheGCtx, txHash)
+					txMeta, err := u.txMetaStore.GetMeta(missingFromCacheGCtx, txHash)
 					if err != nil {
 						if errors.Is(err, txmeta.NewErrTxmetaNotFound(txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
 							// collect all missing transactions for processing in order
