@@ -36,7 +36,7 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 	require.Equal(t, value, dst)
 }
 
-func TestImprovedCache_SetMultiKeys(t *testing.T) {
+func TestImprovedCache_GSetMultiKeysSingleValue(t *testing.T) {
 	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
@@ -51,8 +51,8 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 	}
 
 	startTime := time.Now()
-	_ = cache.SetMulti(allKeys, value, chainhash.HashSize)
-	t.Log("SetMulti took:", time.Since(startTime))
+	_ = cache.SetMultiKeysSingleValue(allKeys, value, chainhash.HashSize)
+	t.Log("SetMultiKeysSingleValue took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
@@ -60,7 +60,7 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 		require.Equal(t, value, dst)
 	}
 
-	_ = cache.SetMulti(allKeys, valueSecond, chainhash.HashSize)
+	_ = cache.SetMultiKeysSingleValue(allKeys, valueSecond, chainhash.HashSize)
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
@@ -70,7 +70,7 @@ func TestImprovedCache_SetMultiKeys(t *testing.T) {
 
 }
 
-func TestImprovedCache_SetKeyAppended(t *testing.T) {
+func TestImprovedCache_GSetMultiKeyAppended(t *testing.T) {
 	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
@@ -94,5 +94,45 @@ func TestImprovedCache_SetKeyAppended(t *testing.T) {
 		dst := make([]byte, 0)
 		_ = cache.Get(&dst, allKeys[i])
 		require.Equal(t, []byte("valuevalue"), dst)
+	}
+}
+
+func TestImprovedCache_SetMulti(t *testing.T) {
+	cache := NewImprovedCache(100 * 1024 * 1024)
+	allKeys := make([][]byte, 0)
+	allValues := make([][]byte, 0)
+	var err error
+	numberOfKeys := 2_000 * bucketsCount
+
+	for i := 0; i < numberOfKeys; i++ {
+		key := make([]byte, 32)
+		value := make([]byte, 32)
+		_, err = rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key)
+		binary.LittleEndian.PutUint64(value, uint64(i))
+		allValues = append(allValues, value)
+	}
+
+	startTime := time.Now()
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti took:", time.Since(startTime))
+
+	for i, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cache.Get(&dst, key)
+		require.NoError(t, err)
+		require.Equal(t, allValues[i], dst)
+	}
+
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+
+	for i, key := range allKeys {
+		dst := make([]byte, 0)
+		err := cache.Get(&dst, key)
+		require.NoError(t, err)
+		require.Equal(t, append(allValues[i], allValues[i]...), dst)
 	}
 }
