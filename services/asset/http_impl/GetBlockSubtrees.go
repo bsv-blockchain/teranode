@@ -2,10 +2,9 @@ package http_impl
 
 import (
 	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
-
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
@@ -30,7 +29,7 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 		block, err := h.repository.GetBlockByHash(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -61,22 +60,24 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 				}
 
 				subtreeHash := block.Subtrees[i]
-				subtreeHead, numNodes, err = h.repository.GetSubtreeHead(c.Request().Context(), subtreeHash)
-				if err != nil {
-					if errors.Is(err, ubsverrors.ErrNotFound) {
-						return echo.NewHTTPError(http.StatusNotFound, err.Error())
-					}
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
 
-				// do something with the subtree result
-				data = append(data, SubtreeMeta{
-					Index:   i,
-					Hash:    subtreeHash.String(),
-					TxCount: numNodes,
-					Fee:     subtreeHead.Fees,
-					Size:    subtreeHead.SizeInBytes,
-				})
+				// do not check for error here, we will just return an empty row for the subtree
+				subtreeHead, numNodes, _ = h.repository.GetSubtreeHead(c.Request().Context(), subtreeHash)
+
+				if subtreeHead != nil {
+					data = append(data, SubtreeMeta{
+						Index:   i,
+						Hash:    subtreeHash.String(),
+						TxCount: numNodes,
+						Fee:     subtreeHead.Fees,
+						Size:    subtreeHead.SizeInBytes,
+					})
+				} else {
+					data = append(data, SubtreeMeta{
+						Index: i,
+						Hash:  subtreeHash.String(),
+					})
+				}
 			}
 		}
 

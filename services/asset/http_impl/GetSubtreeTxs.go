@@ -1,6 +1,8 @@
 package http_impl
 
 import (
+	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 	"time"
@@ -50,7 +52,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 			if err != nil {
-				if strings.HasSuffix(err.Error(), " not found") {
+				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
