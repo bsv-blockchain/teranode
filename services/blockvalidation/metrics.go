@@ -16,6 +16,8 @@ var (
 	prometheusBlockValidationCatchupDuration                 prometheus.Histogram
 	prometheusBlockValidationProcessBlockFoundDuration       prometheus.Histogram
 	prometheusBlockValidationSubtreeFound                    prometheus.Counter
+	prometheusBlockValidationSubtreeFoundCh                  prometheus.Gauge
+	prometheusBlockValidationSubtreeFoundChWaitDuration      prometheus.Histogram
 	prometheusBlockValidationSubtreeFoundDuration            prometheus.Histogram
 	prometheusBlockValidationValidateBlock                   prometheus.Counter
 	prometheusBlockValidationValidateBlockDuration           prometheus.Histogram
@@ -113,6 +115,23 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "subtree_found",
 			Help:      "Number of subtrees found",
+		},
+	)
+
+	prometheusBlockValidationSubtreeFoundCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "subtree_found_ch",
+			Help:      "Number of subtrees found buffered in the subtree found channel",
+		},
+	)
+
+	prometheusBlockValidationSubtreeFoundChWaitDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockvalidation",
+			Name:      "subtree_found_ch_wait_duration_millis",
+			Help:      "Duration of subtree found channel wait",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
