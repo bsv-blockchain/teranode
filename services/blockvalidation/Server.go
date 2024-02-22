@@ -155,26 +155,31 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	g.SetLimit(subtreeFoundChConcurrency)
 
 	go func() {
+		u.logger.Infof("[Init] starting subtree found channel")
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Infof("[Init] closing subtree found channel")
 				return
 			default:
 				subtreeFoundItem := u.subtreeFoundQueue.dequeue()
 				if subtreeFoundItem != nil {
+					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
 					// this will block if the concurrency limit is reached
 					g.Go(func() error {
 						prometheusBlockValidationSubtreeFoundChWaitDuration.Observe(float64(time.Since(time.UnixMilli(subtreeFoundItem.time)).Microseconds()) / 1_000_000)
 						if err := u.subtreeFound(ctx, subtreeFoundItem.hash, subtreeFoundItem.baseURL); err != nil {
 							u.logger.Errorf("[Init] failed to process subtree found [%s] [%v]", subtreeFoundItem.hash.String(), err)
 						}
+
+						prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 						return nil
 					})
 				} else {
 					// queue is empty, sleep for a bit otherwise we overload the CPU in this for loop
 					time.Sleep(100 * time.Millisecond)
+					prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 				}
-				prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 			}
 		}
 	}()
@@ -663,19 +668,12 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		return nil
 	}
 
-	if baseUrl == "" {
-		return fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
-	}
-
-	// decouple the tracing context to not cancel the context when finalize the block processing in the background
-	callerSpan := opentracing.SpanFromContext(spanCtx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	setCtx = util.ContextWithStat(setCtx, stat)
+	spanCtx = util.ContextWithStat(spanCtx, stat)
 	goroutineStat := stat.NewStat("go routine")
 
 	// start a new span for the subtree validation
 	start = gocore.CurrentTime()
-	subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
+	subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidationServer:SubtreeFound:validate")
 	defer func() {
 		goroutineStat.AddTime(start)
 		subtreeSpan.Finish()
