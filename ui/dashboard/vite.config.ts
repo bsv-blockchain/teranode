@@ -2,11 +2,13 @@ import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig, type UserConfigExport } from 'vite'
 // import { visualizer } from 'rollup-plugin-visualizer'
 import svg from '@poppanator/sveltekit-svg'
+import browserslistToEsbuild from 'browserslist-to-esbuild'
 
 export default defineConfig({
   build: {
     sourcemap: true,
     minify: true,
+    target: browserslistToEsbuild(),
     rollupOptions: {
       output: {
         manualChunks: (id) => {
