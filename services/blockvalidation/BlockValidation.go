@@ -793,7 +793,10 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
+	missingTxHashesFromCache := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := atomic.Int32{}
+
+	cache, _ := u.txMetaStore.(*txmetacache.TxMetaCache)
 
 	// cycle through batches of 1024 txHashes at a time
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
@@ -805,27 +808,36 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
 				txHash := txHashes[i+j]
-				txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
-				if err != nil {
-					if errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
-						// collect all missing transactions for processing in order
-						// that is why we use an indexed slice instead of just a slice append
-						// don't add the coinbase placeholder to the missing transactions
-						if !txHash.Equal(*model.CoinbasePlaceholderHash) {
-							missingTxHashes[i+j] = &txHash
-							nrOfMissingTransactions.Add(1)
+				if cache != nil {
+					txMeta = cache.GetMetaCached(gCtx, &txHash)
+					missingTxHashesFromCache[i+j] = &txHash
+				} else {
+					txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
+					if err != nil {
+						if errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
+							// collect all missing transactions for processing in order
+							// that is why we use an indexed slice instead of just a slice append
+							// don't add the coinbase placeholder to the missing transactions
+							if !txHash.Equal(*model.CoinbasePlaceholderHash) {
+								missingTxHashes[i+j] = &txHash
+								nrOfMissingTransactions.Add(1)
+							}
+							continue
+						} else {
+							return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
 						}
-						continue
-					} else {
-						return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
+					}
+
+					// this might be an old check, where we did not get an error, but also txMeta was nil
+					// TODO test and see if this is still needed
+					if txMeta == nil {
+						return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
 					}
 				}
 
-				if txMeta == nil {
-					return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
+				if txMeta != nil {
+					txMetaSlice[i+j] = txMeta
 				}
-
-				txMetaSlice[i+j] = txMeta
 			}
 
 			return nil
@@ -835,6 +847,49 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	err = g.Wait()
 	stat.NewStat("4. checkTxs").AddTime(start)
 	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
+	}
+
+	getMissingSubtreeTxMetaFromCacheConcurrency, _ := gocore.Config().GetInt("blockvalidation_getMissingSubtreeTxMetaFromCacheConcurrency", 1024)
+	missingFromCacheG, missingFromCacheGCtx := errgroup.WithContext(gCtx)
+	missingFromCacheG.SetLimit(getMissingSubtreeTxMetaFromCacheConcurrency)
+
+	if len(missingTxHashesFromCache) > 0 {
+		var txMeta *txmeta.Data
+		// process missingTxHashesFromCache
+		for idx, txHash := range missingTxHashesFromCache {
+			if txHash != nil {
+				idx := idx
+				txHash := txHash
+				g.Go(func() error {
+					txMeta, err = u.txMetaStore.GetMeta(missingFromCacheGCtx, txHash)
+					if err != nil {
+						if errors.Is(err, txmeta.NewErrTxmetaNotFound(txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
+							// collect all missing transactions for processing in order
+							// that is why we use an indexed slice instead of just a slice append
+							// don't add the coinbase placeholder to the missing transactions
+							if !txHash.Equal(*model.CoinbasePlaceholderHash) {
+								missingTxHashes[idx] = txHash
+								nrOfMissingTransactions.Add(1)
+							}
+							return nil
+						} else {
+							return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get tx meta", subtreeHash.String()), err)
+						}
+					}
+					if txMeta == nil {
+						return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
+					}
+
+					txMetaSlice[idx] = txMeta
+
+					return nil
+				})
+			}
+		}
+	}
+
+	if err = missingFromCacheG.Wait(); err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless all transactions in subtree", subtreeHash.String()), err)
 	}
 
