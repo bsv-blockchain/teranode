@@ -582,12 +582,18 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		MiningCandidate: miningCandidate,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
+	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	callerSpan := opentracing.SpanFromContext(ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+
 	go func() {
 		previousHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
-		err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
+		if err := ba.blockchainClient.SendNotification(setCtx, &model.Notification{
 			Type: model.NotificationType_MiningOn,
 			Hash: previousHash,
-		})
+		}); err != nil {
+			ba.logger.Errorf("failed to send mining on notification: %s", err)
+		}
 	}()
 
 	return miningCandidate, nil
