@@ -98,7 +98,7 @@ func TestImprovedCache_GSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache := NewImprovedCache(10 * 1024 * 1024)
+	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
