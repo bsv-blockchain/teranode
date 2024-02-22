@@ -54,7 +54,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.miner`),
       type: 'string',
       props: {
-        width: '10%',
+        width: '11%',
       },
     },
     {
@@ -62,7 +62,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.coinbaseValue`),
       type: 'number',
       props: {
-        width: '15%',
+        width: '14%',
       },
     },
     {
@@ -113,6 +113,11 @@ export const getRenderCells = (t) => {
         component: item[colId] ? LinkHashCopy : null,
         props: getHashLinkProps(DetailType.block, item.hash, t),
         value: '',
+      }
+    },
+    coinbaseValue: (idField, item, colId) => {
+      return {
+        value: (item[colId] / 1e8).toFixed(2),
       }
     },
   }
