@@ -247,6 +247,9 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
+	// Increase buffer size
+	config.ChannelBufferSize = 16 * 2048
+	config.Consumer.Fetch.Default = 1024 * 1024 // 1MB
 
 	/**
 	 * Set up a new Sarama consumer group
