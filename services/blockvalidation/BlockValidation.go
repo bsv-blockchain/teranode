@@ -176,7 +176,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			blockIDBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
-			return u.minedBlockStore.SetMulti(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize)
+			return u.minedBlockStore.SetMultiKeySingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize)
 		})
 	}
 
@@ -220,14 +220,14 @@ func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes [
 	return nil
 }
 
-func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, hashes map[chainhash.Hash]*txmeta.Data) error {
+func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMulti")
 		defer func() {
 			span.Finish()
 		}()
 
-		return cache.SetCacheMulti(hashes)
+		return cache.SetMulti(keys, values)
 	}
 
 	return nil

@@ -692,7 +692,9 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 
 	prometheusBlockValidationSetTXMetaCache.Inc()
 	go func(data [][]byte) {
-		hashes := make(map[chainhash.Hash]*txmeta_store.Data)
+		//hashes := make(map[chainhash.Hash]*txmeta_store.Data)
+		keys := make([][]byte, 0)
+		values := make([][]byte, 0)
 		for _, meta := range data {
 			if len(meta) < 32 {
 				u.logger.Errorf("meta data is too short: %v", meta)
@@ -701,16 +703,19 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
+			keys = append(keys, hash[:])
+			values = append(values, meta[32:])
 
-			dataBytes := meta[32:]
-			txMetaData := &txmeta_store.Data{}
-			txmeta_store.NewMetaDataFromBytes(&dataBytes, txMetaData)
+			//dataBytes := meta[32:]
+			//txMetaData := &txmeta_store.Data{}
+			//txmeta_store.NewMetaDataFromBytes(&dataBytes, txMetaData)
 
-			txMetaData.Tx = nil
-			hashes[hash] = txMetaData
+			//txMetaData.Tx = nil
+			//hashes[hash] = txMetaData
+
 		}
 
-		if err := u.blockValidation.SetTxMetaCacheMulti(ctx, hashes); err != nil {
+		if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
 			u.logger.Errorf("failed to set tx meta data: %v", err)
 		}
 	}(request.Data)

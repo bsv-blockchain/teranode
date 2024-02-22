@@ -81,13 +81,13 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 	return nil
 }
 
-func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) error {
-	for hash, txMeta := range hashes {
-		txMeta.Tx = nil
-		t.cache.Set(hash[:], txMeta.MetaBytes())
-	}
-
-	t.metrics.insertions.Add(uint64(len(hashes)))
+func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
+	// for hash, txMeta := range hashes {
+	// 	txMeta.Tx = nil
+	// 	t.cache.Set(hash[:], txMeta.MetaBytes())
+	// }
+	t.cache.SetMulti(keys, values)
+	t.metrics.insertions.Add(uint64(len(keys)))
 	return nil
 }
 
@@ -176,14 +176,6 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	//	return err
 	//}
 
-	// remove const, parameterize
-
-	// currently CPU is overwhelmed
-	// workload
-	// 1- cont. write and read a.t.m txMeta. Locks should be short. Buckets are smaller, less update per bucket -> less lock time per bucket
-	// 2- blockIDs: readaing or writing a lot. Multi makes sense. Big batfcfh comes at once, longer lock is fine
-
-	// G: why we can't call it with goroutines?
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {
@@ -196,12 +188,7 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
-// 1 move blockID slice out of metacache
-// 2 implement improvedcache setmulti with locks
-
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
-	// G: why not comment out the following as well?
-	// Does only SetMinedMulti called. Yes block validaiton only calls that
 	err := t.txMetaStore.SetMined(ctx, hash, blockID)
 	if err != nil {
 		return err
@@ -250,9 +237,3 @@ func (t *TxMetaCache) Length() int {
 	t.cache.UpdateStats(s)
 	return int(s.EntriesCount)
 }
-
-// func (t *TxMetaCache) BytesSize() int {
-// 	s := &Stats{}
-// 	t.cache.UpdateStats(s)
-// 	return int(s.BytesSize)
-// }
