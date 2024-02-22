@@ -229,13 +229,6 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		}(block)
 	}
 
-	// if !request.External {
-	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
-		Type: model.NotificationType_MiningOn,
-		Hash: block.Hash().CloneBytes(),
-	})
-	// }
-
 	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),
