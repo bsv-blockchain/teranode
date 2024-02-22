@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { Chart, ChartContainer } from '$lib/components/chart'
   import Card from '$internal/components/card/index.svelte'
   import RangeToggle from '$internal/components/range-toggle/index.svelte'
@@ -15,10 +16,28 @@
 
   let renderKey = ''
   let graphObj
+  let delayedTs = 0
+  let refreshTimeoutId
+
+  function updateDelayTs() {
+    if (refreshTimeoutId) {
+      clearTimeout(refreshTimeoutId)
+    }
+    refreshTimeoutId = setTimeout(() => {
+      delayedTs = new Date().getTime()
+    }, 50)
+  }
 
   $: if (data) {
     graphObj = getGraphObj(t, data, period)
+    updateDelayTs()
   }
+
+  onDestroy(() => {
+    if (refreshTimeoutId) {
+      clearTimeout(refreshTimeoutId)
+    }
+  })
 </script>
 
 <Card
@@ -32,7 +51,7 @@
   </svelte:fragment>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="530px">
-      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period} />
+      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period + delayedTs} />
     </ChartContainer>
   {/if}
 </Card>
