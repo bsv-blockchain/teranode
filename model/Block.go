@@ -95,9 +95,15 @@ type Block struct {
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
+	concurrency     int
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
+	concurrency, _ := gocore.Config().GetInt("block_concurrency", -1)
+	if concurrency < 0 {
+		concurrency = util.Max(4, runtime.NumCPU()/2)
+	}
+
 	return &Block{
 		Header:           header,
 		CoinbaseTx:       coinbase,
@@ -105,6 +111,7 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 		TransactionCount: transactionCount,
 		SizeInBytes:      sizeInBytes,
 		subtreeLength:    uint64(len(subtrees)),
+		concurrency:      concurrency,
 	}, nil
 }
 
@@ -341,7 +348,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	duplicateCheckLogger := gocore.Log("duplicateTransactions")
 
 	g := errgroup.Group{}
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep half of the cores free for other tasks
+	g.SetLimit(b.concurrency)
 
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
 	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
@@ -382,7 +389,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep half of the cores free for other tasks
+	g.SetLimit(b.concurrency)
 
 	for sIdx, subtree := range b.SubtreeSlices {
 		sIdx := sIdx
@@ -502,7 +509,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var txCount atomic.Uint64
 
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep half of the cores free for other tasks
+	g.SetLimit(b.concurrency)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i

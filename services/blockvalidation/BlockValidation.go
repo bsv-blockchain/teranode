@@ -143,8 +143,10 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	startTime := time.Now()
 	u.logger.Infof("[localSetMined][%s] update tx mined for block", blockHash.String())
 
+	localSetTxMinedConcurrency, _ := gocore.Config().GetInt("blockvalidation_localSetTxMinedConcurrency", util.Max(4, runtime.NumCPU()/2))
+
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
+	g.SetLimit(localSetTxMinedConcurrency) // keep 32 cores free for other tasks
 
 	for subtreeIdx, subtreeHash := range block.Subtrees {
 		subtreeIdx := subtreeIdx
@@ -406,8 +408,10 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
+	finalizeBlockValidationConcurrency, _ := gocore.Config().GetInt("blockvalidation_finalizeBlockValidationConcurrency", util.Max(4, runtime.NumCPU()/2))
+
 	g, gCtx := errgroup.WithContext(setCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
+	g.SetLimit(finalizeBlockValidationConcurrency) // keep 32 cores free for other tasks
 
 	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
 	if err != nil {
@@ -490,9 +494,11 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	// 14:05:29 | INFO  | BlockValidation.go:94 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees
 	// 14:10:01 | INFO  | BlockValidation.go:99 | bval  | [ValidateBlock][007a6ff44d6d48df201887f5d9725cb131fb837f774278413720292a6b705e41] validating 154 subtrees DONE
 
+	validateBlockSubtreesConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateBlockSubtreesConcurrency", util.Max(4, runtime.NumCPU()/2))
+
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
+	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	missingSubtreesMu := sync.Mutex{}
@@ -528,7 +534,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
 	subtreeBytesMapMu := sync.Mutex{}
 	g, gCtx = errgroup.WithContext(spanCtx)
-	g.SetLimit(8) // mostly IO bound, so double the limit
+	g.SetLimit(validateBlockSubtreesConcurrency) // mostly IO bound, so double the limit
 
 	for _, subtreeHash := range missingSubtrees {
 		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
@@ -776,11 +782,13 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		return err
 	}
 
+	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
+
 	start = gocore.CurrentTime()
 	// validate the subtree
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
+	g.SetLimit(validateSubtreeInternalConcurrency) // keep 32 cores free for other tasks
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
@@ -1045,8 +1053,10 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
 
+	getMissingTransactionsConcurrency, _ := gocore.Config().GetInt("blockvalidation_getMissingTransactions", util.Max(4, runtime.NumCPU()/2))
+
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep 32 cores free for other tasks
+	g.SetLimit(getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
