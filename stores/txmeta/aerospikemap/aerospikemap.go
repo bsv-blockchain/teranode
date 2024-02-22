@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -53,6 +54,11 @@ func init() {
 			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type Store struct {
@@ -61,8 +67,6 @@ type Store struct {
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	asl.Logger.SetLevel(asl.DEBUG)
-
 	logger = logger.New("aero_map_store")
 
 	namespace := u.Path[1:]
