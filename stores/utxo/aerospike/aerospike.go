@@ -418,7 +418,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos, adding to retry queue: %v\n", txID.String(), batchId, err)
+		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos in batchId %d, adding to retry queue: %v\n", txID.String(), len(utxoHashes), batchId, err)
 		// don't return, check each record in the batch for errors and process accordingly
 	}
 
