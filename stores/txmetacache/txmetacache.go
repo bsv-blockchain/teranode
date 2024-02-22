@@ -82,10 +82,6 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 }
 
 func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
-	// for hash, txMeta := range hashes {
-	// 	txMeta.Tx = nil
-	// 	t.cache.Set(hash[:], txMeta.MetaBytes())
-	// }
 	t.cache.SetMulti(keys, values)
 	t.metrics.insertions.Add(uint64(len(keys)))
 	return nil

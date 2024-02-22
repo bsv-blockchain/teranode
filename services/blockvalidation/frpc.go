@@ -51,7 +51,6 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 
 	prometheusBlockValidationSetTXMetaCacheFrpc.Inc()
 	go func(data [][]byte) {
-		//hashes := make(map[chainhash.Hash]*txmeta_store.Data)
 		keys := make([][]byte, 0)
 		values := make([][]byte, 0)
 		for _, meta := range data {
@@ -64,13 +63,6 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 			hash := chainhash.Hash(meta[:32])
 			keys = append(keys, hash[:])
 			values = append(values, meta[32:])
-
-			// dataBytes := meta[32:]
-			// txMetaData := &txmeta_store.Data{}
-			// txmeta_store.NewMetaDataFromBytes(&dataBytes, txMetaData)
-
-			// txMetaData.Tx = nil
-			// hashes[hash] = txMetaData
 		}
 
 		if err := f.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
