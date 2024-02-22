@@ -1,9 +1,10 @@
-package util
+package HTTP
 
 import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/util"
 	"io"
 	"net/http"
 	"testing"
@@ -97,7 +98,7 @@ func TestHTTPGet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := DoHTTPRequest(ctx, "http://www.google.com")
+	_, err := util.DoHTTPRequest(ctx, "http://www.google.com")
 	require.NoError(t, err)
 }
 
@@ -105,7 +106,7 @@ func TestHTTPGetReader(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body, err := DoHTTPRequestBodyReader(ctx, "http://www.google.com")
+	body, err := util.DoHTTPRequestBodyReader(ctx, "http://www.google.com")
 	require.NoError(t, err)
 
 	defer body.Close()
