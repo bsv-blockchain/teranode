@@ -179,8 +179,6 @@ func (c *Centrifuge) startP2PListener() error {
 					continue
 				}
 
-				c.logger.Infof("[Centrifuge] received message of type %s: %s", mType.Type, string(message))
-
 				// send the message on to the centrifuge node
 				_, err = c.centrifugeNode.Publish(strings.ToLower(mType.Type), message)
 				if err != nil {
