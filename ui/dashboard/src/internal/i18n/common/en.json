@@ -312,6 +312,7 @@
     },
     "network": {
       "menu-label": "Network",
+      "live": "Live",
       "nodes": {
         "title": "Connected Nodes",
         "fields": {
