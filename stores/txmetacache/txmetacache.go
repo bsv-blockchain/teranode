@@ -90,6 +90,22 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *txmeta.Data {
+	cachedBytes := make([]byte, 0)
+	_ = t.cache.Get(&cachedBytes, hash[:])
+
+	if len(cachedBytes) > 0 {
+		t.metrics.hits.Add(1)
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+
+		return &txmetaData
+	}
+	t.metrics.misses.Add(1)
+
+	return nil
+}
+
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	_ = t.cache.Get(&cachedBytes, hash[:])
