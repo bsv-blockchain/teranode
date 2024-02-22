@@ -163,11 +163,11 @@
         "fields": {
           "loading": "Loading...",
           "block_count": "Total Blocks",
-          "tx_count": "Mined Transactions",
+          "tx_count": "Mined Tx",
           "max_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",
           "avg_tx_count_per_block": "Average Tx / Block",
-          "txns_per_second": "Txns / Second"
+          "txns_per_second": "Tx / Second"
         }
       },
       "txs": {
