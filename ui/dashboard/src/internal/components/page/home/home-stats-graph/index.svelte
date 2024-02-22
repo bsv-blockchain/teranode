@@ -16,26 +16,27 @@
 
   let renderKey = ''
   let graphObj
-  let delayedTs = 0
-  let refreshTimeoutId
+  let tmpGraphObj
+  let delayId
 
-  function updateDelayTs() {
-    if (refreshTimeoutId) {
-      clearTimeout(refreshTimeoutId)
+  function doDelay() {
+    if (delayId) {
+      clearTimeout(delayId)
     }
-    refreshTimeoutId = setTimeout(() => {
-      delayedTs = new Date().getTime()
+    delayId = setTimeout(() => {
+      graphObj = tmpGraphObj
     }, 50)
   }
 
   $: if (data) {
-    graphObj = getGraphObj(t, data, period)
-    updateDelayTs()
+    tmpGraphObj = getGraphObj(t, data, period)
+    graphObj = null
+    doDelay()
   }
 
   onDestroy(() => {
-    if (refreshTimeoutId) {
-      clearTimeout(refreshTimeoutId)
+    if (delayId) {
+      clearTimeout(delayId)
     }
   })
 </script>
@@ -51,7 +52,7 @@
   </svelte:fragment>
   {#if graphObj?.graphOptions}
     <ChartContainer bind:renderKey height="530px">
-      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period + delayedTs} />
+      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period} />
     </ChartContainer>
   {/if}
 </Card>
