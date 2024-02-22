@@ -792,8 +792,6 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
-	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
-	missingTxHashesFromCache := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := atomic.Int32{}
 	nrOfMissingTransactionsFromCache := atomic.Int32{}
 
@@ -812,8 +810,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 				if cache != nil {
 					txMeta = cache.GetMetaCached(gCtx, &txHash)
 					if txMeta == nil {
-						missingTxHashesFromCache[i+j] = &txHash
 						nrOfMissingTransactionsFromCache.Add(1)
+					} else {
+						txMetaSlice[i+j] = txMeta
 					}
 				} else {
 					txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
@@ -823,7 +822,6 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 							// that is why we use an indexed slice instead of just a slice append
 							// don't add the coinbase placeholder to the missing transactions
 							if !txHash.Equal(*model.CoinbasePlaceholderHash) {
-								missingTxHashes[i+j] = &txHash
 								nrOfMissingTransactions.Add(1)
 							}
 							continue
@@ -836,11 +834,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 					// TODO test and see if this is still needed
 					if txMeta == nil {
 						return fmt.Errorf("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), txHash.String())
+					} else {
+						txMetaSlice[i+j] = txMeta
 					}
-				}
-
-				if txMeta != nil {
-					txMetaSlice[i+j] = txMeta
 				}
 			}
 
@@ -858,22 +854,21 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	missingFromCacheG, missingFromCacheGCtx := errgroup.WithContext(gCtx)
 	missingFromCacheG.SetLimit(getMissingSubtreeTxMetaFromCacheConcurrency)
 
-	if len(missingTxHashesFromCache) > 0 {
+	if nrOfMissingTransactionsFromCache.Load() > 0 {
 		u.logger.Infof("[validateSubtree][%s] processing %d missing tx from cache for subtree instance", subtreeHash.String(), nrOfMissingTransactionsFromCache.Load())
 		// process missingTxHashesFromCache
-		for idx, txHash := range missingTxHashesFromCache {
-			if txHash != nil {
+		for idx, txHash := range txHashes {
+			if txMetaSlice[idx] == nil {
 				idx := idx
 				txHash := txHash
 				missingFromCacheG.Go(func() error {
-					txMeta, err := u.txMetaStore.GetMeta(missingFromCacheGCtx, txHash)
+					txMeta, err := u.txMetaStore.GetMeta(missingFromCacheGCtx, &txHash)
 					if err != nil {
-						if errors.Is(err, txmeta.NewErrTxmetaNotFound(txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
+						if errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) || strings.Contains(err.Error(), "failed to get tx meta") {
 							// collect all missing transactions for processing in order
 							// that is why we use an indexed slice instead of just a slice append
 							// don't add the coinbase placeholder to the missing transactions
 							if !txHash.Equal(*model.CoinbasePlaceholderHash) {
-								missingTxHashes[idx] = txHash
 								nrOfMissingTransactions.Add(1)
 							}
 							return nil
@@ -903,20 +898,16 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 		// this is done to make sure the order is preserved when getting them in parallel
 		// compact the missingTxHashes to only a list of the missing ones
 		missingTxHashesCompacted := make([]missingTxHash, 0, nrOfMissingTransactions.Load())
-		for idx, txHash := range missingTxHashes {
-			if txHash != nil {
+		for idx, txHash := range txHashes {
+			if txMetaSlice[idx] == nil {
 				missingTxHashesCompacted = append(missingTxHashesCompacted, missingTxHash{
-					hash: txHash,
+					hash: &txHash,
 					idx:  idx,
 				})
 			}
 		}
 
-		if len(missingTxHashes) == 1 {
-			u.logger.Infof("[validateSubtree][%s] processing missing tx %s for subtree instance", subtreeHash.String(), missingTxHashes[0].String())
-		} else {
-			u.logger.Infof("[validateSubtree][%s] processing %d missing tx for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
-		}
+		u.logger.Infof("[validateSubtree][%s] processing %d missing tx for subtree instance", subtreeHash.String(), len(missingTxHashesCompacted))
 
 		err = u.processMissingTransactions(ctx5, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
 		if err != nil {
@@ -937,39 +928,10 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 			}
 			continue
 		}
+
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			found := false
-			index := -1
-			for i, h := range txHashes {
-				if h.IsEqual(&txHash) {
-					found = true
-					index = i
-					break
-				}
-			}
-			if found {
-				u.logger.Warnf("[validateSubtree][%s] tx meta exists in txHashes @ %d of %d [%s]", subtreeHash.String(), index, len(txHashes), txHash.String())
-			} else {
-				u.logger.Warnf("[validateSubtree][%s] tx meta not found in txHashes. Not possible? [%s]", subtreeHash.String(), txHash.String())
-			}
-
-			found = false
-			index = -1
-			for i, missingTxHash := range missingTxHashes {
-				if txHash.IsEqual(missingTxHash) {
-					found = true
-					index = i
-					break
-				}
-			}
-			if found {
-				u.logger.Warnf("[validateSubtree][%s] tx meta exists in missingTxHashes but wasn't processed? @ %d of %d [%s]", subtreeHash.String(), index, len(missingTxHashes), txHash.String())
-			} else {
-				u.logger.Warnf("[validateSubtree][%s] tx meta not found in missingTxHashes [%s]", subtreeHash.String(), txHash.String())
-			}
-
 			return fmt.Errorf("[validateSubtree][%s] tx meta not found in txMetaSlice [%s]", subtreeHash.String(), txHash.String())
 		}
 
