@@ -178,7 +178,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			blockIDBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
-			return u.minedBlockStore.SetMultiKeySingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize)
+			return u.minedBlockStore.SetMultiKeysSingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize)
 		})
 	}
 
@@ -229,7 +229,7 @@ func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte
 			span.Finish()
 		}()
 
-		return cache.SetMulti(keys, values)
+		return cache.SetCacheMulti(keys, values)
 	}
 
 	return nil

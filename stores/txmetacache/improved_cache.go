@@ -98,7 +98,7 @@ func (c *ImprovedCache) Set(k, v []byte) {
 // - key to bucket: [0..31 -b0, 32..63 -b1, 64..95 -b2, 96..127 -b3, 128..159 -b4, 160..191 -b5, 192..223 -b6, 224..255 -b7, 256..287 -b0, 288..319 -b1, 320..351 -b2, 352..383 -b3, 384..415 -b4, 416..447 -b5, 448..479 -b6, 480..511 -b7]
 // Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
 // Value bytes are appended to the end of the previous value bytes.
-func (c *ImprovedCache) SetMultiKeySingleValue(keys []byte, value []byte, keySize int) error {
+func (c *ImprovedCache) SetMultiKeysSingleValue(keys []byte, value []byte, keySize int) error {
 	// if len(keys)%keySize != 0 {
 	// 	return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
 	// }
@@ -128,7 +128,7 @@ func (c *ImprovedCache) SetMultiKeySingleValue(keys []byte, value []byte, keySiz
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			c.buckets[bucketIdx].SetMultiKeySingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
 			return nil
 		})
 	}
@@ -316,8 +316,8 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
-// SetMultiKeySingleValue stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
-func (b *bucket) SetMultiKeySingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
+func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var prevValue []byte
@@ -331,7 +331,7 @@ func (b *bucket) SetMultiKeySingleValue(keys [][]byte, value []byte) { //, hashe
 	}
 }
 
-// SetMultiKeySingleValue stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
+// SetMulti stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
 func (b *bucket) SetMulti(keys [][]byte, values [][]byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

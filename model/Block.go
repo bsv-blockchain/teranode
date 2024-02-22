@@ -197,7 +197,7 @@ func (b *Block) Hash() *chainhash.Hash {
 // TODO This should be compatible with the normal txmetastore.Store, but was implemented now just as a test
 type MinedBlockStore interface {
 	SetMultiKeysSingleValue(keys []byte, value []byte, keySize int) error
-	SetMulti(keys []byte, values [][]byte, keySize int) error
+	SetMulti(keys [][]byte, values [][]byte) error
 	Get(dst *[]byte, k []byte) error
 }
 
