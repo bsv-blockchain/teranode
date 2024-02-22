@@ -53,7 +53,7 @@ echarts.use([
   CanvasRenderer,
 ])
 
-export const getGraphObj = (t, data, period, smooth = true) => {
+export const getGraphObj = (t, data, period, smooth = false) => {
   // graph data
   const graphData: any[] = []
   if (data) {
