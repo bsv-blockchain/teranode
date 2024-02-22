@@ -582,6 +582,14 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		MiningCandidate: miningCandidate,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
+	go func() {
+		previousHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
+		err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
+			Type: model.NotificationType_MiningOn,
+			Hash: previousHash,
+		})
+	}()
+
 	return miningCandidate, nil
 }
 

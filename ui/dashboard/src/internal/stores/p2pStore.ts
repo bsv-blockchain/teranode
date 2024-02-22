@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store'
 import type { Writable } from 'svelte/store'
-import * as api from '$internal/api'
+//import * as api from '$internal/api'
 
 export const messages = writable([])
 export const miningNodes: any = writable({})
@@ -63,15 +63,15 @@ export function connectToP2PServer() {
           miningNodeSet[baseUrl] = {
             base_url: baseUrl,
           }
-          const res: any = await api.getBestBlockHeaderFromServer({ baseUrl })
-          if (res.ok && res.data) {
-            miningNodeSet[baseUrl] = {
-              ...res.data,
-              tx_count: res.data.txCount,
-              size_in_bytes: res.data.sizeInBytes,
-              base_url: baseUrl,
-            }
-          }
+          // const res: any = await api.getBestBlockHeaderFromServer({ baseUrl })
+          // if (res.ok && res.data) {
+          //   miningNodeSet[baseUrl] = {
+          //     ...res.data,
+          //     tx_count: res.data.txCount,
+          //     size_in_bytes: res.data.sizeInBytes,
+          //     base_url: baseUrl,
+          //   }
+          // }
           miningNodes.set(miningNodeSet)
         } else if (miningNodeSet[baseUrl]) {
           miningNodeSet[baseUrl].receivedAt = new Date()
