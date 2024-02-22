@@ -152,13 +152,13 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/blockvalidation/blockvalidation_api/blockvalidation_api.proto
 
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
-	services/txmeta/txmeta_api/txmeta_api.proto
+	# protoc \
+	# --proto_path=. \
+	# --go_out=. \
+	# --go_opt=paths=source_relative \
+	# --go-grpc_out=. \
+	# --go-grpc_opt=paths=source_relative \
+	# services/txmeta/txmeta_api/txmeta_api.proto
 
 	protoc \
 	--proto_path=. \
@@ -226,7 +226,7 @@ clean_gen:
 	rm -f ./services/blockvalidation/blockvalidation_api/*.pb.go
 	rm -f ./services/validator/validator_api/*.pb.go
 	rm -f ./services/propagation/propagation_api/*.pb.go
-	rm -f ./services/txmeta/txmeta_api/*.pb.go
+	# rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
 	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/bootstrap/bootstrap_api/*.pb.go

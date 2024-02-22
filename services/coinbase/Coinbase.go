@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
+	"runtime"
 	"strings"
 	"time"
 
@@ -54,6 +56,8 @@ type Coinbase struct {
 	dbTimeout    time.Duration
 	peerSync     *p2p.PeerHeight
 	waitForPeers bool
+	g            *errgroup.Group
+	gCtx         context.Context
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -110,6 +114,9 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
 
+	g, gCtx := errgroup.WithContext(context.Background())
+	g.SetLimit(runtime.NumCPU())
+
 	c := &Coinbase{
 		store:        store,
 		db:           store.GetDB(),
@@ -123,6 +130,8 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
 		peerSync:     p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
 		waitForPeers: waitForPeers,
+		g:            g,
+		gCtx:         gCtx,
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -535,6 +544,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 	defer rows.Close()
 
+	utxos := make([]*bt.UTXO, 0)
 	for rows.Next() {
 		var txid []byte
 		var vout uint32
@@ -550,18 +560,25 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 			return fmt.Errorf("could not create hash from txid: %w", err)
 		}
 
-		utxo := &bt.UTXO{
+		utxos = append(utxos, &bt.UTXO{
 			TxIDHash:      hash,
 			Vout:          vout,
 			LockingScript: &lockingScript,
 			Satoshis:      satoshis,
-		}
+		})
+	}
 
-		c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", hash, vout)
-
-		if err := c.splitUtxo(ctx, utxo); err != nil {
-			return fmt.Errorf("could not split utxo: %w", err)
-		}
+	for _, utxo := range utxos {
+		utxo := utxo
+		// create the utxos in the background
+		// we don't have a method to revert anything that goes wrong anyway
+		c.g.Go(func() error {
+			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
+			if err = c.splitUtxo(c.gCtx, utxo); err != nil {
+				return fmt.Errorf("could not split utxo: %w", err)
+			}
+			return nil
+		})
 	}
 
 	return nil

@@ -13,7 +13,7 @@
   import { addNumCommas } from '$lib/utils/format'
   import { getColDefs, getRenderCells } from './data'
   import { getTps } from '$internal/utils/txs'
-  import { getHumanReadableTime } from '$internal/utils/humanTime'
+  import { getHumanReadableTime } from '$internal/utils/format'
 
   const baseKey = 'page.viewer'
 

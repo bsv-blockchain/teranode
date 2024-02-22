@@ -56,9 +56,16 @@ while true; do
 
   # Countdown before the next update
   for (( i=10; i>0; i-- )); do
-    echo -ne "  Refreshing in $i seconds  \r"
-    sleep 1
+    echo -ne "  Refreshing in $i seconds (or press 'r' key) \r"
+    # Set a timeout for read command
+    read -t 1 -n 1 key
+    if [ "$key" == "r" ]; then
+        key="" # Clear the key
+        echo -ne "  Refreshing immediately...                   \r"
+        break # Exit the loop on key press
+    fi
   done
-  echo -ne "  Refreshing...                  \r"
+
+  echo -ne "  Refreshing...                             \n" # Ensure newline at the end
 done
 

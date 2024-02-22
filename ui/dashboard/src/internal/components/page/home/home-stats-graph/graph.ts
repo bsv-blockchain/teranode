@@ -90,7 +90,7 @@ export const getGraphObj = (t, data, period, smooth = true) => {
     },
   ]
 
-  let startDate = +new Date()
+  let startDate = new Date().getTime()
   switch (period) {
     case '2h':
       startDate -= 2 * 60 * 60 * 1000
@@ -105,14 +105,14 @@ export const getGraphObj = (t, data, period, smooth = true) => {
       startDate -= 24 * 60 * 60 * 1000
       break
     case '1w':
-        startDate -= 7 * 24 * 60 * 60 * 1000
-        break
+      startDate -= 7 * 24 * 60 * 60 * 1000
+      break
     case '1m':
-        startDate -= 30 * 24 * 60 * 60 * 1000
-        break
+      startDate -= 30 * 24 * 60 * 60 * 1000
+      break
     case '3m':
-        startDate -= 90 * 24 * 60 * 60 * 1000
-        break
+      startDate -= 90 * 24 * 60 * 60 * 1000
+      break
   }
 
   // graph options
@@ -136,7 +136,7 @@ export const getGraphObj = (t, data, period, smooth = true) => {
           },
           alignTicks: true,
           min: startDate,
-          max: +new Date(),
+          max: new Date().getTime(),
         },
       ],
       yAxis: [

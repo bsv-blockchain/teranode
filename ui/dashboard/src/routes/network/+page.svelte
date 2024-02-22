@@ -5,7 +5,7 @@
   import ConnectedNodesCard from '$internal/components/page/network/connected-nodes-card/index.svelte'
 
   import { miningNodes, sock } from '$internal/stores/p2pStore'
-  import { humanTime } from '$internal/utils/humanTime'
+  import { humanTime } from '$internal/utils/format'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -20,7 +20,7 @@
     const mNodes = []
     console.log($miningNodes)
     Object.values($miningNodes).forEach((node) => {
-       mNodes.push(node)
+      mNodes.push(node)
     })
     const sorted = mNodes.sort((a: any, b: any) => {
       if (a.base_url < b.base_url) {
@@ -39,7 +39,7 @@
       })
     })
     nodes = tmp
-    console.log({tmp})
+    console.log({ tmp })
   }
 
   onMount(() => {

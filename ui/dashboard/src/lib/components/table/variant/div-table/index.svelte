@@ -530,7 +530,6 @@
     text-align: left;
     white-space: nowrap;
 
-    font-weight: var(--table-th-font-weight, 600);
     font-size: var(--table-th-font-size, 13px);
     line-height: var(--table-th-line-height, 16px);
     letter-spacing: var(--table-th-letter-spacing, 0.02em);
@@ -540,7 +539,8 @@
     align-items: center;
 
     text-transform: var(--table-th-text-transform, uppercase);
-    color: var(--table-th-color, #232d7c);
+    color: var(--table-th-small-color);
+    font-weight: var(--table-th-small-font-weight);
 
     cursor: auto;
   }

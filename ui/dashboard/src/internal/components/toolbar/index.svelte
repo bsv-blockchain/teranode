@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation'
   import TextInput from '$lib/components/textinput/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
-  import { success, failure } from '$lib/utils/notifications'
+  import { failure } from '$lib/utils/notifications'
   import { getDetailsUrl } from '$internal/utils/urls'
 
   import i18n from '$internal/i18n'
@@ -13,22 +13,17 @@
   let searchValue = ''
   let lastSearchCalled = ''
 
-  // TODO(api integration)
   async function onSearchKeyDown(e) {
     if (!e) e = window.event
     const keyCode = e.detail.code || e.detail.key
 
     if (keyCode === 'Enter') {
-      // console.log('call api: search = ', searchValue)
       lastSearchCalled = searchValue
+
       const result: any = await api.searchItem({ q: searchValue })
       if (result.ok) {
-        // success(JSON.stringify(result.data, null, 2))
         const { type, hash } = result.data
-        // console.log('Redirecting in 2 seconds..')
-        // setTimeout(() => {
         goto(getDetailsUrl(type, hash))
-        // }, 2000)
       } else {
         failure(result.error.message)
       }
@@ -61,6 +56,9 @@
     />
   </div>
 </div>
+<div class="warning" {style}>
+ ---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----
+</div>
 
 <style>
   .toolbar {
@@ -68,6 +66,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 5px;
+    flex-wrap: wrap;
   }
 
   .toolbar .left {
@@ -79,5 +79,16 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+  }
+
+  .warning {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    background-color: var(--color-warning);
+    color: var(--color-white);
+    font-size: 14px;
   }
 </style>

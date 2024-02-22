@@ -91,7 +91,7 @@
     {#if isOverview}
       <div class="fields" class:collapse>
         <div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.block`)} FIX</div>
             <div class="value copy-link">
               {#if d?.blockHashes && d?.blockHashes.length > 0}
@@ -110,10 +110,16 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.timestamp`)}</div>
             <div class="value">TBD</div>
+          </div> -->
+          <div class="entry">
+            <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
+            <div class="value">
+              {t('unit.value.kb', { value: d?.sizeInBytes / 1000 })}
+            </div>
           </div>
         </div>
         <div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
             <div class="value">TBD</div>
           </div>
@@ -128,7 +134,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.fee_paid`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
       </div>
     {:else if isJson}

@@ -341,6 +341,8 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	duplicateCheckLogger := gocore.Log("duplicateTransactions")
 
 	g := errgroup.Group{}
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep half of the cores free for other tasks
+
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
 	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
 	for subIdx, subtree := range b.SubtreeSlices {
@@ -380,6 +382,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(util.Max(4, runtime.NumCPU()/2)) // keep half of the cores free for other tasks
 
 	for sIdx, subtree := range b.SubtreeSlices {
 		sIdx := sIdx
