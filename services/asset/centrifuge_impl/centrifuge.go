@@ -4,29 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/blobserver_api"
-	"github.com/bitcoin-sv/ubsv/services/blobserver/repository"
+	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/centrifugal/centrifuge"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Centrifuge struct {
-	logger           utils.Logger
+	logger           ulogger.Logger
 	repository       *repository.Repository
 	baseURL          string
 	blockchainClient blockchain.ClientI
 	centrifugeNode   *centrifuge.Node
 }
 
-func New(logger utils.Logger, repo *repository.Repository) (*Centrifuge, error) {
+func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error) {
 	u, err, found := gocore.Config().GetURL("blobserver_httpAddress")
 	if err != nil {
 		logger.Fatalf("blobserver_httpAddress is not a valid URL: %v", err)
@@ -48,7 +48,7 @@ func New(logger utils.Logger, repo *repository.Repository) (*Centrifuge, error) 
 func (c *Centrifuge) Init(ctx context.Context) (err error) {
 	c.logger.Infof("[BlobServer] Centrifuge service initializing")
 
-	c.blockchainClient, err = blockchain.NewClient(ctx)
+	c.blockchainClient, err = blockchain.NewClient(ctx, c.logger)
 	if err != nil {
 		return err
 	}
@@ -107,8 +107,8 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 				var data []byte
 				var block *model.Block
 				var height uint32
-				switch blobserver_api.Type(notification.Type) {
-				case blobserver_api.Type_Block:
+				switch asset_api.Type(notification.Type) {
+				case asset_api.Type_Block:
 					channel = "blocks"
 					block, err = c.blockchainClient.GetBlock(ctx, notification.Hash)
 					if err != nil {
@@ -141,7 +141,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 						c.logger.Errorf("error marshalling block: %s", err)
 						continue
 					}
-				case blobserver_api.Type_Subtree:
+				case asset_api.Type_Subtree:
 					channel = "subtrees"
 					data = []byte(`{"hash": "` + notification.Hash.String() + `","baseUrl": "` + c.baseURL + `"}`)
 				}
