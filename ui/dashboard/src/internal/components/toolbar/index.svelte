@@ -58,7 +58,6 @@
     />
   </div>
 </div>
-<div class="warning" {style}>{t('global.warning')}</div>
 
 <style>
   .toolbar {

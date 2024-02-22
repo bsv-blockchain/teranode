@@ -9,6 +9,7 @@
   export let position = 'left' // left | right
   export let minWidth = 60
   export let maxWidth = 212
+  export let offsetTop = ''
   export let snapBelowHeader = true
   export let coverColor = 'rgba(40, 41, 51, 0.7)'
   export let showCover = false
@@ -53,7 +54,7 @@
   $: {
     cssVars = [
       `--width:${$mediaSize <= MediaSize.xs ? '100%' : `${calcW}px`}`,
-      `--top:${snapBelowHeader ? 'var(--header-height)' : '0'}`,
+      `--top:${snapBelowHeader ? `calc(var(--header-height)${offsetTop ? ` + ${offsetTop}` : '0'} )` : `${offsetTop}`}`,
       `--content-top:${hasHeader ? 'var(--header-height)' : '0'}`,
       `--content-bottom:${hasFooter ? 'var(--drawer-footer-height)' : '0'}`,
       `--cover-color:${coverColor}`,

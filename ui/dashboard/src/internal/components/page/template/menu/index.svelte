@@ -7,11 +7,16 @@
   import Logo from '$lib/components/logo/index.svelte'
   import Menu from '$lib/components/navigation/menu/index.svelte'
   import Toolbar from '$internal/components/toolbar/index.svelte'
+  import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
 
   export let testId: string | undefined | null = null
   export let showGlobalToolbar = true
+
+  import i18n from '$internal/i18n'
+
+  $: t = $i18n.t
 
   function onLogo() {
     goto('/')
@@ -63,7 +68,7 @@
 </script>
 
 {#if showMobileNavbar}
-  <MobileNavbar>
+  <MobileNavbar offsetTop={'var(--banner-height)'}>
     <div class="navbar-content">
       <div class="logo-container" on:click={onLogo}>
         <Logo name="teranode" height={28} />
@@ -76,10 +81,14 @@
   </MobileNavbar>
 {/if}
 
+<Banner text={t('global.warning')} />
+
 <div
   class="content-container"
   data-test-id={testId}
-  style:--offset-top={showMobileNavbar ? `var(--header-height)` : '0'}
+  style:--offset-top={showMobileNavbar
+    ? `calc(var(--header-height) + var(--banner-height))`
+    : 'var(--banner-height)'}
   style:--offset-left={showMobileNavbar ? '0px' : `${$contentLeft}px`}
 >
   <ContentMenu>
@@ -96,6 +105,7 @@
     enableCollapse={!showMobileNavbar}
     minWidth={60}
     maxWidth={212}
+    offsetTop={'var(--banner-height)'}
     collapsed={!expanded}
     showCover={showMobileNavbar}
     showHeader={!showMobileNavbar}
