@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net/http"
 	"strings"
@@ -60,7 +61,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 			if err != nil {
-				if strings.HasSuffix(err.Error(), " not found") {
+				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -75,7 +76,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// get subtree reader is much more efficient than get subtree
 		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -198,7 +199,7 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), " not found") {
+		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

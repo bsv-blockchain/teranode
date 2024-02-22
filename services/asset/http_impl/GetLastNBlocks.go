@@ -1,6 +1,8 @@
 package http_impl
 
 import (
+	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,7 +46,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), n, includeOrphans, uint32(fromHeight))
 	if err != nil {
-		if strings.HasSuffix(err.Error(), " not found") {
+		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
