@@ -22,10 +22,10 @@ export function connectToP2PServer() {
     if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
       url.protocol = 'ws:'
       url.host = 'localhost'
-      url.port = '9906'
+      url.port = '8090'
     }
 
-    url.pathname = '/p2p-ws'
+    url.pathname = '/connection/websocket'
 
     wsUrl.set(url)
     error.set(null)
@@ -40,6 +40,9 @@ export function connectToP2PServer() {
     socket.onopen = () => {
       error.set(null)
       sock.set(socket)
+      // This is required to trigger connect on server side since server expects
+      // initial connect request from a WebSocket unidirectional client.
+      socket.send(JSON.stringify({}));
       console.log(`p2pWS connection opened to ${url}`)
     }
 
@@ -48,16 +51,38 @@ export function connectToP2PServer() {
         const data = await event.data
         const json: any = JSON.parse(data)
 
-        json.receivedAt = new Date()
+        if (json.connect) {
+          const clientID = json.connect.client;
+          const subscriptions: string[] = [];
+          const subs = json.connect.subs;
+          if (subs) {
+            for (const m in subs) {
+              if (Object.prototype.hasOwnProperty.call(subs, m)) {
+                subscriptions.push(m);
+              }
+            }
+          }
+          console.log("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
+          return
+        }
 
-        let baseUrl = json.base_url
-        if (!json.base_url.includes('localhost') && json.base_url.includes('http:')) {
+        if (!json?.pub?.data) {
+          console.log('p2pWS: Received data:', json)
+          return
+        }
+
+        const jsonData = json.pub.data
+
+        jsonData.receivedAt = new Date()
+
+        let baseUrl = jsonData.base_url
+        if (!jsonData.base_url.includes('localhost') && jsonData.base_url.includes('http:')) {
           baseUrl = baseUrl.replace('http:', 'https:')
         }
 
         const miningNodeSet: any = get(miningNodes)
-        if (json.type === 'mining_on') {
-          miningNodeSet[baseUrl] = json
+        if (jsonData.type === 'mining_on') {
+          miningNodeSet[baseUrl] = jsonData
           miningNodes.set(miningNodeSet)
         } else if (baseUrl && !miningNodeSet[baseUrl]) {
           miningNodeSet[baseUrl] = {
@@ -80,7 +105,7 @@ export function connectToP2PServer() {
         //console.log('miningNodes', miningNodes)
 
         let m: any = get(messages)
-        m = [json, ...m].slice(0, maxMessages)
+        m = [jsonData, ...m].slice(0, maxMessages)
 
         messages.set(m)
       } catch (error) {
