@@ -122,7 +122,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if centrifugeOk && v.httpServer != nil {
-		v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo)
+		v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
 		if err != nil {
 			return fmt.Errorf("error creating centrifuge server: %s", err)
 		}

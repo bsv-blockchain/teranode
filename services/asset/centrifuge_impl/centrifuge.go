@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -24,6 +26,7 @@ type Centrifuge struct {
 	logger           ulogger.Logger
 	repository       *repository.Repository
 	baseURL          string
+	httpServer       *http_impl.HTTP
 	blockchainClient blockchain.ClientI
 	centrifugeNode   *centrifuge.Node
 }
@@ -32,7 +35,7 @@ type messageType struct {
 	Type string `json:"type"`
 }
 
-func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error) {
+func New(logger ulogger.Logger, repo *repository.Repository, httpServer *http_impl.HTTP) (*Centrifuge, error) {
 	u, err, found := gocore.Config().GetURL("asset_httpAddress")
 	if err != nil {
 		return nil, fmt.Errorf("asset_httpAddress is not a valid URL: %v", err)
@@ -45,6 +48,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error
 		logger:     logger,
 		repository: repo,
 		baseURL:    u.String(),
+		httpServer: httpServer,
 	}
 
 	return c, nil
@@ -71,6 +75,7 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 	c.centrifugeNode.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"ping":      {},
 				"block":     {},
 				"subtree":   {},
 				"mining_on": {},
@@ -108,32 +113,19 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 			return true
 		},
 	})
-	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
-	http.Handle("/subscribe", handleSubscribe(c.centrifugeNode))
-	http.Handle("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
-	http.Handle("/client/", http.FileServer(http.Dir("./client")))
+	_ = c.httpServer.AddHTTPHandler("/connection/websocket", authMiddleware(websocketHandler))
+	_ = c.httpServer.AddHTTPHandler("/subscribe", handleSubscribe(c.centrifugeNode))
+	_ = c.httpServer.AddHTTPHandler("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
+	_ = c.httpServer.AddHTTPHandler("/client/", http.FileServer(http.Dir("./client")))
 
-	srv := &http.Server{Addr: addr}
+	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = shutdownCancel
 
-	go func() {
-		<-ctx.Done()
+	<-ctx.Done()
 
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = shutdownCancel
-
-		c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
-		if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
-			c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
-		}
-
-		if err = srv.Shutdown(shutdownContext); err != nil {
-			c.logger.Errorf("[AssetService] Centrifuge (impl) http service shutdown error: %s", err)
-		}
-	}()
-
-	// this will block
-	if err = srv.ListenAndServe(); err != nil {
-		return err
+	c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
+	if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
+		c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
 	}
 
 	return nil
@@ -190,7 +182,7 @@ func (c *Centrifuge) startP2PListener() error {
 				c.logger.Infof("[Centrifuge] received message of type %s: %s", mType.Type, string(message))
 
 				// send the message on to the centrifuge node
-				_, err = c.centrifugeNode.Publish(mType.Type, message)
+				_, err = c.centrifugeNode.Publish(strings.ToLower(mType.Type), message)
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error publishing to %s channel: %s", mType.Type, err)
 				}
@@ -342,7 +334,12 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		err := node.Subscribe("42", "block", centrifuge.WithSubscribeClient(clientID))
+		err := node.Subscribe("42", "ping", centrifuge.WithSubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Subscribe("42", "block", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -374,7 +371,12 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		err := node.Unsubscribe("42", "block", centrifuge.WithUnsubscribeClient(clientID))
+		err := node.Unsubscribe("42", "ping", centrifuge.WithUnsubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Unsubscribe("42", "block", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
