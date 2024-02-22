@@ -95,14 +95,9 @@ type Block struct {
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
-	concurrency     int
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
-	concurrency, _ := gocore.Config().GetInt("block_concurrency", -1)
-	if concurrency < 0 {
-		concurrency = util.Max(4, runtime.NumCPU()/2)
-	}
 
 	return &Block{
 		Header:           header,
@@ -111,7 +106,6 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 		TransactionCount: transactionCount,
 		SizeInBytes:      sizeInBytes,
 		subtreeLength:    uint64(len(subtrees)),
-		concurrency:      concurrency,
 	}, nil
 }
 
@@ -347,8 +341,13 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 
 	duplicateCheckLogger := gocore.Log("duplicateTransactions")
 
+	concurrency, _ := gocore.Config().GetInt("block_checkDuplicateTransactionsConcurrency", -1)
+	if concurrency <= 0 {
+		concurrency = util.Max(4, runtime.NumCPU()/2)
+	}
+
 	g := errgroup.Group{}
-	g.SetLimit(b.concurrency)
+	g.SetLimit(concurrency)
 
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
 	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
@@ -388,8 +387,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 		currentBlockHeaderIDsMap[id] = struct{}{}
 	}
 
+	concurrency, _ := gocore.Config().GetInt("block_validOrderAndBlessedConcurrency", -1)
+	if concurrency <= 0 {
+		concurrency = util.Max(4, runtime.NumCPU()/2)
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(b.concurrency)
+	g.SetLimit(concurrency)
 
 	for sIdx, subtree := range b.SubtreeSlices {
 		sIdx := sIdx
@@ -508,8 +512,13 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 	var sizeInBytes atomic.Uint64
 	var txCount atomic.Uint64
 
+	concurrency, _ := gocore.Config().GetInt("block_getAndValidateSubtreesConcurrency", -1)
+	if concurrency <= 0 {
+		concurrency = util.Max(4, runtime.NumCPU()/2)
+	}
+
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(b.concurrency)
+	g.SetLimit(concurrency)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
