@@ -148,10 +148,14 @@
   let renderComp: any = null
 
   async function setRenderComp(variant: TableVariantType) {
-    if (variant === TableVariant.div) {
-      renderComp = (await import('./variant/div-table/index.svelte')).default;
-    } else {
-      renderComp = (await import('./variant/standard-table/index.svelte')).default;
+    try {
+      if (variant === TableVariant.div) {
+        renderComp = (await import('./variant/div-table/index.svelte')).default
+      } else {
+        renderComp = (await import('./variant/standard-table/index.svelte')).default
+      }
+    } catch (e) {
+      console.error('Error loading table variant:', e)
     }
   }
   $: {
