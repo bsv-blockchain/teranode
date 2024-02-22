@@ -788,13 +788,14 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	// validate the subtree
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(validateSubtreeInternalConcurrency) // keep 32 cores free for other tasks
+	g.SetLimit(validateSubtreeInternalConcurrency)
 
 	u.logger.Infof("[validateSubtree][%s] processing %d txs from subtree", subtreeHash.String(), len(txHashes))
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 	missingTxHashes := make([]*chainhash.Hash, len(txHashes))
 	missingTxHashesFromCache := make([]*chainhash.Hash, len(txHashes))
 	nrOfMissingTransactions := atomic.Int32{}
+	nrOfMissingTransactionsFromCache := atomic.Int32{}
 
 	cache, _ := u.txMetaStore.(*txmetacache.TxMetaCache)
 
@@ -810,7 +811,10 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 				txHash := txHashes[i+j]
 				if cache != nil {
 					txMeta = cache.GetMetaCached(gCtx, &txHash)
-					missingTxHashesFromCache[i+j] = &txHash
+					if txMeta == nil {
+						missingTxHashesFromCache[i+j] = &txHash
+						nrOfMissingTransactionsFromCache.Add(1)
+					}
 				} else {
 					txMeta, err = u.txMetaStore.GetMeta(gCtx, &txHash)
 					if err != nil {
@@ -855,6 +859,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	missingFromCacheG.SetLimit(getMissingSubtreeTxMetaFromCacheConcurrency)
 
 	if len(missingTxHashesFromCache) > 0 {
+		u.logger.Infof("[validateSubtree][%s] processing %d missing tx from cache for subtree instance", subtreeHash.String(), nrOfMissingTransactionsFromCache.Load())
 		// process missingTxHashesFromCache
 		for idx, txHash := range missingTxHashesFromCache {
 			if txHash != nil {
