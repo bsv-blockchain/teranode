@@ -119,14 +119,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
 
 	if compression {
 		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "websocket error setting compression level", map[string]any{"error": err.Error()}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "[Centrifuge] websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
 
@@ -179,14 +179,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]any{"transport": transport.Name()}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "[Centrifuge] error creating client", map[string]any{"transport": transport.Name()}))
 			return
 		}
 		defer func() { _ = closeFn() }()
 
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transport.Name()}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection established", map[string]any{"client": c.ID(), "transport": transport.Name()}))
 		defer func(started time.Time) {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
 		}(time.Now())
 
 		_, data, err := conn.ReadMessage()

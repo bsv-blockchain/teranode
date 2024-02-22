@@ -71,8 +71,9 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 	c.centrifugeNode.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"blocks":   {},
-				"subtrees": {},
+				"block":     {},
+				"subtree":   {},
+				"mining_on": {},
 			},
 		}, nil
 	})
@@ -142,7 +143,7 @@ func (c *Centrifuge) startP2PListener() error {
 	p2pServerAddress, _ := gocore.Config().Get("p2p_httpAddress", "localhost:9906")
 
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
-	c.logger.Infof("connecting to p2p server on %s", u.String())
+	c.logger.Infof("[Centrifuge] connecting to p2p server on %s", u.String())
 
 	var err error
 	var client *websocket.Conn
@@ -152,12 +153,12 @@ func (c *Centrifuge) startP2PListener() error {
 	go func() {
 		for {
 			if !connected {
-				c.logger.Infof("dialing p2p server at: %s", u.String())
+				c.logger.Infof("[Centrifuge] dialing p2p server at: %s", u.String())
 				client, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
 				if err != nil {
-					c.logger.Errorf("error dialing p2p server: %v", err)
+					c.logger.Errorf("[Centrifuge] error dialing p2p server: %v", err)
 				} else {
-					c.logger.Infof("connected to p2p server on: %s", u.String())
+					c.logger.Infof("[Centrifuge] connected to p2p server on: %s", u.String())
 					connected = true
 				}
 			}
@@ -172,7 +173,7 @@ func (c *Centrifuge) startP2PListener() error {
 			if client != nil {
 				_, message, err := client.ReadMessage()
 				if err != nil {
-					c.logger.Debugf("error reading p2p server message: %v", err)
+					c.logger.Debugf("[Centrifuge] error reading p2p server message: %v", err)
 					time.Sleep(1 * time.Second)
 					connected = false
 					continue
@@ -182,17 +183,19 @@ func (c *Centrifuge) startP2PListener() error {
 				var mType messageType
 				err = json.Unmarshal(message, &mType)
 				if err != nil {
-					c.logger.Errorf("error unmarshalling message: %s", err)
+					c.logger.Errorf("[Centrifuge] error unmarshalling message: %s", err)
 					continue
 				}
+
+				c.logger.Infof("[Centrifuge] received message of type %s: %s", mType.Type, string(message))
 
 				// send the message on to the centrifuge node
 				_, err = c.centrifugeNode.Publish(mType.Type, message)
 				if err != nil {
-					c.logger.Errorf("error publishing to %s channel: %s", mType.Type, err)
+					c.logger.Errorf("[Centrifuge] error publishing to %s channel: %s", mType.Type, err)
 				}
 			} else {
-				c.logger.Debugf("p2p client not connected, waiting...")
+				c.logger.Debugf("[Centrifuge] p2p client not connected, waiting...")
 				time.Sleep(1 * time.Second)
 			}
 		}
@@ -224,16 +227,16 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 				var height uint32
 				switch asset_api.Type(notification.Type) {
 				case asset_api.Type_Block:
-					channel = "blocks"
+					channel = "block"
 					block, err = c.blockchainClient.GetBlock(ctx, notification.Hash)
 					if err != nil {
-						c.logger.Errorf("error getting block header: %s", err)
+						c.logger.Errorf("[Centrifuge] error getting block header: %s", err)
 						continue
 					}
 
 					height, err = util.ExtractCoinbaseHeight(block.CoinbaseTx)
 					if err != nil {
-						c.logger.Errorf("error extracting coinbase height: %s", err)
+						c.logger.Errorf("[Centrifuge] error extracting coinbase height: %s", err)
 					}
 
 					// marshal the block header to json
@@ -253,18 +256,18 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 						BaseURL:    c.baseURL,
 					})
 					if err != nil {
-						c.logger.Errorf("error marshalling block: %s", err)
+						c.logger.Errorf("[Centrifuge] error marshalling block: %s", err)
 						continue
 					}
 				case asset_api.Type_Subtree:
-					channel = "subtrees"
+					channel = "subtree"
 					data = []byte(`{"hash": "` + notification.Hash.String() + `","baseUrl": "` + c.baseURL + `"}`)
 				}
 
 				if channel != "" {
 					_, err = c.centrifugeNode.Publish(channel, data)
 					if err != nil {
-						c.logger.Errorf("error publishing to blocks channel: %s", err)
+						c.logger.Errorf("[Centrifuge] error publishing to block channel: %s", err)
 					}
 				}
 			}
@@ -310,7 +313,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 }
 
 func (c *Centrifuge) Stop(ctx context.Context) error {
-	c.logger.Infof("[AssetService] GRPC (impl) service shutting down")
+	c.logger.Infof("[AssetService] Centrifuge GRPC (impl) service shutting down")
 
 	return nil
 }
@@ -339,7 +342,17 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		err := node.Subscribe("42", "blocks", centrifuge.WithSubscribeClient(clientID))
+		err := node.Subscribe("42", "block", centrifuge.WithSubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Subscribe("42", "subtree", centrifuge.WithSubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Subscribe("42", "mining_on", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -361,7 +374,17 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		err := node.Unsubscribe("42", "blocks", centrifuge.WithUnsubscribeClient(clientID))
+		err := node.Unsubscribe("42", "block", centrifuge.WithUnsubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Unsubscribe("42", "subtree", centrifuge.WithUnsubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		err = node.Unsubscribe("42", "mining_on", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
