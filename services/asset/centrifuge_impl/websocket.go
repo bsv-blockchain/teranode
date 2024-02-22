@@ -2,10 +2,7 @@ package centrifuge_impl
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -405,26 +402,23 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 func sameHostOriginCheck() func(r *http.Request) bool {
 	return func(r *http.Request) bool {
 		err := checkSameHost(r)
-		if err != nil {
-			return false
-		}
-		return true
+		return err != nil
 	}
 }
 
 func checkSameHost(r *http.Request) error {
 	return nil
 
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return nil
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return fmt.Errorf("failed to parse Origin header %q: %w", origin, err)
-	}
-	if strings.EqualFold(r.Host, u.Host) {
-		return nil
-	}
-	return fmt.Errorf("request Origin %q is not authorized for Host %q", origin, r.Host)
+	//origin := r.Header.Get("Origin")
+	//if origin == "" {
+	//	return nil
+	//}
+	//u, err := url.Parse(origin)
+	//if err != nil {
+	//	return fmt.Errorf("failed to parse Origin header %q: %w", origin, err)
+	//}
+	//if strings.EqualFold(r.Host, u.Host) {
+	//	return nil
+	//}
+	//return fmt.Errorf("request Origin %q is not authorized for Host %q", origin, r.Host)
 }

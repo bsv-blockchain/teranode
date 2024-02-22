@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/gorilla/websocket"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -26,14 +28,17 @@ type Centrifuge struct {
 	centrifugeNode   *centrifuge.Node
 }
 
-func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error) {
-	u, err, found := gocore.Config().GetURL("blobserver_httpAddress")
-	if err != nil {
-		logger.Fatalf("blobserver_httpAddress is not a valid URL: %v", err)
-	}
+type messageType struct {
+	Type string `json:"type"`
+}
 
+func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error) {
+	u, err, found := gocore.Config().GetURL("asset_httpAddress")
+	if err != nil {
+		return nil, fmt.Errorf("asset_httpAddress is not a valid URL: %v", err)
+	}
 	if !found {
-		return nil, fmt.Errorf("blobserver_httpAddress not found in config")
+		return nil, fmt.Errorf("asset_httpAddress not found in config")
 	}
 
 	c := &Centrifuge{
@@ -46,12 +51,12 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*Centrifuge, error
 }
 
 func (c *Centrifuge) Init(ctx context.Context) (err error) {
-	c.logger.Infof("[BlobServer] Centrifuge service initializing")
+	c.logger.Infof("[AssetService] Centrifuge service initializing")
 
-	c.blockchainClient, err = blockchain.NewClient(ctx, c.logger)
-	if err != nil {
-		return err
-	}
+	//c.blockchainClient, err = blockchain.NewClient(ctx, c.logger)
+	//if err != nil {
+	//	return err
+	//}
 
 	c.centrifugeNode, err = centrifuge.New(centrifuge.Config{
 		LogLevel: centrifuge.LogLevelDebug,
@@ -59,6 +64,9 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 			c.logger.Infof("[Centrifuge] %s: %s", e.Message, e.Fields)
 		},
 	})
+	if err != nil {
+		return err
+	}
 
 	c.centrifugeNode.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
@@ -85,10 +93,117 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 }
 
 func (c *Centrifuge) Start(ctx context.Context, addr string) error {
-	c.logger.Infof("[BlobServer] Centrifuge service starting")
+	c.logger.Infof("[AssetService] Centrifuge service starting")
 
+	err := c.startP2PListener()
+	if err != nil {
+		return err
+	}
+
+	websocketHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
+		ReadBufferSize:     1024,
+		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	})
+	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
+	http.Handle("/subscribe", handleSubscribe(c.centrifugeNode))
+	http.Handle("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
+	http.Handle("/client/", http.FileServer(http.Dir("./client")))
+
+	srv := &http.Server{Addr: addr}
+
+	go func() {
+		<-ctx.Done()
+
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownCancel
+
+		c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
+		if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
+			c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
+		}
+
+		if err = srv.Shutdown(shutdownContext); err != nil {
+			c.logger.Errorf("[AssetService] Centrifuge (impl) http service shutdown error: %s", err)
+		}
+	}()
+
+	// this will block
+	if err = srv.ListenAndServe(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Centrifuge) startP2PListener() error {
+	p2pServerAddress, _ := gocore.Config().Get("p2p_httpAddress", "localhost:9906")
+
+	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
+	c.logger.Infof("connecting to p2p server on %s", u.String())
+
+	var err error
+	var client *websocket.Conn
+
+	connected := false
+
+	go func() {
+		for {
+			if !connected {
+				c.logger.Infof("dialing p2p server at: %s", u.String())
+				client, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+				if err != nil {
+					c.logger.Errorf("error dialing p2p server: %v", err)
+				} else {
+					c.logger.Infof("connected to p2p server on: %s", u.String())
+					connected = true
+				}
+			}
+
+			// retrying in 1 second
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
+	go func() {
+		for {
+			if client != nil {
+				_, message, err := client.ReadMessage()
+				if err != nil {
+					c.logger.Debugf("error reading p2p server message: %v", err)
+					time.Sleep(1 * time.Second)
+					connected = false
+					continue
+				}
+
+				// Unmarshal the message into a messageType struct
+				var mType messageType
+				err = json.Unmarshal(message, &mType)
+				if err != nil {
+					c.logger.Errorf("error unmarshalling message: %s", err)
+					continue
+				}
+
+				// send the message on to the centrifuge node
+				_, err = c.centrifugeNode.Publish(mType.Type, message)
+				if err != nil {
+					c.logger.Errorf("error publishing to %s channel: %s", mType.Type, err)
+				}
+			} else {
+				c.logger.Debugf("p2p client not connected, waiting...")
+				time.Sleep(1 * time.Second)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (c *Centrifuge) _(ctx context.Context, addr string) error {
 	// Subscribe to the blockchain service
-	blockchainSubscription, err := c.blockchainClient.Subscribe(ctx, "blobserver")
+	blockchainSubscription, err := c.blockchainClient.Subscribe(ctx, "AssetService")
 	if err != nil {
 		return err
 	}
@@ -96,7 +211,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 		for {
 			select {
 			case <-ctx.Done():
-				c.logger.Infof("[BlobServer] Centrifuge service shutting down")
+				c.logger.Infof("[AssetService] Centrifuge service shutting down")
 				return
 			case notification := <-blockchainSubscription:
 				if notification == nil {
@@ -159,6 +274,9 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	websocketHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	})
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
 	http.Handle("/subscribe", handleSubscribe(c.centrifugeNode))
@@ -170,15 +288,16 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	go func() {
 		<-ctx.Done()
 
-		shutdownContext, _ := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = shutdownCancel
 
-		c.logger.Infof("[BlobServer] Centrifuge (impl) service shutting down")
+		c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
 		if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
-			c.logger.Errorf("[BlobServer] Centrifuge (impl) node service shutdown error: %s", err)
+			c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
 		}
 
 		if err = srv.Shutdown(shutdownContext); err != nil {
-			c.logger.Errorf("[BlobServer] Centrifuge (impl) http service shutdown error: %s", err)
+			c.logger.Errorf("[AssetService] Centrifuge (impl) http service shutdown error: %s", err)
 		}
 	}()
 
@@ -191,7 +310,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 }
 
 func (c *Centrifuge) Stop(ctx context.Context) error {
-	c.logger.Infof("[BlobServer] GRPC (impl) service shutting down")
+	c.logger.Infof("[AssetService] GRPC (impl) service shutting down")
 
 	return nil
 }
