@@ -13,11 +13,11 @@ import (
 const maxValueSizeKB = 2   // 2KB
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const chunksPerAlloc = 1024
+const chunksPerAlloc = 2 // 1024
 
-const bucketsCount = 512
+const bucketsCount = 2 // 512
 
-const chunkSize = maxValueSizeKB * 1024 * 32
+const chunkSize = maxValueSizeKB // * 1024 * 32
 
 const bucketSizeBits = 40
 
@@ -283,19 +283,15 @@ func (b *bucket) Reset() {
 	b.mu.Unlock()
 }
 
-func (b *bucket) cleanLocked() {
-	// current generation of data within the bucket
+// cleanLockedMap removes expired k-v pairs from bucket map.
+func (b *bucket) cleanLockedMap() {
 	bGen := b.gen & ((1 << genSizeBits) - 1)
-	// current index in the chunks array where the next k-v pair will be written
 	bIdx := b.idx
 	bm := b.m
-	// newItems hold the number of valid k-v pairs that are not expired
 	newItems := 0
-	for _, v := range bm { // iterates over all the k-v pairs in the whole bucket
-		// for each k-v pair, calculates the generation and index of the k-v pair
+	for _, v := range bm {
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
-		// identifies valid elements that are not expired
 		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
 			newItems++
 		}
@@ -316,6 +312,39 @@ func (b *bucket) cleanLocked() {
 	}
 }
 
+// cleanLockedMapNew removes expired k-v pairs from bucket map.
+func (b *bucket) cleanLockedMapNew() {
+	// current generation of data within the bucket
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	// current index in the chunks array where the next k-v pair will be written
+	bIdx := b.idx
+	bm := b.m
+
+	// we halved the number of chunks in SetNew
+	byteOffsetRemoved := (b.idx / 2) * chunkSize
+	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
+	bmNew := make(map[uint64]uint64, len(bm))
+	for k, v := range bm {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+
+		// adjust the idx for each item, since we removed the first half of the chunks/
+		// we only take items in the second half of the chunks, i.e. after the byteOffsetRemoved
+		if idx >= byteOffsetRemoved {
+			// calcualte the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
+			adjustedIdx := idx - byteOffsetRemoved
+
+			// Check if the item is still valid after adjustment.
+			// This check might need to include considerations for generation and index within the new structure.
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && adjustedIdx >= bIdx || gen == bGen && adjustedIdx < bIdx {
+				bmNew[k] = (gen << bucketSizeBits) | adjustedIdx
+			}
+		}
+
+	}
+	b.m = bmNew
+}
+
 func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
@@ -333,7 +362,7 @@ func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hash
 		prevValue = value
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
-		b.Set(key, prevValue, hash, true)
+		b.SetNew(key, prevValue, hash, true)
 	}
 }
 
@@ -348,7 +377,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 		prevValue = values[i]
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
-		b.Set(key, prevValue, hash, true)
+		b.SetNew(key, prevValue, hash, true)
 	}
 }
 
@@ -421,7 +450,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
-		b.cleanLocked()
+		b.cleanLockedMapNew()
 	}
 }
 
@@ -509,7 +538,7 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
-		b.cleanLocked()
+		b.cleanLockedMapNew()
 	}
 }
 
@@ -566,13 +595,7 @@ func (b *bucket) Del(h uint64) {
 	b.mu.Unlock()
 }
 
-// var (
-// 	freeChunks     []*[chunkSize]byte
-// 	freeChunksLock sync.Mutex
-// )
-
 func (b *bucket) getChunk() []byte {
-	//b.freeChunksLock.Lock()
 	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
@@ -590,7 +613,6 @@ func (b *bucket) getChunk() []byte {
 	p := b.freeChunks[n]
 	b.freeChunks[n] = nil
 	b.freeChunks = b.freeChunks[:n]
-	//b.freeChunksLock.Unlock()
 	return p[:]
 }
 
@@ -605,11 +627,3 @@ func (b *bucket) putChunk(chunk []byte) {
 	b.freeChunks = append(b.freeChunks, p)
 	//b.freeChunksLock.Unlock()
 }
-
-// TODO:
-//
-// when needClean! don't clean and delete all chunks.
-// only delete first 16 chunks or 32 chunks or 64 chunks, etc. Not so much
-// so we keep the more recent allocations there.
-// make sure we can decide the chunks. That only works if  so we must make sure chunks are appended logically. i.e. oldest to newest. and we delete the oldest chunks.
-// write test after making it full and adding again, with smaller chunk size.
