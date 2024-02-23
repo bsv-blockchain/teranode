@@ -325,15 +325,11 @@
           "previousblockhash": "Previous hash",
           "receivedAt": "Last seen"
         }
-      },
-      "chaintip": {}
+      }
     },
-    "status": {
-      "menu-label": "Status",
-      "title": "Status",
-      "filter": "Filter",
-      "live": "Live",
-      "paused": "Paused"
+    "updates": {
+      "menu-label": "Updates",
+      "title": "Updates"
     }
   },
   "notifications": {

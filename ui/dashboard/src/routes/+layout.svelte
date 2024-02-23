@@ -104,6 +104,12 @@
         path: '/network',
         label: $i18n.t('page.network.menu-label'),
       },
+      // {
+      //   icon: 'icon-network-line',
+      //   iconSelected: 'icon-network-solid',
+      //   path: '/updates',
+      //   label: $i18n.t('page.updates.menu-label'),
+      // },
     ],
   }
 
