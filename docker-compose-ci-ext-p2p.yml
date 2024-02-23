@@ -113,18 +113,13 @@ services:
       txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
-      mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       startBootstrap: false
       startP2P: true
       feature_libP2P: true
       feature_bootstrap: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-1:8087"
       blockvalidation_httpAddress: "http://localhost:8088"
-      coinbase_should_wait: true
-      coinbase_wait_until_block: 200
       propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -157,12 +152,8 @@ services:
       startP2P: true
       feature_libP2P: true
       mine_initial_blocks: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-2:8087"
       blockvalidation_httpAddress: "http://localhost:8088"
-      coinbase_should_wait: true
-      coinbase_wait_until_block: 200
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -195,12 +186,8 @@ services:
       startP2P: true
       feature_libP2P: true
       mine_initial_blocks: false
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-3:8087"
       blockvalidation_httpAddress: "http://localhost:8088"
-      coinbase_should_wait: true
-      coinbase_wait_until_block: 200
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -227,8 +214,6 @@ services:
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_assetGrpcAddress: ubsv-1:8091
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
@@ -259,8 +244,6 @@ services:
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_assetGrpcAddress: ubsv-2:8091
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
@@ -291,8 +274,6 @@ services:
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_assetGrpcAddress: ubsv-3:8091
-      securityLevelGRPC: 0
-      securityLevelHTTP: 0
       BLASTER_ARGS: "-workers=2"
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
