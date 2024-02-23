@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/gorilla/websocket"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
@@ -137,8 +139,7 @@ func (c *Centrifuge) startP2PListener() error {
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
 	c.logger.Infof("[Centrifuge] connecting to p2p server on %s", u.String())
 
-	var err error
-	var client *websocket.Conn
+	var client atomic.Pointer[websocket.Conn]
 
 	connected := false
 
@@ -146,13 +147,14 @@ func (c *Centrifuge) startP2PListener() error {
 		for {
 			if !connected {
 				c.logger.Infof("[Centrifuge] dialing p2p server at: %s", u.String())
-				client, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+				websocketClient, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error dialing p2p server: %v", err)
 				} else {
 					c.logger.Infof("[Centrifuge] connected to p2p server on: %s", u.String())
 					connected = true
 				}
+				client.Store(websocketClient)
 			}
 
 			// retrying in 1 second
@@ -162,8 +164,9 @@ func (c *Centrifuge) startP2PListener() error {
 
 	go func() {
 		for {
-			if client != nil {
-				_, message, err := client.ReadMessage()
+			webSocketClient := client.Load()
+			if webSocketClient != nil {
+				_, message, err := webSocketClient.ReadMessage()
 				if err != nil {
 					c.logger.Debugf("[Centrifuge] error reading p2p server message: %v", err)
 					time.Sleep(1 * time.Second)
