@@ -98,8 +98,11 @@
           {#if selectable}
             <th />
           {/if}
-          {#each colDefs as colDef (colDef.id)}
-            <th on:click={() => onHeaderClick(colDef.id)}>
+          {#each colDefs as colDef, i (colDef.id)}
+            <th
+              on:click={() => onHeaderClick(colDef.id)}
+              class:right={i > 0 && colDef?.type === 'number'}
+            >
               <div class="table-cell-row">
                 {colDef.name}
                 {#if sortEnabled && sortState.sortColumn === colDef.id}
@@ -388,5 +391,15 @@
 
     background: #ffffff;
     border-radius: 0px 0px 4px 4px;
+  }
+  :global(table th.right .table-cell-row) {
+    text-align: right;
+    justify-content: flex-end;
+    width: 100%;
+  }
+  :global(table .num) {
+    text-align: right;
+    display: block;
+    width: 100%;
   }
 </style>

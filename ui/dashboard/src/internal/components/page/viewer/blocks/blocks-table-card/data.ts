@@ -3,6 +3,7 @@ import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
 
 const pageKey = 'page.viewer'
@@ -30,7 +31,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.timestamp`),
       type: 'dateStr',
       props: {
-        width: '13%',
+        width: '17%',
       },
     },
     {
@@ -62,7 +63,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.coinbaseValue`),
       type: 'number',
       props: {
-        width: '14%',
+        width: '10%',
       },
     },
     {
@@ -117,7 +118,12 @@ export const getRenderCells = (t) => {
     },
     coinbaseValue: (idField, item, colId) => {
       return {
-        value: (item[colId] / 1e8).toFixed(2),
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: (item[colId] / 1e8).toFixed(2),
+          className: 'num',
+        },
+        value: '',
       }
     },
   }
