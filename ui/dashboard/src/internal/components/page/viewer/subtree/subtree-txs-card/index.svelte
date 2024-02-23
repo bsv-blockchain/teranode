@@ -113,6 +113,7 @@
     expandUp={true}
     pager={false}
     useServerPagination={true}
+    sortEnabled={false}
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
