@@ -392,7 +392,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
-	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("[BlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -427,7 +427,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
 
 	// first check if the block exists, it might have already been processed
-	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -442,7 +442,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	// catchup if we are missing the parent block
-	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
@@ -535,7 +535,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
 
 	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockchainClient.GetBlockExists(spanCtx, fromBlock.Hash())
+	exists, err := u.blockValidation.GetBlockExists(spanCtx, fromBlock.Hash())
 	if err != nil {
 		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 	}
@@ -561,7 +561,7 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
-			exists, err = u.blockchainClient.GetBlockExists(spanCtx, blockHeader.Hash())
+			exists, err = u.blockValidation.GetBlockExists(spanCtx, blockHeader.Hash())
 			if err != nil {
 				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 			}

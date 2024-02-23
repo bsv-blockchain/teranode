@@ -45,7 +45,8 @@ type BlockValidation struct {
 	subtreeDeDuplicator *deduplicator.DeDuplicator
 	optimisticMining    bool
 	localSetMined       bool
-	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of block hashes that have been validated
+	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
+	blockExists         *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
 }
 
 type missingTx struct {
@@ -80,6 +81,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		optimisticMining:    optimisticMining,
 		localSetMined:       gocore.Config().GetBool("blockvalidation_localSetMined", false),
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExists:         expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 	}
 
 	if bv.localSetMined {
@@ -117,6 +119,29 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	}
 
 	return bv
+}
+
+func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
+	u.blockExists.Set(*hash, true)
+	return nil
+}
+
+func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	_, ok := u.blockExists.Get(*hash)
+	if ok {
+		return true, nil
+	}
+
+	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	if err != nil {
+		return false, err
+	}
+
+	if exists {
+		u.blockExists.Set(*hash, true)
+	}
+
+	return exists, nil
 }
 
 func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
@@ -265,7 +290,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}()
 
 	// first check if the block already exists in the blockchain
-	blockExists, err := u.blockchainClient.GetBlockExists(spanCtx, block.Header.Hash())
+	blockExists, err := u.GetBlockExists(spanCtx, block.Header.Hash())
 	if err == nil && blockExists {
 		u.logger.Warnf("[ValidateBlock][%s] tried to validate existing block", block.Header.Hash().String())
 		return nil
@@ -320,6 +345,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
+		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+		}
+
 		// decouple the tracing context to not cancel the context when finalize the block processing in the background
 		callerSpan := opentracing.SpanFromContext(spanCtx)
 		validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -351,9 +380,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 		// if valid, store the block
 		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
+
 		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
 			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 		}
+
+		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+		}
+
 		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 	}
 
@@ -471,7 +506,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 		span.Finish()
 	}()
 
-	subtreeTTLConcurrency, _ := gocore.Config().GetInt("subtreeTTLConcurrency", 32)
+	subtreeTTLConcurrency, _ := gocore.Config().GetInt("blockvalidation_subtreeTTLConcurrency", 32)
 
 	// update the subtree TTLs
 	g, gCtx := errgroup.WithContext(spanCtx)
