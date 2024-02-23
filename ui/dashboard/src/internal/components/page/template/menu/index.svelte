@@ -32,6 +32,10 @@
     } else {
       window.open(item.path, '_blank')
     }
+
+    if (showMobileNavbar) {
+      showMenu = false
+    }
   }
 
   let showMenu = true
