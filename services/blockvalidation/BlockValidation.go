@@ -616,7 +616,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
-			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl, &subtreeBytesMap); err != nil {
+			if err = u.validateSubtree(ctx1, subtreeHash, baseUrl, &subtreeBytesMapMu, &subtreeBytesMap); err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
@@ -775,17 +775,17 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 	return txMeta, nil
 }
 
-func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+func (u *BlockValidation) validateSubtree(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeBytesMapMu *sync.Mutex, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
 	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
 	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
 	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
 
 	return u.subtreeDeDuplicator.DeDuplicate(ctx, *subtreeHash, func() error {
-		return u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeHashesMap...)
+		return u.validateSubtreeInternal(ctx, subtreeHash, baseUrl, subtreeBytesMapMu, subtreeHashesMap...)
 	})
 }
 
-func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
+func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string, subtreeBytesMapMu *sync.Mutex, subtreeHashesMap ...*map[chainhash.Hash][]chainhash.Hash) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
@@ -800,10 +800,18 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	start := gocore.CurrentTime()
 	var txHashes []chainhash.Hash
 
-	// check whether we have the subtree in the subtreeHashesMap and can skip getting it here
-	if len(subtreeHashesMap) > 0 && len(*subtreeHashesMap[0]) > 0 && len((*subtreeHashesMap[0])[*subtreeHash]) > 0 {
-		txHashes = (*subtreeHashesMap[0])[*subtreeHash]
-	} else {
+	findSubtree := true
+	if subtreeBytesMapMu != nil {
+		subtreeBytesMapMu.Lock()
+		// check whether we have the subtree in the subtreeHashesMap and can skip getting it here
+		if len(subtreeHashesMap) > 0 && len(*subtreeHashesMap[0]) > 0 && len((*subtreeHashesMap[0])[*subtreeHash]) > 0 {
+			findSubtree = false
+			txHashes = (*subtreeHashesMap[0])[*subtreeHash]
+		}
+		subtreeBytesMapMu.Unlock()
+	}
+
+	if findSubtree {
 		// get subtree from store
 		subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
 		stat.NewStat("1. subtreeExists").AddTime(start)
