@@ -246,13 +246,18 @@ func (b *bucket) Reset() {
 }
 
 func (b *bucket) cleanLocked() {
+	// current generation of data within the bucket
 	bGen := b.gen & ((1 << genSizeBits) - 1)
+	// current index in the chunks array where the next k-v pair will be written
 	bIdx := b.idx
 	bm := b.m
+	// newItems hold the number of valid k-v pairs that are not expired
 	newItems := 0
-	for _, v := range bm {
+	for _, v := range bm { // iterates over all the k-v pairs in the whole bucket
+		// for each k-v pair, calculates the generation and index of the k-v pair
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
+		// identifies valid elements that are not expired
 		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
 			newItems++
 		}
@@ -321,26 +326,123 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 		defer b.mu.Unlock()
 	}
 
+	// calculate the idx of the k-v pair to be added
+	// adjust idxNew, calcualte where the new k-v pair will end
+	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
+	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
+		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
+			// writing needs to start over from the beginning. // TODO currently. we can change it to start from
 			idx = 0
 			idxNew = kvLen
+			// the chunk index is set to 0
 			chunkIdx = 0
+			// the generation of the bucket is incremented
 			b.gen++
 			if b.gen&((1<<genSizeBits)-1) == 0 {
 				b.gen++
 			}
 			needClean = true
-		} else {
+		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
+			// calculate the index as byte offset
 			idx = chunkIdxNew * chunkSize
 			idxNew = idx + kvLen
 			chunkIdx = chunkIdxNew
 		}
 		chunks[chunkIdx] = chunks[chunkIdx][:0]
+	}
+	chunk := chunks[chunkIdx]
+	if chunk == nil {
+		chunk = b.getChunk()
+		chunk = chunk[:0]
+	}
+	chunk = append(chunk, kvLenBuf[:]...)
+	chunk = append(chunk, k...)
+	chunk = append(chunk, v...)
+	chunks[chunkIdx] = chunk
+	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.idx = idxNew
+	if needClean {
+		b.cleanLocked()
+	}
+}
+
+// SetNew skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+// removes only half of the each chunk when the chunk is full
+func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
+	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
+		// Too big key or value - its length cannot be encoded
+		// with 2 bytes (see below). Skip the entry.
+		return
+	}
+	var kvLenBuf [4]byte
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	if kvLen >= chunkSize {
+		// Do not store too big keys and values, since they do not
+		// fit a chunk.
+		return
+	}
+
+	chunks := b.chunks
+	needClean := false
+
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+
+	// calculate the idx of the k-v pair to be added
+	// adjust idxNew, calcualte where the new k-v pair will end
+	// the new k-v pair must be in the same chunk.
+	idx := b.idx
+	idxNew := idx + kvLen
+	chunkIdx := idx / chunkSize
+	chunkIdxNew := idxNew / chunkSize
+	// check if we are crossing the chunk boundary, we need to allocate a new chunk
+	if chunkIdxNew > chunkIdx {
+		// if there are no more chunks to allocate, we need to reset the bucket
+		if chunkIdxNew >= uint64(len(chunks)) {
+			// we keep second half of the chunks, and remove the first half of the chunks
+			numOfChunksToKeep := len(chunks) / 2
+
+			// Shift the more recent half of the chunks to the start of the array
+			for i := 0; i < numOfChunksToKeep; i++ {
+				chunks[i] = chunks[i+numOfChunksToKeep]
+				// Clear the old position where this chunk was moved from. Reslice, keep memory allocated.
+				chunks[i+numOfChunksToKeep] = chunks[i+numOfChunksToKeep][:0]
+			}
+
+			// set the new current index to the idx /2
+			idx = idx / 2
+			idxNew = idx + kvLen
+			// calculate the where the next write should occur based on new index
+			chunkIdx = idx / chunkSize
+
+			// increment the generation of the bucket
+			b.gen++
+			if b.gen&((1<<genSizeBits)-1) == 0 {
+				b.gen++
+			}
+
+			// now clean
+			needClean = true
+		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
+			// calculate the index as byte offset
+			idx = chunkIdxNew * chunkSize
+			idxNew = idx + kvLen
+			chunkIdx = chunkIdxNew
+		}
+		// ensur eany old data is removed from the chunk before storing the new data.
+		// chunks[chunkIdx] = chunks[chunkIdx][:0]
 	}
 	chunk := chunks[chunkIdx]
 	if chunk == nil {
@@ -450,3 +552,11 @@ func (b *bucket) putChunk(chunk []byte) {
 	b.freeChunks = append(b.freeChunks, p)
 	//b.freeChunksLock.Unlock()
 }
+
+// TODO:
+//
+// when needClean! don't clean and delete all chunks.
+// only delete first 16 chunks or 32 chunks or 64 chunks, etc. Not so much
+// so we keep the more recent allocations there.
+// make sure we can decide the chunks. That only works if  so we must make sure chunks are appended logically. i.e. oldest to newest. and we delete the oldest chunks.
+// write test after making it full and adding again, with smaller chunk size.
