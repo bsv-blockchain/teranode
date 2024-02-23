@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { error } from '@sveltejs/kit'
   import { beforeUpdate } from 'svelte'
   import BlockDetails from '$internal/components/page/viewer/block/index.svelte'
   import SubtreeDetails from '$internal/components/page/viewer/subtree/index.svelte'
