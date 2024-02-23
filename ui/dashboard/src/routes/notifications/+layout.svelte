@@ -25,7 +25,7 @@
   }
 </script>
 
-<PageWithMenu showTools={false} showWarning={true}>
+<PageWithMenu showTools={true} showWarning={true}>
   <div class="tools-container">
     <div class="tools">
       <div class="title">{t(`${pageKey}.title`)}</div>
