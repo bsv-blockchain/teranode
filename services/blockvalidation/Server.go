@@ -695,7 +695,7 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 	}()
 
 	subtreeSpan.LogKV("hash", subtreeHash.String())
-	err = u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl)
+	err = u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl, nil)
 	if err != nil {
 		u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 	}
