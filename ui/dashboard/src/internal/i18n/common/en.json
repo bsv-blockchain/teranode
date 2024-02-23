@@ -369,6 +369,7 @@
     }
   },
   "global": {
-    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets."
+    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets.",
+    "warning_2": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }
