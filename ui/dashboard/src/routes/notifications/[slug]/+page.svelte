@@ -40,33 +40,28 @@
 </script>
 
 {#if currentPost}
-  <div class="msg-contaienr">
+  <div class="post-details">
     <SvelteMarkdown source={currentPost?.body} />
   </div>
 {/if}
 
 <style>
-  .msg-contaienr {
-    /* flex: 1; */
-
+  .post-details {
     box-sizing: var(--box-sizing);
+
     display: flex;
     flex-direction: column;
     gap: 6px;
 
     background: #151a20;
-    padding: 20px;
+    padding: 10px 20px;
     border-radius: 12px;
   }
 
-  :global(.msg-contaienr table) {
+  :global(.post-details table) {
     border: 1px solid white;
   }
-  :global(.msg-contaienr table th, .msg-contaienr table td) {
+  :global(.post-details table th, .msg-contaienr table td) {
     border: 1px solid white;
-  }
-
-  * {
-    box-sizing: var(--box-sizing);
   }
 </style>

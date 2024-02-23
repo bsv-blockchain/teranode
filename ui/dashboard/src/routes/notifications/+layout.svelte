@@ -103,6 +103,10 @@
   .posts {
     flex: 1 1 auto;
     min-width: 250px;
+
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
   }
 
   .slug {
