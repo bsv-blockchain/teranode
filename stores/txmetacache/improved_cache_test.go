@@ -115,6 +115,11 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	var err error
 	numberOfKeys := 2_000 * bucketsCount
 
+	// number of buckets: 512
+	// number of chunks: 4
+	// max value size: 2 KB
+	//
+
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
 		value := make([]byte, 32)

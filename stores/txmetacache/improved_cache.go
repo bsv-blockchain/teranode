@@ -10,7 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxValueSizeKB = 1   // 2KB
+const maxValueSizeKB = 2   // 2KB
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
 const chunksPerAlloc = 1024
@@ -66,6 +66,7 @@ func NewImprovedCache(maxBytes int) *ImprovedCache {
 	}
 	var c ImprovedCache
 	maxBucketBytes := uint64((maxBytes + bucketsCount - 1) / bucketsCount)
+	fmt.Println("number of buckets", bucketsCount)
 	for i := range c.buckets[:] {
 		c.buckets[i].Init(maxBucketBytes)
 	}
@@ -275,6 +276,7 @@ func (b *bucket) Init(maxBytes uint64) {
 	b.chunks = make([][]byte, maxChunks)
 	b.m = make(map[uint64]uint64)
 	b.Reset()
+	fmt.Println("number of chunks", maxChunks)
 }
 
 func (b *bucket) Reset() {
@@ -501,6 +503,7 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
+			fmt.Println("time to clean, we are out of chunks, chunkIdxNew: ", chunkIdxNew)
 			// we keep second half of the chunks, and remove the first half of the chunks
 			numOfChunksToKeep := len(chunks) / 2
 
@@ -546,7 +549,6 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
-		fmt.Println("time to clean")
 		b.cleanLockedMapNew()
 	}
 }
