@@ -9,7 +9,7 @@
 
   const pageKey = 'page.notifications'
 
-  export let slug = $page.params.slug
+  $: slug = $page.params.slug
 
   let currentPost: any = null
 
@@ -40,31 +40,14 @@
 </script>
 
 {#if currentPost}
-  <div class="container">
-    <div class="column">
-      <div class="msg-contaienr">
-        <SvelteMarkdown source={currentPost?.body} />
-      </div>
-    </div>
+  <div class="msg-contaienr">
+    <SvelteMarkdown source={currentPost?.body} />
   </div>
 {/if}
 
 <style>
-  .container {
-    box-sizing: var(--box-sizing);
-    margin-top: 20px;
-
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-
-    width: 100%;
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
   .msg-contaienr {
-    flex: 1;
+    /* flex: 1; */
 
     box-sizing: var(--box-sizing);
     display: flex;
@@ -81,11 +64,6 @@
   }
   :global(.msg-contaienr table th, .msg-contaienr table td) {
     border: 1px solid white;
-  }
-
-  .column {
-    flex: 1;
-    min-width: 200px;
   }
 
   * {

@@ -1,16 +1,28 @@
 <script lang="ts">
   import type { LayoutData } from './$types'
+  import { page } from '$app/stores'
+  import { goto } from '$app/navigation'
 
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
+  import Post from './Post.svelte'
   import i18n from '$internal/i18n'
+
+  $: slug = $page.params.slug
 
   $: t = $i18n.t
 
   export let data: LayoutData
 
-  $: console.log('data =', data)
+  let sortedPosts: any[] = []
+  $: {
+    sortedPosts = data.posts.sort((a: any, b: any) => b.timestamp - a.timestamp)
+  }
 
   const pageKey = 'page.notifications'
+
+  function onPostSelect(slug: string) {
+    goto(`/notifications/${slug}`)
+  }
 </script>
 
 <PageWithMenu showTools={false} showWarning={true}>
@@ -20,10 +32,22 @@
     </div>
   </div>
   <div class="layout">
-    <div class="posts">fdgdfgdfg</div>
-    <div class="slug">
-      <slot />
+    <div class="posts">
+      {#each sortedPosts as post (post.slug)}
+        <Post
+          title={post.title}
+          summary={post.summary}
+          timestamp={post.timestamp}
+          selected={slug === post.slug}
+          on:click={() => onPostSelect(post.slug)}
+        />
+      {/each}
     </div>
+    {#if slug}
+      <div class="slug">
+        <slot />
+      </div>
+    {/if}
   </div>
 </PageWithMenu>
 
@@ -68,10 +92,12 @@
     font-family: var(--font-family);
     box-sizing: var(--box-sizing);
 
+    width: 100%;
+    margin-top: 20px;
+
     display: flex;
     flex-wrap: wrap;
-    width: 100%;
-    background: red;
+    gap: 10px;
   }
 
   .posts {
@@ -81,6 +107,6 @@
 
   .slug {
     flex: 1 1 auto;
-    min-width: 400px;
+    min-width: 50%;
   }
 </style>
