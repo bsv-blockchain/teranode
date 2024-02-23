@@ -2,6 +2,7 @@
   import type { LayoutData } from './$types'
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
+  import { fade, fly } from 'svelte/transition'
 
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import Post from '$internal/components/post/index.svelte'
@@ -12,6 +13,7 @@
   $: t = $i18n.t
 
   export let data: LayoutData
+  const flyContent = true
 
   let sortedPosts: any[] = []
   $: {
@@ -44,7 +46,11 @@
       {/each}
     </div>
     {#if slug}
-      <div class="slug">
+      <div
+        class="slug"
+        in:fly={flyContent ? { x: 200, opacity: 0, duration: 300 } : {}}
+        out:fade={{ delay: 100 }}
+      >
         <slot />
       </div>
     {/if}

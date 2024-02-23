@@ -62,11 +62,14 @@
     font-size: 15px;
     font-style: normal;
     outline: none;
+
+    background-color: transparent;
+    transition: background-color var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
 
   .post.selected,
   .post:hover {
-    background: #151a20;
+    background-color: #151a20;
   }
 
   .post:focus-visible {
