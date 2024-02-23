@@ -7,7 +7,7 @@
   import Logo from '$lib/components/logo/index.svelte'
   import Menu from '$lib/components/navigation/menu/index.svelte'
   import Toolbar from '$internal/components/toolbar/index.svelte'
-  import Banner from '$internal/components/banner/index.svelte'
+  // import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
 
@@ -83,7 +83,7 @@
   </MobileNavbar>
 {/if}
 
-<Banner text={t('global.warning')} />
+<!-- <Banner text={t('global.warning')} /> -->
 
 <div
   class="content-container"
