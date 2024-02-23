@@ -20,6 +20,17 @@ func TestImprovedCache_Get(t *testing.T) {
 
 }
 
+func TestImprovedCache_NewSetGet(t *testing.T) {
+	// initialize improved cache with 1MB capacity
+	cache := NewImprovedCache(1 * 1024 * 1024)
+	cache.SetNew([]byte("KEY"), []byte("value"))
+	dst := make([]byte, 0)
+	err := cache.Get(&dst, []byte("KEY"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), dst)
+
+}
+
 func TestImprovedCache_GetBigKV(t *testing.T) {
 	cache := NewImprovedCache(1 * 1024 * 1024)
 	key, value := make([]byte, (1*1024)), make([]byte, (1*1024))

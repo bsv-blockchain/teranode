@@ -10,14 +10,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxValueSizeKB = 2   // 2KB
+const maxValueSizeKB = 1   // 2KB
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const chunksPerAlloc = 2 // 1024
+const chunksPerAlloc = 1024
 
-const bucketsCount = 2 // 512
+const bucketsCount = 512
 
-const chunkSize = maxValueSizeKB // * 1024 * 32
+const chunkSize = maxValueSizeKB * 1024 * 32
 
 const bucketSizeBits = 40
 
@@ -89,6 +89,13 @@ func (c *ImprovedCache) Set(k, v []byte) {
 	h := xxhash.Sum64(k)
 	idx := h % bucketsCount
 	c.buckets[idx].Set(k, v, h)
+}
+
+// SetNew stores (k, v) in the cache, with halving the chunks when chunks are finished.
+func (c *ImprovedCache) SetNew(k, v []byte) {
+	h := xxhash.Sum64(k)
+	idx := h % bucketsCount
+	c.buckets[idx].SetNew(k, v, h)
 }
 
 // SetMulti stores multiple (k, v) entries in the cache, for the same v.
@@ -460,6 +467,7 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
+		fmt.Println("yo")
 		return
 	}
 	var kvLenBuf [4]byte
@@ -538,6 +546,7 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
+		fmt.Println("time to clean")
 		b.cleanLockedMapNew()
 	}
 }
