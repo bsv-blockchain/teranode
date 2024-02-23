@@ -25,7 +25,7 @@
     }
     delayId = setTimeout(() => {
       graphObj = tmpGraphObj
-    }, 50)
+    }, 20)
   }
 
   $: if (data) {
@@ -50,9 +50,10 @@
   <svelte:fragment slot="header-tools">
     <RangeToggle value={period} on:change={(e) => onChangePeriod(e.detail.value)} />
   </svelte:fragment>
-  {#if graphObj?.graphOptions}
-    <ChartContainer bind:renderKey height="530px">
+
+  <ChartContainer bind:renderKey height="530px">
+    {#if graphObj?.graphOptions}
       <Chart options={graphObj?.graphOptions} renderKey={renderKey + period} />
-    </ChartContainer>
-  {/if}
+    {/if}
+  </ChartContainer>
 </Card>
