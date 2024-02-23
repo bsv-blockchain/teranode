@@ -327,9 +327,9 @@
         }
       }
     },
-    "updates": {
-      "menu-label": "Updates",
-      "title": "Updates"
+    "notifications": {
+      "menu-label": "Notifications",
+      "title": "Notifications"
     }
   },
   "notifications": {

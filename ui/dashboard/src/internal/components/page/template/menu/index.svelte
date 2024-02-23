@@ -13,6 +13,8 @@
 
   export let testId: string | undefined | null = null
   export let showGlobalToolbar = true
+  export let showTools = true
+  export let showWarning = true
 
   import i18n from '$internal/i18n'
 
@@ -93,7 +95,7 @@
 >
   <ContentMenu>
     {#if showGlobalToolbar}
-      <Toolbar style="padding-bottom: 13px;" />
+      <Toolbar style="padding-bottom: 13px;" {showTools} {showWarning} />
     {/if}
     <slot />
   </ContentMenu>

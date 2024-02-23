@@ -1,0 +1,18 @@
+{
+  "posts": [
+    {
+      "title": "Welcome",
+      "summary": "Welcome message",
+      "slug": "welcome",
+      "path": "welcome.json",
+      "timestamp": "1708593730130"
+    },
+    {
+      "title": "Scalable architecture",
+      "summary": "The path towards scalable architecture",
+      "slug": "scale-arch",
+      "path": "scale-arch.json",
+      "timestamp": "1708693878689"
+    }
+  ]
+}
