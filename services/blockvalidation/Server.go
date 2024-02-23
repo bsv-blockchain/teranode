@@ -166,6 +166,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				subtreeFoundItem := u.subtreeFoundQueue.dequeue()
 				if subtreeFoundItem != nil {
 					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
+
+					if u.processSubtreeNotify.Get(subtreeFoundItem.hash) != nil {
+						u.logger.Warnf("[Init][%s] already processing subtree", subtreeFoundItem.hash.String())
+						continue
+					}
+
 					// this will block if the concurrency limit is reached
 					g.Go(func() error {
 						prometheusBlockValidationSubtreeFoundChWaitDuration.Observe(float64(time.Since(time.UnixMilli(subtreeFoundItem.time)).Microseconds()) / 1_000_000)
