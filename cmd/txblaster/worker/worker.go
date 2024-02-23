@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/util"
 	"math/rand"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/util"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
@@ -50,13 +51,13 @@ const (
 	ContextRetry
 )
 
-var prometheusMetricsInitialized = false
+var prometheusMetricsInitialized = atomic.Bool{}
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
+	if prometheusMetricsInitialized.Load() {
 		return
 	}
-	prometheusMetricsInitialized = true
+	prometheusMetricsInitialized.Store(true)
 
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{

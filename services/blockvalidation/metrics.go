@@ -32,6 +32,7 @@ var (
 	prometheusBlockValidationSetTXMetaCacheKafka   prometheus.Histogram
 	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
+	prometheusBlockValidationSetMinedLocal         prometheus.Counter
 	prometheusBlockValidationSetMinedMulti         prometheus.Counter
 	prometheusBlockValidationSetMinedMultiFrpc     prometheus.Counter
 )
@@ -233,6 +234,14 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "del_tx_meta_cache_frpc",
 			Help:      "Number of tx meta cache deletes with frpc",
+		},
+	)
+
+	prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_mined_local",
+			Help:      "Number of tx mined local sets",
 		},
 	)
 

@@ -16,26 +16,27 @@
 
   let renderKey = ''
   let graphObj
-  let delayedTs = 0
-  let refreshTimeoutId
+  let tmpGraphObj
+  let delayId
 
-  function updateDelayTs() {
-    if (refreshTimeoutId) {
-      clearTimeout(refreshTimeoutId)
+  function doDelay() {
+    if (delayId) {
+      clearTimeout(delayId)
     }
-    refreshTimeoutId = setTimeout(() => {
-      delayedTs = new Date().getTime()
-    }, 50)
+    delayId = setTimeout(() => {
+      graphObj = tmpGraphObj
+    }, 20)
   }
 
   $: if (data) {
-    graphObj = getGraphObj(t, data, period)
-    updateDelayTs()
+    tmpGraphObj = getGraphObj(t, data, period)
+    graphObj = null
+    doDelay()
   }
 
   onDestroy(() => {
-    if (refreshTimeoutId) {
-      clearTimeout(refreshTimeoutId)
+    if (delayId) {
+      clearTimeout(delayId)
     }
   })
 </script>
@@ -49,9 +50,10 @@
   <svelte:fragment slot="header-tools">
     <RangeToggle value={period} on:change={(e) => onChangePeriod(e.detail.value)} />
   </svelte:fragment>
-  {#if graphObj?.graphOptions}
-    <ChartContainer bind:renderKey height="530px">
-      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period + delayedTs} />
-    </ChartContainer>
-  {/if}
+
+  <ChartContainer bind:renderKey height="530px">
+    {#if graphObj?.graphOptions}
+      <Chart options={graphObj?.graphOptions} renderKey={renderKey + period} />
+    {/if}
+  </ChartContainer>
 </Card>

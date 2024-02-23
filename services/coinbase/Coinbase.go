@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
@@ -574,7 +575,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		// we don't have a method to revert anything that goes wrong anyway
 		c.g.Go(func() error {
 			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
-			if err = c.splitUtxo(c.gCtx, utxo); err != nil {
+			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
 				return fmt.Errorf("could not split utxo: %w", err)
 			}
 			return nil

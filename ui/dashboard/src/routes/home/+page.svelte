@@ -28,7 +28,7 @@
           },
           max_height: {
             id: 'max_height',
-            icon: 'icon-network-line',
+            icon: 'icon-cube-line',
             value: result.data.max_height,
           },
           avg_block_size: {
@@ -43,7 +43,7 @@
           },
           txns_per_second: {
             id: 'txns_per_second',
-            icon: 'icon-binoculars-line',
+            icon: 'icon-arrow-transfer-line',
             value: Math.round(result.data.tx_count / 24 / 60 / 60),
           },
         }
@@ -89,7 +89,7 @@
 
     // graph
     isMounted = true
-    period = "24h"
+    period = '24h'
 
     const timeoutId = setTimeout(async () => {
       Graph = (await import('$internal/components/page/home/home-stats-graph/index.svelte')).default

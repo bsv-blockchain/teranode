@@ -163,11 +163,11 @@
         "fields": {
           "loading": "Loading...",
           "block_count": "Total Blocks",
-          "tx_count": "Mined Transactions",
+          "tx_count": "Mined Tx",
           "max_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",
           "avg_tx_count_per_block": "Average Tx / Block",
-          "txns_per_second": "Txns / Second"
+          "txns_per_second": "Tx / Second"
         }
       },
       "txs": {
@@ -312,6 +312,7 @@
     },
     "network": {
       "menu-label": "Network",
+      "live": "Live",
       "nodes": {
         "title": "Connected Nodes",
         "fields": {
@@ -324,15 +325,11 @@
           "previousblockhash": "Previous hash",
           "receivedAt": "Last seen"
         }
-      },
-      "chaintip": {}
+      }
     },
-    "status": {
-      "menu-label": "Status",
-      "title": "Status",
-      "filter": "Filter",
-      "live": "Live",
-      "paused": "Paused"
+    "updates": {
+      "menu-label": "Updates",
+      "title": "Updates"
     }
   },
   "notifications": {
@@ -372,6 +369,7 @@
     }
   },
   "global": {
-    "warning": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
+    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets.",
+    "warning_2": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }

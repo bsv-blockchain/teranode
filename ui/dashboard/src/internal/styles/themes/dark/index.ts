@@ -9,6 +9,7 @@ import { toast } from './toast'
 import { msgbox } from './msgbox'
 import { switchh } from './switch'
 import { tab } from './tab'
+import { banner } from './banner'
 
 export const dark = {
   easing: {
@@ -51,6 +52,7 @@ export const dark = {
     },
   },
   comp: { ...comp },
+  banner: { ...banner },
   input: { ...input },
   dropdown: { ...dropdown },
   table: { ...table },

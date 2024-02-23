@@ -80,7 +80,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
+		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000", nil)
 		require.NoError(t, err)
 	})
 }
@@ -165,7 +165,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	start := time.Now()
 
-	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000")
+	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000", nil)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))

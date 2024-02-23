@@ -124,6 +124,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Infof("[Init] closing block found channel")
 				return
 			case c := <-u.catchupCh:
 				{
@@ -155,26 +156,37 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	g.SetLimit(subtreeFoundChConcurrency)
 
 	go func() {
+		u.logger.Infof("[Init] starting subtree found channel")
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Infof("[Init] closing subtree found channel")
 				return
 			default:
 				subtreeFoundItem := u.subtreeFoundQueue.dequeue()
 				if subtreeFoundItem != nil {
+					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
+
+					if u.processSubtreeNotify.Get(subtreeFoundItem.hash) != nil {
+						u.logger.Warnf("[Init][%s] already processing subtree", subtreeFoundItem.hash.String())
+						continue
+					}
+
 					// this will block if the concurrency limit is reached
 					g.Go(func() error {
 						prometheusBlockValidationSubtreeFoundChWaitDuration.Observe(float64(time.Since(time.UnixMilli(subtreeFoundItem.time)).Microseconds()) / 1_000_000)
 						if err := u.subtreeFound(ctx, subtreeFoundItem.hash, subtreeFoundItem.baseURL); err != nil {
 							u.logger.Errorf("[Init] failed to process subtree found [%s] [%v]", subtreeFoundItem.hash.String(), err)
 						}
+
+						prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 						return nil
 					})
 				} else {
 					// queue is empty, sleep for a bit otherwise we overload the CPU in this for loop
 					time.Sleep(100 * time.Millisecond)
+					prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 				}
-				prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
 			}
 		}
 	}()
@@ -386,7 +398,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
-	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("[BlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -421,7 +433,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
 
 	// first check if the block exists, it might have already been processed
-	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
 	}
@@ -436,7 +448,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	// catchup if we are missing the parent block
-	parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
@@ -529,7 +541,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
 
 	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockchainClient.GetBlockExists(spanCtx, fromBlock.Hash())
+	exists, err := u.blockValidation.GetBlockExists(spanCtx, fromBlock.Hash())
 	if err != nil {
 		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 	}
@@ -555,13 +567,14 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
-			exists, err = u.blockchainClient.GetBlockExists(spanCtx, blockHeader.Hash())
+			exists, err = u.blockValidation.GetBlockExists(spanCtx, blockHeader.Hash())
 			if err != nil {
 				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 			}
 			if exists {
 				break LOOP
 			}
+			u.logger.Warnf("[catchup][%s] parent block does not exist [%s]", fromBlock.Hash().String(), blockHeader.String())
 
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 
@@ -663,19 +676,12 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		return nil
 	}
 
-	if baseUrl == "" {
-		return fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
-	}
-
-	// decouple the tracing context to not cancel the context when finalize the block processing in the background
-	callerSpan := opentracing.SpanFromContext(spanCtx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	setCtx = util.ContextWithStat(setCtx, stat)
+	spanCtx = util.ContextWithStat(spanCtx, stat)
 	goroutineStat := stat.NewStat("go routine")
 
 	// start a new span for the subtree validation
 	start = gocore.CurrentTime()
-	subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(setCtx, "BlockValidationServer:SubtreeFound:validate")
+	subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidationServer:SubtreeFound:validate")
 	defer func() {
 		goroutineStat.AddTime(start)
 		subtreeSpan.Finish()
@@ -689,7 +695,7 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 	}()
 
 	subtreeSpan.LogKV("hash", subtreeHash.String())
-	err = u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl)
+	err = u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl, nil)
 	if err != nil {
 		u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 	}
@@ -737,7 +743,8 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 
 	prometheusBlockValidationSetTXMetaCache.Inc()
 	go func(data [][]byte) {
-		hashes := make(map[chainhash.Hash]*txmeta_store.Data)
+		keys := make([][]byte, 0)
+		values := make([][]byte, 0)
 		for _, meta := range data {
 			if len(meta) < 32 {
 				u.logger.Errorf("meta data is too short: %v", meta)
@@ -746,16 +753,11 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
-
-			dataBytes := meta[32:]
-			txMetaData := &txmeta_store.Data{}
-			txmeta_store.NewMetaDataFromBytes(&dataBytes, txMetaData)
-
-			txMetaData.Tx = nil
-			hashes[hash] = txMetaData
+			keys = append(keys, hash[:])
+			values = append(values, meta[32:])
 		}
 
-		if err := u.blockValidation.SetTxMetaCacheMulti(ctx, hashes); err != nil {
+		if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
 			u.logger.Errorf("failed to set tx meta data: %v", err)
 		}
 	}(request.Data)

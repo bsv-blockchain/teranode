@@ -98,7 +98,7 @@ func (c *ImprovedCache) Set(k, v []byte) {
 // - key to bucket: [0..31 -b0, 32..63 -b1, 64..95 -b2, 96..127 -b3, 128..159 -b4, 160..191 -b5, 192..223 -b6, 224..255 -b7, 256..287 -b0, 288..319 -b1, 320..351 -b2, 352..383 -b3, 384..415 -b4, 416..447 -b5, 448..479 -b6, 480..511 -b7]
 // Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
 // Value bytes are appended to the end of the previous value bytes.
-func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
+func (c *ImprovedCache) SetMultiKeysSingleValue(keys []byte, value []byte, keySize int) error {
 	// if len(keys)%keySize != 0 {
 	// 	return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
 	// }
@@ -128,7 +128,45 @@ func (c *ImprovedCache) SetMulti(keys []byte, value []byte, keySize int) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// SetMulti stores multiple (k, v) entries in the cache, for different values.
+func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
+	batchedKeys := make([][][]byte, bucketsCount)
+	batchedValues := make([][][]byte, bucketsCount)
+
+	var bucketIdx uint64
+	var h uint64
+
+	// divide keys into buckets
+	for i, key := range keys {
+		h = xxhash.Sum64(key)
+		bucketIdx = h % bucketsCount
+		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
+		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
+	}
+
+	g := errgroup.Group{}
+
+	// for every bucket run a goroutine to populate it
+	for bucketIdx := range batchedKeys {
+		// if there is no key for this bucket
+		if len(batchedKeys[bucketIdx]) == 0 {
+			continue
+		}
+		bucketIdx := bucketIdx
+		g.Go(func() error {
+			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
 	}
@@ -284,8 +322,8 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
-// SetMulti stores multiple (k, v) entries for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
-func (b *bucket) SetMulti(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the exsiting v value, doesn't overwrite.
+func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var prevValue []byte
@@ -293,6 +331,21 @@ func (b *bucket) SetMulti(keys [][]byte, value []byte) { //, hashes []uint64) { 
 
 	for _, key := range keys {
 		prevValue = value
+		hash = xxhash.Sum64(key)
+		b.Get(&prevValue, key, hash, true, true)
+		b.Set(key, prevValue, hash, true)
+	}
+}
+
+// SetMulti stores multiple (k, v) entries with 1-1 mapping for the same bucket. Appends v to the exsiting v value, doesn't overwrite.
+func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var prevValue []byte
+	var hash uint64
+
+	for i, key := range keys {
+		prevValue = values[i]
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
 		b.Set(key, prevValue, hash, true)

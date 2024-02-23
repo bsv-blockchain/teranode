@@ -50,6 +50,7 @@
     "i18next": "^23.7.6",
     "polished": "^4.2.2",
     "svelte-i18next": "^2.2.2",
+    "svelte-markdown": "^0.4.1",
     "tippy.js": "^6.3.7"
   }
 }

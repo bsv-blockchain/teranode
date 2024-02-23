@@ -25,7 +25,7 @@ export const msgbox = {
   },
   ping: {
     border: {
-      color: '#1778FF',
+      color: '#444',
     },
   },
   getminingcandidate: {
