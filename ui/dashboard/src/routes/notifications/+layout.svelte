@@ -4,7 +4,7 @@
   import { goto } from '$app/navigation'
 
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
-  import Post from './Post.svelte'
+  import Post from '$internal/components/post/index.svelte'
   import i18n from '$internal/i18n'
 
   $: slug = $page.params.slug
@@ -97,7 +97,7 @@
 
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 20px;
   }
 
   .posts {
@@ -111,6 +111,6 @@
 
   .slug {
     flex: 1 1 auto;
-    min-width: 50%;
+    min-width: 55%;
   }
 </style>

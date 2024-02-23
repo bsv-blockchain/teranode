@@ -53,9 +53,9 @@
     flex-direction: column;
     gap: 6px;
 
-    background: #151a20;
-    padding: 10px 20px;
+    padding: 10px 20px 10px 30px;
     border-radius: 12px;
+    border-left: 1px solid #151a20;
   }
 
   :global(.post-details table) {
