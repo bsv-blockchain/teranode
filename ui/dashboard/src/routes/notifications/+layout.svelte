@@ -1,8 +1,14 @@
 <script lang="ts">
+  import type { LayoutData } from './$types'
+
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
+
+  export let data: LayoutData
+
+  $: console.log('data =', data)
 
   const pageKey = 'page.notifications'
 </script>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { afterUpdate } from 'svelte'
+  import { page } from '$app/stores'
   import SvelteMarkdown from 'svelte-markdown'
 
   import i18n from '$internal/i18n'
@@ -8,7 +9,7 @@
 
   const pageKey = 'page.notifications'
 
-  export let slug = 'welcome'
+  export let slug = $page.params.slug
 
   let currentPost: any = null
 
@@ -21,26 +22,6 @@
       loadPost(slug)
     }
   }
-
-  $: console.log('currentPost = ', currentPost)
-
-  //   const source = `
-  //     # This is a header
-
-  //   This is a paragraph.
-
-  //   * This is a list
-  //   * With two items
-  //     1. And a sublist
-  //     2. That is ordered
-  //       * With another
-  //       * Sublist inside
-
-  //   👋 hello
-
-  //   | And this is | A table |
-  //   |-------------|---------|
-  //   | With two    | columns |`
 
   function scrollToTop() {
     if (!import.meta.env.SSR && window && window.scrollTo) {
