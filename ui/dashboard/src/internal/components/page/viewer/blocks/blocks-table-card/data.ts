@@ -23,7 +23,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.hash`),
       type: 'string',
       props: {
-        width: '17%',
+        width: '15%',
       },
     },
     {
@@ -31,7 +31,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.timestamp`),
       type: 'dateStr',
       props: {
-        width: '17%',
+        width: '15%',
       },
     },
     {
@@ -55,7 +55,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.miner`),
       type: 'string',
       props: {
-        width: '11%',
+        width: '10%',
       },
     },
     {
@@ -63,7 +63,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.coinbaseValue`),
       type: 'number',
       props: {
-        width: '10%',
+        width: '8%',
       },
     },
     {
@@ -71,7 +71,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.transactionCount`),
       type: 'number',
       props: {
-        width: '6%',
+        width: '8%',
       },
     },
     {
@@ -79,7 +79,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.tps`),
       type: 'string',
       props: {
-        width: '7%',
+        width: '9%',
       },
     },
     {
@@ -87,7 +87,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.size`),
       type: 'number',
       props: {
-        width: '9%',
+        width: '12%',
       },
     },
   ]
