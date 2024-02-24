@@ -426,6 +426,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 			if err != nil {
 				return fmt.Errorf("[moveDownBlock][%s] error getting subtree %s: %s", block.String(), subtreeHash.String(), err.Error())
 			}
+			defer func() {
+				_ = subtreeReader.Close()
+			}()
 
 			subtree := &util.Subtree{}
 			err = subtree.DeserializeFromReader(subtreeReader)
