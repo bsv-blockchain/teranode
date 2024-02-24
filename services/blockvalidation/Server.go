@@ -695,13 +695,6 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 	prometheusBlockValidationSubtreeFound.Inc()
 	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", subtreeHash.String(), baseUrl)
 
-	if u.processSubtreeNotify.Get(subtreeHash) != nil {
-		u.logger.Warnf("[SubtreeFound][%s] already processing subtree", subtreeHash.String())
-		return nil
-	}
-	// set the processing flag for 1 minute, so we don't process the same subtree multiple times
-	u.processSubtreeNotify.Set(subtreeHash, true, 1*time.Minute)
-
 	exists, err := u.blockValidation.GetSubtreeExists(spanCtx, &subtreeHash)
 	if err != nil {
 		return fmt.Errorf("[SubtreeFound][%s] failed to check if subtree exists [%w]", subtreeHash.String(), err)
