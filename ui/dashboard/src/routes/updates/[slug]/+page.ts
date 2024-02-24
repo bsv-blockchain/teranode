@@ -12,7 +12,7 @@ export function entries() {
 export const load: PageLoad = async ({ params }) => {
   if (posts.posts.filter((item) => item.slug === params.slug).length === 0) {
     // error(404, { message: 'Not found' })
-    goto('/notifications')
+    goto('/updates')
   }
 }
 

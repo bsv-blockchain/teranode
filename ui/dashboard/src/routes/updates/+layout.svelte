@@ -23,7 +23,7 @@
   const pageKey = 'page.notifications'
 
   function onPostSelect(slug: string) {
-    goto(`/notifications/${slug}`)
+    goto(`/updates/${slug}`)
   }
 </script>
 

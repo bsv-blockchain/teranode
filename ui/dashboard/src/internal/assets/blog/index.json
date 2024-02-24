@@ -1,18 +1,18 @@
 {
   "posts": [
     {
-      "title": "Welcome",
-      "summary": "Welcome message",
-      "slug": "welcome",
-      "path": "welcome.json",
-      "timestamp": "1708593730130"
+      "title": "Testing Teranode",
+      "summary": "Public Teranode testing website",
+      "slug": "testing-teranode",
+      "path": "testing-teranode.json",
+      "timestamp": "1708797533321"
     },
     {
-      "title": "Scalable architecture",
-      "summary": "The path towards scalable architecture",
-      "slug": "scale-arch",
-      "path": "scale-arch.json",
-      "timestamp": "1708693878689"
+      "title": "Initial tests",
+      "summary": "Initial tests gathering data",
+      "slug": "initial-tests",
+      "path": "initial-tests.json",
+      "timestamp": "1708797533321"
     }
   ]
 }
