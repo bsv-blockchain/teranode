@@ -27,15 +27,17 @@ function build_local_image {
     local RACE=true
     local ID=$(cat ./deploy/docker/CLUSTER_BASE_ID)
 
-    CERT=$(aws ecr get-login-password --region eu-north-1)
-    if [[ $? -ne 0 ]]; then
-        echo "Failed to get ECR login password." >&2
-        exit 1
-    fi
-    echo $CERT | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com >&2
-    if [[ $? -ne 0 ]]; then
-        echo "Failed to login to ECR." >&2
-        exit 1
+    if [[ -z $OFFLINE ]]; then
+        CERT=$(aws ecr get-login-password --region eu-north-1)
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to get ECR login password." >&2
+            exit 1
+        fi
+        echo $CERT | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com >&2
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to login to ECR." >&2
+            exit 1
+        fi
     fi
 
     docker buildx build \
@@ -64,6 +66,7 @@ usage() {
     echo "         $0 --image local --environment docker-desktop"
     echo ""
     echo "         --filter <filter>  Filter the output of kustomize"
+    echo "         --offline          Work offline if possible"
     echo ""
     exit 1
 }
@@ -84,6 +87,10 @@ while [[ $# -gt 0 ]]; do
         --filter)
             FILTER="$2"
             shift
+            shift
+            ;;
+        --offline)
+            OFFLINE="true"
             shift
             ;;
         *)
