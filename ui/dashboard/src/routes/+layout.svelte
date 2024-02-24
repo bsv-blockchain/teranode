@@ -108,7 +108,7 @@
       // {
       //   icon: 'icon-bell-line',
       //   iconSelected: 'icon-bell-solid',
-      //   path: '/notifications',
+      //   path: '/updates',
       //   label: $i18n.t('page.notifications.menu-label'),
       // },
     ],
