@@ -46,16 +46,16 @@
             })
           }
           break
-        // case 'notifications':
+        // case 'updates':
         //   tmp.push({
-        //     label: 'notifications',
-        //     path: '/notifications/',
+        //     label: 'updates',
+        //     path: '/updates/',
         //     selected: paths.length === 1,
         //   })
         //   if (paths.length === 2) {
         //     tmp.push({
         //       label: paths[1],
-        //       path: `/notifications/${paths[1]}`,
+        //       path: `/updates/${paths[1]}`,
         //       selected: paths.length === 2,
         //     })
         //   }

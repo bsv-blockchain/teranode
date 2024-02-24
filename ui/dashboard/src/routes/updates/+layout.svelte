@@ -20,7 +20,7 @@
     sortedPosts = data.posts.sort((a: any, b: any) => b.timestamp - a.timestamp)
   }
 
-  const pageKey = 'page.notifications'
+  const pageKey = 'page.updates'
 
   function onPostSelect(slug: string) {
     goto(`/updates/${slug}`)

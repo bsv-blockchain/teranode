@@ -7,7 +7,7 @@
 
   $: t = $i18n.t
 
-  const pageKey = 'page.notifications'
+  const pageKey = 'page.updates'
 
   $: slug = $page.params.slug
 

@@ -109,7 +109,7 @@
       //   icon: 'icon-bell-line',
       //   iconSelected: 'icon-bell-solid',
       //   path: '/updates',
-      //   label: $i18n.t('page.notifications.menu-label'),
+      //   label: $i18n.t('page.updates.menu-label'),
       // },
     ],
   }
