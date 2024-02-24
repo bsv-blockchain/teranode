@@ -69,6 +69,11 @@
   :global(a:hover) {
     text-decoration: underline;
   }
+  :global(sup) {
+    vertical-align: top;
+    position: relative;
+    top: -0.5em;
+  }
 
   :root {
     --toastContainerTop: auto;
