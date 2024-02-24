@@ -763,11 +763,15 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		idx := idx
 		st := subtree
 		g.Go(func() error {
-			var err error
-			remainderSubtrees[idx], err = st.Difference(transactionMap)
-			if err != nil {
-				return fmt.Errorf("error calculating difference: %s", err.Error())
+			remainderSubtrees[idx] = make([]util.SubtreeNode, 0, len(st.Nodes)/10) // expect max 10% of the nodes to be different
+			// don't use the util function, keep the memory local in this function, no jumping between heap and stack
+			//err = st.Difference(transactionMap, &remainderSubtrees[idx])
+			for _, node := range st.Nodes {
+				if !transactionMap.Exists(node.Hash) {
+					remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+				}
 			}
+
 			hashCount.Add(int64(len(remainderSubtrees[idx])))
 
 			return nil
