@@ -228,7 +228,7 @@ export const formatLargeNumber = (val: number) => {
   }
 }
 
-export const formatLargeNumberStr = (val: number) => {
+export const formatLargeNumberStr = (val: number, decimals = -1) => {
   const parts = formatLargeNumber(val)
-  return parts.value + parts.unit
+  return decimals !== -1 ? parts.value.toFixed(decimals) + parts.unit : parts.value + parts.unit
 }
