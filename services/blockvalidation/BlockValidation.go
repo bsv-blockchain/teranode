@@ -47,6 +47,7 @@ type BlockValidation struct {
 	localSetMined       bool
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
 	blockExists         *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeExists       *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
 }
 
 type missingTx struct {
@@ -82,7 +83,18 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		localSetMined:       gocore.Config().GetBool("blockvalidation_localSetMined", false),
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:         expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
+		subtreeExists:       expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
 	}
+
+	go func() {
+		// update stats for the expiring maps every 5 seconds
+		for {
+			time.Sleep(5 * time.Second)
+			prometheusBlockValidationLastValidatedBlocksCache.Set(float64(bv.lastValidatedBlocks.Len()))
+			prometheusBlockValidationBlockExistsCache.Set(float64(bv.blockExists.Len()))
+			prometheusBlockValidationSubtreeExistsCache.Set(float64(bv.subtreeExists.Len()))
+		}
+	}()
 
 	if bv.localSetMined {
 		// start a blockchain listener and process all the blocks that are mined into the txmetastore
@@ -127,6 +139,11 @@ func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
 }
 
 func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockExists")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
 	_, ok := u.blockExists.Get(*hash)
 	if ok {
 		return true, nil
@@ -139,6 +156,33 @@ func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Ha
 
 	if exists {
 		u.blockExists.Set(*hash, true)
+	}
+
+	return exists, nil
+}
+func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
+	u.subtreeExists.Set(*hash, true)
+	return nil
+}
+
+func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetSubtreeExists")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	_, ok := u.subtreeExists.Get(*hash)
+	if ok {
+		return true, nil
+	}
+
+	exists, err := u.GetSubtreeExists(ctx, hash)
+	if err != nil {
+		return false, err
+	}
+
+	if exists {
+		u.subtreeExists.Set(*hash, true)
 	}
 
 	return exists, nil
@@ -556,7 +600,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		// first check all the subtrees exist or not in our store, in parallel, and gather what is missing
 		g.Go(func() error {
 			// get subtree from store
-			subtreeExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:])
+			subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 			}
@@ -814,7 +858,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 
 	if findSubtree {
 		// get subtree from store
-		subtreeExists, err := u.subtreeStore.Exists(spanCtx, subtreeHash[:])
+		subtreeExists, err := u.GetSubtreeExists(spanCtx, subtreeHash)
 		stat.NewStat("1. subtreeExists").AddTime(start)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
@@ -1027,6 +1071,8 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, subtreeHa
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", subtreeHash.String()), err)
 	}
+
+	_ = u.SetSubtreeExists(subtreeHash)
 
 	// only set this on no errors
 	prometheusBlockValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
