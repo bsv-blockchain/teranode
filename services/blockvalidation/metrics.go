@@ -35,6 +35,11 @@ var (
 	prometheusBlockValidationSetMinedLocal         prometheus.Counter
 	prometheusBlockValidationSetMinedMulti         prometheus.Counter
 	prometheusBlockValidationSetMinedMultiFrpc     prometheus.Counter
+
+	// expiring cache metrics
+	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
+	prometheusBlockValidationBlockExistsCache         prometheus.Gauge
+	prometheusBlockValidationSubtreeExistsCache       prometheus.Gauge
 )
 
 var prometheusMetricsInitialised = false
@@ -258,6 +263,30 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "set_tx_mined_multi_frpc",
 			Help:      "Number of tx mined multi sets with frpc",
+		},
+	)
+
+	prometheusBlockValidationLastValidatedBlocksCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "last_validated_blocks_cache",
+			Help:      "Number of blocks in the last validated blocks cache",
+		},
+	)
+
+	prometheusBlockValidationBlockExistsCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "block_exists_cache",
+			Help:      "Number of blocks in the block exists cache",
+		},
+	)
+
+	prometheusBlockValidationSubtreeExistsCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "subtree_exists_cache",
+			Help:      "Number of subtrees in the subtree exists cache",
 		},
 	)
 
