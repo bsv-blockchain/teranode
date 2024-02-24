@@ -16,6 +16,7 @@
   export let html = false
   export let value: any = ''
   export let wrap = true
+  export let overflow = false
 
   $: typoObj = variant === TypoVariant.text ? text : title
 
@@ -38,7 +39,7 @@
 <span
   data-test-id={testId}
   class={`tui-typo${clazz ? ' ' + clazz : ''}`}
-  class:single-line={!wrap}
+  class:single-line={!wrap && !overflow}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
 >
   {#if html}
