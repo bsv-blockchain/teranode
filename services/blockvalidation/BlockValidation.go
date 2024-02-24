@@ -407,7 +407,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
 				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-					u.logger.Errorf("[ValidateBlock] failed to invalidate block in background: %s", err)
+					u.logger.Errorf("[ValidateBlock][%s] failed to invalidate block in background: %s", block.String(), err)
 				}
 			}
 		}()
