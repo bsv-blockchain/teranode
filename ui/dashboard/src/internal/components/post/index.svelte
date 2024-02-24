@@ -109,7 +109,7 @@
   }
 
   .right {
-    flex: 0.2;
+    flex: 1;
     max-width: 80px;
     text-align: right;
     word-wrap: break-word;
