@@ -104,12 +104,13 @@
         path: '/network',
         label: $i18n.t('page.network.menu-label'),
       },
-      {
-        icon: 'icon-bell-line',
-        iconSelected: 'icon-bell-solid',
-        path: '/notifications',
-        label: $i18n.t('page.notifications.menu-label'),
-      },
+      // TEMPORARILY DISABLED
+      // {
+      //   icon: 'icon-bell-line',
+      //   iconSelected: 'icon-bell-solid',
+      //   path: '/notifications',
+      //   label: $i18n.t('page.notifications.menu-label'),
+      // },
     ],
   }
 
