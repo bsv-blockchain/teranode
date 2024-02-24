@@ -13,17 +13,46 @@ import (
 )
 
 func Test_StoreBlock(t *testing.T) {
-	storeUrl, err := url.Parse("sqlitememory:///")
-	require.NoError(t, err)
+	t.Run("store block 1", func(t *testing.T) {
+		storeUrl, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeUrl)
-	require.NoError(t, err)
+		s, err := New(ulogger.TestLogger{}, storeUrl)
+		require.NoError(t, err)
 
-	_, err = s.StoreBlock(context.Background(), block1, "")
-	require.NoError(t, err)
+		_, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
 
-	_, err = s.StoreBlock(context.Background(), block2, "")
-	require.NoError(t, err)
+		_, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+	})
+
+	t.Run("store invalid child", func(t *testing.T) {
+		storeUrl, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeUrl)
+		require.NoError(t, err)
+
+		_, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+
+		err = s.InvalidateBlock(context.Background(), block1.Hash())
+		require.NoError(t, err)
+
+		var blockInvalid bool
+		err = s.db.QueryRow("SELECT invalid FROM blocks WHERE hash = ?", block1.Hash().CloneBytes()).Scan(&blockInvalid)
+		require.NoError(t, err)
+		assert.True(t, blockInvalid)
+
+		_, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+
+		// block 2 should be invalid
+		err = s.db.QueryRow("SELECT invalid FROM blocks WHERE hash = ?", block2.Hash().CloneBytes()).Scan(&blockInvalid)
+		require.NoError(t, err)
+		assert.True(t, blockInvalid)
+	})
 }
 
 func Test_getCumulativeChainWork(t *testing.T) {
