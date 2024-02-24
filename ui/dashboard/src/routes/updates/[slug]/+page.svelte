@@ -14,7 +14,7 @@
   let currentPost: any = null
 
   async function loadPost(slug: string) {
-    currentPost = (await import(`../../../internal/assets/blog/${slug}.json`)).default
+    currentPost = (await import(`../../../internal/assets/blog/${slug}.md?raw`)).default
   }
 
   $: {
@@ -41,7 +41,7 @@
 
 {#if currentPost}
   <div class="post-details">
-    <SvelteMarkdown source={currentPost?.body} />
+    <SvelteMarkdown source={currentPost} />
   </div>
 {/if}
 

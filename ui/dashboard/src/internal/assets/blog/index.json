@@ -4,14 +4,14 @@
       "title": "Testing Teranode",
       "summary": "Public Teranode testing website",
       "slug": "testing-teranode",
-      "path": "testing-teranode.json",
+      "path": "testing-teranode.md",
       "timestamp": "1708797533321"
     },
     {
       "title": "Initial tests",
       "summary": "Initial tests gathering data",
       "slug": "initial-tests",
-      "path": "initial-tests.json",
+      "path": "initial-tests.md",
       "timestamp": "1708797533321"
     }
   ]
