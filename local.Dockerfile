@@ -26,11 +26,13 @@ ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
 RUN RACE=true make build -j 32
+RUN RACE=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
@@ -70,5 +72,4 @@ RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
 ENV LD_LIBRARY_PATH=.
 
 # Set the entrypoint to the library
-ENTRYPOINT ["./ubsv.run"]
 #ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]

@@ -30,16 +30,6 @@ services:
     - ubsv-network
     entrypoint: ["pwd"]
 
-  # tx-blaster-builder:
-  #   image: blaster:latest
-  #   build:
-  #     context: .
-  #     dockerfile: local.txblaster.Dockerfile
-  #   networks:
-  #   - ubsv-network
-  #   entrypoint: ["pwd"]
-
-
   postgres:
     container_name: postgres
     image: postgres:latest
@@ -221,7 +211,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -250,7 +240,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -279,7 +269,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["./blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
