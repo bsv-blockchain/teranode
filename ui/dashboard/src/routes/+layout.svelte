@@ -161,7 +161,10 @@
 </GlobalStyle>
 
 {#if $spinCount > 0}
-  <Spinner offsetX={$contentLeft} coverColor="var(--app-cover-bg-color)" />
+  <Spinner
+    offsetX={$mediaSize <= MediaSize.sm ? 0 : $contentLeft}
+    coverColor="var(--app-cover-bg-color)"
+  />
 {/if}
 
 <SvelteToast options={toastOptions} />
