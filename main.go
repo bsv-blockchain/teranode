@@ -121,11 +121,11 @@ func main() {
 	startValidator := shouldStart("Validator")
 	startPropagation := shouldStart("Propagation")
 	startMiner := shouldStart("Miner")
+	startP2P := shouldStart("P2P")
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
-	startP2P := shouldStart("P2P")
 	startSubtreeAssembly := shouldStart("SubtreeAssembly")
 	help := shouldStart("help")
 
@@ -203,6 +203,15 @@ func main() {
 	}
 
 	var err error
+
+	// p2p server
+	if startP2P {
+		if err = sm.AddService("P2P", p2p.NewServer(
+			logger.New("P2P"),
+		)); err != nil {
+			panic(err)
+		}
+	}
 
 	// asset service
 	if startAsset {
@@ -307,15 +316,6 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
-		}
-	}
-
-	// p2p server
-	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(
-			logger.New("P2P"),
-		)); err != nil {
-			panic(err)
 		}
 	}
 
