@@ -80,7 +80,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			,subtrees
 			,peer_id
 			,coinbase_tx
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
+			,invalid
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
 			RETURNING id
 		`
 	} else {
