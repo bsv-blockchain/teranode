@@ -139,7 +139,8 @@ func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
 }
 
 func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockExists")
+	start := time.Now()
+	stat := gocore.NewStat("GetBlockExists")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -176,7 +177,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 		return true, nil
 	}
 
-	exists, err := u.GetSubtreeExists(ctx, hash)
+	exists, err := u.subtreeStore.Exists(ctx, hash[:])
 	if err != nil {
 		return false, err
 	}
