@@ -347,12 +347,13 @@ func (b *bucket) cleanLockedMapNew() {
 		if idx >= byteOffsetRemoved {
 			// calcualte the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
 			adjustedIdx := idx - byteOffsetRemoved
-
+			fmt.Println("adjustedIdx: ", adjustedIdx, "idx: ", idx, "byteOffsetRemoved: ", byteOffsetRemoved)
 			// Check if the item is still valid after adjustment.
 			// This check might need to include considerations for generation and index within the new structure.
 			//if (gen+1 == bGen || gen == maxGen && bGen == 1) && adjustedIdx >= bIdx || gen == bGen && adjustedIdx < bIdx {
 			//bmNew[k] = (gen << bucketSizeBits) | adjustedIdx
-			bmNew[k] = adjustedIdx
+			bmNew[k] = v // probably this is wrong
+			// bmNew[k] = v, or Idx
 		}
 		//}
 
@@ -508,7 +509,7 @@ func (b *bucket) SetNew(k, v []byte, h uint64, skipLocking ...bool) {
 	chunkIdxNew := idxNew / chunkSize
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
-		fmt.Println("chunkIdxNew > chunkIdx ")
+		fmt.Printf("chunkIdxNew (%d) > chunkIdx (%d) \n", chunkIdxNew, chunkIdx)
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
 			//fmt.Println("time to clean, we are out of chunks, chunkIdxNew: ", chunkIdxNew)
