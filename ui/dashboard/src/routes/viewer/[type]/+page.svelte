@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { error } from '@sveltejs/kit'
   import { beforeUpdate } from 'svelte'
+  import { page } from '$app/stores'
+
   import BlockDetails from '$internal/components/page/viewer/block/index.svelte'
   import SubtreeDetails from '$internal/components/page/viewer/subtree/index.svelte'
   import TxDetails from '$internal/components/page/viewer/tx/index.svelte'
   import UtxoDetails from '$internal/components/page/viewer/utxo/index.svelte'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import { DetailType } from '$internal/utils/urls'
-  import { page } from '$app/stores'
 
   let ready = false
   beforeUpdate(() => {

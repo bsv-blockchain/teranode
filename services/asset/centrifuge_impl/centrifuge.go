@@ -140,21 +140,21 @@ func (c *Centrifuge) startP2PListener() error {
 	c.logger.Infof("[Centrifuge] connecting to p2p server on %s", u.String())
 
 	var client atomic.Pointer[websocket.Conn]
-
-	connected := false
+	var clientConnected atomic.Bool
 
 	go func() {
 		for {
-			if !connected {
+			if !clientConnected.Load() {
 				c.logger.Infof("[Centrifuge] dialing p2p server at: %s", u.String())
 				websocketClient, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error dialing p2p server: %v", err)
+					client.Store(nil)
 				} else {
 					c.logger.Infof("[Centrifuge] connected to p2p server on: %s", u.String())
-					connected = true
+					clientConnected.Store(true)
+					client.Store(websocketClient)
 				}
-				client.Store(websocketClient)
 			}
 
 			// retrying in 1 second
@@ -170,7 +170,7 @@ func (c *Centrifuge) startP2PListener() error {
 				if err != nil {
 					c.logger.Debugf("[Centrifuge] error reading p2p server message: %v", err)
 					time.Sleep(1 * time.Second)
-					connected = false
+					clientConnected.Store(false)
 					continue
 				}
 

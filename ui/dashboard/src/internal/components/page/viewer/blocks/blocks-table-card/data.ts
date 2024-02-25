@@ -3,6 +3,7 @@ import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
 
 const pageKey = 'page.viewer'
@@ -22,7 +23,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.hash`),
       type: 'string',
       props: {
-        width: '17%',
+        width: '15%',
       },
     },
     {
@@ -30,7 +31,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.timestamp`),
       type: 'dateStr',
       props: {
-        width: '13%',
+        width: '15%',
       },
     },
     {
@@ -54,7 +55,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.miner`),
       type: 'string',
       props: {
-        width: '11%',
+        width: '10%',
       },
     },
     {
@@ -62,7 +63,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.coinbaseValue`),
       type: 'number',
       props: {
-        width: '14%',
+        width: '8%',
       },
     },
     {
@@ -70,7 +71,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.transactionCount`),
       type: 'number',
       props: {
-        width: '6%',
+        width: '8%',
       },
     },
     {
@@ -78,7 +79,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.tps`),
       type: 'string',
       props: {
-        width: '7%',
+        width: '9%',
       },
     },
     {
@@ -86,7 +87,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.size`),
       type: 'number',
       props: {
-        width: '9%',
+        width: '12%',
       },
     },
   ]
@@ -117,7 +118,12 @@ export const getRenderCells = (t) => {
     },
     coinbaseValue: (idField, item, colId) => {
       return {
-        value: (item[colId] / 1e8).toFixed(2),
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: (item[colId] / 1e8).toFixed(2),
+          className: 'num',
+        },
+        value: '',
       }
     },
   }

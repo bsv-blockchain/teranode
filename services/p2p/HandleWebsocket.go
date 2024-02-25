@@ -37,8 +37,8 @@ var (
 
 func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl string) func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
-	newClientCh := make(chan chan []byte, 10)
-	deadClientCh := make(chan chan []byte, 10)
+	newClientCh := make(chan chan []byte, 1_000)
+	deadClientCh := make(chan chan []byte, 1_000)
 
 	pingTimer := time.NewTicker(10 * time.Second)
 
@@ -67,7 +67,12 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl s
 				}
 
 				for clientCh := range clientChannels {
-					clientCh <- data
+					select {
+					case clientCh <- data:
+						// Data sent successfully
+					case <-time.After(time.Second): // Adjust timeout duration as needed
+						s.logger.Errorf("Timeout sending data to client")
+					}
 				}
 
 			case notification := <-notificationCh:
@@ -82,7 +87,12 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl s
 				}
 
 				for clientCh := range clientChannels {
-					clientCh <- data
+					select {
+					case clientCh <- data:
+						// Data sent successfully
+					case <-time.After(time.Second): // Adjust timeout duration as needed
+						s.logger.Errorf("Timeout sending data to client")
+					}
 				}
 			}
 		}

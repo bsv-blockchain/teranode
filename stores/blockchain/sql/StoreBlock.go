@@ -27,6 +27,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	var previousChainWork []byte
 	var previousHeight uint64
 	var height uint64
+	previousBlockInvalid := false
 
 	q := `
 		INSERT INTO blocks (
@@ -45,8 +46,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 		,subtree_count
 		,subtrees
 		,peer_id
-    ,coinbase_tx
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
+        ,coinbase_tx
+		,invalid
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
 		RETURNING id
 	`
 
@@ -78,7 +80,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			,subtrees
 			,peer_id
 			,coinbase_tx
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16)
+			,invalid
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
 			RETURNING id
 		`
 	} else {
@@ -88,6 +91,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			 b.id
 			,b.chain_work
 			,b.height
+			,b.invalid
 			FROM blocks b
 			WHERE b.hash = $1
 		`
@@ -95,6 +99,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			&previousBlockId,
 			&previousChainWork,
 			&previousHeight,
+			&previousBlockInvalid,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
@@ -164,6 +169,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 		subtreeBytes,
 		peerID,
 		block.CoinbaseTx.Bytes(),
+		previousBlockInvalid,
 	)
 	if err != nil {
 		return 0, err

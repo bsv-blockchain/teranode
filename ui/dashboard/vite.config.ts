@@ -24,6 +24,7 @@ export default defineConfig({
             // console.log('manualChunks: id = ', id)
             if (
               [
+                'icon-bell',
                 'icon-search',
                 'icon-home',
                 'icon-binoculars',

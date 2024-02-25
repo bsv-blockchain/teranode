@@ -70,6 +70,19 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration like 1s or 5000ms (%s)", timeoutStr))
 	}
 
+	maxRetries, _ := gocore.Config().GetInt("validator_blockvalidation_maxRetries", 3)
+	durationString, _ := gocore.Config().Get("validator_blockvalidation_retrySleep", "1s")
+	duration, err := time.ParseDuration(durationString)
+	if err != nil {
+		panic(fmt.Sprintf("invalid setting value %s for validator_blockvalidation_retrySleep", durationString))
+	}
+
+	delayString, _ := gocore.Config().Get("validator_blockvalidation_delay", "0")
+	delay, err := time.ParseDuration(delayString)
+	if err != nil {
+		panic(fmt.Sprintf("invalid setting value %s for validator_blockvalidation_delay", durationString))
+	}
+
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
 		sendBatch := func(batch []*txmeta.Data) {
 			startTime := gocore.CurrentTime()
@@ -85,9 +98,19 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			// add data to block validation cache
-			if err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch); err != nil {
-				validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+			for i := 1; i <= maxRetries+1; i++ {
+				// add data to block validation cache
+				time.Sleep(delay)
+				err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch)
+				if err != nil {
+					if i < maxRetries+1 {
+						validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
+						time.Sleep(duration)
+						continue
+					}
+					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				}
+				break
 			}
 		}
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)

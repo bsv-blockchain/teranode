@@ -46,6 +46,20 @@
             })
           }
           break
+        // case 'updates':
+        //   tmp.push({
+        //     label: 'updates',
+        //     path: '/updates/',
+        //     selected: paths.length === 1,
+        //   })
+        //   if (paths.length === 2) {
+        //     tmp.push({
+        //       label: paths[1],
+        //       path: `/updates/${paths[1]}`,
+        //       selected: paths.length === 2,
+        //     })
+        //   }
+        //   break
       }
     }
 

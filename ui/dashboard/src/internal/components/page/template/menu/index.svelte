@@ -7,12 +7,14 @@
   import Logo from '$lib/components/logo/index.svelte'
   import Menu from '$lib/components/navigation/menu/index.svelte'
   import Toolbar from '$internal/components/toolbar/index.svelte'
-  import Banner from '$internal/components/banner/index.svelte'
+  // import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
 
   export let testId: string | undefined | null = null
   export let showGlobalToolbar = true
+  export let showTools = true
+  export let showWarning = true
 
   import i18n from '$internal/i18n'
 
@@ -29,6 +31,10 @@
       goto(item.path)
     } else {
       window.open(item.path, '_blank')
+    }
+
+    if (showMobileNavbar) {
+      showMenu = false
     }
   }
 
@@ -81,7 +87,7 @@
   </MobileNavbar>
 {/if}
 
-<Banner text={t('global.warning')} />
+<!-- <Banner text={t('global.warning')} /> -->
 
 <div
   class="content-container"
@@ -93,7 +99,7 @@
 >
   <ContentMenu>
     {#if showGlobalToolbar}
-      <Toolbar style="padding-bottom: 13px;" />
+      <Toolbar style="padding-bottom: 13px;" {showTools} {showWarning} />
     {/if}
     <slot />
   </ContentMenu>

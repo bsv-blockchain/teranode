@@ -52,7 +52,7 @@ type SubtreeProcessor struct {
 	reorgBlockChan            chan reorgBlocksRequest
 	deDuplicateTransactionsCh chan struct{}
 	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
-	chainedSubtrees           []*util.Subtree
+	chainedSubtrees           []*util.Subtree        // TODO change this to use badger under the hood, so we can scale beyond RAM
 	chainedSubtreeCount       atomic.Int32
 	currentSubtree            *util.Subtree
 	currentBlockHeader        *model.BlockHeader
@@ -414,6 +414,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
 
 	g, gCtx := errgroup.WithContext(ctx)
+	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
+	g.SetLimit(moveDownBlockConcurrency)
 
 	// get all the subtrees in parallel
 	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
@@ -426,6 +428,9 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 			if err != nil {
 				return fmt.Errorf("[moveDownBlock][%s] error getting subtree %s: %s", block.String(), subtreeHash.String(), err.Error())
 			}
+			defer func() {
+				_ = subtreeReader.Close()
+			}()
 
 			subtree := &util.Subtree{}
 			err = subtree.DeserializeFromReader(subtreeReader)
@@ -753,6 +758,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	g, _ := errgroup.WithContext(ctx)
+	processRemainderTxHashesConcurrency, _ := gocore.Config().GetInt("blockassembly_processRemainderTxHashesConcurrency", 64)
+	g.SetLimit(processRemainderTxHashesConcurrency)
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
 	remainderSubtrees := make([][]util.SubtreeNode, len(chainedSubtrees))
@@ -760,11 +767,15 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		idx := idx
 		st := subtree
 		g.Go(func() error {
-			var err error
-			remainderSubtrees[idx], err = st.Difference(transactionMap)
-			if err != nil {
-				return fmt.Errorf("error calculating difference: %s", err.Error())
+			remainderSubtrees[idx] = make([]util.SubtreeNode, 0, len(st.Nodes)/10) // expect max 10% of the nodes to be different
+			// don't use the util function, keep the memory local in this function, no jumping between heap and stack
+			//err = st.Difference(transactionMap, &remainderSubtrees[idx])
+			for _, node := range st.Nodes {
+				if !transactionMap.Exists(node.Hash) {
+					remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+				}
 			}
+
 			hashCount.Add(int64(len(remainderSubtrees[idx])))
 
 			return nil
@@ -824,8 +835,19 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 				return errors.Join(fmt.Errorf("error deserializing subtree: %s", st.String()), err)
 			}
 
+			bucketG := errgroup.Group{}
 			for bucket, hashes := range txHashBuckets {
-				_ = transactionMap.PutMulti(bucket, hashes)
+				bucket := bucket
+				hashes := hashes
+				// put the hashes into the transaction map in parallel, it has already been split into the correct buckets
+				bucketG.Go(func() error {
+					_ = transactionMap.PutMulti(bucket, hashes)
+					return nil
+				})
+			}
+
+			if err = bucketG.Wait(); err != nil {
+				return fmt.Errorf("error putting hashes into transaction map: %s", err.Error())
 			}
 
 			return nil

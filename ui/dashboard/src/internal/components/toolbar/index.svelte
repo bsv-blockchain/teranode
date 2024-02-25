@@ -11,6 +11,8 @@
   $: t = $i18n.t
 
   export let style = ''
+  export let showTools = true
+  export let showWarning = true
 
   let searchValue = ''
   let lastSearchCalled = ''
@@ -37,29 +39,33 @@
   }
 </script>
 
-<div class="toolbar" {style}>
-  <div class="left">
-    <BreadCrumbs />
+{#if showTools}
+  <div class="toolbar" {style}>
+    <div class="left">
+      <BreadCrumbs />
+    </div>
+    <div class="right">
+      <TextInput
+        name="one"
+        size="medium"
+        style="--input-size-md-border-radius:8px"
+        autocomplete="off"
+        bind:value={searchValue}
+        width={330}
+        focusWidth={570}
+        icon={searchValue === lastSearchCalled || !searchValue
+          ? 'icon-search-line'
+          : 'icon-search-solid'}
+        placeholder={$i18n.t('comp.toolbar.placeholder')}
+        on:keydown={onSearchKeyDown}
+      />
+    </div>
   </div>
-  <div class="right">
-    <TextInput
-      name="one"
-      size="medium"
-      style="--input-size-md-border-radius:8px"
-      autocomplete="off"
-      bind:value={searchValue}
-      width={330}
-      focusWidth={570}
-      icon={searchValue === lastSearchCalled || !searchValue
-        ? 'icon-search-line'
-        : 'icon-search-solid'}
-      placeholder={$i18n.t('comp.toolbar.placeholder')}
-      on:keydown={onSearchKeyDown}
-    />
-  </div>
-</div>
+{/if}
 
-<div class="warning" {style}>{t('global.warning_2')}</div>
+{#if showWarning}
+  <div class="warning" {style}>{t('global.warning_2')}</div>
+{/if}
 
 <style>
   .toolbar {

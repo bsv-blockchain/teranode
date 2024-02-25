@@ -298,6 +298,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 11. Check that there are no duplicate transactions in the block.
 	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
 	if subtreeStore != nil {
+		// this creates the txMap for the block that is also used in the validOrderAndBlessed check
 		err = b.checkDuplicateTransactions(spanCtx)
 		if err != nil {
 			return false, err
@@ -312,6 +313,9 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 			return false, err
 		}
 	}
+
+	// reset the txMap and release the memory
+	b.txMap = nil
 
 	return true, nil
 }
@@ -530,6 +534,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, subtreeStore blob.St
 				if err != nil {
 					return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
 				}
+				defer func() {
+					_ = subtreeReader.Close()
+				}()
 
 				subtree := &util.Subtree{}
 				err = subtree.DeserializeFromReader(subtreeReader)

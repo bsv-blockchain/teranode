@@ -77,6 +77,9 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 	if err != nil {
 		return fmt.Errorf("[SubtreeAssembly] error getting subtree from store: %s", err)
 	}
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
 
 	subtree := util.Subtree{}
 	err = subtree.DeserializeFromReader(subtreeReader)

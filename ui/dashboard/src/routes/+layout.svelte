@@ -104,9 +104,10 @@
         path: '/network',
         label: $i18n.t('page.network.menu-label'),
       },
+      // TEMPORARILY DISABLED
       // {
-      //   icon: 'icon-network-line',
-      //   iconSelected: 'icon-network-solid',
+      //   icon: 'icon-bell-line',
+      //   iconSelected: 'icon-bell-solid',
       //   path: '/updates',
       //   label: $i18n.t('page.updates.menu-label'),
       // },
@@ -161,7 +162,10 @@
 </GlobalStyle>
 
 {#if $spinCount > 0}
-  <Spinner offsetX={$contentLeft} coverColor="var(--app-cover-bg-color)" />
+  <Spinner
+    offsetX={$mediaSize <= MediaSize.sm ? 0 : $contentLeft}
+    coverColor="var(--app-cover-bg-color)"
+  />
 {/if}
 
 <SvelteToast options={toastOptions} />
