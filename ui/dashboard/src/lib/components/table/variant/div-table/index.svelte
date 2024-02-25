@@ -197,8 +197,8 @@
               </div>
             {/if}
             {#if $mediaSize > MediaSize.sm}
-              {#each colDefs as colDef (colDef.id)}
-                <div class="td">
+              {#each colDefs as colDef, i (colDef.id)}
+                <div class="td" class:left={i === 0}>
                   {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
                     <svelte:component
                       this={getDisplay(renderCells, renderTypes, colDef, idField, item).component}
@@ -607,12 +607,13 @@
     justify-content: flex-end;
     width: 100%;
   }
-  :global(.table .num) {
+  :global(.table .td .num) {
     text-align: right;
     display: block;
     width: 100%;
   }
-  :global(.table.small .num) {
+  :global(.table.small .num),
+  :global(.table .td.left .num) {
     text-align: left;
     display: inline;
     width: auto;

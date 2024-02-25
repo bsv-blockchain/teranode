@@ -138,8 +138,8 @@
                 />
               </td>
             {/if}
-            {#each colDefs as colDef (colDef.id)}
-              <td>
+            {#each colDefs as colDef, i (colDef.id)}
+              <td class:left={i === 0}>
                 {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
                   <svelte:component
                     this={getDisplay(renderCells, renderTypes, colDef, idField, item).component}
@@ -401,5 +401,10 @@
     text-align: right;
     display: block;
     width: 100%;
+  }
+  :global(table td.left .num) {
+    text-align: left;
+    display: inline;
+    width: auto;
   }
 </style>
