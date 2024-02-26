@@ -38,7 +38,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/ordishs/go-utils v1.0.50
-	github.com/ordishs/gocore v1.0.57
+	github.com/ordishs/gocore v1.0.58
 	github.com/prometheus/client_golang v1.16.0
 	github.com/quic-go/quic-go v0.38.2
 	github.com/redis/go-redis/v9 v9.2.1
