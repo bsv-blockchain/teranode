@@ -9,7 +9,7 @@ When a block is found, there is an economic limit applied to the block size whic
 
 This allows nodes to reach consensus on behavioural limits of the network. This limit is set to a large multiple of typical demand.
 
-The UBSV Node system will be unbounded, so the block size limit will be purely economic, and the system will be capable of adding blocks of any size to the blockchain.
+The Teranode Node system will be unbounded, so the block size limit will be purely economic, and the system will be capable of adding blocks of any size to the blockchain.
 
 ### Block Subsidy Rule:
 
@@ -25,7 +25,7 @@ The Target value to find a Proof-of-Work is adjusted to maintain a block discove
 
 As of 2017, the Target value is adjusted every block. However, in the original release of Bitcoin, the Target value was adjusted every 14 days.
 
-The UBSV Node system will maintain the current Target Adjustment schedule of every block, but the system may be updated in the future to return to the original Target Adjustment schedule.
+The Teranode Node system will maintain the current Target Adjustment schedule of every block, but the system may be updated in the future to return to the original Target Adjustment schedule.
 
 ### Genesis Block Rule:
 
@@ -33,7 +33,7 @@ All new blocks must be added to the unbroken chain of proof-of-work leading back
 
 Since blocks are connected via new blocks including the hash of its previous block, and Merkle trees are used to keep track of transactions within a block, this rule can be satisfied using the chain of block headers. Each block header is only 80 bytes.
 
-Given the chain of block headers can be used to adhere to the Genesis Block rules, the Initial Block Download or IBD where a new node joining the network downloads all block data including transaction data all the way back to the genesis block used by current node implementations is not needed and will not be included in the UBSV Node system.
+Given the chain of block headers can be used to adhere to the Genesis Block rules, the Initial Block Download or IBD where a new node joining the network downloads all block data including transaction data all the way back to the genesis block used by current node implementations is not needed and will not be included in the Teranode Node system.
 
 ### Coinbase Maturity Rule:
 
@@ -43,7 +43,7 @@ Nodes cannot spend the output of a Coinbase Transaction unless 99 blocks have be
 
 Bitcoin Nodes collectively set a practical limit for the size of transactions they’re willing to timestamp into a block.
 
-The UBSV Node project will ensure this limit is entirely economic and by allowing unbounded scaling.
+The Teranode Node project will ensure this limit is entirely economic and by allowing unbounded scaling.
 
 ### nLockTime and nSequence Rules:
 
@@ -81,7 +81,7 @@ If the value of the inputs is greater than the value of the outputs, the differe
 
 If the value of the inputs is equal to the value of the outputs, the transaction has no fee, and is considered a “free” transaction.
 
-The UBSV Node system will support free transactions up to a cumulative maximum size: initially, 2GB, then 5GB per block.
+The Teranode Node system will support free transactions up to a cumulative maximum size: initially, 2GB, then 5GB per block.
 
 Free transactions must follow a standard transaction template that has been given the status of standard by the Technical Standards Committee.
 

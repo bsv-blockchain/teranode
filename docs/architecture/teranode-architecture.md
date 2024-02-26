@@ -7,7 +7,7 @@
 
 ---
 
-# UBSV (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
+# Teranode (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
 
 [Last Modified - 17-January-2024]
 
@@ -18,8 +18,8 @@
 2. [Data Model and Propagation](#2-data-model-and-propagation)
 - [2.1. Block Size](#21-block-size)
 - [2.2. Bitcoin Data Model](#22-bitcoin-data-model)
-- [2.3. UBSV Data Model](#23-ubsv-data-model)
-- [2.4. Advantages of the UBSV Model](#24-advantages-of-the-ubsv-model)
+- [2.3. Teranode Data Model](#23-teranode-data-model)
+- [2.4. Advantages of the Teranode Model](#24-advantages-of-the-teranode-model)
 - [2.5. Network Behavior](#25-network-behavior)
 3. [Node Workflow](#3-node-workflow)
 4. [Services](#4-services)
@@ -47,9 +47,9 @@
 
 In the early stages of Bitcoin's development, a block size limit of 1 megabyte per block was introduced as a temporary measure. This limit effectively restricts the network's capacity to approximately 3.3 to 7 transactions per second. As Bitcoin's adoption has expanded, this constraint has increasingly led to transaction processing bottlenecks, causing delays and higher transaction fees. These issues have highlighted the critical need for scalable solutions within the Bitcoin network.
 
-**UBSV** (Unbounded Bitcoin Satoshi Vision) is a major component of the Teranode Project, being developed by the BSV Association. UBSV addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
+**Teranode** (Unbounded Bitcoin Satoshi Vision), being developed by the BSV Association, addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
 
-UBSV provides a robust node processing system for Bitcoin that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
+Teranode provides a robust node processing system for Bitcoin that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of services that work together to provide a decentralized, scalable, and secure blockchain network. The node is designed to be modular, allowing for easy integration of new services and features.
 
 
@@ -68,13 +68,13 @@ Nodes are responsible for:
 * Managing Coinbase transactions and their spendability.
 
 
-The diagram below shows the different microservices, together with their interactions, that make up the UBSV node.
+The diagram below shows the different microservices, together with their interactions, that make up Teranode.
 
 ![UBSV_Container_Diagram.png](img%2FUBSV_Container_Diagram.png)
 
 Various services and components are outlined to show their interactions and functions within the system:
 
-1. **UBSV Node Core Services**:
+1. **Teranode Core Services**:
   - **Propagation Service**: Receives new transactions and sends them to the validator service.
   - **TX Validator Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks to be included blockchain.
@@ -85,7 +85,7 @@ Various services and components are outlined to show their interactions and func
   - **TX Meta Store**: Keeps track of the status of transactions within the system.
 
 2. **Overlay Services**:
-  - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (UBSV) nodes, this service acts as a bridge between the two types of nodes.
+  - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (Teranode) nodes, this service acts as a bridge between the two types of nodes.
   - **Peer-to-Peer Bootstrap Service**: This service handles node discovery, managing connections with peer nodes in the network.
   - **Coinbase Overlay Service**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
 
@@ -97,17 +97,17 @@ Various services and components are outlined to show their interactions and func
 
 ## 2. Data Model and Propagation
 
-The UBSV data model addresses scalability and efficiency issues found in the BTC design by introducing data abstractions that make propagation across the network more optimal. This section provides a summary of the key points and how they represent improvements over the BTC design:
+The Teranode data model addresses scalability and efficiency issues found in the BTC design by introducing data abstractions that make propagation across the network more optimal. This section provides a summary of the key points and how they represent improvements over the BTC design:
 
 ### 2.1. Block Size
 - **Bitcoin**: Fixed at 1MB, limiting the number of transactions per block.
 - **BSV**: Increased to 4GB, allowing significantly more transactions per block.
-- **UBSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees.
+- **Teranode BSV**: Unbounded block size, enabling potentially unlimited transactions per block, increasing throughput, and reducing transaction fees.
 
 
 ### 2.2. Bitcoin Data Model
 
-A comparison of the BTC and UBSV Data Model helps to understand how the latter improves on the former.
+A comparison of the BTC and Teranode BSV Data Model helps to understand how the latter improves on the former.
 
 The Bitcoin data model is as follows:
 
@@ -135,15 +135,15 @@ Blocks contain all transaction data for the transactions included.
 
 Note how the Bitcoin block contains all transactions (including ALL transaction data) for each transaction it contains, not just the transaction Id. This means that the block size would be very large if many transactions were included. At scale, this is not practical, as the block size would be too large to propagate across the network in a timely manner.
 
-Let's see next how the UBSV data model addresses these issues.
+Let's see next how the Teranode BSV data model addresses these issues.
 
-### 2.3. UBSV Data Model
+### 2.3. Teranode Data Model
 
 ##### 2.3.1. Transactions:
 
-UBSV Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur.
+Teranode Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur.
 
-UBSV is expected to receive new transactions using the extended format only, with the legacy format not supported. A wallet will be required to create new transactions in extended format in order to communicate with UBSV.
+Teranode is expected to receive new transactions using the extended format only, with the legacy format not supported. A wallet will be required to create new transactions in extended format in order to communicate with UBSV.
 
 The Extended Format adds a marker to the transaction format:
 
@@ -195,7 +195,7 @@ To know more about the Extended Transaction Format, please refer to the [Bitcoin
 
 The Subtrees are an innovation aimed at improving scalability and real-time processing capabilities of the blockchain system.
 
-_Unique to UBSV_: The concept of subtrees is a distinct feature not found in the BTC design.
+_Unique to Teranode BSV_: The concept of subtrees is a distinct feature not found in the BTC design.
 
 1. A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root.
    - Note that the size of the subtree could be any number of transactions, just as long as it is a power of 2 (16, 32, 64...). The only requirement is that all subtrees in a block have to be the same size. At peak throughput, subtrees will contain millions of transaction Ids.
@@ -225,7 +225,7 @@ Blocks contain lists of subtree identifiers, not transactions. This is practical
 
 Please note that the use of subtrees within blocks represents a data abstraction for a more optimal propagation of transactions. The data model is still the same as Bitcoin, with blocks containing transactions. The subtrees are used to optimize the propagation of transactions and blocks.
 
-### 2.4. Advantages of the UBSV Model
+### 2.4. Advantages of the Teranode BSV Model
 
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
 
@@ -242,21 +242,21 @@ Please note that the use of subtrees within blocks represents a data abstraction
 
 - **Block Propagation**: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree within a new block that it is unaware of, it can request the details from the node that submitted the block.
 
-This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that the UBSV can scale effectively to meet high transaction demands without the bottlenecks experienced by the BTC network.
+This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that Teranode BSV can scale effectively to meet high transaction demands without the bottlenecks experienced by the BTC network.
 
 ---
 
 ## 3. Node Workflow
 
-At a high level, the UBSV node performs the following functions:
+At a high level, Teranode performs the following functions:
 
-1. **Transaction Submission**: UBSV nodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
+1. **Transaction Submission**: Teranodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
 
 
 2. **Transaction Validator**: Transactions are validated by the TX Validator Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the TX Meta Store, indicating they have not been included in a block yet and are eligible for inclusion.
 
 
-3. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. "Subtrees" are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
+3. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. "Subtrees" are a key component of Teranode, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
    * Note - nodes are expected to arrive to similar or equal subtree compositions. All nodes should have the same transactions in their subtrees, but the order of the transactions may differ. As they build their subtrees, nodes will broadcast these subtrees to each other.
 
 
@@ -364,7 +364,7 @@ This service is responsible for creating subtrees, as well as creating mining ca
 
 There are two distinct processes that the Block Assembly Service performs:
 
-1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [UBSV Data Model](#23-ubsv-data-model) section, subtrees are a key component of the UBSV node, allowing for efficient processing of transactions and blocks. A UBSV subtree is designed to contain at least 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
+1. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. As discussed in the [Teranode Data Model](#23-teranode-data-model) section, subtrees are a key component of Teranode, allowing for efficient processing of transactions and blocks. A Teranode subtree is designed to contain at least 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
 
 
 2. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
@@ -574,7 +574,7 @@ An explanation of the components:
 
 6. **Asset Server**: Acts as a front for clients requesting blockchain data.
 
-Note - The Block model described in the [UBSV Data Model](#23-ubsv-data-model) section applies to the internal block model within the UBSV node. The blockchain service stores blocks in the standard Bitcoin format.
+Note - The Block model described in the [Teranode Data Model](#23-teranode-data-model) section applies to the internal block model within Teranode. The blockchain service stores blocks in the standard Bitcoin format.
 
 The system is designed to maintain the blockchain's integrity by ensuring that all blocks are properly assembled, validated, and stored. It enables other services and participants in the network to interact with the blockchain, request data, and understand the current state of the network for further actions like mining.
 
@@ -602,7 +602,7 @@ The server uses both HTTP and gRPC as communication protocols, as can be seen in
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests, as well as WebSockets.
 
-- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the UBSV distributed network.
+- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the Teranode distributed network.
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
@@ -614,7 +614,7 @@ The various microservices write directly to the data stores, but the asset servi
 
 The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
-In the UBSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
+In the Teranode BSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
 
 The Coinbase primary function is to monitor all blocks being mined, ensuring accurate tracking of the blocks that have been mined along with their Coinbase Unspent Transaction Outputs (UTXOs).
 
@@ -642,7 +642,7 @@ In essence, the Coinbase Service operates as a straightforward Simplified Paymen
 
 ### 4.10. Bootstrap
 
-The Bootstrap Service helps new nodes find peers in a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
+The Bootstrap Service helps new nodes find peers in a Teranode BSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
 The service is implemented using the `libp2p` library, a modular network stack for peer-to-peer applications.
 
@@ -653,7 +653,7 @@ The service is implemented using the `libp2p` library, a modular network stack f
 
 ### 4.11. P2P Legacy Service
 
-The P2P service is responsible for managing communications between BSV and U-BSV nodes, effectively translating between the historical BSV and the new (UBSV) data abstractions. This makes possible to run historical and UBSV nodes side by side, allowing for a gradual rollout of UBSV.
+The P2P service is responsible for managing communications between BSV and Teranode-BSV nodes, effectively translating between the historical BSV and the new (Teranode BSV) data abstractions. This makes possible to run historical and Teranodes side by side, allowing for a gradual rollout of Teranode.
 
 This legacy P2P network is to be phased out as transaction volumes increase, forcing an eventual migration towards a more scalable and feature-rich system.
 
