@@ -8,7 +8,7 @@
   import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
   import { DetailType, DetailTab, reverseHashParam, getHashLinkProps } from '$internal/utils/urls'
 
-  import { addNumCommas } from '$lib/utils/format'
+  import { addNumCommas, dataSize } from '$lib/utils/format'
   import { Button, Icon } from '$lib/components'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
@@ -121,7 +121,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
-              {t('unit.value.kb', { value: addNumCommas(expandedData.size / 1000) })}
+              {dataSize(expandedData.size)}
             </div>
           </div>
           <!-- <div class="entry">

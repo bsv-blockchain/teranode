@@ -1,6 +1,7 @@
 import { formatNum } from '$lib/utils/format'
 import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
+import { getTpsStrFromValue } from '$internal/utils/txs'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
 import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
@@ -77,7 +78,7 @@ export const getColDefs = (t) => {
     {
       id: 'tps',
       name: t(`${pageKey}.col-defs-label.tps`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '9%',
       },
@@ -86,6 +87,7 @@ export const getColDefs = (t) => {
       id: 'size',
       name: t(`${pageKey}.col-defs-label.size`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '12%',
       },
@@ -121,6 +123,16 @@ export const getRenderCells = (t) => {
         component: valueSet(item[colId]) ? RenderSpan : null,
         props: {
           value: (item[colId] / 1e8).toFixed(2),
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    tps: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getTpsStrFromValue(item[colId]),
           className: 'num',
         },
         value: '',

@@ -51,6 +51,7 @@ export const getColDefs = (t) => {
       id: 'size',
       name: t(`${labelKey}.size`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '15%',
       },

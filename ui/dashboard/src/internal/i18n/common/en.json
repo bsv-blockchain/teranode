@@ -189,7 +189,7 @@
         "coinbaseValue": "Block Reward",
         "transactionCount": "Tx",
         "tps": "TPS",
-        "size": "Size (Bytes)"
+        "size": "Size"
       }
     },
     "viewer-block": {
@@ -362,11 +362,6 @@
     "series": {
       "date": "Date",
       "tx_count": "Tx Count"
-    }
-  },
-  "unit": {
-    "value": {
-      "kb": "{{ value }} KB"
     }
   },
   "global": {

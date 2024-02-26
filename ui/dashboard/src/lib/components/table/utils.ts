@@ -140,7 +140,9 @@ export const getDisplay = (renderCells, renderTypes, colDef, idField, item) => {
     ? renderCells[colDef.id](idField, item, colDef.id)
     : renderTypes && renderTypes[colDef.type]
       ? renderTypes[colDef.type](idField, item, colDef.id)
-      : defaultColTypeRenderers[colDef.type]
-        ? defaultColTypeRenderers[colDef.type](idField, item, colDef.id)
-        : { value: item[colDef.id] }
+      : defaultColTypeRenderers[colDef.format]
+        ? defaultColTypeRenderers[colDef.format](idField, item, colDef.id)
+        : defaultColTypeRenderers[colDef.type]
+          ? defaultColTypeRenderers[colDef.type](idField, item, colDef.id)
+          : { value: item[colDef.id] }
 }

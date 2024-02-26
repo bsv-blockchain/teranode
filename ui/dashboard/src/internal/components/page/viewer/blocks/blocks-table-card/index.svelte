@@ -12,7 +12,7 @@
   import { tableVariant } from '$internal/stores/nav'
   import { addNumCommas } from '$lib/utils/format'
   import { getColDefs, getRenderCells } from './data'
-  import { getTps } from '$internal/utils/txs'
+  import { getTps, getTpsStrFromValue, getTpsValue } from '$internal/utils/txs'
   import { getHumanReadableTime } from '$internal/utils/format'
 
   const baseKey = 'page.viewer'
@@ -85,7 +85,7 @@
         const blockTime: any = new Date(block.timestamp)
         const diff = blockTime - prevBlockTime
 
-        block.tps = getTps(block.transactionCount, diff)
+        block.tps = getTpsValue(block.transactionCount, diff)
 
         block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
       })

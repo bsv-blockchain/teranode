@@ -9,7 +9,7 @@
 
   import { Button, Icon } from '$lib/components'
   import { getDifficultyFromBits } from '$lib/utils/difficulty'
-  import { addNumCommas, formatDate, formatNumberExpStr } from '$lib/utils/format'
+  import { addNumCommas, dataSize, formatDate, formatNumberExpStr } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
@@ -132,9 +132,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
-              {t('unit.value.kb', {
-                value: addNumCommas(expandedHeader.sizeInBytes / 1000),
-              })}
+              {dataSize(expandedHeader.sizeInBytes)}
             </div>
           </div>
           <div class="entry">

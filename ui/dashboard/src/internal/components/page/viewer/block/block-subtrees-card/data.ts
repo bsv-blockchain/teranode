@@ -3,7 +3,6 @@ import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
-import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
 
 const baseKey = 'page.viewer-block.subtrees'
@@ -47,6 +46,7 @@ export const getColDefs = (t) => {
       id: 'size',
       name: t(`${labelKey}.size`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '15%',
       },
@@ -83,16 +83,6 @@ export const getRenderCells = (t, blockHash) => {
     fee: (idField, item, colId) => {
       return {
         value: formatSatoshi(item[colId]) + ' BSV',
-      }
-    },
-    size: (idField, item, colId) => {
-      return {
-        component: valueSet(item[colId]) ? RenderSpan : null,
-        props: {
-          value: formatNum(item[colId] / 1000) + ' KB',
-          className: 'num',
-        },
-        value: '',
       }
     },
   }
