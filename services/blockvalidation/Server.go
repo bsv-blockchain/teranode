@@ -871,9 +871,11 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	for i := 0; i < workers; i++ {
 		go func() {
 			for msg := range workerCh {
+				startTime := time.Now()
+
 				data, err := blockassembly.NewFromBytes(msg.Message.Value)
 				if err != nil {
-					u.logger.Errorf("[BlockValidation] Failed to decode kafka message: %s", err)
+					u.logger.Errorf("[BlockValidation] failed to decode kafka message: %s", err)
 				}
 
 				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
@@ -888,30 +890,13 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 				}); err != nil {
 					u.logger.Errorf("failed to set tx meta data: %v", err)
 				}
+
+				prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
 		}()
 	}
 
-	util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh)
-	// util.StartKafkaListener(ctx, u.logger, kafkaBrokersURL, workers, "BlockValidation", "blockvalidation", func(ctx context.Context, key []byte, dataBytes []byte) error {
-	// 	startTime := time.Now()
-	// 	defer func() {
-	// 		prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-	// 	}()
-
-	// 	data, err := blockassembly.NewFromBytes(dataBytes)
-	// 	if err != nil {
-	// 		return fmt.Errorf("[BlockValidation] Failed to decode kafka message: %s", err)
-	// 	}
-
-	// 	if err := u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
-	// 		Fee:            data.Fee,
-	// 		SizeInBytes:    data.Size,
-	// 		ParentTxHashes: data.ParentTxHashes,
-	// 	}); err != nil {
-	// 		u.logger.Errorf("failed to set tx meta data: %v", err)
-	// 	}
-
-	// 	return nil
-	// })
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh); err != nil {
+		u.logger.Errorf("[BlockValidation] Failed to start Kafka listener: %v", err)
+	}
 }

@@ -129,8 +129,13 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
 			validator.txsChan = make(chan []byte, 10000)
-			go util.StartAsyncProducer(validator.logger, kafkaURL, validator.txsChan)
-			//_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
+			go func() {
+				// TODO add retry
+				if err := util.StartAsyncProducer(validator.logger, kafkaURL, validator.txsChan); err != nil {
+					validator.logger.Errorf("[Validator] error starting kafka producer: %v", err)
+					return
+				}
+			}()
 
 			if err != nil {
 				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
@@ -455,7 +460,9 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
 	} else if v.txsChan != nil {
+		start := time.Now()
 		v.txsChan <- bData.Bytes()
+		prometheusValidatorSendToKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
 		for i, h := range bData.UtxoHashes {

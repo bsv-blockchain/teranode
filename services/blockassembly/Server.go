@@ -356,23 +356,27 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 	}
 
 	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
-	// startTime := time.Now()
 
-	//util.StartKafkaListener(ctx, ba.logger, kafkaBrokersURL, workers, "BlockAssembly", "blockassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
-	//StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage) error {
+	// updates the stats every 5 seconds
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+		}
+	}()
+
 	workerCh := make(chan util.KafkaMessage)
 	for i := 0; i < workers; i++ {
 		go func() {
-			// defer func() {
-			// 	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-			// 	prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-			// 	prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
-			// 	prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-			// }()
 			for msg := range workerCh {
+				startTime := time.Now()
+
 				data, err := NewFromBytes(msg.Message.Value)
 				if err != nil {
 					ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+					continue
 				}
 
 				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
@@ -387,13 +391,17 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 					Locktime: data.LockTime,
 					Utxos:    utxoHashesBytes,
 				}); err != nil {
-					ba.logger.Errorf("[BlockAssembly] Failed to add tx to block assembly: %s", err)
+					ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
 				}
+
+				prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
 		}()
 	}
 
-	util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh)
+	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh); err != nil {
+		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
+	}
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
