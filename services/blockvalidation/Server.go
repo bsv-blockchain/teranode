@@ -723,15 +723,21 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 	}()
 
 	subtreeSpan.LogKV("hash", subtreeHash.String())
+	v := ValidateSubtree{
+		SubtreeHash:   subtreeHash,
+		BaseUrl:       baseUrl,
+		Quick:         false,
+		SubtreeHashes: nil,
+	}
 	if quick {
 		// having strange troubles with Dedupe
-		if err := u.blockValidation.validateSubtreeInternal(timeoutCtx, &subtreeHash, baseUrl, quick, nil); err != nil {
+		if err := u.blockValidation.validateSubtreeInternal(timeoutCtx, v); err != nil {
 			if quick {
 				return err
 			}
 		}
 	} else {
-		if err := u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl, quick, nil); err != nil {
+		if err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 		}
 	}
