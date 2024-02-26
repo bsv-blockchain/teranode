@@ -662,10 +662,11 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		if subtreeHash != nil {
 			ctx1 := util.ContextWithStat(spanCtx, stat2)
 			v := ValidateSubtree{
-				SubtreeHash:   *subtreeHash,
-				BaseUrl:       baseUrl,
-				Quick:         false,
-				SubtreeHashes: subtreeBytesMap[*subtreeHash],
+				SubtreeHash:      *subtreeHash,
+				BaseUrl:          baseUrl,
+				Quick:            false,
+				SubtreeHashes:    subtreeBytesMap[*subtreeHash],
+				AbandonThreshold: 0, // 0 means no abandon threshold
 			}
 			if err = u.validateSubtree(ctx1, v); err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
@@ -827,10 +828,11 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 }
 
 type ValidateSubtree struct {
-	SubtreeHash   chainhash.Hash
-	BaseUrl       string
-	Quick         bool
-	SubtreeHashes []chainhash.Hash
+	SubtreeHash      chainhash.Hash
+	BaseUrl          string
+	Quick            bool
+	SubtreeHashes    []chainhash.Hash
+	AbandonThreshold int
 }
 
 func (u *BlockValidation) validateSubtree(ctx context.Context, v ValidateSubtree) error {
@@ -957,8 +959,15 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to bless all transactions in subtree", v.SubtreeHash.String()), err)
 	}
 
-	if v.Quick && nrOfMissingTransactionsFromCache.Load() > int32(missingTxThreshold) {
+	missingCount := nrOfMissingTransactionsFromCache.Load()
+
+	if v.Quick && missingCount > int32(missingTxThreshold) {
 		return fmt.Errorf("[validateSubtreeInternal][%s] quick check failed - not all tx were in the txMetaCache", v.SubtreeHash.String())
+	}
+
+	if missingCount > 0 && missingCount > int32(v.AbandonThreshold) {
+		u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries - aborting subtree validation", v.SubtreeHash.String()))
+		return nil
 	}
 
 	getMissingSubtreeTxMetaFromCacheConcurrency, _ := gocore.Config().GetInt("blockvalidation_getMissingSubtreeTxMetaFromCacheConcurrency", 1024)

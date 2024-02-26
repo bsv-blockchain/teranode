@@ -722,12 +722,15 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		timeoutCancel()
 	}()
 
+	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 0)
+
 	subtreeSpan.LogKV("hash", subtreeHash.String())
 	v := ValidateSubtree{
-		SubtreeHash:   subtreeHash,
-		BaseUrl:       baseUrl,
-		Quick:         false,
-		SubtreeHashes: nil,
+		SubtreeHash:      subtreeHash,
+		BaseUrl:          baseUrl,
+		Quick:            false,
+		SubtreeHashes:    nil,
+		AbandonThreshold: abandonTxThreshold,
 	}
 	if quick {
 		// having strange troubles with Dedupe
