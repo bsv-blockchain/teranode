@@ -36,6 +36,7 @@ export const getColDefs = (t) => {
       id: 'size_in_bytes',
       name: t(`${fieldKey}.size_in_bytes`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '10%',
       },
