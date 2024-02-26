@@ -15,6 +15,7 @@
   export let data: LayoutData
 
   $: sortedPosts = data.posts.sort((a: any, b: any) => b.timestamp - a.timestamp)
+  $: showPosts = !slug || $mediaSize > MediaSize.sm
 
   const pageKey = 'page.updates'
 
@@ -30,17 +31,19 @@
     </div>
   </div>
   <div class="layout" class:small={$mediaSize <= MediaSize.sm}>
-    <div class="posts">
-      {#each sortedPosts as post (post.slug)}
-        <Post
-          title={post.title}
-          summary={post.summary}
-          timestamp={post.timestamp}
-          selected={slug === post.slug}
-          on:click={() => onPostSelect(post.slug)}
-        />
-      {/each}
-    </div>
+    {#if showPosts}
+      <div class="posts">
+        {#each sortedPosts as post (post.slug)}
+          <Post
+            title={post.title}
+            summary={post.summary}
+            timestamp={post.timestamp}
+            selected={slug === post.slug}
+            on:click={() => onPostSelect(post.slug)}
+          />
+        {/each}
+      </div>
+    {/if}
     {#if slug}
       <div class="slug" in:fly={{ x: 200, opacity: 0, duration: 300 }} out:fade={{ delay: 100 }}>
         <slot />
