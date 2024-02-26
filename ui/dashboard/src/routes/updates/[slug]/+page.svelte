@@ -56,6 +56,15 @@
     padding: 10px 20px 10px 30px;
     border-radius: 12px;
     border-left: 1px solid #151a20;
+
+    color: rgba(255, 255, 255, 0.88);
+
+    font-family: var(--font-family);
+    font-size: 14px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 24px;
+    letter-spacing: 0.28px;
   }
 
   :global(.post-details table) {
