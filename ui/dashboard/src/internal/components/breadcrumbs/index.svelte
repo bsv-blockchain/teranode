@@ -43,7 +43,7 @@
             tmp.push({
               label: $i18n.t(`${baseKey}.viewer.page.${type}.title`),
               path: getDetailsUrl(type, hash),
-              selected: paths.length === 2,
+              selected: true,
             })
           }
           break
@@ -59,7 +59,7 @@
               tmp.push({
                 label: matches[0].title,
                 path: `/updates/${paths[1]}`,
-                selected: paths.length === 2,
+                selected: true,
               })
             }
           }
