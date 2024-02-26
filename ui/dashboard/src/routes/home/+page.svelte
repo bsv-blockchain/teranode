@@ -15,6 +15,19 @@
     try {
       const result: any = await api.getBlockStats()
       if (result.ok) {
+
+        let txs_per_second = result.data.tx_count / 24 / 60 / 60
+        let full_stats = true
+
+        const time_now = Math.round(+Date.now() / 1000)
+        const start_time  = result.data.first_block_time
+        const last_block_time = result.data.last_block_time
+        // if startTime is less than 24 hours, calculate txs_per_second based on the time difference
+        if (start_time > time_now - (24 * 60 * 60) + 900) { // allow 15 minutes of difference for block mining
+          txs_per_second = result.data.tx_count / (last_block_time - start_time)
+          full_stats = false
+        }
+
         statsData = {
           block_count: {
             id: 'block_count',
@@ -44,8 +57,9 @@
           txns_per_second: {
             id: 'txns_per_second',
             icon: 'icon-arrow-transfer-line',
-            value: Math.round(result.data.tx_count / 24 / 60 / 60),
+            value: Math.round(txs_per_second),
           },
+          full_stats,
         }
       } else {
         failure(result.error.message)

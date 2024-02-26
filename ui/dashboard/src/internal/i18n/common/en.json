@@ -159,6 +159,7 @@
       "menu-label": "Dashboard",
       "stats": {
         "title": "24h Stats",
+        "alternateTitle": "Stats since last restart",
         "live": "Live",
         "fields": {
           "loading": "Loading...",

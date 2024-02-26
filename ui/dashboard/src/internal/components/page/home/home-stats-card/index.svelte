@@ -7,7 +7,7 @@
   import { sock as p2pSock } from '$internal/stores/p2pStore'
 
   export let loading = true
-  export let data = {}
+  export let data: any = {}
   export let onRefresh = () => {}
 
   const baseKey = 'page.home.stats'
@@ -35,11 +35,12 @@
     'avg_tx_count_per_block',
   ]
 
+  $: fullStats = data?.full_stats
   $: cols = $mediaSize <= MediaSize.md ? colsMd : colsLg
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
 </script>
 
-<Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
+<Card title={t(`${baseKey}.${fullStats ? 'title' : 'alternateTitle'}`)} showFooter={false} headerPadding="20px 24px 10px 24px">
   <svelte:fragment slot="header-tools">
     <div class="live">
       <div class="live-icon" class:connected>
