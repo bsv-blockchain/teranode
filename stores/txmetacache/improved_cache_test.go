@@ -3,7 +3,6 @@ package txmetacache
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"testing"
 	"time"
 
@@ -17,17 +16,6 @@ func TestImprovedCache_Get(t *testing.T) {
 	cache.Set([]byte("key"), []byte("value"))
 	dst := make([]byte, 0)
 	_ = cache.Get(&dst, []byte("key"))
-	require.Equal(t, []byte("value"), dst)
-
-}
-
-func TestImprovedCache_NewSetGet(t *testing.T) {
-	// initialize improved cache with 1MB capacity
-	cache := NewImprovedCache(1 * 1024 * 1024)
-	cache.SetNew([]byte("KEY"), []byte("value"))
-	dst := make([]byte, 0)
-	err := cache.Get(&dst, []byte("KEY"))
-	require.NoError(t, err)
 	require.Equal(t, []byte("value"), dst)
 
 }
@@ -48,7 +36,7 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 	require.Equal(t, value, dst)
 }
 
-func TestImprovedCache_GSetMultiKeysSingleValue(t *testing.T) {
+func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
@@ -63,7 +51,7 @@ func TestImprovedCache_GSetMultiKeysSingleValue(t *testing.T) {
 	}
 
 	startTime := time.Now()
-	_ = cache.SetMultiKeysSingleValue(allKeys, value, chainhash.HashSize)
+	_ = cache.SetMultiKeysSingleValueAppended(allKeys, value, chainhash.HashSize)
 	t.Log("SetMultiKeysSingleValue took:", time.Since(startTime))
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
@@ -72,7 +60,7 @@ func TestImprovedCache_GSetMultiKeysSingleValue(t *testing.T) {
 		require.Equal(t, value, dst)
 	}
 
-	_ = cache.SetMultiKeysSingleValue(allKeys, valueSecond, chainhash.HashSize)
+	_ = cache.SetMultiKeysSingleValueAppended(allKeys, valueSecond, chainhash.HashSize)
 
 	for i := 0; i < len(allKeys); i += chainhash.HashSize {
 		dst := make([]byte, 0)
@@ -82,7 +70,7 @@ func TestImprovedCache_GSetMultiKeysSingleValue(t *testing.T) {
 
 }
 
-func TestImprovedCache_GSetMultiKeyAppended(t *testing.T) {
+func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	cache := NewImprovedCache(100 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
@@ -110,19 +98,21 @@ func TestImprovedCache_GSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache := NewImprovedCache(10 * 1024 * 1024) // 100 * 1024 * 1024
+	cache := NewImprovedCache(200 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
 	numberOfKeys := 100 * bucketsCount
 
-	// cache size : 1 * 1024 * 2 bytes -> 2 KB
-	// number of buckets: 4
-	// max bucket size: 512 bytes -> 512 * 4 = 2048 bytes -> 2 KB
-	// chunk size: 2 * 64 = 128 bytes
-	// number of total chunks: 2 KB / 128 bytes = 16 chunks
-	// number of chunks per bucket: 16 / 4 = 4 chunks per bucket
-	// max value size in KB: 2
+	// cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
+	// number of buckets: 512
+	// bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
+	// chunk size: 2 * 1024 * 16 = 32 KB
+	// number of total chunks: 2 GB / 32 KB = 65536 chunks
+	// number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
+	// key size: 32 bytes, value size: 32 bytes, kvLen: 4 bytes. Total size: 68 bytes for each key-value pair
+	// number of key-value pairs per chunk: 32 KB / 68 bytes = 470 key-value pairs per chunk
+	// number of key-value pairs per bucket: 470 * 128 = 60160 key-value pairs per bucket
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -158,19 +148,21 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 }
 
 func TestImprovedCache_Trimming(t *testing.T) {
-	cache := NewImprovedCache(1 * 1024 * 2) // 100 * 1024 * 1024
+	cache := NewImprovedCache(128 * 1024 * 1024) // (256 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 15 //100 * bucketsCount
+	numberOfKeys := (3760 * bucketsCount) + 1
 
-	// cache size : 1 * 1024 * 2 bytes -> 2 KB
-	// number of buckets: 4
-	// max bucket size: 512 bytes -> 512 * 4 = 2048 bytes -> 2 KB
-	// chunk size: 2 * 64 = 128 bytes
-	// number of total chunks: 2 KB / 128 bytes = 16 chunks
-	// number of chunks per bucket: 16 / 4 = 4 chunks per bucket
-	// max value size in KB: 2
+	// cache size : 128 * 1024 * 1024 bytes -> 128 KB
+	// number of buckets: 512
+	// bucket size: 128 MB / 512 = 256 KB
+	// chunk size: 2 * 1024 * 16 = 32 KB
+	// number of total chunks: 128MB / 32 KB = 4096 chunks
+	// number of chunks per bucket: 4096 / 512 = 8 chunks per bucket
+	// key size: 32 bytes, value size: 32 bytes, kvLen: 4 bytes. Total size: 68 bytes for each key-value pair
+	// number of key-value pairs per chunk: 32 KB / 68 bytes = 470 key-value pairs per chunk
+	// number of key-value pairs per bucket: 470 * 8 = 3760 key-value pairs per bucket -> even if everything is perfectly balanced
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -192,22 +184,8 @@ func TestImprovedCache_Trimming(t *testing.T) {
 		dst := make([]byte, 0)
 		err = cache.Get(&dst, key)
 		if err != nil {
-			//fmt.Println("error at index:", i, "error:", err)
 			errCounter++
 		}
-
-		//require.NoError(t, err)
-		//require.Equal(t, allValues[i], dst)
 	}
-	fmt.Println("errors:", errCounter)
-
-	// err = cache.SetMulti(allKeys, allValues)
-	// require.NoError(t, err)
-
-	// for i, key := range allKeys {
-	// 	dst := make([]byte, 0)
-	// 	err := cache.Get(&dst, key)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, append(allValues[i], allValues[i]...), dst)
-	// }
+	require.NotZero(t, errCounter)
 }

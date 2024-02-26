@@ -248,7 +248,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			blockIDBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
-			if err = u.minedBlockStore.SetMultiKeysSingleValue(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize); err != nil {
+			if err = u.minedBlockStore.SetMultiKeysSingleValueAppended(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize); err != nil {
 				return fmt.Errorf("[localSetMined][%s] failed to set tx mined for subtree: %v", blockHash.String(), err)
 			}
 
