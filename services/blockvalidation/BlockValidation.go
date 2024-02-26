@@ -1004,9 +1004,9 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
 
-	cache, _ := u.txMetaStore.(*txmetacache.TxMetaCache)
-	if cache == nil {
-		u.logger.Errorf("[processTxMetaUsingCache] txMetaStore cache is nil")
+	cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache)
+	if !ok {
+		u.logger.Errorf("[processTxMetaUsingCache] txMetaStore is not a cached implementation")
 		return len(txHashes), nil // As there was no cache, we "missed" all the txHashes
 	}
 
@@ -1065,92 +1065,56 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
 
-	workerCh := make(chan missingTxHash, 100)
-
 	var missed atomic.Int32
 
 	if batched {
-		for i := 0; i < 10; i++ { // 10 workers for now
-
-			g.Go(func() error {
-				txHashes := make([]*chainhash.Hash, 0, batchSize)
-
-				for {
-					select {
-					case <-gCtx.Done():
-						return gCtx.Err()
-
-					case missingTxHash, closed := <-workerCh:
-						if closed {
-							if len(txHashes) > 0 {
-								u.txMetaStore.GetMulti(ctx, txHashes, "fee", "sizeInBytes", "parentTxHashes", "blockIDs")
-							}
-							return nil
-						}
-
-						txHashes = append(txHashes, missingTxHash.hash)
-						if len(txHashes) == batchSize {
-							u.txMetaStore.GetMulti(ctx, txHashes, "fee", "sizeInBytes", "parentTxHashes", "blockIDs")
-							txHashes = txHashes[:0]
-						}
-					}
-				}
-			})
-		}
+		// TODO: implement batched processing
+		return len(txHashes), nil
 
 	} else {
-		for i := 0; i < batchSize; i++ {
-			// Worker
-			g.Go(func() error {
-				for {
-					select {
-					case <-gCtx.Done():
-						return gCtx.Err()
 
-					case missingTxHash, closed := <-workerCh:
-						if closed {
-							return nil
+		for i := 0; i < len(txHashes); i += batchSize {
+			i := i
+
+			g.Go(func() error {
+				// cycle through the batch size, making sure not to go over the length of the txHashes
+				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+
+					select {
+					case <-gCtx.Done(): // Listen for cancellation signal
+						return gCtx.Err() // Return the error that caused the cancellation
+
+					default:
+						txHash := txHashes[i+j]
+
+						if txHash.Equal(*model.CoinbasePlaceholderHash) {
+							// coinbase placeholder is not in the store
+							continue
 						}
 
-						txMeta, err := u.txMetaStore.GetMeta(ctx, missingTxHash.hash)
+						txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
 						if err != nil {
-							if !errors.Is(err, txmeta.NewErrTxmetaNotFound(missingTxHash.hash)) && !strings.Contains(err.Error(), "failed to get tx meta") {
-								u.logger.Errorf("[processTxMetaUsingStore] failed to get tx meta for tx %v: %v", missingTxHash.hash, err)
-							}
+							return err
 						}
 
 						if txMeta != nil {
-							txMetaSlice[missingTxHash.idx] = txMeta
-						} else {
-							newMissed := missed.Add(1)
-							if failFast && newMissed > int32(missingTxThreshold) { // TODO - this is not correct, we need to check if we have missed more than the previously missed
-								return fmt.Errorf("Missed threshold reached")
-							}
+							txMetaSlice[i+j] = txMeta
+							continue
+						}
+
+						newMissed := missed.Add(1)
+						if failFast && newMissed > int32(missingTxThreshold) {
+							return fmt.Errorf("Missed threshold reached")
 						}
 					}
 				}
+
+				return nil
 			})
 		}
+
+		return int(missed.Load()), g.Wait()
 	}
-
-	for idx, txHash := range txHashes {
-		if txHash.Equal(*model.CoinbasePlaceholderHash) {
-			// coinbase placeholder is not in the store
-			continue
-		}
-
-		if txMetaSlice[idx] == nil {
-			workerCh <- missingTxHash{
-				hash: &txHash,
-				idx:  idx,
-			}
-		}
-	}
-
-	close(workerCh)
-
-	return int(missed.Load()), g.Wait()
-
 }
 
 func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
