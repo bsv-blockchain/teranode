@@ -11,7 +11,7 @@ As this is a test, restarts of the test network are to be expected, especially i
 
 ### Test setup
 
-The test setup consists of 3 full Teranodes, all processing transactions, and building and propagating blocks. Each node has its own utxo set and does full validation of all transactions and blocks.
+The test setup consists of 3 full Teranodes, all processing transactions, and building and propagating blocks. Each node has its own UTXO set and does full validation of all transactions and blocks.
 
 The Teranodes are:
 - M1: In Europe
