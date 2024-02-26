@@ -16,6 +16,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/ordishs/gocore"
 )
 
 /**
@@ -345,9 +346,13 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan [
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 
-	config.Producer.Flush.Bytes = 1024 * 1024 // 1MB
-	config.Producer.Flush.Messages = 50
-	config.Producer.Flush.Frequency = 5 * time.Second
+	flushBytes, _ := gocore.Config().GetInt("blockassembly_kafka_flushBytes", 1048576)
+	flushMessages, _ := gocore.Config().GetInt("blockassembly_kafka_flushMessages", 50000)
+	flushFrequency, _ := gocore.Config().GetInt("blockassembly_kafka_flushFrequency", 1)
+
+	config.Producer.Flush.Bytes = flushBytes
+	config.Producer.Flush.Messages = flushMessages
+	config.Producer.Flush.Frequency = time.Duration(flushFrequency) * time.Second
 
 	clusterAdmin, err := createTopic(kafkaURL, config)
 	if err != nil {
