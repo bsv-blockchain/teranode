@@ -1,7 +1,14 @@
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
 
-  $: gutterW = $mediaSize <= MediaSize.lg ? 32 : 90
+  $: gutterW =
+    $mediaSize <= MediaSize.lg
+      ? $mediaSize <= MediaSize.sm
+        ? $mediaSize <= MediaSize.xs
+          ? 10
+          : 20
+        : 32
+      : 90
 
   const marginTop = 15
   const marginBottom = 36
@@ -29,5 +36,7 @@
     width: 100%;
     padding: var(--padding);
     margin-left: 0;
+
+    transition: padding var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
 </style>
