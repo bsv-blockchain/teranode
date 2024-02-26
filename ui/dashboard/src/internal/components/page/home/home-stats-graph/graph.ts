@@ -146,7 +146,7 @@ export const getGraphObj = (t, data, period, smooth = false) => {
           min: 0,
           max: 'dataMax',
           axisLabel: {
-            formatter: (value) => formatLargeNumberStr(value, 2),
+            formatter: (value) => formatLargeNumberStr(value, 2, false),
           },
           splitLine: {
             show: false,

@@ -228,7 +228,14 @@ export const formatLargeNumber = (val: number) => {
   }
 }
 
-export const formatLargeNumberStr = (val: number, decimals = -1) => {
+export const formatLargeNumberStr = (val: number, decimals = -1, fixed = false) => {
   const parts = formatLargeNumber(val)
-  return decimals !== -1 ? parts.value.toFixed(decimals) + parts.unit : parts.value + parts.unit
+  if (decimals !== -1) {
+    const fmtVal = fixed
+      ? parts.value.toFixed(decimals)
+      : Math.round(parts.value * Math.pow(10, decimals)) / Math.pow(10, decimals)
+    return fmtVal + parts.unit
+  } else {
+    return parts.value + parts.unit
+  }
 }
