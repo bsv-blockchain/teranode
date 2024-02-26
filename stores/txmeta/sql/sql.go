@@ -160,7 +160,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	}, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
 	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 
 	// TODO make this into a batch call

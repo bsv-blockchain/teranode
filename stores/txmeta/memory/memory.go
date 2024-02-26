@@ -48,7 +48,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *Memory) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (m *Memory) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
 	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 
 	// TODO make this into a batch call

@@ -194,7 +194,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
@@ -208,7 +208,12 @@ func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[cha
 			return nil, err
 		}
 
-		record := aerospike.NewBatchRead(key, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
+		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+		if len(fields) > 0 {
+			bins = fields
+		}
+
+		record := aerospike.NewBatchRead(key, bins)
 		// Add to batch
 		batchRecords[idx] = record
 	}
