@@ -330,41 +330,23 @@ func (b *bucket) cleanLockedMapOld() {
 
 // cleanLockedMapNew removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMapNew(startingOffset int) {
-	// current generation of data within the bucket
-	//bGen := b.gen & ((1 << genSizeBits) - 1)
-	// current index in the chunks array where the next k-v pair will be written
-	//bIdx := b.idx
 	bm := b.m
 
-	// we halved the number of chunks in SetNew
-
-	//byteOffsetRemoved := (b.idx / 2) * chunkSize
-	//fmt.Println("inside cleanLockedMapNew, b.idx: ", b.idx, ", current b.map: ", b.m)
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
 	bmNew := make(map[uint64]uint64, len(bm))
 
 	for k, v := range bm {
-		// gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
 
 		// adjust the idx for each item, since we removed the first half of the chunks/
 		// we only take items in the second half of the chunks, i.e. after the byteOffsetRemoved
 		if int(idx) >= startingOffset {
 			// calcualte the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
-			// Check if the item is still valid after adjustment.
-			// This check might need to include considerations for generation and index within the new structure.
-			//if (gen+1 == bGen || gen == maxGen && bGen == 1) && adjustedIdx >= bIdx || gen == bGen && adjustedIdx < bIdx {
-			//bmNew[k] = (gen << bucketSizeBits) | adjustedIdx
 			adjustedIdx := idx - uint64(startingOffset)
 			bmNew[k] = adjustedIdx | (b.gen << bucketSizeBits)
-			//b.m[h] = idx | (b.gen << bucketSizeBits)
-			// bmNew[k] = v, or Idx
 		}
-		//}
-
 	}
 	b.m = bmNew
-	//fmt.Println("ending map: ", b.m)
 }
 
 func (b *bucket) UpdateStats(s *Stats) {
