@@ -46,6 +46,7 @@ type Validator struct {
 	blockAssemblyDisabled         bool
 	blockAssemblyCreatesUTXOs     bool
 	blockValidationBatcherEnabled bool
+	txsChan                       chan []byte
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store, blockValidationClient blockValidationTxMetaClient) (Interface, error) {
@@ -127,7 +128,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
+			validator.txsChan = make(chan []byte, 10000)
+			go util.StartAsyncProducer(validator.logger, kafkaURL, validator.txsChan)
+			//_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
+
 			if err != nil {
 				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
@@ -443,13 +447,15 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	}()
 
 	if v.kafkaProducer != nil {
-		if err := v.publishToKafka(traceSpan, bData); err != nil {
+		if err := v.publishToKafka(traceSpan, nil, bData); err != nil {
 			if reverseErr := v.reverseSpends(traceSpan, reservedUtxos); reverseErr != nil {
 				err = errors.Join(err, fmt.Errorf("error reversing utxos: %v", reverseErr))
 			}
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
+	} else if v.txsChan != nil {
+		v.txsChan <- bData.Bytes()
 	} else {
 		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
 		for i, h := range bData.UtxoHashes {
@@ -515,7 +521,7 @@ func (v *Validator) reverseStores(traceSpan tracing.Span, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.Data) error {
+func (v *Validator) publishToKafka(traceSpan tracing.Span, key []byte, bData *blockassembly.Data) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "publishToKafka")
 	defer func() {
 		stat.AddTime(start)
@@ -525,5 +531,5 @@ func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.
 	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()
 
-	return v.kafkaProducer.Send(bData.TxIDChainHash[:], bData.Bytes())
+	return v.kafkaProducer.Send(key, bData.Bytes())
 }
