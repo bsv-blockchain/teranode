@@ -105,12 +105,12 @@
         label: $i18n.t('page.network.menu-label'),
       },
       // TEMPORARILY DISABLED
-      // {
-      //   icon: 'icon-bell-line',
-      //   iconSelected: 'icon-bell-solid',
-      //   path: '/updates',
-      //   label: $i18n.t('page.updates.menu-label'),
-      // },
+      {
+        icon: 'icon-bell-line',
+        iconSelected: 'icon-bell-solid',
+        path: '/updates',
+        label: $i18n.t('page.updates.menu-label'),
+      },
     ],
   }
 
