@@ -199,7 +199,7 @@ export const formatNumberExp = (val: number, html = true) => {
 
 export const formatNumberExpStr = (val: number, html = true) => {
   const parts = formatNumberExp(val, html)
-  return parts.value + parts.exp
+  return addNumCommas(parts.value) + parts.exp
 }
 
 export const formatLargeNumber = (val: number) => {
@@ -234,8 +234,8 @@ export const formatLargeNumberStr = (val: number, decimals = -1, fixed = false) 
     const fmtVal = fixed
       ? parts.value.toFixed(decimals)
       : Math.round(parts.value * Math.pow(10, decimals)) / Math.pow(10, decimals)
-    return fmtVal + parts.unit
+    return addNumCommas(fmtVal) + parts.unit
   } else {
-    return parts.value + parts.unit
+    return addNumCommas(parts.value) + parts.unit
   }
 }

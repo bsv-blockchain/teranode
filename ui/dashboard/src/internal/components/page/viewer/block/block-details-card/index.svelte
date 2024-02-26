@@ -9,7 +9,7 @@
 
   import { Button, Icon } from '$lib/components'
   import { getDifficultyFromBits } from '$lib/utils/difficulty'
-  import { addNumCommas, formatNumberExpStr } from '$lib/utils/format'
+  import { addNumCommas, formatDate, formatNumberExpStr } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
@@ -115,7 +115,7 @@
         <div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.timestamp`)}</div>
-            <div class="value">{expandedHeader.time}</div>
+            <div class="value">{formatDate(expandedHeader.time * 1000)}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
