@@ -87,7 +87,7 @@
 
         block.tps = getTpsValue(block.transactionCount, diff)
 
-        block.deltaTime = getHumanReadableTime(diff) // The time diff in human readable format
+        block.deltaTime = diff
       })
 
       // Calculate the age of the block
@@ -95,10 +95,10 @@
         const blockTime: any = new Date(block.timestamp)
         const now: any = new Date()
         const diff = now - blockTime
-        block.age = getHumanReadableTime(diff)
+        block.age = diff
       })
 
-      data = b //b.slice(0, numberOfBlocks) // Only show the last 10 blocks
+      data = b
     } catch (err: any) {
       failure(err)
     }

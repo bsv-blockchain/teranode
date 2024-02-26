@@ -2,6 +2,7 @@ import { formatNum } from '$lib/utils/format'
 import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
 import { getTpsStrFromValue } from '$internal/utils/txs'
+import { getHumanReadableTime } from '$internal/utils/format'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
 import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
@@ -38,7 +39,7 @@ export const getColDefs = (t) => {
     {
       id: 'age',
       name: t(`${pageKey}.col-defs-label.age`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '8%',
       },
@@ -46,7 +47,7 @@ export const getColDefs = (t) => {
     {
       id: 'deltaTime',
       name: t(`${pageKey}.col-defs-label.deltaTime`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '7%',
       },
@@ -115,6 +116,26 @@ export const getRenderCells = (t) => {
       return {
         component: item[colId] ? LinkHashCopy : null,
         props: getHashLinkProps(DetailType.block, item.hash, t),
+        value: '',
+      }
+    },
+    age: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getHumanReadableTime(item[colId]),
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    deltaTime: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getHumanReadableTime(item[colId]),
+          className: 'num',
+        },
         value: '',
       }
     },
