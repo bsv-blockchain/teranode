@@ -125,6 +125,8 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 		return nil, err
 	}
 
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
+
 	// add to cache
 	txMeta.Tx = nil
 	_ = t.SetCache(hash, txMeta)
@@ -150,6 +152,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	if err != nil {
 		return nil, err
 	}
+
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
 	// add to cache
 	txMeta.Tx = nil

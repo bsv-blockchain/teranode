@@ -179,7 +179,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					quickValidation := gocore.Config().GetBool("blockvalidation_quick_validation", false)
 					maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-					retrySleepString, _ := gocore.Config().Get("blockvalidation_validation_retry_sleep", "5s")
+					retrySleepString, _ := gocore.Config().Get("blockvalidation_validation_retry_sleep", "10s")
 					retrySleepDuration, err := time.ParseDuration(retrySleepString)
 					if err != nil {
 						panic(fmt.Sprintf("invalid value %s for blockvalidation_quick_validation_retry_sleep", retrySleepString))
@@ -238,7 +238,7 @@ func (u *Server) Start(ctx context.Context) error {
 
 	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockvalidation_kafkaBrokers")
 	if err == nil && ok {
-		u.startKafkaListener(ctx, kafkaBrokersURL)
+		go u.startKafkaListener(ctx, kafkaBrokersURL)
 	}
 
 	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
@@ -722,16 +722,25 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		timeoutCancel()
 	}()
 
+	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 0)
+
 	subtreeSpan.LogKV("hash", subtreeHash.String())
+	v := ValidateSubtree{
+		SubtreeHash:      subtreeHash,
+		BaseUrl:          baseUrl,
+		Quick:            false,
+		SubtreeHashes:    nil,
+		AbandonThreshold: abandonTxThreshold,
+	}
 	if quick {
 		// having strange troubles with Dedupe
-		if err := u.blockValidation.validateSubtreeInternal(timeoutCtx, &subtreeHash, baseUrl, quick, nil); err != nil {
+		if err := u.blockValidation.validateSubtreeInternal(timeoutCtx, v); err != nil {
 			if quick {
 				return err
 			}
 		}
 	} else {
-		if err := u.blockValidation.validateSubtree(timeoutCtx, &subtreeHash, baseUrl, quick, nil); err != nil {
+		if err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
 			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 		}
 	}
@@ -858,25 +867,36 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 
 	u.logger.Infof("[BlockValidation] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
 
-	util.StartKafkaListener(ctx, u.logger, kafkaBrokersURL, workers, "BlockValidation", "blockvalidation", func(ctx context.Context, key []byte, dataBytes []byte) error {
-		startTime := time.Now()
-		defer func() {
-			prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	workerCh := make(chan util.KafkaMessage)
+	for i := 0; i < workers; i++ {
+		go func() {
+			for msg := range workerCh {
+				startTime := time.Now()
+
+				data, err := blockassembly.NewFromBytes(msg.Message.Value)
+				if err != nil {
+					u.logger.Errorf("[BlockValidation] failed to decode kafka message: %s", err)
+				}
+
+				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
+				for i, hash := range data.UtxoHashes {
+					utxoHashesBytes[i] = hash.CloneBytes()
+				}
+
+				if err := u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
+					Fee:            data.Fee,
+					SizeInBytes:    data.Size,
+					ParentTxHashes: data.ParentTxHashes,
+				}); err != nil {
+					u.logger.Errorf("failed to set tx meta data: %v", err)
+				}
+
+				prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+			}
 		}()
+	}
 
-		data, err := blockassembly.NewFromBytes(dataBytes)
-		if err != nil {
-			return fmt.Errorf("[BlockValidation] Failed to decode kafka message: %s", err)
-		}
-
-		if err := u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
-			Fee:            data.Fee,
-			SizeInBytes:    data.Size,
-			ParentTxHashes: data.ParentTxHashes,
-		}); err != nil {
-			u.logger.Errorf("failed to set tx meta data: %v", err)
-		}
-
-		return nil
-	})
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh); err != nil {
+		u.logger.Errorf("[BlockValidation] Failed to start Kafka listener: %v", err)
+	}
 }

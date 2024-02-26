@@ -1,7 +1,7 @@
 package util
 
 import (
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 )
 
 // KafkaConsumer represents a Sarama consumer group consumer

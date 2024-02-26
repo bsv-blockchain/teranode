@@ -1,7 +1,7 @@
 <script lang="ts">
   import { afterUpdate } from 'svelte'
   import { page } from '$app/stores'
-  import SvelteMarkdown from 'svelte-markdown'
+  import Markdown from 'svelte-exmarkdown'
 
   import i18n from '$internal/i18n'
 
@@ -41,7 +41,7 @@
 
 {#if currentPost}
   <div class="post-details">
-    <SvelteMarkdown source={currentPost} />
+    <Markdown md={currentPost} />
   </div>
 {/if}
 

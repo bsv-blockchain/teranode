@@ -1,10 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { addNumCommas } from '$lib/utils/format'
-  import { getDetailsUrl, DetailType, DetailTab, reverseHashParam } from '$internal/utils/urls'
+  import { DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
   import { Button, Icon } from '$lib/components'
@@ -35,12 +34,6 @@
 
   function onReverseHash(hash) {
     reverseHashParam(hash)
-  }
-
-  function navToTx(hash) {
-    if (hash) {
-      goto(getDetailsUrl(DetailType.tx, hash))
-    }
   }
 </script>
 
@@ -114,7 +107,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
-              {t('unit.value.kb', { value: d?.sizeInBytes / 1000 })}
+              {t('unit.value.kb', { value: addNumCommas(d?.sizeInBytes / 1000) })}
             </div>
           </div>
         </div>

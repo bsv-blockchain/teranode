@@ -5,13 +5,13 @@
       "summary": "Public Teranode testing website",
       "slug": "testing-teranode",
       "path": "testing-teranode.md",
-      "timestamp": "1708797533321"
+      "timestamp": "1708606953233"
     },
     {
-      "title": "Initial tests",
-      "summary": "Initial tests gathering data",
-      "slug": "initial-tests",
-      "path": "initial-tests.md",
+      "title": "First findings",
+      "summary": "First findings of the Teranode testing",
+      "slug": "first-findings",
+      "path": "first-findings.md",
       "timestamp": "1708797533321"
     }
   ]

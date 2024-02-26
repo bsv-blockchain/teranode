@@ -9,7 +9,7 @@
 
   import { Button, Icon } from '$lib/components'
   import { getDifficultyFromBits } from '$lib/utils/difficulty'
-  import { formatNumberExpStr } from '$lib/utils/format'
+  import { addNumCommas, formatDate, formatNumberExpStr } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
@@ -115,11 +115,11 @@
         <div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.timestamp`)}</div>
-            <div class="value">{expandedHeader.time}</div>
+            <div class="value">{formatDate(expandedHeader.time * 1000)}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
-            <div class="value">{expandedHeader.txCount}</div>
+            <div class="value">{addNumCommas(expandedHeader.txCount)}</div>
           </div>
           <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
@@ -132,7 +132,9 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
-              {t('unit.value.kb', { value: expandedHeader.sizeInBytes / 1000 })}
+              {t('unit.value.kb', {
+                value: addNumCommas(expandedHeader.sizeInBytes / 1000),
+              })}
             </div>
           </div>
           <div class="entry">
@@ -153,7 +155,9 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
-            <div class="value">{data.latestBlockData.height - expandedHeader.height}</div>
+            <div class="value">
+              {addNumCommas(data.latestBlockData.height - expandedHeader.height)}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>

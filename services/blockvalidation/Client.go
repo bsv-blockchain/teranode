@@ -230,8 +230,10 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 
 		b := hash.CloneBytes()
 
-		data.Tx = nil
+		temp := data.Tx
+		data.Tx = nil // clear the tx from the data so we don't send it over the wire
 		b = append(b, data.MetaBytes()...)
+		data.Tx = temp // restore the tx, incase we need to try again
 
 		txMetaDataSlice = append(txMetaDataSlice, b)
 	}

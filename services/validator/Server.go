@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
