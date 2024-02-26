@@ -24,7 +24,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.hash`),
       type: 'string',
       props: {
-        width: '15%',
+        width: '17%',
       },
     },
     {
@@ -89,7 +89,7 @@ export const getColDefs = (t) => {
       type: 'number',
       format: 'dataSize',
       props: {
-        width: '12%',
+        width: '10%',
       },
     },
   ]
