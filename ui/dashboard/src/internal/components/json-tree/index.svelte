@@ -1,6 +1,15 @@
 <script lang="ts">
+  import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import { getDetailsUrl, DetailType } from '$internal/utils/urls'
+  import { tippy } from '$lib/stores/media'
 
+  import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
+
+  import i18n from '$internal/i18n'
+
+  $: t = $i18n.t
+
+  export let level = 0 // used internally to set recursive level
   export let data = {}
   export let parentKey = ''
   export let blockHash = ''
@@ -16,6 +25,18 @@
 </script>
 
 {#if data}
+  {#if level === 0}
+    <div class="tools">
+      <div class="icon" use:$tippy={{ content: t('tooltip.copy-json-to-clipboard') }}>
+        <ActionStatusIcon
+          icon="icon-duplicate-line"
+          action={copyTextToClipboardVanilla}
+          actionData={JSON.stringify(data, null, 2)}
+          size={15}
+        />
+      </div>
+    </div>
+  {/if}
   <div class="json-tree">
     {#if typeof data === 'object'}
       &#123;
@@ -24,12 +45,12 @@
           <li>
             <span class="key">{key}:</span>
             {#if getType(value) === 'object' && value !== null}
-              <svelte:self data={value} {blockHash} />
+              <svelte:self data={value} {blockHash} level={level + 1} />
             {:else if getType(value) === 'array'}
               [
               <ul>
                 {#each value as item (item)}
-                  <li><svelte:self data={item} parentKey={key} {blockHash} /></li>
+                  <li><svelte:self data={item} parentKey={key} {blockHash} level={level + 1} /></li>
                 {/each}
               </ul>
               ]
@@ -79,6 +100,16 @@
     font-style: normal;
     font-weight: 200;
     line-height: 20px;
+  }
+
+  .tools {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: -15px;
+  }
+  .tools .icon {
+    color: rgba(255, 255, 255, 0.66);
+    cursor: pointer;
   }
 
   ul {

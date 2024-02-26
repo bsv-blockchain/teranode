@@ -353,6 +353,7 @@
   "tooltip": {
     "copy-hash-to-clipboard": "Copy hash",
     "copy-url-to-clipboard": "Copy URL",
+    "copy-json-to-clipboard": "Copy JSON",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",
