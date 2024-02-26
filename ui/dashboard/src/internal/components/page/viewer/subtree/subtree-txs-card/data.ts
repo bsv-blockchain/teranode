@@ -1,6 +1,9 @@
 import { DetailType, getHashLinkProps } from '$internal/utils/urls'
+import { formatSatoshi } from '$lib/utils/format'
+import { valueSet } from '$lib/utils/types'
 
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
+import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 
 const baseKey = 'page.viewer-subtree.txs'
 const labelKey = `${baseKey}.col-defs-label`
@@ -42,7 +45,7 @@ export const getColDefs = (t) => {
     {
       id: 'fee',
       name: t(`${labelKey}.fee`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '15%',
       },
@@ -71,6 +74,16 @@ export const getRenderCells = (t) => {
             props: getHashLinkProps(DetailType.tx, item.txid, t),
             value: '',
           }
+    },
+    fee: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: formatSatoshi(item[colId]) + ' BSV',
+          className: 'num',
+        },
+        value: '',
+      }
     },
   }
 }
