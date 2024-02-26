@@ -889,8 +889,6 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		return err
 	}
 
-	start = gocore.CurrentTime()
-
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 
 	u.logger.Infof("[validateSubtreeInternal][%s] processing %d txs from subtree (quick=%v)", v.SubtreeHash.String(), len(txHashes), v.Quick)
@@ -909,7 +907,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 
 	if missed > 0 {
 		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, v.Quick)
+		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, missed, false, v.Quick)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", v.SubtreeHash.String()), err)
 		}
@@ -1056,7 +1054,7 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 	return int(missed.Load()), g.Wait()
 }
 
-func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, previouslyMissed int, batched bool, failFast bool) (int, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingStore")
 	defer stat.AddTime(start)
 
@@ -1067,57 +1065,92 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
 
-	missed := atomic.Int32{}
+	workerCh := make(chan missingTxHash, 100)
 
-	// cycle through batches of 1024 txHashes at a time
-	for i := 0; i < len(txHashes); i += batchSize {
-		i := i
+	var missed atomic.Int32
 
-		g.Go(func() error {
-			// cycle through the batch size, making sure not to go over the length of the txHashes
-			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+	if batched {
+		for i := 0; i < 10; i++ { // 10 workers for now
 
-				select {
-				case <-gCtx.Done(): // Listen for cancellation signal
-					return gCtx.Err() // Return the error that caused the cancellation
+			g.Go(func() error {
+				txHashes := make([]*chainhash.Hash, 0, batchSize)
 
-				default:
+				for {
+					select {
+					case <-gCtx.Done():
+						return gCtx.Err()
 
-					if txMetaSlice[i+j] != nil {
-						continue // Already populated = no need to do anything
-					}
+					case missingTxHash, closed := <-workerCh:
+						if closed {
+							if len(txHashes) > 0 {
+								u.txMetaStore.GetMulti(ctx, txHashes, "fee", "sizeInBytes", "parentTxHashes", "blockIDs")
+							}
+							return nil
+						}
 
-					txHash := txHashes[i+j]
-
-					if txHash.Equal(*model.CoinbasePlaceholderHash) {
-						// coinbase placeholder is not in the store
-						continue
-					}
-
-					txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
-					if err != nil {
-						if !errors.Is(err, txmeta.NewErrTxmetaNotFound(&txHash)) && !strings.Contains(err.Error(), "failed to get tx meta") {
-							return fmt.Errorf("failed to get tx meta for tx %v: %w", txHash, err)
+						txHashes = append(txHashes, missingTxHash.hash)
+						if len(txHashes) == batchSize {
+							u.txMetaStore.GetMulti(ctx, txHashes, "fee", "sizeInBytes", "parentTxHashes", "blockIDs")
+							txHashes = txHashes[:0]
 						}
 					}
+				}
+			})
+		}
 
-					if txMeta != nil {
-						txMetaSlice[i+j] = txMeta
-						continue
-					}
+	} else {
+		for i := 0; i < batchSize; i++ {
+			// Worker
+			g.Go(func() error {
+				for {
+					select {
+					case <-gCtx.Done():
+						return gCtx.Err()
 
-					newMissed := missed.Add(1)
-					if failFast && newMissed > int32(missingTxThreshold) {
-						return fmt.Errorf("Missed threshold reached")
+					case missingTxHash, closed := <-workerCh:
+						if closed {
+							return nil
+						}
+
+						txMeta, err := u.txMetaStore.GetMeta(ctx, missingTxHash.hash)
+						if err != nil {
+							if !errors.Is(err, txmeta.NewErrTxmetaNotFound(missingTxHash.hash)) && !strings.Contains(err.Error(), "failed to get tx meta") {
+								u.logger.Errorf("[processTxMetaUsingStore] failed to get tx meta for tx %v: %v", missingTxHash.hash, err)
+							}
+						}
+
+						if txMeta != nil {
+							txMetaSlice[missingTxHash.idx] = txMeta
+						} else {
+							newMissed := missed.Add(1)
+							if failFast && newMissed > int32(missingTxThreshold) { // TODO - this is not correct, we need to check if we have missed more than the previously missed
+								return fmt.Errorf("Missed threshold reached")
+							}
+						}
 					}
 				}
-			}
-
-			return nil
-		})
+			})
+		}
 	}
 
+	for idx, txHash := range txHashes {
+		if txHash.Equal(*model.CoinbasePlaceholderHash) {
+			// coinbase placeholder is not in the store
+			continue
+		}
+
+		if txMetaSlice[idx] == nil {
+			workerCh <- missingTxHash{
+				hash: &txHash,
+				idx:  idx,
+			}
+		}
+	}
+
+	close(workerCh)
+
 	return int(missed.Load()), g.Wait()
+
 }
 
 func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {

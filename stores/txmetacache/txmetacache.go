@@ -162,7 +162,7 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
 	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 
 	var err error

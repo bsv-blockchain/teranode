@@ -26,7 +26,7 @@ func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *NullStore) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (m *NullStore) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
 	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 
 	// TODO make this into a batch call
