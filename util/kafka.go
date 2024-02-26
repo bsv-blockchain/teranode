@@ -90,6 +90,8 @@ func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
 
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 	partition := binary.LittleEndian.Uint32(key) % uint32(k.Partitions)
+	// binary.LittleEndian.Uint32(txID) % bucketsCount -> bucketID
+	// binary.LittleEndian.Uint32(txID)
 	_, _, err := k.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic:     k.Topic,
 		Key:       sarama.ByteEncoder(key),

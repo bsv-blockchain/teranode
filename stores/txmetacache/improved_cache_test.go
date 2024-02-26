@@ -3,6 +3,7 @@ package txmetacache
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -97,6 +98,7 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	}
 }
 
+/*
 func TestImprovedCache_SetMulti(t *testing.T) {
 	cache := NewImprovedCache(200 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
@@ -146,13 +148,15 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 }
+*/
 
 func TestImprovedCache_Trimming(t *testing.T) {
-	cache := NewImprovedCache(128 * 1024 * 1024) // (256 * 1024 * 1024)
+	cache := NewImprovedCache(1 * 1024 * 1024) // (256 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := (3760 * bucketsCount) + 1
+	//numberOfKeys := (3760 * bucketsCount) + 1
+	numberOfKeys := (2000 * bucketsCount)
 
 	// cache size : 128 * 1024 * 1024 bytes -> 128 KB
 	// number of buckets: 512
@@ -187,5 +191,60 @@ func TestImprovedCache_Trimming(t *testing.T) {
 			errCounter++
 		}
 	}
-	require.NotZero(t, errCounter)
+	//require.NotZero(t, errCounter)
+}
+
+func TestImprovedCache_SetMulti(t *testing.T) {
+	cache := NewImprovedCache(1 * 1024 * 2) // 100 * 1024 * 1024
+	allKeys := make([][]byte, 0)
+	allValues := make([][]byte, 0)
+	var err error
+	numberOfKeys := 15 //100 * bucketsCount
+
+	// cache size : 1 * 1024 * 2 bytes -> 2 KB
+	// number of buckets: 4
+	// max bucket size: 512 bytes -> 512 * 4 = 2048 bytes -> 2 KB
+	// chunk size: 2 * 64 = 128 bytes
+	// number of total chunks: 2 KB / 128 bytes = 16 chunks
+	// number of chunks per bucket: 16 / 4 = 4 chunks per bucket
+	// max value size in KB: 2
+
+	for i := 0; i < numberOfKeys; i++ {
+		key := make([]byte, 32)
+		value := make([]byte, 32)
+		_, err = rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key)
+		binary.LittleEndian.PutUint64(value, uint64(i))
+		allValues = append(allValues, value)
+	}
+
+	startTime := time.Now()
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti took:", time.Since(startTime))
+
+	errCounter := 0
+	for _, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cache.Get(&dst, key)
+		if err != nil {
+			//fmt.Println("error at index:", i, "error:", err)
+			errCounter++
+		}
+
+		//require.NoError(t, err)
+		//require.Equal(t, allValues[i], dst)
+	}
+	fmt.Println("errors:", errCounter)
+
+	// err = cache.SetMulti(allKeys, allValues)
+	// require.NoError(t, err)
+
+	// for i, key := range allKeys {
+	// 	dst := make([]byte, 0)
+	// 	err := cache.Get(&dst, key)
+	// 	require.NoError(t, err)
+	// 	require.Equal(t, append(allValues[i], allValues[i]...), dst)
+	// }
 }

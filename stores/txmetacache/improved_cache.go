@@ -12,21 +12,34 @@ import (
 
 // Example calculation for the improved cache:
 // cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
-// number of buckets: 512
+// number of buckets: 1024
 // bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
 // chunk size: 2 * 1024 * 16 = 32 KB
 // number of total chunks: 2 GB / 32 KB = 65536 chunks
 // number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
 
+// 600 Million keys per block * 5 blocks = 3 Billion keys
+// 3 billion keys
+// 1024 bucket * 1024 chunks = 1,048,576 chunks
+// 3 billion / 1,048,576 = 2867 keys per chunk
+// 2867 * 68 bytes = 194,156 bytes per chunk -> 194 KB
+// 194 KB * 1024 chunks = 198,656 KB -> 194 MB per bucket
+// 194 MB * 1024 buckets = 198,656 MB -> 194 GB
+// 256 GB for the cache
+// 256 / 1024 = 0.25 GB per bucket
+
+// 1- allocate memory in the beginning for all chunks in bucket init
+// 2- check collision for Sum64 of transaction ID that is 32 bytes.
+
 const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const chunksPerAlloc = 100 // 1024 * 1024
+const chunksPerAlloc = 4 // 1024
 
-const bucketsCount = 512 //4
+const bucketsCount = 4 // 512
 
-const chunkSize = maxValueSizeKB * 1024 * 16
+const chunkSize = maxValueSizeKB * 64 //1024 * 16
 
 const bucketSizeBits = 40
 
@@ -35,8 +48,6 @@ const genSizeBits = 64 - bucketSizeBits
 const maxGen = 1<<genSizeBits - 1
 
 const maxBucketSize uint64 = 1 << bucketSizeBits
-
-var trimRatio int = 25
 
 // Stats represents cache stats.
 //
@@ -62,7 +73,8 @@ func (s *Stats) Reset() {
 // Call Reset when the cache is no longer needed. This reclaims the allocated
 // memory.
 type ImprovedCache struct {
-	buckets [bucketsCount]bucket
+	buckets   [bucketsCount]bucket
+	trimRatio int
 }
 
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
@@ -77,11 +89,13 @@ func NewImprovedCache(maxBytes int, trimRatioSetting ...int) *ImprovedCache {
 
 	// set the trim ratio
 	if len(trimRatioSetting) > 0 {
-		trimRatio = trimRatioSetting[0]
+		c.trimRatio = trimRatioSetting[0]
+	} else {
+		c.trimRatio = 25
 	}
 
 	for i := range c.buckets[:] {
-		c.buckets[i].Init(maxBucketBytes)
+		c.buckets[i].Init(maxBucketBytes, c.trimRatio)
 	}
 	return &c
 }
@@ -168,10 +182,10 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		bucketIdx = h % bucketsCount
 		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
 		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
-		//fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
+		fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
 	}
 
-	g := errgroup.Group{}
+	//g := errgroup.Group{}
 
 	// for every bucket run a goroutine to populate it
 	for bucketIdx := range batchedKeys {
@@ -181,16 +195,16 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 			continue
 		}
 		bucketIdx := bucketIdx
-		g.Go(func() error {
-			//fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
-			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
-			return nil
-		})
+		//g.Go(func() error {
+		fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
+		c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
+		//return nil
+		//})
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
-	}
+	//if err := g.Wait(); err != nil {
+	//	return err
+	//}
 
 	return nil
 }
@@ -207,14 +221,12 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % bucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		//fmt.Println("ERROR getting for bucket: ", idx, " , current bucket idx: ", c.buckets[idx].idx, ", checking for key: ", k, "\ncurrent b.map: ", c.buckets[idx].m)
-
 		return fmt.Errorf("key %s not found in cache", k)
 	}
 	return nil
 }
 
-// // Has returns true if entry for the given key k exists in the cache.
+// Has returns true if entry for the given key k exists in the cache.
 func (c *ImprovedCache) Has(k []byte) bool {
 	h := xxhash.Sum64(k)
 	idx := h % bucketsCount
@@ -255,6 +267,8 @@ type bucket struct {
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
 	m map[uint64]uint64
+	// pass txId directly. How is memory?
+	// m map[[32]byte]uint64
 
 	// idx points to chunks for writing the next (k, v) pair.
 	idx uint64
@@ -264,9 +278,11 @@ type bucket struct {
 
 	// free chunks per bucket
 	freeChunks []*[chunkSize]byte
+
+	trimRatio int
 }
 
-func (b *bucket) Init(maxBytes uint64) {
+func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 	if maxBytes == 0 {
 		panic(fmt.Errorf("maxBytes cannot be zero"))
 	}
@@ -274,25 +290,41 @@ func (b *bucket) Init(maxBytes uint64) {
 		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
-	b.chunks = make([][]byte, maxChunks)
-	//chunk := make([]byte, 0, chunkSize)
+	//b.chunks = make([][]byte, maxChunks)
+	// TODO!
 	// allocate chunks from the beginning, don't wait while adding.
-	// for i := 0; i < int(maxChunks); i++ {
-	// 	chunk := b.getChunk()
-	// 	b.chunks = append(b.chunks, chunk)
-	// }
+	//for i := 0; i < int(maxChunks); i++ {
+	// chunk := b.getChunk()
+	// b.chunks = append(b.chunks, chunk)
+	//}
+
+	// allocate memory for chunks
+	// data holds 1024 (chunksPerAlloc) chunks of chunkSize (64) bytes each.
+	data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	if err != nil {
+		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+	}
+	for len(data) > 0 {
+		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+		//b.freeChunks = append(b.freeChunks, p)
+		b.chunks = append(b.chunks, p[:])
+		data = data[chunkSize:]
+	}
+
 	b.m = make(map[uint64]uint64)
+	b.trimRatio = trimRatio
 	b.Reset()
-	//fmt.Println("number of chunks: ", maxChunks, " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize, " b.chunks: ", b.chunks)
+	fmt.Println("number of chunks: ", maxChunks, " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize, " b.chunks: ", b.chunks)
+
 }
 
 func (b *bucket) Reset() {
 	b.mu.Lock()
-	chunks := b.chunks
-	for i := range chunks {
-		b.putChunk(chunks[i])
-		chunks[i] = nil
-	}
+	// chunks := b.chunks
+	// for i := range chunks {
+	// 	b.putChunk(chunks[i])
+	// 	chunks[i] = nil
+	// }
 	b.m = make(map[uint64]uint64)
 	b.idx = 0
 	b.gen = 1
@@ -331,6 +363,7 @@ func (b *bucket) cleanLockedMapOld() {
 // cleanLockedMapNew removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMapNew(startingOffset int) {
 	bm := b.m
+	fmt.Println("inside cleanLockedMapNew, b.idx: ", b.idx, ", current b.map: ", b.m)
 
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
 	bmNew := make(map[uint64]uint64, len(bm))
@@ -377,7 +410,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 	var hash uint64
 
 	for i, key := range keys {
-		//fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
+		fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
 		hash = xxhash.Sum64(key)
 		b.Set(key, values[i], hash, true)
 	}
@@ -492,11 +525,14 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
+	fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
+		fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			numOfChunksToRemove := len(chunks) * trimRatio / 100
+			fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
+			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 
 			// Shift the more recent half of the chunks to the start of the array
@@ -507,6 +543,10 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 			// Clear the rest of the chunks
 			for i := numOfChunksToKeep; i < len(chunks); i++ {
 				chunks[i] = chunks[i][:0]
+				// make chunks[i] full of zeros
+				for j := range chunks[i] {
+					chunks[i][j] = 0
+				}
 			}
 
 			idx = chunkSize * uint64(numOfChunksToKeep)
@@ -523,17 +563,28 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 			chunkIdx = chunkIdxNew
 		}
 	}
+
+	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
 	chunk := chunks[chunkIdx]
 	if chunk == nil || len(chunk) == 0 {
+		fmt.Println(" YOU SHOULD NEVER ENTER HERE!")
+		fmt.Println("YOU SHOULD NEVER ENTER HERE!,  chunks: ", chunks, "idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx)
+
 		chunk = b.getChunk()
 		chunk = chunk[:0]
 	}
-	chunk = append(chunk, kvLenBuf[:]...)
-	chunk = append(chunk, k...)
-	chunk = append(chunk, v...)
+	data := append(append(kvLenBuf[:], k...), v...)
+	// check if the chunk is 0, i.e. first time to write data over 0 chunk
+	if chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 0 {
+		copy(chunk, data)
+	} else {
+		chunk = append(chunk, data...)
+	}
+
 	chunks[chunkIdx] = chunk
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
+	fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, ", chunks:", chunks)
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
@@ -610,12 +661,12 @@ func (b *bucket) getChunk() []byte {
 	return p[:]
 }
 
-func (b *bucket) putChunk(chunk []byte) {
-	if chunk == nil {
-		return
-	}
-	chunk = chunk[:chunkSize]
-	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+// func (b *bucket) putChunk(chunk []byte) {
+// 	if chunk == nil {
+// 		return
+// 	}
+// 	chunk = chunk[:chunkSize]
+// 	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
 
-	b.freeChunks = append(b.freeChunks, p)
-}
+// 	b.freeChunks = append(b.freeChunks, p)
+// }
