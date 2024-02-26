@@ -10,22 +10,24 @@
   // stats
   let statsLoading = true
   let statsData = {}
+  let fullStats = false
 
   async function getStatsData() {
     try {
+      fullStats = false
       const result: any = await api.getBlockStats()
       if (result.ok) {
-
         let txs_per_second = result.data.tx_count / 24 / 60 / 60
-        let full_stats = true
+        fullStats = true
 
         const time_now = Math.round(+Date.now() / 1000)
-        const start_time  = result.data.first_block_time
+        const start_time = result.data.first_block_time
         const last_block_time = result.data.last_block_time
         // if startTime is less than 24 hours, calculate txs_per_second based on the time difference
-        if (start_time > time_now - (24 * 60 * 60) + 900) { // allow 15 minutes of difference for block mining
+        if (start_time > time_now - 24 * 60 * 60 + 900) {
+          // allow 15 minutes of difference for block mining
           txs_per_second = result.data.tx_count / (last_block_time - start_time)
-          full_stats = false
+          fullStats = false
         }
 
         statsData = {
@@ -59,7 +61,6 @@
             icon: 'icon-arrow-transfer-line',
             value: Math.round(txs_per_second),
           },
-          full_stats,
         }
       } else {
         failure(result.error.message)
@@ -123,7 +124,7 @@
 
 <PageWithMenu>
   <div class="content">
-    <HomeStatsCard loading={statsLoading} data={statsData} onRefresh={getStatsData} />
+    <HomeStatsCard loading={statsLoading} data={statsData} {fullStats} onRefresh={getStatsData} />
     {#if Graph}
       <Graph data={blockGraphData} {period} {onChangePeriod} />
     {/if}
