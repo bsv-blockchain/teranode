@@ -90,17 +90,17 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				blockValidationStat.AddTime(startTime)
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
-				if err := recover(); err != nil {
-					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
-				}
+				// if err := recover(); err != nil {
+				// 	validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				// }
 			}()
 
-			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-
 			for i := 1; i <= maxRetries+1; i++ {
-				// add data to block validation cache
 				time.Sleep(delay)
+
+				ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+
 				err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch)
 				if err != nil {
 					if i < maxRetries+1 {
