@@ -79,7 +79,7 @@ func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
 
 	output.FormatTimestamp = func(i interface{}) string {
 		parse, _ := time.Parse(time.RFC3339, i.(string))
-		return parse.Format("15:04:05")
+		return parse.Format(time.RFC3339)
 	}
 
 	output.FormatLevel = func(i interface{}) string {
