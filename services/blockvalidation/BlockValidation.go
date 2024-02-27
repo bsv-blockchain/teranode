@@ -900,7 +900,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
 	}
 
-	if missed > v.AbandonThreshold {
+	if v.Quick && missed > v.AbandonThreshold {
 		u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries - aborting subtree validation", v.SubtreeHash.String()))
 		return nil
 	}
@@ -999,7 +999,7 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_quick_validation_threshold", 1)
+	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_cache_miss_threshold", 1)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
@@ -1060,7 +1060,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 1000)
+	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_store_miss_threshold", 1000)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)

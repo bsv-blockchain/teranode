@@ -722,7 +722,7 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		timeoutCancel()
 	}()
 
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 0)
+	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 
 	subtreeSpan.LogKV("hash", subtreeHash.String())
 	v := ValidateSubtree{
