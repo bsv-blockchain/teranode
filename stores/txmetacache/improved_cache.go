@@ -35,7 +35,7 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const chunksPerAlloc = 4 // 1024
+const chunksPerAlloc = 4 //1024
 
 const bucketsCount = 4 // 512
 
@@ -144,10 +144,12 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 		h = xxhash.Sum64(key)
 		bucketIdx = h % bucketsCount
 		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
+		fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
+
 		//	hashes[bucketIdx] = append(hashes[bucketIdx], h)
 	}
 
-	g := errgroup.Group{}
+	//g := errgroup.Group{}
 
 	for bucketIdx := range batchedKeys {
 		// if there is no key for this bucket
@@ -155,14 +157,20 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 			continue
 		}
 		bucketIdx := bucketIdx
-		g.Go(func() error {
-			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
-			return nil
-		})
+		//g.Go(func() error {
+		fmt.Println("\n\nCalling SetMultiKeysSingleValue for bucket ", bucketIdx)
+		c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+		//	return nil
+		//})
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
+	// if err := g.Wait(); err != nil {
+	// 	return err
+	// }
+
+	for i := range c.buckets {
+		fmt.Println("bucket: ", i)
+		fmt.Println("chunks: ", c.buckets[i].chunks)
 	}
 
 	return nil
@@ -185,7 +193,11 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
 	}
 
-	//g := errgroup.Group{}
+	// for i := range batchedKeys {
+	// 	fmt.Println("bucket: ", i, "len of batchedKeys: ", len(batchedKeys[i]), "len of batchedValues: ", len(batchedValues[i]))
+	// }
+
+	g := errgroup.Group{}
 
 	// for every bucket run a goroutine to populate it
 	for bucketIdx := range batchedKeys {
@@ -195,16 +207,16 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 			continue
 		}
 		bucketIdx := bucketIdx
-		//g.Go(func() error {
-		//fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
-		c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
-		//return nil
-		//})
+		g.Go(func() error {
+			//fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
+			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
+			return nil
+		})
 	}
 
-	//if err := g.Wait(); err != nil {
-	//	return err
-	//}
+	if err := g.Wait(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -221,8 +233,8 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % bucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		fmt.Println("ERROR getting for bucket: ", idx, " , current bucket idx: ", c.buckets[idx].idx, ", checking for key: ", k, "\ncurrent b.map: ", c.buckets[idx].m)
-		return fmt.Errorf("key %s not found in cache", k)
+		//fmt.Println("ERROR getting for bucket: ", idx, " , current bucket idx: ", c.buckets[idx].idx, ", checking for key: ", k, "chunks:", c.buckets[idx].chunks)
+		return fmt.Errorf("key %v not found in cache", k)
 	}
 	return nil
 }
@@ -278,7 +290,7 @@ type bucket struct {
 	gen uint64
 
 	// free chunks per bucket
-	freeChunks []*[chunkSize]byte
+	// freeChunks []*[chunkSize]byte
 
 	trimRatio int
 }
@@ -290,7 +302,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 	if maxBytes >= maxBucketSize {
 		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
-	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
+	//maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	//b.chunks = make([][]byte, maxChunks)
 	// TODO!
 	// allocate chunks from the beginning, don't wait while adding.
@@ -315,7 +327,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
 	b.Reset()
-	fmt.Println("number of chunks: ", maxChunks, " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize, " b.chunks: ", b.chunks)
+	fmt.Println("number of chunks: ", len(b.chunks), " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize, " b.chunks: ", b.chunks)
 
 }
 
@@ -332,39 +344,10 @@ func (b *bucket) Reset() {
 	b.mu.Unlock()
 }
 
-// cleanLockedMap removes expired k-v pairs from bucket map.
-func (b *bucket) cleanLockedMapOld() {
-	bGen := b.gen & ((1 << genSizeBits) - 1)
-	bIdx := b.idx
-	bm := b.m
-	newItems := 0
-	for _, v := range bm {
-		gen := v >> bucketSizeBits
-		idx := v & ((1 << bucketSizeBits) - 1)
-		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-			newItems++
-		}
-	}
-	if newItems < len(bm) {
-		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
-		// This should reduce memory fragmentation and the number Go objects behind b.m.
-		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := make(map[uint64]uint64, newItems)
-		for k, v := range bm {
-			gen := v >> bucketSizeBits
-			idx := v & ((1 << bucketSizeBits) - 1)
-			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-				bmNew[k] = v
-			}
-		}
-		b.m = bmNew
-	}
-}
-
 // cleanLockedMapNew removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMapNew(startingOffset int) {
 	bm := b.m
-	fmt.Println("inside cleanLockedMapNew, b.idx: ", b.idx, ", current b.map: ", b.m)
+	//fmt.Println("inside cleanLockedMapNew, b.idx: ", b.idx, ", current b.map: ", b.m)
 
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
 	bmNew := make(map[uint64]uint64, len(bm))
@@ -395,11 +378,13 @@ func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hash
 	defer b.mu.Unlock()
 	var prevValue []byte
 	var hash uint64
+	var res bool
 
 	for _, key := range keys {
 		prevValue = value
 		hash = xxhash.Sum64(key)
-		b.Get(&prevValue, key, hash, true, true)
+		res = b.Get(&prevValue, key, hash, true, true)
+		fmt.Println("for key : ", key, ", get result was: ", res, ", value is: ", value, ", and prevValue:", prevValue)
 		b.Set(key, prevValue, hash, true)
 	}
 }
@@ -417,6 +402,196 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 	}
 }
 
+// SetNew skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+// removes only half of the each chunk when the chunk is full
+func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
+	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
+		// Too big key or value - its length cannot be encoded
+		// with 2 bytes (see below). Skip the entry.
+		return
+	}
+	var kvLenBuf [4]byte
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	if kvLen >= chunkSize {
+		// Do not store too big keys and values, since they do not
+		// fit a chunk.
+		return
+	}
+
+	chunks := b.chunks
+
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+
+	// calculate the idx of the k-v pair to be added
+	// adjust idxNew, calcualte where the new k-v pair will end
+	// the new k-v pair must be in the same chunk.
+	idx := b.idx
+	idxNew := idx + kvLen
+	chunkIdx := idx / chunkSize
+	chunkIdxNew := idxNew / chunkSize
+	fmt.Println("\n\nInside SetNew, k: ", k, "v: ", v, "h: ", h, "idx: ", b.idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "chunkIdxNew: ", chunkIdxNew, "len of chunks: ", len(chunks))
+	fmt.Println("chunks: \n", chunks)
+	// check if we are crossing the chunk boundary, we need to allocate a new chunk
+	if chunkIdxNew > chunkIdx {
+		//	fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
+		// if there are no more chunks to allocate, we need to reset the bucket
+		if chunkIdxNew >= uint64(len(chunks)) {
+			// fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
+			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
+			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
+			//fmt.Println(" num of chunks to remove: ", numOfChunksToRemove, " num of chunks to keep: ", numOfChunksToKeep)
+
+			// numOfChunksToKeep = 3, umber of chunks to remove  =1
+			// Shift the more recent half of the chunks to the start of the array
+			for i := 0; i < numOfChunksToKeep; i++ {
+				chunks[i] = chunks[i+numOfChunksToRemove]
+			}
+
+			// Clear the rest of the chunks
+			//itemsZeroed := 0
+			for i := numOfChunksToKeep; i < len(chunks); i++ {
+				chunks[i] = make([]byte, chunkSize, chunkSize)
+			}
+
+			//fmt.Println("chunks after clearing: ", chunks)
+
+			idx = chunkSize * uint64(numOfChunksToKeep)
+			idxNew = idx + kvLen
+			// calculate the where the next write should occur based on new index
+			chunkIdx = idx / chunkSize
+
+			b.cleanLockedMapNew(numOfChunksToRemove * chunkSize)
+
+		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
+			// calculate the index as byte offset
+			idx = chunkIdxNew * chunkSize
+			idxNew = idx + kvLen
+			chunkIdx = chunkIdxNew
+		}
+	}
+
+	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
+	chunk := chunks[chunkIdx]
+	if chunk == nil || len(chunk) == 0 {
+		fmt.Println("YOU SHOULD NEVER ENTER HERE!,  chunks: ", chunks, "idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx)
+		panic(fmt.Errorf("YOU SHOULD NEVER ENTER HERE!, chunk is nil or empty"))
+		//chunk = b.getChunk()
+		//chunk = chunk[:0]
+	}
+	data := append(append(kvLenBuf[:], k...), v...)
+	// check if the chunk is 0, i.e. first time to write data over 0 chunk
+	// if chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 0 {
+	// 	copy(chunk, data)
+	// } else {
+	// 	chunk = append(chunk, data...)
+	// }
+	copy(chunk[idx:], data)
+
+	chunks[chunkIdx] = chunk
+	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.idx = idxNew
+	fmt.Println("SET NEW Result chunks:\n", chunks)
+}
+
+// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+	found := false
+	chunks := b.chunks
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.RLock()
+		defer b.mu.RUnlock()
+	}
+
+	v := b.m[h]
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	if v > 0 {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
+			chunkIdx := idx / chunkSize
+			if chunkIdx >= uint64(len(chunks)) {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			chunk := chunks[chunkIdx]
+			idx %= chunkSize
+			if idx+4 >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			kvLenBuf := chunk[idx : idx+4]
+			keyLen := (uint64(kvLenBuf[0]) << 8) | uint64(kvLenBuf[1])
+			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
+			idx += 4
+			if idx+keyLen+valLen >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			if string(k) == string(chunk[idx:idx+keyLen]) {
+				idx += keyLen
+				if returnDst {
+					*dst = append(*dst, chunk[idx:idx+valLen]...)
+				}
+				found = true
+			}
+
+			// if !found {
+			// 	fmt.Println("ERROR getting for key: ", k, "chunkID: ", chunkIdx, "idx: ", idx, "chunks:", chunks)
+			// }
+		}
+	}
+end:
+	if !found {
+		fmt.Println()
+	}
+	return found
+}
+
+func (b *bucket) Del(h uint64) {
+	b.mu.Lock()
+	delete(b.m, h)
+	b.mu.Unlock()
+}
+
+// func (b *bucket) getChunk() []byte {
+// 	// if len(b.freeChunks) == 0 {
+// 	// 	// Allocate offheap memory, so GOGC won't take into account cache size.
+// 	// 	// This should reduce free memory waste.
+// 	// 	data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+// 	// 	if err != nil {
+// 	// 		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+// 	// 	}
+// 	// 	for len(data) > 0 {
+// 	// 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+// 	// 		b.freeChunks = append(b.freeChunks, p)
+// 	// 		data = data[chunkSize:]
+// 	// 	}
+// 	// }
+// 	// n := len(b.freeChunks) - 1
+// 	// p := b.freeChunks[n]
+// 	// b.freeChunks[n] = nil
+// 	// b.freeChunks = b.freeChunks[:n]
+// 	return make([]byte, 0)
+// }
+
+// func (b *bucket) putChunk(chunk []byte) {
+// 	if chunk == nil {
+// 		return
+// 	}
+// 	chunk = chunk[:chunkSize]
+// 	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+
+// 	b.freeChunks = append(b.freeChunks, p)
+// }
+
+/*
 // SetOld is to be removed.
 // SetOld skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucket) SetOld(k, v []byte, h uint64, skipLocking ...bool) {
@@ -491,183 +666,36 @@ func (b *bucket) SetOld(k, v []byte, h uint64, skipLocking ...bool) {
 		b.cleanLockedMapOld()
 	}
 }
+*/
 
-// SetNew skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-// removes only half of the each chunk when the chunk is full
-func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
-	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
-		// Too big key or value - its length cannot be encoded
-		// with 2 bytes (see below). Skip the entry.
-		return
-	}
-	var kvLenBuf [4]byte
-	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
-	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
-	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
-	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
-	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
-	if kvLen >= chunkSize {
-		// Do not store too big keys and values, since they do not
-		// fit a chunk.
-		return
-	}
-
-	chunks := b.chunks
-
-	if len(skipLocking) == 0 || !skipLocking[0] {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-	}
-
-	// calculate the idx of the k-v pair to be added
-	// adjust idxNew, calcualte where the new k-v pair will end
-	// the new k-v pair must be in the same chunk.
-	idx := b.idx
-	idxNew := idx + kvLen
-	chunkIdx := idx / chunkSize
-	chunkIdxNew := idxNew / chunkSize
-	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
-	// check if we are crossing the chunk boundary, we need to allocate a new chunk
-	if chunkIdxNew > chunkIdx {
-		//	fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
-		// if there are no more chunks to allocate, we need to reset the bucket
-		if chunkIdxNew >= uint64(len(chunks)) {
-			fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
-			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
-			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
-			//fmt.Println(" num of chunks to remove: ", numOfChunksToRemove, " num of chunks to keep: ", numOfChunksToKeep)
-
-			// numOfChunksToKeep = 3, umber of chunks to remove  =1
-			// Shift the more recent half of the chunks to the start of the array
-			for i := 0; i < numOfChunksToKeep; i++ {
-				chunks[i] = chunks[i+numOfChunksToRemove]
-			}
-
-			// Clear the rest of the chunks
-			//itemsZeroed := 0
-			for i := numOfChunksToKeep; i < len(chunks); i++ {
-				chunks[i] = make([]byte, chunkSize, chunkSize)
-			}
-
-			//fmt.Println("chunks after clearing: ", chunks)
-
-			idx = chunkSize * uint64(numOfChunksToKeep)
-			idxNew = idx + kvLen
-			// calculate the where the next write should occur based on new index
-			chunkIdx = idx / chunkSize
-
-			b.cleanLockedMapNew(numOfChunksToRemove * chunkSize)
-
-		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
-			// calculate the index as byte offset
-			idx = chunkIdxNew * chunkSize
-			idxNew = idx + kvLen
-			chunkIdx = chunkIdxNew
-		}
-	}
-
-	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
-	chunk := chunks[chunkIdx]
-	if chunk == nil || len(chunk) == 0 {
-		fmt.Println("YOU SHOULD NEVER ENTER HERE!,  chunks: ", chunks, "idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx)
-
-		chunk = b.getChunk()
-		chunk = chunk[:0]
-	}
-	data := append(append(kvLenBuf[:], k...), v...)
-	// check if the chunk is 0, i.e. first time to write data over 0 chunk
-	if chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 0 {
-		copy(chunk, data)
-	} else {
-		chunk = append(chunk, data...)
-	}
-
-	chunks[chunkIdx] = chunk
-	b.m[h] = idx | (b.gen << bucketSizeBits)
-	b.idx = idxNew
-	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, ", chunks:", chunks)
-}
-
-// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
-	found := false
-	chunks := b.chunks
-	if len(skipLocking) == 0 || !skipLocking[0] {
-		b.mu.RLock()
-		defer b.mu.RUnlock()
-	}
-
-	v := b.m[h]
+/*
+// cleanLockedMap removes expired k-v pairs from bucket map.
+func (b *bucket) cleanLockedMapOld() {
 	bGen := b.gen & ((1 << genSizeBits) - 1)
-	if v > 0 {
+	bIdx := b.idx
+	bm := b.m
+	newItems := 0
+	for _, v := range bm {
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
-		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
-			chunkIdx := idx / chunkSize
-			if chunkIdx >= uint64(len(chunks)) {
-				// Corrupted data during the load from file. Just skip it.
-				goto end
-			}
-			chunk := chunks[chunkIdx]
-			idx %= chunkSize
-			if idx+4 >= chunkSize {
-				// Corrupted data during the load from file. Just skip it.
-				goto end
-			}
-			kvLenBuf := chunk[idx : idx+4]
-			keyLen := (uint64(kvLenBuf[0]) << 8) | uint64(kvLenBuf[1])
-			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
-			idx += 4
-			if idx+keyLen+valLen >= chunkSize {
-				// Corrupted data during the load from file. Just skip it.
-				goto end
-			}
-			if string(k) == string(chunk[idx:idx+keyLen]) {
-				idx += keyLen
-				if returnDst {
-					*dst = append(*dst, chunk[idx:idx+valLen]...)
-				}
-				found = true
-			}
+		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+			newItems++
 		}
 	}
-end:
-	return found
-}
-
-func (b *bucket) Del(h uint64) {
-	b.mu.Lock()
-	delete(b.m, h)
-	b.mu.Unlock()
-}
-
-func (b *bucket) getChunk() []byte {
-	if len(b.freeChunks) == 0 {
-		// Allocate offheap memory, so GOGC won't take into account cache size.
-		// This should reduce free memory waste.
-		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
-		if err != nil {
-			panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+	if newItems < len(bm) {
+		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
+		// This should reduce memory fragmentation and the number Go objects behind b.m.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
+		bmNew := make(map[uint64]uint64, newItems)
+		for k, v := range bm {
+			gen := v >> bucketSizeBits
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+				bmNew[k] = v
+			}
 		}
-		for len(data) > 0 {
-			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
-			b.freeChunks = append(b.freeChunks, p)
-			data = data[chunkSize:]
-		}
+		b.m = bmNew
 	}
-	n := len(b.freeChunks) - 1
-	p := b.freeChunks[n]
-	b.freeChunks[n] = nil
-	b.freeChunks = b.freeChunks[:n]
-	return p[:]
 }
 
-// func (b *bucket) putChunk(chunk []byte) {
-// 	if chunk == nil {
-// 		return
-// 	}
-// 	chunk = chunk[:chunkSize]
-// 	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
-
-// 	b.freeChunks = append(b.freeChunks, p)
-// }
+*/
