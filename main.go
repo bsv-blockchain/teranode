@@ -461,8 +461,6 @@ func initLogger(serviceName string) ulogger.Logger {
 
 	logger := ulogger.New(progname, logOptions...)
 
-	logger.Errorf("IsTerminal: %v", isTerminal)
-
 	return logger
 }
 
