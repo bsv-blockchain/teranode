@@ -1060,7 +1060,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_quick_validation_threshold", 1)
+	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 1000)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
