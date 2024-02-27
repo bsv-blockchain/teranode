@@ -1042,7 +1042,7 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 
 					newMissed := missed.Add(1)
 					if failFast && newMissed > int32(missingTxThreshold) {
-						return fmt.Errorf("Missed threshold reached")
+						return fmt.Errorf("missed threshold reached")
 					}
 				}
 			}
@@ -1104,7 +1104,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 						newMissed := missed.Add(1)
 						if failFast && newMissed > int32(missingTxThreshold) {
-							return fmt.Errorf("Missed threshold reached")
+							return fmt.Errorf("missed threshold reached")
 						}
 					}
 				}
