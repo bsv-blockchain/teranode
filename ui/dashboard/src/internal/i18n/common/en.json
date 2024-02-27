@@ -357,7 +357,9 @@
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "expand-all": "Expand all",
+    "collapse-all": "Collapse all"
   },
   "graph": {
     "series": {
