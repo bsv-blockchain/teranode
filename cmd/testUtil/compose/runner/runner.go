@@ -1,70 +1,96 @@
-package main
+package runner
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
-func main() {
-	// Define command-line flags
-	upFlag := flag.Bool("up", false, "Start all services")
-	cleanFlag := flag.Bool("clean", false, "Clean up and tear down services")
+var (
+	buildFlag bool
+	upFlag    bool
+	cleanFlag bool
+)
 
-	// Parse the flags
-	flag.Parse()
+var composeFileName = "docker-compose-generated.yml"
+var composeFilePath = filepath.Join("../../../", composeFileName)
+
+func AddRunCommand(rootCmd *cobra.Command) {
+	var runCmd = &cobra.Command{
+		Use:   "run",
+		Short: "Run Docker Compose file",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Run executed \n")
+			err := Run()
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		},
+	}
+	runCmd.Flags().BoolVarP(&buildFlag, "build", "b", false, "Build all services")
+	runCmd.Flags().BoolVarP(&upFlag, "up", "u", false, "Start all services")
+	runCmd.Flags().BoolVarP(&cleanFlag, "clean", "c", false, "Clean up and tear down services")
+	rootCmd.AddCommand(runCmd)
+}
+
+func Run() error {
 
 	// Execute based on flags
-	if *upFlag {
+	if upFlag {
 		startServices()
-	} else if *cleanFlag {
+	} else if cleanFlag {
 		cleanup()
+	} else if buildFlag {
+		// Build the Docker services
+		exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
 	} else {
-		fmt.Println("No valid command provided. Use --up to start services or --clean for cleanup.")
+		return fmt.Errorf("No valid command provided. Use --up to start services or --clean for cleanup.")
 	}
+	return nil
 }
 
 func startServices() {
-	// Define the path to the Docker Compose file
-	composeFilePath := filepath.Join("..", "..", "..", "..", "docker-compose-ci-template.yml")
-
 	// Start the Docker services in the background
-	startService(fmt.Sprintf("docker-compose -f %s up -d p2p-bootstrap-1 p2p-bootstrap-2 p2p-bootstrap-3", composeFilePath))
+	startService(fmt.Sprintf("docker-compose -f %s up -d p2p-bootstrap-1", composeFilePath))
 	time.Sleep(10 * time.Second)
 	startService(fmt.Sprintf("docker-compose -f %s up -d postgres", composeFilePath))
 	time.Sleep(10 * time.Second)
-	startService(fmt.Sprintf("docker-compose -f %s up -d ubsv-1 ubsv-2 ubsv-3", composeFilePath))
+	ubsvServices, err := getServices("ubsv")
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, ubsvServices))
 	time.Sleep(10 * time.Second)
 
-	// Check if nodes are in sync and have 300 blocks each
-	checkBlocks("http://localhost:18090", 300)
-	checkBlocks("http://localhost:28090", 305)
-	checkBlocks("http://localhost:38090", 305)
-
-	// Start the Coinbase services in the background
-	startService(fmt.Sprintf("docker-compose -f %s up -d ubsv-1-coinbase ubsv-2-coinbase ubsv-3-coinbase", composeFilePath))
 	time.Sleep(10 * time.Second)
-	checkBlocks("http://localhost:18090", 315)
-	checkBlocks("http://localhost:28090", 315)
-	checkBlocks("http://localhost:38090", 315)
+	checkBlocks("http://localhost:18090", 301)
 
 	// Start the TxBlaster services in the background
-	startService(fmt.Sprintf("docker-compose -f %s up -d tx-blaster-1 tx-blaster-2 tx-blaster-3", composeFilePath))
+	txBlasterServices, err := getServices("tx-blaster")
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, txBlasterServices))
 }
 
 func cleanup() {
 	fmt.Println("Starting cleanup...")
 
 	// Define the path to the project root
-	projectRoot := filepath.Join("..", "..", "..", "..")
+	rootPath := filepath.Join("../../../")
 
 	// Remove the data directory
-	dataDir := filepath.Join(projectRoot, "data")
+	dataDir := filepath.Join(rootPath, "data")
 	if err := os.RemoveAll(dataDir); err != nil {
 		fmt.Printf("Error removing data directory: %s\n", err)
 	} else {
@@ -72,7 +98,7 @@ func cleanup() {
 	}
 
 	// Stop and remove all services
-	composeFilePath := filepath.Join("..", "..", "..", "..", "docker-compose-ci-template.yml")
+	composeFilePath := filepath.Join(rootPath, composeFileName)
 	if err := execCommand(fmt.Sprintf("docker-compose -f %s down", composeFilePath)); err != nil {
 		fmt.Println(err)
 		return
@@ -116,7 +142,7 @@ func checkBlocks(url string, desiredHeight int) {
 }
 
 func getBlockHeight(url string) (int, error) {
-	resp, err := http.Get(url + "/lastblocks?n=1")
+	resp, err := http.Get(url + "/api/v1/lastblocks?n=1")
 	if err != nil {
 		return 0, err
 	}
@@ -148,4 +174,23 @@ func execCommand(name string, args ...string) error {
 		return fmt.Errorf("error executing command: %w", err)
 	}
 	return nil
+}
+
+func getServices(prefix string) (string, error) {
+
+	cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath))
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var servicesList []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			servicesList = append(servicesList, line)
+		}
+	}
+	services := strings.Join(servicesList, " ")
+	return services, nil
 }
