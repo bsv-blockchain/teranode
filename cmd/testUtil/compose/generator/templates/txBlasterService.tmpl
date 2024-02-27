@@ -1,0 +1,28 @@
+{{ define "txBlasterService" }}
+  tx-blaster-{{ .Index }}:
+    <<: *ubsv-base
+    image: ubsv:latest
+    depends_on:
+      - postgres
+{{- range $i, $ubsv := .UbsvDependencies }}
+      - {{ $ubsv }}
+{{- end }}
+    environment:
+      SETTINGS_CONTEXT: "docker"
+      tx_blaster_profilerAddr: ":9092"
+      asset_httpAddress: "{{ .AssetHTTPAddress }}"
+      propagation_grpcAddresses: {{ .PropagationGRPCAddresses }}
+      coinbase_grpcAddress: "{{ .CoinbaseGRPCAddress }}"
+      coinbase_store: postgres://postgres:postgres@postgres:5432/coinbase{{ .Index }}
+      blockchain_store: postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
+      utxostore: postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}
+      coinbase_assetGrpcAddress: "{{ .CoinbaseAssetGRPCAddress }}"
+      securityLevelGRPC: 0
+      securityLevelHTTP: 0
+      propagation_quicAddresses: {{ .PropagationQUICAddresses }}
+    command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    networks:
+      - ubsv-network
+    volumes:
+      - ./data/txblaster{{ .Index }}:/app/data
+{{ end }}
