@@ -901,8 +901,10 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	}
 
 	if missed > 0 {
+		batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", false)
+
 		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, false, v.FailFast)
+		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched, v.FailFast)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", v.SubtreeHash.String()), err)
 		}
