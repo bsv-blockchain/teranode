@@ -79,7 +79,6 @@
       <div class="icon" use:$tippy={{ content: t('tooltip.expand-all') }}>
         <Icon name="icon-chevron-down-line" size={15} on:click={() => onBulkClose(false)} />
       </div>
-
       <div class="icon" use:$tippy={{ content: t('tooltip.copy-json-to-clipboard') }}>
         <ActionStatusIcon
           icon="icon-duplicate-line"
@@ -130,7 +129,7 @@
               {/if}
 
               {#if getType(value) === 'object' && value !== null}
-                {#if !expandState[id + '_' + i]}
+                {#if !expandState[id + '_' + i] || !inlineObj}
                   <svelte:self
                     data={value}
                     {blockHash}
@@ -141,25 +140,40 @@
                   />
                 {/if}
               {:else if getType(value) === 'array'}
-                {#if !expandState[id + '_' + i]}
-                  {#if !inlineArr}&#91;{/if}
-                  <ul>
-                    {#each value as item, j (item)}
-                      <li>
-                        <svelte:self
-                          data={item}
-                          parentKey={key}
-                          {blockHash}
-                          level={level + 2}
-                          showFinalComma={j < value.length - 1}
-                          inlineObj={false}
-                          id={id + '_' + i + '_' + j}
-                          bind:expandState
-                        />
-                      </li>
-                    {/each}
-                  </ul>
-                  &#93;{#if showCommas},{/if}
+                {#if !expandState[id + '_' + i] || !inlineArr}
+                  {#if !inlineArr}
+                    <br />
+                    <div
+                      class="expand"
+                      class:closed={expandState[id + '_' + i + '_']}
+                      id={id + '_' + i + '_'}
+                      style="margin-left:-15px;"
+                      on:click={onExpClick}
+                    >
+                      <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
+                    </div>
+                    <span class="obj-start" style="margin-left:-9px;">&#91;</span
+                    >{#if expandState[id + '_' + i + '_']}..&#93;{/if}
+                  {/if}
+                  {#if (!inlineArr && !expandState[id + '_' + i + '_']) || (inlineArr && !expandState[id + '_' + i])}
+                    <ul>
+                      {#each value as item, j (item)}
+                        <li>
+                          <svelte:self
+                            data={item}
+                            parentKey={key}
+                            {blockHash}
+                            level={level + 2}
+                            showFinalComma={j < value.length - 1}
+                            inlineObj={false}
+                            id={id + '_' + i + '_' + j}
+                            bind:expandState
+                          />
+                        </li>
+                      {/each}
+                    </ul>
+                    &#93;{#if showCommas},{/if}
+                  {/if}
                 {/if}
               {:else if getType(value) === 'string'}
                 {#if value.length === 64}
