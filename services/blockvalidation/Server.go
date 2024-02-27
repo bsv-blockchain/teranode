@@ -179,10 +179,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					quickValidation := gocore.Config().GetBool("blockvalidation_quick_validation", false)
 					maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-					retrySleepString, _ := gocore.Config().Get("blockvalidation_validation_retry_sleep", "10s")
-					retrySleepDuration, err := time.ParseDuration(retrySleepString)
+					retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 					if err != nil {
-						panic(fmt.Sprintf("invalid value %s for blockvalidation_quick_validation_retry_sleep", retrySleepString))
+						panic(fmt.Sprintf("invalid value for blockvalidation_quick_validation_retry_sleep: %v", err))
 					}
 
 					// this will block if the concurrency limit is reached

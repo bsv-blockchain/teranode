@@ -243,10 +243,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				backoff := d.backoff
 
 				for {
-					timeoutStr, _ := gocore.Config().Get("distributor_timeout", "30s")
-					timeout, err := time.ParseDuration(timeoutStr)
+					timeout, err, _ := gocore.Config().GetDuration("distributor_timeout", 30*time.Second)
 					if err != nil {
-						d.logger.Fatalf("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout = %s", timeoutStr)
+						d.logger.Fatalf("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout : %v", err)
 					}
 					ctx1, cancel := context.WithTimeout(ctx1, timeout)
 					_, err = p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
