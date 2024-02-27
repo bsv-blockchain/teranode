@@ -16,6 +16,10 @@ import (
 )
 
 func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+	if len(txHashes) != len(txMetaSlice) {
+		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
+	}
+
 	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingCache")
 	defer stat.AddTime(start)
 

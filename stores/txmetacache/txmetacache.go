@@ -56,11 +56,13 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	}
 
 	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case <-ticker.C:
 				if prometheusBlockValidationTxMetaCacheSize != nil {
 					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
@@ -68,8 +70,6 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
 				}
-
-				time.Sleep(5 * time.Second)
 			}
 		}
 	}()
@@ -167,18 +167,21 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
-	m, err := t.txMetaStore.GetMulti(ctx, hashes, fields...)
-	if err != nil {
-		return nil, err
+func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []txmeta.MissingTxHash, fields ...string) error {
+	if err := t.txMetaStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+		return err
 	}
 
-	for hash, txMeta := range m {
-		txMeta.Tx = nil
-		_ = t.SetCache(&hash, txMeta)
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
+
+	for _, data := range hashes {
+		if data.Data != nil {
+			data.Data.Tx = nil
+			_ = t.SetCache(data.Hash, data.Data)
+		}
 	}
 
-	return m, nil
+	return nil
 }
 
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {

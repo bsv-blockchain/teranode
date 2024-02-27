@@ -53,10 +53,6 @@ type missingTx struct {
 	tx  *bt.Tx
 	idx int
 }
-type missingTxHash struct {
-	hash *chainhash.Hash
-	idx  int
-}
 
 func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *BlockValidation {
@@ -679,10 +675,10 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
-func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []missingTxHash, baseUrl string) ([]*bt.Tx, error) {
+func (u *BlockValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []txmeta.MissingTxHash, baseUrl string) ([]*bt.Tx, error) {
 	txIDBytes := make([]byte, 32*len(txHashes))
 	for idx, txHash := range txHashes {
-		copy(txIDBytes[idx*32:(idx+1)*32], txHash.hash[:])
+		copy(txIDBytes[idx*32:(idx+1)*32], txHash.Hash[:])
 	}
 
 	// do http request to baseUrl + txHash.String()
@@ -906,7 +902,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 
 	if missed > 0 {
 		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, missed, false, v.FailFast)
+		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, false, v.FailFast)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", v.SubtreeHash.String()), err)
 		}
@@ -918,12 +914,12 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
 		// this is done to make sure the order is preserved when getting them in parallel
 		// compact the missingTxHashes to only a list of the missing ones
-		missingTxHashesCompacted := make([]missingTxHash, 0, missed)
+		missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, missed)
 		for idx, txHash := range txHashes {
 			if txMetaSlice[idx] == nil {
-				missingTxHashesCompacted = append(missingTxHashesCompacted, missingTxHash{
-					hash: &txHash,
-					idx:  idx,
+				missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
+					Hash: &txHash,
+					Idx:  idx,
 				})
 			}
 		}
@@ -1046,7 +1042,7 @@ func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *goco
 }
 
 func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
-	missingTxHashes []missingTxHash, baseUrl string, txMetaSlice []*txmeta.Data) error {
+	missingTxHashes []txmeta.MissingTxHash, baseUrl string, txMetaSlice []*txmeta.Data) error {
 
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
 	defer func() {
@@ -1092,7 +1088,7 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 	return nil
 }
 
-func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []missingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
+func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxHashes []txmeta.MissingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
@@ -1133,17 +1129,17 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	// populate the missingTx slice with the tx data
 	missingTxs = make([]missingTx, 0, len(missingTxHashes))
 	for _, mTx := range missingTxHashes {
-		if mTx.hash == nil {
-			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.hash.String())
+		if mTx.Hash == nil {
+			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.Hash.String())
 		}
-		tx, ok := missingTxsMap[*mTx.hash]
+		tx, ok := missingTxsMap[*mTx.Hash]
 		if !ok {
-			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.hash.String())
+			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
 		}
 		if tx == nil {
-			return nil, fmt.Errorf("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.hash.String())
+			return nil, fmt.Errorf("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
 		}
-		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.idx})
+		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
 	}
 
 	return missingTxs, nil

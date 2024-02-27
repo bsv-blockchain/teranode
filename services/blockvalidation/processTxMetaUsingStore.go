@@ -14,7 +14,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, previouslyMissed int, batched bool, failFast bool) (int, error) {
+func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, batched bool, failFast bool) (int, error) {
+	if len(txHashes) != len(txMetaSlice) {
+		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
+	}
+
 	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingStore")
 	defer stat.AddTime(start)
 
@@ -28,8 +32,56 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 	var missed atomic.Int32
 
 	if batched {
-		// TODO: implement batched processing
-		return len(txHashes), nil
+		for i := 0; i < len(txHashes); i += batchSize {
+			i := i // capture range variable for goroutine
+
+			g.Go(func() error {
+				end := util.Min(i+batchSize, len(txHashes))
+
+				missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, end-i)
+
+				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+					select {
+					case <-gCtx.Done(): // Listen for cancellation signal
+						return gCtx.Err() // Return the error that caused the cancellation
+
+					default:
+
+						if txMetaSlice[i+j] == nil {
+							missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
+								Hash: &txHashes[i+j],
+								Idx:  i + j,
+							})
+						}
+					}
+				}
+
+				if err := u.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "fee", "sizeInBytes", "parentTxHashes", "blockIDs"); err != nil {
+					return err
+				}
+
+				select {
+				case <-gCtx.Done(): // Listen for cancellation signal
+					return gCtx.Err() // Return the error that caused the cancellation
+
+				default:
+					for _, data := range missingTxHashesCompacted {
+						if data.Data == nil {
+							newMissed := missed.Add(1)
+							if failFast && newMissed > int32(missingTxThreshold) {
+								return fmt.Errorf("missed threshold reached")
+							}
+							continue
+						}
+						txMetaSlice[data.Idx] = data.Data
+					}
+
+					return nil
+				}
+			})
+		}
+
+		return int(missed.Load()), g.Wait()
 
 	} else {
 
@@ -52,14 +104,16 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 							continue
 						}
 
-						txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
-						if err != nil {
-							return err
-						}
+						if txMetaSlice[i+j] == nil {
+							txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
+							if err != nil {
+								return err
+							}
 
-						if txMeta != nil {
-							txMetaSlice[i+j] = txMeta
-							continue
+							if txMeta != nil {
+								txMetaSlice[i+j] = txMeta
+								continue
+							}
 						}
 
 						newMissed := missed.Add(1)

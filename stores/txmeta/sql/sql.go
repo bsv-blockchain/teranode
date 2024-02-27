@@ -160,19 +160,17 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	}, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := s.Get(ctx, hash)
+	for _, item := range items {
+		data, err := s.Get(ctx, item.Hash)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		results[*hash] = data
+		item.Data = data
 	}
 
-	return results, nil
+	return nil
 }
 
 func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {

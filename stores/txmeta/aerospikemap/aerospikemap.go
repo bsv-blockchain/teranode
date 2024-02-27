@@ -4,6 +4,7 @@ package aerospikemap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -154,19 +155,8 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
-	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := s.Get(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		results[*hash] = data
-	}
-
-	return results, nil
+func (s *Store) MetaBatchDecorate(ctx context.Context, hashes []txmeta.MissingTxHash, fields ...string) error {
+	return errors.New("not implemented")
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {

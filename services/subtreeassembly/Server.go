@@ -3,6 +3,10 @@ package subtreeassembly
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"runtime"
+	"time"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -13,9 +17,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
-	"net/url"
-	"runtime"
-	"time"
 )
 
 // Server type carries the logger within it
@@ -96,35 +97,40 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 	results := make([][]byte, len(subtree.Nodes))
 	// get the tx metas from the tx meta store in batches of N
 	for i := 0; i < len(subtree.Nodes); i += batchSize {
-		i := i
-		end := i + batchSize
-		if end > len(subtree.Nodes) {
-			end = len(subtree.Nodes)
-		}
+		i := i // capture range variable for goroutine
+
+		end := util.Min(i+batchSize, len(subtree.Nodes))
+
+		missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, end-i)
 
 		g.Go(func() error {
-			txHashes := make([]*chainhash.Hash, 0, batchSize)
-			for _, txHash := range subtree.Nodes[i:end] {
-				if !txHash.Hash.Equal(model.CoinbasePlaceholder) {
-					txHashes = append(txHashes, &txHash.Hash)
+
+			for j := 0; j < util.Min(batchSize, len(subtree.Nodes)-i); j++ {
+
+				if !subtree.Nodes[i+j].Hash.Equal(model.CoinbasePlaceholder) {
+					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
+						Hash: &subtree.Nodes[i+j].Hash,
+						Idx:  i + j,
+					})
 				}
 			}
 
-			txMetas, err := ps.txMetaStore.GetMulti(gCtx, txHashes)
-			if err != nil {
+			if err := ps.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
 				return fmt.Errorf("[SubtreeAssembly] error getting tx metas from store: %s", err)
 			}
 
-			for n := i; n < end; n++ {
-				txMeta, ok := txMetas[subtree.Nodes[n].Hash]
-				if !ok {
-					return fmt.Errorf("[SubtreeAssembly] error getting tx meta from store: %s", err)
+			for _, data := range missingTxHashesCompacted {
+				if data.Data != nil {
+					results[data.Idx] = data.Data.Tx.Bytes()
 				}
-				results[n] = txMeta.Tx.Bytes()
 			}
 
 			return nil
 		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("[SubtreeAssembly] error getting tx metas from store: %s", err)
 	}
 
 	// get the tx bytes in order

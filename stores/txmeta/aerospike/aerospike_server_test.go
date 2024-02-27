@@ -178,16 +178,18 @@ func TestAerospike(t *testing.T) {
 		_, err = db.Create(ctx, tx3)
 		require.NoError(t, err)
 
-		var value map[chainhash.Hash]*txmeta.Data
-		value, err = db.GetMulti(ctx, []*chainhash.Hash{hash, hash2, hash3})
+		items := make([]txmeta.MissingTxHash, 3)
+		items[0] = txmeta.MissingTxHash{Hash: hash}
+		items[1] = txmeta.MissingTxHash{Hash: hash2}
+		items[2] = txmeta.MissingTxHash{Hash: hash3}
+
+		err = db.MetaBatchDecorate(ctx, items)
 		require.NoError(t, err)
 
-		assert.Len(t, value, 3)
-
-		for h, data := range value {
-			switch h.String() {
+		for _, item := range items {
+			switch item.Hash.String() {
 			case hash.String():
-				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash.String())
+				assert.Equal(t, item.Data.Tx.TxIDChainHash().String(), hash.String())
 				//assert.Equal(t, uint64(101), data.Fee)
 				//assert.Equal(t, uint64(60), data.SizeInBytes)
 				//assert.Len(t, data.ParentTxHashes, 1)
@@ -195,12 +197,12 @@ func TestAerospike(t *testing.T) {
 				//assert.Len(t, data.BlockIDs, 0)
 				//assert.Nil(t, data.BlockIDs)
 			case hash2.String():
-				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash2.String())
+				assert.Equal(t, item.Data.Tx.TxIDChainHash().String(), hash2.String())
 				//assert.Equal(t, uint64(102), data.Fee)
 				//assert.Len(t, data.BlockIDs, 0)
 				//assert.Nil(t, data.BlockIDs)
 			case hash3.String():
-				assert.Equal(t, data.Tx.TxIDChainHash().String(), hash3.String())
+				assert.Equal(t, item.Data.Tx.TxIDChainHash().String(), hash3.String())
 				//assert.Equal(t, uint64(103), data.Fee)
 				//assert.Len(t, data.BlockIDs, 0)
 				//assert.Nil(t, data.BlockIDs)
