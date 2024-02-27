@@ -728,7 +728,7 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 	v := ValidateSubtree{
 		SubtreeHash:      subtreeHash,
 		BaseUrl:          baseUrl,
-		Quick:            false,
+		FailFast:         false,
 		SubtreeHashes:    nil,
 		AbandonThreshold: abandonTxThreshold,
 	}

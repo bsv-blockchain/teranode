@@ -52,7 +52,7 @@ func Run() error {
 		// Build the Docker services
 		exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
 	} else {
-		return fmt.Errorf("No valid command provided. Use --up to start services or --clean for cleanup.")
+		return fmt.Errorf("no valid command provided. Use --up to start services or --clean for cleanup")
 	}
 	return nil
 }

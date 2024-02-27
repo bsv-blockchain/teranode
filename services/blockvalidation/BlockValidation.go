@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ordishs/go-utils/expiringmap"
@@ -664,7 +663,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			v := ValidateSubtree{
 				SubtreeHash:      *subtreeHash,
 				BaseUrl:          baseUrl,
-				Quick:            false,
+				FailFast:         false,
 				SubtreeHashes:    subtreeBytesMap[*subtreeHash],
 				AbandonThreshold: 0, // 0 means no abandon threshold
 			}
@@ -830,7 +829,7 @@ func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx
 type ValidateSubtree struct {
 	SubtreeHash      chainhash.Hash
 	BaseUrl          string
-	Quick            bool
+	FailFast         bool
 	SubtreeHashes    []chainhash.Hash
 	AbandonThreshold int
 }
@@ -891,23 +890,23 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 
-	u.logger.Infof("[validateSubtreeInternal][%s] processing %d txs from subtree (quick=%v)", v.SubtreeHash.String(), len(txHashes), v.Quick)
+	u.logger.Infof("[validateSubtreeInternal][%s] processing %d txs from subtree (quick=%v)", v.SubtreeHash.String(), len(txHashes), v.FailFast)
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 	// 1. First attempt to load the txMeta from the cache...
-	missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, v.Quick)
+	missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, v.FailFast)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
 	}
 
-	if v.Quick && missed > v.AbandonThreshold {
+	if v.FailFast && missed > v.AbandonThreshold {
 		u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries - aborting subtree validation", v.SubtreeHash.String()))
 		return nil
 	}
 
 	if missed > 0 {
 		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, missed, false, v.Quick)
+		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, missed, false, v.FailFast)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", v.SubtreeHash.String()), err)
 		}
@@ -991,130 +990,6 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	prometheusBlockValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
 	return nil
-}
-
-func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingCache")
-	defer stat.AddTime(start)
-
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
-	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_cache_miss_threshold", 1)
-
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(validateSubtreeInternalConcurrency)
-
-	cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache)
-	if !ok {
-		u.logger.Errorf("[processTxMetaUsingCache] txMetaStore is not a cached implementation")
-		return len(txHashes), nil // As there was no cache, we "missed" all the txHashes
-	}
-
-	missed := atomic.Int32{}
-
-	// cycle through batches of 1024 txHashes at a time
-	for i := 0; i < len(txHashes); i += batchSize {
-		i := i
-
-		g.Go(func() error {
-			var txMeta *txmeta.Data
-
-			// cycle through the batch size, making sure not to go over the length of the txHashes
-			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-
-				select {
-				case <-gCtx.Done(): // Listen for cancellation signal
-					return gCtx.Err() // Return the error that caused the cancellation
-
-				default:
-					txHash := txHashes[i+j]
-
-					if txHash.Equal(*model.CoinbasePlaceholderHash) {
-						// coinbase placeholder is not in the store
-						continue
-					}
-
-					txMeta = cache.GetMetaCached(gCtx, &txHash)
-					if txMeta != nil {
-						txMetaSlice[i+j] = txMeta
-						continue
-					}
-
-					newMissed := missed.Add(1)
-					if failFast && newMissed > int32(missingTxThreshold) {
-						return fmt.Errorf("missed threshold reached")
-					}
-				}
-			}
-
-			return nil
-		})
-	}
-
-	return int(missed.Load()), g.Wait()
-}
-
-func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, previouslyMissed int, batched bool, failFast bool) (int, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingStore")
-	defer stat.AddTime(start)
-
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeBatchSize", 1024)
-	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateSubtreeInternal", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_store_miss_threshold", 1000)
-
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(validateSubtreeInternalConcurrency)
-
-	var missed atomic.Int32
-
-	if batched {
-		// TODO: implement batched processing
-		return len(txHashes), nil
-
-	} else {
-
-		for i := 0; i < len(txHashes); i += batchSize {
-			i := i
-
-			g.Go(func() error {
-				// cycle through the batch size, making sure not to go over the length of the txHashes
-				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-
-					select {
-					case <-gCtx.Done(): // Listen for cancellation signal
-						return gCtx.Err() // Return the error that caused the cancellation
-
-					default:
-						txHash := txHashes[i+j]
-
-						if txHash.Equal(*model.CoinbasePlaceholderHash) {
-							// coinbase placeholder is not in the store
-							continue
-						}
-
-						txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
-						if err != nil {
-							return err
-						}
-
-						if txMeta != nil {
-							txMetaSlice[i+j] = txMeta
-							continue
-						}
-
-						newMissed := missed.Add(1)
-						if failFast && newMissed > int32(missingTxThreshold) {
-							return fmt.Errorf("missed threshold reached")
-						}
-					}
-				}
-
-				return nil
-			})
-		}
-
-		return int(missed.Load()), g.Wait()
-	}
 }
 
 func (u *BlockValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {

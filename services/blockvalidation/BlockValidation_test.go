@@ -83,7 +83,7 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
 			BaseUrl:       "http://localhost:8000",
-			Quick:         false,
+			FailFast:      false,
 			SubtreeHashes: nil,
 		}
 		err = blockValidation.validateSubtree(context.Background(), v)
@@ -174,7 +174,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *rootHash,
 		BaseUrl:       "http://localhost:8000",
-		Quick:         false,
+		FailFast:      false,
 		SubtreeHashes: nil,
 	}
 	err = blockValidation.validateSubtree(context.Background(), v)
