@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImprovedCache_Get(t *testing.T) {
+func TestImprovedCache_SetGetTest(t *testing.T) {
 	// initialize improved cache with 1MB capacity
 	cache := NewImprovedCache(1 * 1024 * 1024)
 	cache.Set([]byte("key"), []byte("value"))
@@ -38,7 +38,7 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 }
 
 func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
-	cache := NewImprovedCache(1 * 1024 * 2) //100 * 1024 * 1024)
+	cache := NewImprovedCache(1*1024*2, true) //100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
 	valueSecond := []byte("second")
@@ -69,7 +69,7 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 		// }
 	}
 
-	fmt.Println("\n\n\n Second Part")
+	//fmt.Println("\n\n\n Second Part")
 
 	err = cache.SetMultiKeysSingleValueAppended(allKeys, valueSecond, chainhash.HashSize)
 	require.NoError(t, err)
@@ -89,7 +89,8 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 }
 
 func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
-	cache := NewImprovedCache(100 * 1024 * 1024)
+	// We test appending performance, so we will use unallocated cache
+	cache := NewImprovedCache(100*1024*1024, true)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
 	numberOfKeys := 2_000 * bucketsCount
@@ -115,74 +116,63 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	}
 }
 
-/*
-	func TestImprovedCache_SetMulti(t *testing.T) {
-		cache := NewImprovedCache(200 * 1024 * 1024)
-		allKeys := make([][]byte, 0)
-		allValues := make([][]byte, 0)
-		var err error
-		numberOfKeys := 100 * bucketsCount
+func TestImprovedCache_SetMulti(t *testing.T) {
+	cache := NewImprovedCache(100 * 1024 * 1024)
+	allKeys := make([][]byte, 0)
+	allValues := make([][]byte, 0)
+	var err error
+	numberOfKeys := 1000 * bucketsCount
 
-		// cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
-		// number of buckets: 512
-		// bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
-		// chunk size: 2 * 1024 * 16 = 32 KB
-		// number of total chunks: 2 GB / 32 KB = 65536 chunks
-		// number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
-		// key size: 32 bytes, value size: 32 bytes, kvLen: 4 bytes. Total size: 68 bytes for each key-value pair
-		// number of key-value pairs per chunk: 32 KB / 68 bytes = 470 key-value pairs per chunk
-		// number of key-value pairs per bucket: 470 * 128 = 60160 key-value pairs per bucket
+	// cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
+	// number of buckets: 512
+	// bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
+	// chunk size: 2 * 1024 * 16 = 32 KB
+	// number of total chunks: 2 GB / 32 KB = 65536 chunks
+	// number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
+	// key size: 32 bytes, value size: 32 bytes, kvLen: 4 bytes. Total size: 68 bytes for each key-value pair
+	// number of key-value pairs per chunk: 32 KB / 68 bytes = 470 key-value pairs per chunk
+	// number of key-value pairs per bucket: 470 * 128 = 60160 key-value pairs per bucket
 
-		for i := 0; i < numberOfKeys; i++ {
-			key := make([]byte, 32)
-			value := make([]byte, 32)
-			_, err = rand.Read(key)
-			require.NoError(t, err)
-			allKeys = append(allKeys, key)
-			binary.LittleEndian.PutUint64(value, uint64(i))
-			allValues = append(allValues, value)
-		}
-
-		startTime := time.Now()
-		err = cache.SetMulti(allKeys, allValues)
+	for i := 0; i < numberOfKeys; i++ {
+		key := make([]byte, 32)
+		value := make([]byte, 32)
+		_, err = rand.Read(key)
 		require.NoError(t, err)
-		t.Log("SetMulti took:", time.Since(startTime))
-
-		for i, key := range allKeys {
-			dst := make([]byte, 0)
-			err = cache.Get(&dst, key)
-			require.NoError(t, err)
-			require.Equal(t, allValues[i], dst)
-		}
-
-		err = cache.SetMulti(allKeys, allValues)
-		require.NoError(t, err)
-
-		for i, key := range allKeys {
-			dst := make([]byte, 0)
-			err := cache.Get(&dst, key)
-			require.NoError(t, err)
-			require.Equal(t, allValues[i], dst)
-		}
+		allKeys = append(allKeys, key)
+		binary.LittleEndian.PutUint64(value, uint64(i))
+		allValues = append(allValues, value)
 	}
-*/
+
+	startTime := time.Now()
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti took:", time.Since(startTime))
+
+	for i, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cache.Get(&dst, key)
+		require.NoError(t, err)
+		require.Equal(t, allValues[i], dst)
+	}
+
+	// err = cache.SetMulti(allKeys, allValues)
+	// require.NoError(t, err)
+
+	// for i, key := range allKeys {
+	// 	dst := make([]byte, 0)
+	// 	err := cache.Get(&dst, key)
+	// 	require.NoError(t, err)
+	// 	require.Equal(t, allValues[i], dst)
+	// }
+}
+
 func TestImprovedCache_Trimming(t *testing.T) {
-	cache := NewImprovedCache(1 * 1024 * 1024) // (256 * 1024 * 1024)
+	cache := NewImprovedCache(200 * 1024 * 1024) // (256 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
 	//numberOfKeys := (3760 * bucketsCount) + 1
 	numberOfKeys := (2000 * bucketsCount)
-
-	// cache size : 128 * 1024 * 1024 bytes -> 128 KB
-	// number of buckets: 512
-	// bucket size: 128 MB / 512 = 256 KB
-	// chunk size: 2 * 1024 * 16 = 32 KB
-	// number of total chunks: 128MB / 32 KB = 4096 chunks
-	// number of chunks per bucket: 4096 / 512 = 8 chunks per bucket
-	// key size: 32 bytes, value size: 32 bytes, kvLen: 4 bytes. Total size: 68 bytes for each key-value pair
-	// number of key-value pairs per chunk: 32 KB / 68 bytes = 470 key-value pairs per chunk
-	// number of key-value pairs per bucket: 470 * 8 = 3760 key-value pairs per bucket -> even if everything is perfectly balanced
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -210,20 +200,22 @@ func TestImprovedCache_Trimming(t *testing.T) {
 	require.NotZero(t, errCounter)
 }
 
-func TestImprovedCache_SetMulti(t *testing.T) {
-	cache := NewImprovedCache(1 * 1024 * 2) // 100 * 1024 * 1024
+func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
+	cache := NewImprovedCache(256 * 1024 * 1024)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 15 //100 * bucketsCount
+	numberOfKeys := 3936256 * 5
 
-	// cache size : 1 * 1024 * 2 bytes -> 2 KB
-	// number of buckets: 4
-	// max bucket size: 512 bytes -> 512 * 4 = 2048 bytes -> 2 KB
-	// chunk size: 2 * 64 = 128 bytes
-	// number of total chunks: 2 KB / 128 bytes = 16 chunks
-	// number of chunks per bucket: 16 / 4 = 4 chunks per bucket
-	// max value size in KB: 2
+	// cache size : 256 * 1024 * 1024 bytes -> 256 MB
+	// number of buckets: 1024
+	// bucket size: 256 MB / 1024 = 256 KB
+	// chunk size: 2 * 1024 * 16 = 32 KB
+	// 256 KB / 32 KB = 8 chunks per bucket
+	// 32 KB to bytes = 32 * 1024 = 32768 bytes
+	// 32768 / 68  = 481 key-value pairs per chunk
+	// 481 * 8 = 3848 key-value pairs per bucket
+	// 3848 * 1024 = 3936256 key-value pairs per cache
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -245,22 +237,9 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		dst := make([]byte, 0)
 		err = cache.Get(&dst, key)
 		if err != nil {
-			//fmt.Println("error at index:", i, "error:", err)
 			errCounter++
 		}
-
-		//require.NoError(t, err)
-		//require.Equal(t, allValues[i], dst)
 	}
 	fmt.Println("errors:", errCounter)
-
-	// err = cache.SetMulti(allKeys, allValues)
-	// require.NoError(t, err)
-
-	// for i, key := range allKeys {
-	// 	dst := make([]byte, 0)
-	// 	err := cache.Get(&dst, key)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, append(allValues[i], allValues[i]...), dst)
-	// }
+	require.NotZero(t, errCounter)
 }
