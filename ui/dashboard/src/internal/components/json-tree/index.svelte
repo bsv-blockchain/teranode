@@ -12,11 +12,10 @@
 
   $: t = $i18n.t
 
-  // internal (invloved in recursion, leave alone)
+  // internal, don't set manually
   export let level = 0 // used internally to set recursive level
   export let id = 'exp'
-
-  // expand/close state
+  export let isLastChild = false
   export let expandState = {}
   let expIds: string[] = []
 
@@ -134,7 +133,8 @@
                     data={value}
                     {blockHash}
                     level={level + 1}
-                    showFinalComma={i < entries.length - 1}
+                    {showFinalComma}
+                    isLastChild={i === entries.length - 1}
                     id={id + '_' + i}
                     bind:expandState
                   />
@@ -164,7 +164,8 @@
                             parentKey={key}
                             {blockHash}
                             level={level + 2}
-                            showFinalComma={j < value.length - 1}
+                            {showFinalComma}
+                            isLastChild={j === entries.length - 1}
                             inlineObj={false}
                             id={id + '_' + i + '_' + j}
                             bind:expandState
@@ -172,52 +173,53 @@
                         </li>
                       {/each}
                     </ul>
-                    &#93;{#if showCommas},{/if}
+                    &#93;{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                   {/if}
                 {/if}
               {:else if getType(value) === 'string'}
                 {#if value.length === 64}
                   {#if key.toLowerCase().includes('txid')}
                     <a href={getDetailsUrl(DetailType.tx, value)}>"{value}"</a
-                    >{#if showCommas && i < entries.length - 1},{/if}
+                    >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                   {:else if key.includes('block') || key === 'hash'}
                     <a href={getDetailsUrl(DetailType.block, value)}>"{value}"</a
-                    >{#if showCommas && i < entries.length - 1},{/if}
+                    >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                   {:else if key === 'utxoHash'}
                     <a href={getDetailsUrl(DetailType.utxo, value)}>"{value}"</a
-                    >{#if showCommas && i < entries.length - 1},{/if}
+                    >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                   {:else}
                     <span class="string">"{value}"</span
-                    >{#if showCommas && i < entries.length - 1},{/if}
+                    >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                   {/if}
                 {:else}
                   <span class="string">"{value}"</span
-                  >{#if showCommas && i < entries.length - 1},{/if}
+                  >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
                 {/if}
               {:else if getType(value) === 'number'}
-                <span class="string2">{value}</span>{#if showCommas && i < entries.length - 1},{/if}
+                <span class="string2">{value}</span
+                >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
               {:else}
                 <span class={getType(value)}>{value}</span
-                >{#if showCommas && i < entries.length - 1},{/if}
+                >{#if showCommas && (showFinalComma || i < entries.length - 1)},{/if}
               {/if}
             </li>
           {/each}
         </ul>
-        &#125;{#if showCommas && showFinalComma},{/if}
+        &#125;{#if showCommas && (showFinalComma || !isLastChild) && level > 0},{/if}
       {/if}
     {:else if castToArray(data).length === 64 && parentKey === 'subtrees'}
       <a href={getDetailsUrl(DetailType.subtree, `${data}`, blockHash ? { blockHash } : {})}
         >"{data}"</a
-      >{#if showCommas && showFinalComma},{/if}
+      >{#if showCommas && (showFinalComma || !isLastChild)},{/if}
     {:else if castToArray(data).length === 64 && parentKey.includes('block')}
       <a href={getDetailsUrl(DetailType.block, `${data}`)}>"{data}"</a
-      >{#if showCommas && showFinalComma},{/if}
+      >{#if showCommas && (showFinalComma || !isLastChild)},{/if}
     {:else if castToArray(data).length === 64 && parentKey.includes('utxo')}
       <a href={getDetailsUrl(DetailType.utxo, `${data}`)}>"{data}"</a
-      >{#if showCommas && showFinalComma},{/if}
+      >{#if showCommas && (showFinalComma || !isLastChild)},{/if}
     {:else if castToArray(data).length === 64 && parentKey.includes('parentTx')}
       <a href={getDetailsUrl(DetailType.tx, `${data}`)}>"{data}"</a
-      >{#if showCommas && showFinalComma},{/if}
+      >{#if showCommas && (showFinalComma || !isLastChild)},{/if}
     {:else}
       <span class={getType(data)}>{data}</span>{#if showCommas && showFinalComma},{/if}
     {/if}
