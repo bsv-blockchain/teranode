@@ -25,7 +25,7 @@ function build_local_image {
     local GITHUB_SHA=$1
     local DEBUG=true
     local RACE=true
-    local ID=$(cat ./deploy/docker/CLUSTER_BASE_ID)
+    local ID=$(cat $DIR/../deploy/docker/CLUSTER_BASE_ID)
 
     if [[ -z $OFFLINE ]]; then
         CERT=$(aws ecr get-login-password --region eu-north-1)
@@ -39,6 +39,8 @@ function build_local_image {
             exit 1
         fi
     fi
+
+    cd $DIR/..
 
     docker buildx build \
     --build-arg BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-$ID \
@@ -115,30 +117,6 @@ case $ENVIRONMENT in
         exit 1
         ;;
 esac
-
-# Check if the image tag is "latest" or a valid SHA1 hash
-if [[ $ENVIRONMENT == "docker-desktop" && $IMAGE_TAG == "local" ]]; then   
-   
-   GITHUB_SHA=$(git rev-parse HEAD)
-   build_local_image $GITHUB_SHA
-
-elif [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ && ! $IMAGE_TAG =~ ^(scaling-){0,1}v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Invalid image tag. Please specify 'latest', a valid SHA1 hash, or a version tag."
-    exit 1
-fi
-
-if [[ $ENVIRONMENT == "docker-desktop" && $IMAGE_TAG == "local" ]]; then 
-    IMAGE_NAME="ubsv:$GITHUB_SHA"
-else 
-    if [[ $IMAGE_TAG == "latest" ]]; then
-        # Extract the git commit hash by querying the ECR repository with this horrible command...
-        IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
-    fi
-
-    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
-fi
-
-echo "Using image tag: $IMAGE_TAG" >&2
 
 REGION=$(kubectl config view --minify --output 'jsonpath={..name}' | cut -d ' ' -f1 | cut -d ':' -f 4)
 NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
@@ -217,7 +195,6 @@ else
     exit 1
 fi
 
-
 # Check the folders exist...
 if [[ ! -d $DIR/k8s/base/${ENVIRONMENT}-miner ]]; then
     echo ""
@@ -234,6 +211,31 @@ if [[ ! -d $DIR/k8s/$REGION/$ENVIRONMENT ]]; then
     echo ""
     exit 1
 fi
+
+# Check if the image tag is "latest" or a valid SHA1 hash
+if [[ $ENVIRONMENT == "docker-desktop" && $IMAGE_TAG == "local" ]]; then   
+   
+   GITHUB_SHA=$(git rev-parse HEAD)
+   build_local_image $GITHUB_SHA
+
+elif [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ && ! $IMAGE_TAG =~ ^(scaling-){0,1}v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid image tag. Please specify 'latest', a valid SHA1 hash, or a version tag."
+    exit 1
+fi
+
+if [[ $ENVIRONMENT == "docker-desktop" && $IMAGE_TAG == "local" ]]; then 
+    IMAGE_NAME="ubsv:$GITHUB_SHA"
+else 
+    if [[ $IMAGE_TAG == "latest" ]]; then
+        # Extract the git commit hash by querying the ECR repository with this horrible command...
+        IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
+    fi
+
+    IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"
+fi
+
+echo "Using image tag: $IMAGE_TAG" >&2
+
 
 cd $DIR/k8s/base/${ENVIRONMENT}-miner
 
