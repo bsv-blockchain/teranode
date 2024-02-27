@@ -36,6 +36,11 @@ type TxMetaCache struct {
 }
 
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
+	if _, ok := txMetaStore.(*TxMetaCache); ok {
+		// txMetaStore is a TxMetaCache, this is not allowed
+		panic("Cannot use TxMetaCache as the underlying store for TxMetaCache")
+	}
+
 	initPrometheusMetrics()
 
 	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 32)
@@ -163,16 +168,17 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 }
 
 func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash, fields ...string) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
-	var err error
-	for _, hash := range hashes {
-		if results[*hash], err = t.Get(ctx, hash); err != nil {
-			return nil, err
-		}
+	m, err := t.txMetaStore.GetMulti(ctx, hashes, fields...)
+	if err != nil {
+		return nil, err
 	}
 
-	return results, nil
+	for hash, txMeta := range m {
+		txMeta.Tx = nil
+		_ = t.SetCache(&hash, txMeta)
+	}
+
+	return m, nil
 }
 
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
