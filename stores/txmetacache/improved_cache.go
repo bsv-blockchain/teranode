@@ -196,7 +196,7 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		//g.Go(func() error {
-		fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
+		//fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
 		c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 		//return nil
 		//})
@@ -221,6 +221,7 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % bucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
+		fmt.Println("ERROR getting for bucket: ", idx, " , current bucket idx: ", c.buckets[idx].idx, ", checking for key: ", k, "\ncurrent b.map: ", c.buckets[idx].m)
 		return fmt.Errorf("key %s not found in cache", k)
 	}
 	return nil
@@ -410,7 +411,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 	var hash uint64
 
 	for i, key := range keys {
-		fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
+		//fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
 		hash = xxhash.Sum64(key)
 		b.Set(key, values[i], hash, true)
 	}
@@ -525,29 +526,30 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
-	fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
+	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
-		fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
+		//	fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
 			fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
 			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
+			//fmt.Println(" num of chunks to remove: ", numOfChunksToRemove, " num of chunks to keep: ", numOfChunksToKeep)
 
+			// numOfChunksToKeep = 3, umber of chunks to remove  =1
 			// Shift the more recent half of the chunks to the start of the array
 			for i := 0; i < numOfChunksToKeep; i++ {
 				chunks[i] = chunks[i+numOfChunksToRemove]
 			}
 
 			// Clear the rest of the chunks
+			//itemsZeroed := 0
 			for i := numOfChunksToKeep; i < len(chunks); i++ {
-				chunks[i] = chunks[i][:0]
-				// make chunks[i] full of zeros
-				for j := range chunks[i] {
-					chunks[i][j] = 0
-				}
+				chunks[i] = make([]byte, chunkSize, chunkSize)
 			}
+
+			//fmt.Println("chunks after clearing: ", chunks)
 
 			idx = chunkSize * uint64(numOfChunksToKeep)
 			idxNew = idx + kvLen
@@ -567,7 +569,6 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
 	chunk := chunks[chunkIdx]
 	if chunk == nil || len(chunk) == 0 {
-		fmt.Println(" YOU SHOULD NEVER ENTER HERE!")
 		fmt.Println("YOU SHOULD NEVER ENTER HERE!,  chunks: ", chunks, "idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx)
 
 		chunk = b.getChunk()
@@ -584,7 +585,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	chunks[chunkIdx] = chunk
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
-	fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, ", chunks:", chunks)
+	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, ", chunks:", chunks)
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
