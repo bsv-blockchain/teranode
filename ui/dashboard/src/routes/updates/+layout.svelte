@@ -6,6 +6,7 @@
 
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
+  import Icon from '$lib/components/icon/index.svelte'
   import Post from '$internal/components/post/index.svelte'
   import i18n from '$internal/i18n'
 
@@ -15,12 +16,24 @@
   export let data: LayoutData
 
   $: sortedPosts = data.posts.sort((a: any, b: any) => b.timestamp - a.timestamp)
-  $: showPosts = !slug || $mediaSize > MediaSize.sm
+  $: showPosts = !slug || ($mediaSize > MediaSize.sm && !maxMsg)
+  $: showExpand = $mediaSize > MediaSize.sm
 
   const pageKey = 'page.updates'
 
   function onPostSelect(slug: string) {
     goto(`/updates/${slug}`)
+  }
+
+  let maxMsg = false
+  function onMaxMsg() {
+    maxMsg = !maxMsg
+  }
+
+  $: {
+    if (!slug) {
+      maxMsg = false
+    }
   }
 </script>
 
@@ -45,7 +58,17 @@
       </div>
     {/if}
     {#if slug}
-      <div class="slug" in:fly={{ x: 200, opacity: 0, duration: 300 }} out:fade={{ delay: 100 }}>
+      <div
+        class="slug"
+        class:maxMsg
+        in:fly={{ x: 200, opacity: 0, duration: 300 }}
+        out:fade={{ delay: 100 }}
+      >
+        {#if showExpand}
+          <div class="expand" on:click={onMaxMsg}>
+            <Icon name="icon-chevron-left-line" size={15} />
+          </div>
+        {/if}
         <slot />
       </div>
     {/if}
@@ -113,7 +136,30 @@
   .slug {
     width: 60%;
   }
+  .slug.maxMsg,
   .layout.small .slug {
     width: 100%;
+  }
+
+  .expand {
+    box-sizing: var(--box-sizing);
+
+    color: rgba(255, 255, 255, 0.3);
+    width: 15px;
+    height: 15px;
+
+    float: right;
+    margin-top: 10px;
+    margin-right: 10px;
+
+    transform: rotate(0deg);
+    transition: transform var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
+  }
+  .slug.maxMsg .expand {
+    transform: rotate(180deg);
+  }
+  .expand:hover {
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
   }
 </style>
