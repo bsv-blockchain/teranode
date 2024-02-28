@@ -26,6 +26,10 @@
     goto(`/updates/${slug}`)
   }
 
+  function onPosts() {
+    goto(`/updates`)
+  }
+
   let maxMsg = false
   function onMaxMsg() {
     maxMsg = !maxMsg
@@ -61,7 +65,7 @@
     {#if slug}
       <div
         class="slug"
-        class:maxMsg
+        class:maxMsg={maxMsg && showExpand}
         in:fly={{ x: 200, opacity: 0, duration: 300 }}
         out:fade={{ delay: 100 }}
       >
@@ -74,6 +78,16 @@
             }}
           >
             <Icon name="icon-chevron-left-line" size={15} />
+          </div>
+        {:else}
+          <div
+            class="expand"
+            on:click={onPosts}
+            use:$tippy={{
+              content: t('tooltip.to-posts'),
+            }}
+          >
+            <Icon name="icon-chevron-up-line" size={15} />
           </div>
         {/if}
         <slot />

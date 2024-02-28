@@ -365,7 +365,8 @@
     "expand-all": "Expand all",
     "collapse-all": "Collapse all",
     "expand": "Expand",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "to-posts": "To posts"
   },
   "graph": {
     "series": {
