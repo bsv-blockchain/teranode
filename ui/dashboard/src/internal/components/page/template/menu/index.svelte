@@ -111,7 +111,7 @@
     enableCollapse={!showMobileNavbar}
     minWidth={60}
     maxWidth={212}
-    offsetTop={'var(--banner-height)'}
+    offsetTop={'var(--banner-height, 0)'}
     collapsed={!expanded}
     showCover={showMobileNavbar}
     showHeader={!showMobileNavbar}

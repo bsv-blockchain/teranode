@@ -160,7 +160,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	}, nil
 }
 
-func (s *Store) MetaBatchDecorate(ctx context.Context, items []txmeta.MissingTxHash, fields ...string) error {
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
 	for _, item := range items {
 		data, err := s.Get(ctx, item.Hash)

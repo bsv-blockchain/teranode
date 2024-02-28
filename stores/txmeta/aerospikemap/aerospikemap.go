@@ -155,7 +155,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) MetaBatchDecorate(ctx context.Context, hashes []txmeta.MissingTxHash, fields ...string) error {
+func (s *Store) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
 	return errors.New("not implemented")
 }
 

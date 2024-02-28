@@ -194,7 +194,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) MetaBatchDecorate(ctx context.Context, items []txmeta.MissingTxHash, fields ...string) error {
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	//policy := util.GetAerospikeBatchReadPolicy()

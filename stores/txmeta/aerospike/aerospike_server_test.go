@@ -178,10 +178,10 @@ func TestAerospike(t *testing.T) {
 		_, err = db.Create(ctx, tx3)
 		require.NoError(t, err)
 
-		items := make([]txmeta.MissingTxHash, 3)
-		items[0] = txmeta.MissingTxHash{Hash: hash}
-		items[1] = txmeta.MissingTxHash{Hash: hash2}
-		items[2] = txmeta.MissingTxHash{Hash: hash3}
+		items := make([]*txmeta.MissingTxHash, 3)
+		items[0] = &txmeta.MissingTxHash{Hash: hash}
+		items[1] = &txmeta.MissingTxHash{Hash: hash2}
+		items[2] = &txmeta.MissingTxHash{Hash: hash3}
 
 		err = db.MetaBatchDecorate(ctx, items)
 		require.NoError(t, err)
@@ -279,6 +279,29 @@ func TestAerospike(t *testing.T) {
 		require.ErrorIs(t, err, txmeta.NewErrTxmetaNotFound(blockHash))
 	})
 
+	t.Run("aerospike read batch", func(t *testing.T) {
+		cleanDB(t, client)
+		_, err = db.Create(ctx, tx)
+		require.NoError(t, err)
+
+		_, err = db.Create(ctx, tx2)
+		require.NoError(t, err)
+
+		_, err = db.Create(ctx, tx3)
+		require.NoError(t, err)
+
+		items := make([]*txmeta.MissingTxHash, 3)
+		items[0] = &txmeta.MissingTxHash{Hash: hash}
+		items[1] = &txmeta.MissingTxHash{Hash: hash2}
+		items[2] = &txmeta.MissingTxHash{Hash: hash3}
+
+		err = db.MetaBatchDecorate(ctx, items, "tx", "fee", "sizeInBytes")
+		require.NoError(t, err)
+
+		assert.Equal(t, uint64(101), items[0].Data.Fee)
+		assert.Equal(t, uint64(102), items[1].Data.Fee)
+		assert.Equal(t, uint64(103), items[2].Data.Fee)
+	})
 }
 
 func cleanDB(t *testing.T, client *aerospike.Client) {
