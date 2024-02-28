@@ -41,7 +41,7 @@
 
   let w
 
-  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 45 : 570
+  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
 </script>
 
 <svelte:window bind:innerWidth={w} />
