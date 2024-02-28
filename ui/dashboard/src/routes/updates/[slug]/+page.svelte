@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import Markdown from 'svelte-exmarkdown'
 
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -40,7 +41,10 @@
 </script>
 
 {#if currentPost}
-  <div class="post-details">
+  <div
+    class="post-details"
+    style:--padding={$mediaSize <= MediaSize.sm ? '10px 20px 10px 24px' : '10px 20px 10px 30px'}
+  >
     <Markdown md={currentPost} />
   </div>
 {/if}
@@ -53,7 +57,7 @@
     flex-direction: column;
     gap: 6px;
 
-    padding: 10px 20px 10px 30px;
+    padding: var(--padding);
     border-radius: 12px;
     border-left: 1px solid #151a20;
 

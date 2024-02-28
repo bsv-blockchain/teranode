@@ -5,7 +5,7 @@
     $mediaSize <= MediaSize.lg
       ? $mediaSize <= MediaSize.sm
         ? $mediaSize <= MediaSize.xs
-          ? 10
+          ? 16
           : 20
         : 32
       : 90

@@ -12,8 +12,7 @@
   import { tableVariant } from '$internal/stores/nav'
   import { addNumCommas } from '$lib/utils/format'
   import { getColDefs, getRenderCells } from './data'
-  import { getTps, getTpsStrFromValue, getTpsValue } from '$internal/utils/txs'
-  import { getHumanReadableTime } from '$internal/utils/format'
+  import { getTpsValue } from '$internal/utils/txs'
 
   const baseKey = 'page.viewer'
 
