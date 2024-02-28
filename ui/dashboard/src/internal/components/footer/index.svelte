@@ -58,6 +58,7 @@
     box-sizing: var(--box-sizing);
 
     padding: var(--padding);
+    margin-top: -1px;
 
     width: 100%;
     height: var(--footer-height);
