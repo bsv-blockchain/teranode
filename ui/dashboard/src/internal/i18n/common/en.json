@@ -363,7 +363,9 @@
     "next-block": "Next block",
     "refresh": "Refresh",
     "expand-all": "Expand all",
-    "collapse-all": "Collapse all"
+    "collapse-all": "Collapse all",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "graph": {
     "series": {

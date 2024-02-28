@@ -5,6 +5,7 @@
   import { fade, fly } from 'svelte/transition'
 
   import { mediaSize, MediaSize } from '$lib/stores/media'
+  import { tippy } from '$lib/stores/media'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import Icon from '$lib/components/icon/index.svelte'
   import Post from '$internal/components/post/index.svelte'
@@ -65,7 +66,13 @@
         out:fade={{ delay: 100 }}
       >
         {#if showExpand}
-          <div class="expand" on:click={onMaxMsg}>
+          <div
+            class="expand"
+            on:click={onMaxMsg}
+            use:$tippy={{
+              content: maxMsg ? t('tooltip.collapse') : t('tooltip.expand'),
+            }}
+          >
             <Icon name="icon-chevron-left-line" size={15} />
           </div>
         {/if}
