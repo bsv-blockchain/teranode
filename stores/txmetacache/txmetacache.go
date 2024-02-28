@@ -167,7 +167,7 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []txmeta.MissingTxHash, fields ...string) error {
+func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
 	if err := t.txMetaStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}

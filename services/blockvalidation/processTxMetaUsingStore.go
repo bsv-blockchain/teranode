@@ -38,7 +38,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 			g.Go(func() error {
 				end := util.Min(i+batchSize, len(txHashes))
 
-				missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, end-i)
+				missingTxHashesCompacted := make([]*txmeta.MissingTxHash, 0, end-i)
 
 				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
 					select {
@@ -48,7 +48,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 					default:
 
 						if txMetaSlice[i+j] == nil {
-							missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
+							missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
 								Hash: &txHashes[i+j],
 								Idx:  i + j,
 							})

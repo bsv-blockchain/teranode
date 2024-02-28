@@ -101,14 +101,14 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 
 		end := util.Min(i+batchSize, len(subtree.Nodes))
 
-		missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, end-i)
+		missingTxHashesCompacted := make([]*txmeta.MissingTxHash, 0, end-i)
 
 		g.Go(func() error {
 
 			for j := 0; j < util.Min(batchSize, len(subtree.Nodes)-i); j++ {
 
 				if !subtree.Nodes[i+j].Hash.Equal(model.CoinbasePlaceholder) {
-					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
+					missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
 						Hash: &subtree.Nodes[i+j].Hash,
 						Idx:  i + j,
 					})

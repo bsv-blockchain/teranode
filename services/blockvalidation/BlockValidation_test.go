@@ -70,6 +70,11 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		_, err = txMetaStore.Create(context.Background(), tx4)
 		require.NoError(t, err)
 
+		t.Log(tx1.TxIDChainHash().String())
+		t.Log(tx2.TxIDChainHash().String())
+		t.Log(tx3.TxIDChainHash().String())
+		t.Log(tx4.TxIDChainHash().String())
+
 		nodeBytes, err := subtree.SerializeNodes()
 		require.NoError(t, err)
 

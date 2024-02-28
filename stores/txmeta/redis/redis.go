@@ -169,7 +169,7 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 	return data, nil
 }
 
-func (r *Redis) MetaBatchDecorate(ctx context.Context, items []txmeta.MissingTxHash, fields ...string) error {
+func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
 	for _, item := range items {
 		data, err := r.Get(ctx, item.Hash)

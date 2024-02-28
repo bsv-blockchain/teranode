@@ -48,7 +48,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *Memory) MetaBatchDecorate(ctx context.Context, items []txmeta.MissingTxHash, fields ...string) error {
+func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
 	for _, item := range items {
 		data, err := m.Get(ctx, item.Hash)
