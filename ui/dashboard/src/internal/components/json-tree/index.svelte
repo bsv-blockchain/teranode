@@ -16,7 +16,7 @@
   export let level = 0 // used internally to set recursive level
   export let id = 'exp'
   export let isLastChild = false
-  export let expandState = {}
+  export let expandState = {} // mapping from "expand" block id's to boolean indicating whether the block should be collapsed
   let expIds: string[] = []
 
   // options
@@ -53,6 +53,8 @@
       return
     }
     expandState = { ...expIds.reduce((acc, id) => ({ ...acc, [id]: value }), {}) }
+    // let's keep the root object expanded
+    expandState[id] = false
   }
 
   onMount(() => {
