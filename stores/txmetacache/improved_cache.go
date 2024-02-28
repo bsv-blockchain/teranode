@@ -36,11 +36,9 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const chunksPerAlloc = 1024
-
 const bucketsCount = 1024
 
-const chunkSize = maxValueSizeKB * 1024 * 16
+const chunkSize = maxValueSizeKB * 1024 * 16 //32 KB
 
 const bucketSizeBits = 40
 
@@ -49,6 +47,8 @@ const genSizeBits = 64 - bucketSizeBits
 const maxGen = 1<<genSizeBits - 1
 
 const maxBucketSize uint64 = 1 << bucketSizeBits
+
+const chunksPerAlloc = 1024
 
 // Stats represents cache stats.
 //
@@ -67,7 +67,7 @@ func (s *Stats) Reset() {
 type bucketInterface interface {
 	Init(maxBytes uint64, trimRatio int)
 	Reset()
-	Set(k, v []byte, h uint64, skipLocking ...bool)
+	Set(k, v []byte, h uint64, skipLocking ...bool) error
 	SetMultiKeysSingleValue(keys [][]byte, value []byte)
 	SetMulti(keys [][]byte, values [][]byte)
 	Get(*[]byte, []byte, uint64, bool, ...bool) bool
@@ -135,10 +135,10 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 // SetBig can be used for storing entries exceeding maxValueSizeKB.
 //
 // k and v contents may be modified after returning from Set.
-func (c *ImprovedCache) Set(k, v []byte) {
+func (c *ImprovedCache) Set(k, v []byte) error {
 	h := xxhash.Sum64(k)
 	idx := h % bucketsCount
-	c.buckets[idx].Set(k, v, h)
+	return c.buckets[idx].Set(k, v, h)
 }
 
 // SetMultiKeysSingleValueAppended stores multiple (k, v) entries in the cache, for the same v. New v is appended to the existing v, doesn't overwrite.
@@ -213,10 +213,6 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
 		//fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
 	}
-
-	// for i := range batchedKeys {
-	// 	fmt.Println("bucket: ", i, "len of batchedKeys: ", len(batchedKeys[i]), "len of batchedValues: ", len(batchedValues[i]))
-	// }
 
 	g := errgroup.Group{}
 
@@ -321,9 +317,13 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 
+	// calculate number of chunks per bucket
+
 	// allocate memory for chunks
 	// data holds 1024 (chunksPerAlloc) chunks of chunkSize (64) bytes each.
-	data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	// data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+
 	if err != nil {
 		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
 	}
@@ -337,7 +337,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
 	b.Reset()
-	//fmt.Println("number of chunks: ", len(b.chunks), " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize, " b.chunks: ", b.chunks)
+	//fmt.Println("number of chunks: ", len(b.chunks), " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize)
 }
 
 func (b *bucket) Reset() {
@@ -350,13 +350,10 @@ func (b *bucket) Reset() {
 
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMap(startingOffset int) {
-	bm := b.m
-	//fmt.Println("inside cleanLockedMapNew, b.idx: ", b.idx, ", current b.map: ", b.m)
-
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
-	bmNew := make(map[uint64]uint64, len(bm))
+	bmNew := make(map[uint64]uint64, len(b.m))
 
-	for k, v := range bm {
+	for k, v := range b.m {
 		idx := v & ((1 << bucketSizeBits) - 1)
 
 		// adjust the idx for each item, since we removed the first half of the chunks/
@@ -390,6 +387,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 		//fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
 		hash = xxhash.Sum64(key)
 		b.Set(key, values[i], hash, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 	}
 }
 
@@ -406,11 +404,11 @@ func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hash
 
 // SetNew skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 // removes only half of the each chunk when the chunk is full
-func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
+func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return
+		return fmt.Errorf("too big key or value")
 	}
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
@@ -421,7 +419,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return
+		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
 
 	chunks := b.chunks
@@ -445,7 +443,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 		//	fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
+			//fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
 			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 			//fmt.Println(" num of chunks to remove: ", numOfChunksToRemove, " num of chunks to keep: ", numOfChunksToKeep)
@@ -462,7 +460,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 				chunks[i] = make([]byte, chunkSize, chunkSize)
 			}
 
-			//fmt.Println("chunks after clearing: ", chunks)
+			//fmt.Println("idx before reset: ", idx)
 
 			idx = chunkSize * uint64(numOfChunksToKeep)
 			idxNew = idx + kvLen
@@ -502,6 +500,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	//fmt.Println("\nSET NEW Result chunks:\n", chunks)
+	return nil
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
@@ -660,11 +659,12 @@ func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
 }
 
 // SetOld skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) {
+func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return
+		fmt.Println("len(k): ", len(k), ", len(v): ", len(v), ", (1<<maxValueSizeLog): ", (1 << maxValueSizeLog))
+		return fmt.Errorf("too big key or value")
 	}
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
@@ -675,7 +675,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return
+		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
 
 	chunks := b.chunks
@@ -731,6 +731,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) {
 	if needClean {
 		b.cleanLockedMap()
 	}
+	return nil
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.

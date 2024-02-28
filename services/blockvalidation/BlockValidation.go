@@ -67,7 +67,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 
-	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 128)
+	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
 
 	bv := &BlockValidation{
 		logger:              logger,
@@ -76,7 +76,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		subtreeTTL:          subtreeTTL,
 		txStore:             txStore,
 		txMetaStore:         txMetaStore,
-		minedBlockStore:     txmetacache.NewImprovedCache(blockMinedCacheMaxMB * 1024 * 1024),
+		minedBlockStore:     txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, true), // new unallocated cache
 		validatorClient:     validatorClient,
 		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 		optimisticMining:    optimisticMining,
