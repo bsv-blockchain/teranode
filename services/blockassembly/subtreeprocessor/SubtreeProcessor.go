@@ -134,11 +134,12 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				logger.Infof("[SubtreeProcessor] get current subtrees")
-				completeSubtrees := make([]*util.Subtree, 0, len(stp.chainedSubtrees))
+				chainedCount := stp.chainedSubtreeCount.Load()
+				completeSubtrees := make([]*util.Subtree, 0, chainedCount)
 				completeSubtrees = append(completeSubtrees, stp.chainedSubtrees...)
 
 				// incomplete subtrees ?
-				if len(stp.chainedSubtrees) == 0 && stp.currentSubtree.Length() > 1 {
+				if chainedCount == 0 && stp.currentSubtree.Length() > 1 {
 					incompleteSubtree, err := util.NewTreeByLeafCount(stp.currentItemsPerFile)
 					if err != nil {
 						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
@@ -219,8 +220,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						break
 					}
 				}
-
-				stp.chainedSubtreeCount.Store(int32(len(stp.chainedSubtrees)))
 			}
 		}
 	}()
@@ -262,6 +261,7 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		// this needs to happen here, so we can wait for the append action to complete
 		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
+		stp.chainedSubtreeCount.Add(1)
 
 		oldSubtree := stp.currentSubtree
 		oldSubtreeHash := oldSubtree.RootHash()
@@ -409,6 +409,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		return fmt.Errorf("[moveDownBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
@@ -570,6 +571,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return fmt.Errorf("[moveUpBlock][%s] error creating new subtree: %s", block.String(), err.Error())
 	}
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
@@ -691,6 +693,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	}
 
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
 
 	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load()))
 	removeMapLength := stp.removeMap.Length()
