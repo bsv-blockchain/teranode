@@ -99,8 +99,6 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
 
-	fmt.Println("number of buckets", bucketsCount, ", maxBucketBytes", maxBucketBytes)
-
 	// if the cache is unallocated cache
 	if len(unallocatedCache) > 0 && unallocatedCache[0] {
 		for i := 0; i < bucketsCount; i++ {
@@ -109,13 +107,11 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 		}
 	} else { // if the cache is allocated cache
 		c.trimRatio = trimRatio
-		fmt.Println("Trim Ratio is set to: ", c.trimRatio)
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucket{}
 			c.buckets[i].Init(maxBucketBytes, c.trimRatio)
 		}
 	}
-
 	return &c
 }
 
@@ -151,7 +147,6 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 	}
 
 	batchedKeys := make([][][]byte, bucketsCount)
-	//hashes := make([][]uint64, bucketsCount)
 
 	var key []byte
 	var bucketIdx uint64
@@ -163,8 +158,6 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 		h = xxhash.Sum64(key)
 		bucketIdx = h % bucketsCount
 		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
-		// fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
-		//	hashes[bucketIdx] = append(hashes[bucketIdx], h)
 	}
 
 	g := errgroup.Group{}
@@ -176,7 +169,6 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			//fmt.Println("\n\nCalling SetMultiKeysSingleValue for bucket ", bucketIdx)
 			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
 			return nil
 		})
@@ -185,11 +177,6 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 	if err := g.Wait(); err != nil {
 		return err
 	}
-
-	// for i := range c.buckets {
-	// 	fmt.Println("\n\nbucket: ", i)
-	// 	c.buckets[i].listChunks()
-	// }
 
 	return nil
 }
@@ -245,7 +232,6 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % bucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		//fmt.Println("ERROR getting for bucket: ", idx, " , current bucket idx: ", c.buckets[idx].idx, ", checking for key: ", k, "chunks:", c.buckets[idx].chunks)
 		return fmt.Errorf("key %v not found in cache", k)
 	}
 	return nil
@@ -328,7 +314,6 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
 	b.Reset()
-	//fmt.Println("number of chunks: ", len(b.chunks), " , max bucket bytes: ", maxBytes, " , chunk size: ", chunkSize)
 }
 
 func (b *bucket) Reset() {
@@ -375,7 +360,6 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 	var hash uint64
 
 	for i, key := range keys {
-		//fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
 		hash = xxhash.Sum64(key)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, values[i], hash, true)
@@ -626,7 +610,6 @@ func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
 		prevValue = values[i]
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
-		//fmt.Println("for key : ", key, ", get result was: ", res, ", value is: ", value, ", and prevValue:", prevValue)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, prevValue, hash, true)
 	}
@@ -637,7 +620,6 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		fmt.Println("len(k): ", len(k), ", len(v): ", len(v), ", (1<<maxValueSizeLog): ", (1 << maxValueSizeLog))
 		return fmt.Errorf("too big key or value")
 	}
 	var kvLenBuf [4]byte
@@ -767,7 +749,6 @@ func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte)
 		prevValue = value
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
-		//fmt.Println("for key : ", key, ", get result was: ", res, ", value is: ", value, ", and prevValue:", prevValue)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, prevValue, hash, true)
 	}
