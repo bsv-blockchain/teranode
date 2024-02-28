@@ -159,3 +159,17 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	assert.NotNil(t, txmetaLatest)
 
 }
+
+func TestMap(t *testing.T) {
+	m := make(map[chainhash.Hash]*txmeta.Data)
+
+	hash1, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
+	hash2, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
+
+	assert.Equal(t, hash1, hash2)
+
+	m[*hash1] = &txmeta.Data{}
+	m[*hash2] = &txmeta.Data{}
+
+	assert.Equal(t, 1, len(m))
+}

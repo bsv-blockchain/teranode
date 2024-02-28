@@ -36,6 +36,11 @@ type TxMetaCache struct {
 }
 
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
+	if _, ok := txMetaStore.(*TxMetaCache); ok {
+		// txMetaStore is a TxMetaCache, this is not allowed
+		panic("Cannot use TxMetaCache as the underlying store for TxMetaCache")
+	}
+
 	initPrometheusMetrics()
 
 	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
@@ -51,11 +56,13 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	}
 
 	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case <-ticker.C:
 				if prometheusBlockValidationTxMetaCacheSize != nil {
 					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
@@ -63,8 +70,6 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
 				}
-
-				time.Sleep(5 * time.Second)
 			}
 		}
 	}()
@@ -165,17 +170,21 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
+	if err := t.txMetaStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+		return err
+	}
 
-	var err error
-	for _, hash := range hashes {
-		if results[*hash], err = t.Get(ctx, hash); err != nil {
-			return nil, err
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
+
+	for _, data := range hashes {
+		if data.Data != nil {
+			data.Data.Tx = nil
+			_ = t.SetCache(data.Hash, data.Data)
 		}
 	}
 
-	return results, nil
+	return nil
 }
 
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {

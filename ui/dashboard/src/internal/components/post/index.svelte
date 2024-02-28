@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import i18n from '$internal/i18n'
+  import { formatDate } from '$lib/utils/format'
 
   const dispatch = createEventDispatcher()
 
@@ -9,12 +9,7 @@
   export let timestamp
   export let selected = false
 
-  $: timeStringParts = new Intl.DateTimeFormat($i18n.language, {
-    timeStyle: 'medium',
-    dateStyle: 'short',
-  })
-    .format(new Date(parseInt(timestamp)))
-    .split(', ')
+  $: timeStringParts = formatDate(parseInt(timestamp)).split(' ')
 
   function onKeyDown(e) {
     if (!e) e = window.event

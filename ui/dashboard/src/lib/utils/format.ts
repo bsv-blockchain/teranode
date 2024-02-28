@@ -207,19 +207,19 @@ export const formatLargeNumber = (val: number) => {
 
   if (val >= 1e15) {
     val = val / 1e15
-    unit = ' P'
+    unit = 'P'
   } else if (val >= 1e12) {
     val = val / 1e12
-    unit = ' T'
+    unit = 'T'
   } else if (val >= 1e9) {
     val = val / 1e9
-    unit = ' G'
+    unit = 'G'
   } else if (val >= 1e6) {
     val = val / 1e6
-    unit = ' M'
+    unit = 'M'
   } else if (val >= 1e3) {
     val = val / 1e3
-    unit = ' K'
+    unit = 'K'
   }
 
   return {
@@ -234,8 +234,8 @@ export const formatLargeNumberStr = (val: number, decimals = -1, fixed = false) 
     const fmtVal = fixed
       ? parts.value.toFixed(decimals)
       : Math.round(parts.value * Math.pow(10, decimals)) / Math.pow(10, decimals)
-    return addNumCommas(fmtVal) + parts.unit
+    return `${addNumCommas(fmtVal)}${parts.unit ? ' ' + parts.unit : ''}`
   } else {
-    return addNumCommas(parts.value) + parts.unit
+    return `${addNumCommas(parts.value)}${parts.unit ? ' ' + parts.unit : ''}`
   }
 }

@@ -13,6 +13,7 @@
   export let variant: TypoVariantType = TypoVariant.text
   export let size = 'sm'
   export let color: string | null = null
+  export let hoverColor: string | null = null
   export let html = false
   export let value: any = ''
   export let wrap = true
@@ -26,6 +27,7 @@
   $: {
     cssVars = [
       `--color:${color ? color : typoProps.color}`,
+      `--color-hover:${hoverColor ? hoverColor : color ? color : typoProps.color}`,
       `--font-family:${typoProps.font.family}`,
       `--font-weight:${typoProps.font.weight}`,
       `--font-size:${typoProps.font.size}`,
@@ -59,6 +61,9 @@
     margin: var(--margin);
 
     white-space: var(--wrap);
+  }
+  .tui-typo:hover {
+    color: var(--color-hover);
   }
   .tui-typo.single-line {
     overflow: hidden;

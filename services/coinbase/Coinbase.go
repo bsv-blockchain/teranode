@@ -84,8 +84,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	duration, _ := gocore.Config().Get("distributor_backoff_duration", "1s")
-	backoffDuration, err := time.ParseDuration(duration)
+	backoffDuration, err, _ := gocore.Config().GetDuration("distributor_backoff_duration", 1*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse distributor_backoff_duration: %v", err)
 	}
@@ -107,8 +106,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 	}
 	numberOfExpectedPeers := 1 + strings.Count(addresses, "|") // each | is a ip:port separator
 
-	timeout, _ := gocore.Config().Get("peerStatus_timeout", "30s")
-	peerStatusTimeout, err := time.ParseDuration(timeout)
+	peerStatusTimeout, err, _ := gocore.Config().GetDuration("peerStatus_timeout", 30*time.Second)
 	if err != nil {
 		panic(fmt.Sprintf("[PeerStatus] failed to parse peerStatus_timeout: %s", err))
 	}

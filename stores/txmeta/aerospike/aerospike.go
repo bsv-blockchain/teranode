@@ -194,28 +194,32 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 	//policy := util.GetAerospikeBatchReadPolicy()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
-	for idx, hash := range hashes {
-		key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	for idx, item := range items {
+		key, err := aerospike.NewKey(s.namespace, "txmeta", item.Hash[:])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		record := aerospike.NewBatchRead(key, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
+		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+		if len(fields) > 0 {
+			bins = fields
+		}
+
+		record := aerospike.NewBatchRead(key, bins)
 		// Add to batch
 		batchRecords[idx] = record
 	}
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	prometheusTxMetaSetMinedBatch.Inc()
@@ -223,28 +227,56 @@ func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[cha
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			results[*hashes[idx]] = nil
-			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hashes[idx].String(), err)
+			items[idx].Data = nil
+			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
 		} else {
 			bins := batchRecord.BatchRec().Record.Bins
-			// TODO add the rest of the bins
-			if bins["tx"] != nil {
-				txBytes, ok := bins["tx"].([]byte)
-				if ok {
-					tx, err := bt.NewTxFromBytes(txBytes)
-					if err != nil {
-						return nil, errors.Join(errors.New("could not convert tx bytes to bt.Tx"), err)
-					}
 
-					results[*hashes[idx]] = &txmeta.Data{Tx: tx}
-				} else {
-					results[*hashes[idx]] = nil
+			items[idx].Data = &txmeta.Data{}
+
+			for key, value := range bins {
+				switch key {
+				case "tx":
+					txBytes, ok := value.([]byte)
+					if ok {
+						tx, err := bt.NewTxFromBytes(txBytes)
+						if err != nil {
+							return fmt.Errorf("could not convert tx bytes to bt.Tx: %w", err)
+						}
+						items[idx].Data.Tx = tx
+					}
+				case "fee":
+					fee, ok := value.(int)
+					if ok {
+						items[idx].Data.Fee = uint64(fee)
+					}
+				case "sizeInBytes":
+					sizeInBytes, ok := value.(int)
+					if ok {
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
+					}
+				case "parentTxHashes":
+					parentTxHashesInterface, ok := value.([]byte)
+					if ok {
+						parentTxHashes := make([]chainhash.Hash, 0, len(parentTxHashesInterface)/32)
+						for i := 0; i < len(parentTxHashesInterface); i += 32 {
+							parentTxHashes = append(parentTxHashes, chainhash.Hash(parentTxHashesInterface[i:i+32]))
+						}
+						items[idx].Data.ParentTxHashes = parentTxHashes
+					}
+				case "blockIDs":
+					temp := value.([]interface{})
+					var blockIDs []uint32
+					for _, val := range temp {
+						blockIDs = append(blockIDs, uint32(val.(int)))
+					}
+					items[idx].Data.BlockIDs = blockIDs
 				}
 			}
 		}
 	}
 
-	return results, nil
+	return nil
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {

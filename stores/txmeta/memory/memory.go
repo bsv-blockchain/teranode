@@ -48,19 +48,17 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
-func (m *Memory) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
+func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := m.Get(ctx, hash)
+	for _, item := range items {
+		data, err := m.Get(ctx, item.Hash)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		results[*hash] = data
+		item.Data = data
 	}
 
-	return results, nil
+	return nil
 }
 
 func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {

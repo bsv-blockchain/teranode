@@ -62,7 +62,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 			} else {
 				// TODO change this back to Debug
 				logger.Warnf("[UTXOStore] setting block height to %d", meta.Height)
-				_ = utxoStore.SetBlockHeight(meta.Height)
+				setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
 			}
 
 			logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
@@ -81,7 +81,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 							}
 							// TODO change this back to Debug
 							logger.Warnf("[UTXOStore] setting block height to %d", meta.Height)
-							_ = utxoStore.SetBlockHeight(meta.Height)
+							setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
 						}
 					}
 				}
@@ -119,9 +119,22 @@ func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore u
 						logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 						continue
 					}
-					_ = utxoStore.SetBlockHeight(meta.Height)
+					setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
 				}
 			}
 		}
 	}()
+}
+
+func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string, blockHeight uint32) error {
+	currentHeight, err := utxoStore.GetBlockHeight()
+	if err != nil {
+		return err
+	}
+	if blockHeight < currentHeight {
+		logger.Warnf("block height %d is less than current block height %d - ignoring and sticking with current block height", blockHeight, currentHeight)
+		return nil
+	}
+	err = utxoStore.SetBlockHeight(blockHeight)
+	return err
 }

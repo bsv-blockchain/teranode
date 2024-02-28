@@ -25,7 +25,7 @@
 
 ## 1. Description
 
-The Blob Server is a generic datastore that can be used for any specific data model. In the current UBSV implementation, it is used to store transactions (extended tx) and subtrees.
+The Blob Server is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.
 
 The Blob Server provides a set of methods to interact with the TX and Subtree storage implementations.
 

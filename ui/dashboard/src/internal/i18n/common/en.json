@@ -1,7 +1,11 @@
 {
   "comp": {
     "footer": {
-      "copyright": "© {{ year }} Teranode"
+      "copyright": "© {{ year }} BSV Blockchain Org.",
+      "privacy": "Privacy",
+      "privacy_url": "https://www.bsvblockchain.org/privacy",
+      "terms": "Terms of Use",
+      "terms_url": "https://www.bsvblockchain.org/terms"
     },
     "pager": {
       "prev": "Prev",
@@ -189,7 +193,7 @@
         "coinbaseValue": "Block Reward",
         "transactionCount": "Tx",
         "tps": "TPS",
-        "size": "Size (Bytes)"
+        "size": "Size"
       }
     },
     "viewer-block": {
@@ -353,20 +357,18 @@
   "tooltip": {
     "copy-hash-to-clipboard": "Copy hash",
     "copy-url-to-clipboard": "Copy URL",
+    "copy-json-to-clipboard": "Copy JSON",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "expand-all": "Expand all",
+    "collapse-all": "Collapse all"
   },
   "graph": {
     "series": {
       "date": "Date",
       "tx_count": "Tx Count"
-    }
-  },
-  "unit": {
-    "value": {
-      "kb": "{{ value }} KB"
     }
   },
   "global": {

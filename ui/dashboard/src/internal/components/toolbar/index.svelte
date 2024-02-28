@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import TextInput from '$lib/components/textinput/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
   import { failure } from '$lib/utils/notifications'
@@ -37,7 +38,13 @@
       return false
     }
   }
+
+  let w
+
+  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
 </script>
+
+<svelte:window bind:innerWidth={w} />
 
 {#if showTools}
   <div class="toolbar" {style}>
@@ -52,7 +59,7 @@
         autocomplete="off"
         bind:value={searchValue}
         width={330}
-        focusWidth={570}
+        {focusWidth}
         icon={searchValue === lastSearchCalled || !searchValue
           ? 'icon-search-line'
           : 'icon-search-solid'}

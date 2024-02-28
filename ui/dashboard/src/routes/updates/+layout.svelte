@@ -57,8 +57,6 @@
     font-family: var(--font-family);
     box-sizing: var(--box-sizing);
 
-    flex: 1;
-
     width: 100%;
     min-height: 50px;
     padding: 24px;

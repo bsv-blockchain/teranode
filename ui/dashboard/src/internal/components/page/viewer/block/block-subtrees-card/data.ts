@@ -38,7 +38,7 @@ export const getColDefs = (t) => {
     {
       id: 'fee',
       name: t(`${labelKey}.fee`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '23%',
       },
@@ -47,6 +47,7 @@ export const getColDefs = (t) => {
       id: 'size',
       name: t(`${labelKey}.size`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '15%',
       },
@@ -82,14 +83,9 @@ export const getRenderCells = (t, blockHash) => {
     },
     fee: (idField, item, colId) => {
       return {
-        value: formatSatoshi(item[colId]) + ' BSV',
-      }
-    },
-    size: (idField, item, colId) => {
-      return {
         component: valueSet(item[colId]) ? RenderSpan : null,
         props: {
-          value: formatNum(item[colId] / 1000) + ' KB',
+          value: formatSatoshi(item[colId]) + ' BSV',
           className: 'num',
         },
         value: '',

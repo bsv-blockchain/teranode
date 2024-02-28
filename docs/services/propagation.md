@@ -3,9 +3,20 @@
 ## Index
 
 
+1. [Description](#1-description)
+2. [Functionality](#2-functionality)
+- [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
+- [2.2. Propagating Transactions](#22-propagating-transactions)
+3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+4. [Data Model](#4-data-model)
+5. [Technology](#5-technology)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+7. [How to run](#7-how-to-run)
+8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+
 ## 1. Description
 
-The `Propagation Service` is designed to handle the propagation of transactions across a peer-to-peer UBSV network.
+The `Propagation Service` is designed to handle the propagation of transactions across a peer-to-peer Teranode network.
 
 At a glance, the Propagation service:
 1. Receives new transactions through various communication methods.
@@ -52,7 +63,13 @@ All communication channels receive txs and delegate them to the `ProcessTransact
 
 ![propagation_udp_ipv6.svg](img%2Fplantuml%2Fpropagation%2Fpropagation_udp_ipv6.svg)
 
-## 3. Data Model
+
+
+## 3. gRPC Protobuf Definitions
+
+The Propagation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/propagationProto.md).
+
+## 4. Data Model
 
 The Propagation Service deals with the extended transaction format, as seen below:
 
@@ -68,7 +85,7 @@ The Propagation Service deals with the extended transaction format, as seen belo
 
 More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 
-## 4. Technology
+## 5. Technology
 
 Main technologies involved:
 
@@ -77,7 +94,7 @@ Main technologies involved:
 
 2. **Peer-to-Peer (P2P) Networking**:
   - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
-  - `libsv/go-p2p/wire` is used for P2P transaction propagation in the UBSV network.
+  - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
 
 3. **Networking Protocols (UDP, HTTP, QUIC, fRPC)**:
   - The service uses various networking protocols for communication:
@@ -93,7 +110,7 @@ Main technologies involved:
   - gRPC, indicated by the use of `google.golang.org/grpc`, is a high-performance, open-source universal RPC framework. It uses Protocol Buffers as its interface definition language.
 
 
-## 5. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```
 ./services/propagation
@@ -113,7 +130,7 @@ Main technologies involved:
 
 ```
 
-## 6. How to run
+## 7. How to run
 
 To run the Propagation Service locally, you can execute the following command:
 
@@ -124,27 +141,15 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Propagation=1
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Propagation Service locally.
 
 
-## 7. Configuration options (settings flags)
+## 8. Configuration options (settings flags)
 
 The Propagation service uses the following configuration options:
 
-1. **`utxostore_grpcAddress`**:
-  - Used in the `Enabled()` function to check if the gRPC address for the UTXO store is set.
-
-2. **`ipv6_addresses`**:
-  - Used in the `Start()` function to retrieve IPv6 addresses for setting up UDP listeners.
-
-3. **`propagation_httpAddress`**:
-  - Used in the `Start()` function to set the HTTP address for the propagation server.
-
-4. **`propagation_frpcListenAddress`**:
-  - Used in the `Start()` function to set the address for the fRPC server.
-
-5. **`propagation_quicListenAddress`**:
-  - Used in the `Start()` function to set the address for the QUIC server.
-
-6. **`ipv6_interface`**:
-  - Used in the `StartUDP6Listeners()` function to find the network interface name for setting up IPv6 listeners.
-
-7. **`propagation_frpcConcurrency`**:
-  - Used in the `frpcServer()` function to set the concurrency level for the fRPC server.
+- **`utxostore_grpcAddress`**: gRPC address for the UTXO store is set.
+- **`ipv6_addresses`**: Specifies the IPv6 addresses to bind UDP6 listeners for transaction propagation.
+- **`ipv6_interface`**: Configures the network interface (e.g., "en0") to use for IPv6 multicast listeners, with a default fallback if not specified.
+- **`propagation_quicListenAddress`**: Defines the address and port for the QUIC server used for experimental high-throughput transaction propagation.
+- **`grpc_resolver`**: Determines the gRPC resolver to use for client connections, supporting Kubernetes ("k8s" or "kubernetes") and potentially other resolvers.
+- **`propagation_grpcAddresses`**: Lists the gRPC server addresses for the propagation service, used by the client to connect and process transactions.
+- **`useLocalValidator`**: A boolean flag to use a local validator service for health checks and possibly other validation purposes.
+- **`grpc_resolver`** alternatives (`"k8s"`, `"kubernetes"`): Specifies the resolver scheme for Kubernetes service discovery, affecting how the propagation client resolves service addresses within a Kubernetes environment.

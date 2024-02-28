@@ -293,7 +293,7 @@ As a sequence:
 
 ## 4. Data Model
 
-Please refer to the [Architecture Overview](../architecture/ubsv-architecture.md) document for a detailed description of the Block and Subtree data model.
+Please refer to the [Architecture Overview](../architecture/teranode-architecture.md) document for a detailed description of the Block and Subtree data model.
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
@@ -365,22 +365,19 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The following settings can be configured for the p2p service:
 
-```
-
-startP2P.${YOUR_USERNAME}=true      ## Whether to start the P2P service
-
-p2p_ip=0.0.0.0                      ## The IP address to listen for incoming connections
-p2p_port=9905                       ## The port to listen for incoming connections
-
-p2p_topic_prefix.${YOUR_USERNAME}=dev.github.com/bitcoin-sv/ubsv
-
-p2p_block_topic=block               ## The P2P topic to publish block messages
-p2p_subtree_topic=subtree           ## The P2P topic to publish subtree messages
-p2p_bestblock_topic=bestblock       ## The P2P topic to publish best block messages
-p2p_mining_on_topic=miningon        ## The P2P topic to publish mining on messages
-p2p_rejected_tx_topic=rejected_tx   ## The P2P topic to publish rejected transaction messages
-
-p2p_httpListenAddress=:${P2P_HTTP_PORT}
-p2p_httpListenAddress.dev=localhost:${P2P_HTTP_PORT}
-
-```
+- **`p2p_ip`**: Specifies the IP address for the P2P service to bind to.
+- **`p2p_port`**: Defines the port number on which the P2P service listens.
+- **`p2p_topic_prefix`**: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
+- **`p2p_block_topic`**: The topic name used for block-related messages in the P2P network.
+- **`p2p_subtree_topic`**: Specifies the topic for subtree-related messages within the P2P network.
+- **`p2p_bestblock_topic`**: Defines the topic for broadcasting the best block information among peers.
+- **`p2p_mining_on_topic`**: The topic used for messages related to the start of mining a new block.
+- **`p2p_rejected_tx_topic`**: Specifies the topic for broadcasting information about rejected transactions.
+- **`p2p_shared_key`**: A shared key for securing P2P communications, required for private network configurations.
+- **`p2p_dht_use_private`**: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
+- **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
+- **`p2p_static_peers`**: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
+- **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network.
+- **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
+- **`securityLevelHTTP`**: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
+- **`server_certFile`** and **`server_keyFile`**: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.

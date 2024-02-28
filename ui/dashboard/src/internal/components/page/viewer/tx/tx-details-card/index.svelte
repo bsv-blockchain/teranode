@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
-  import { addNumCommas } from '$lib/utils/format'
+  import { addNumCommas, dataSize } from '$lib/utils/format'
   import { DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
@@ -107,7 +107,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
             <div class="value">
-              {t('unit.value.kb', { value: addNumCommas(d?.sizeInBytes / 1000) })}
+              {dataSize(d?.sizeInBytes)}
             </div>
           </div>
         </div>

@@ -4,6 +4,9 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/rs/zerolog"
+	"golang.org/x/term"
 )
 
 type Options struct {
@@ -16,10 +19,17 @@ type Options struct {
 type Option func(*Options)
 
 func DefaultOptions() *Options {
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	output := zerolog.ConsoleWriter{
+		Out:     os.Stdout,
+		NoColor: !isTerminal, // Disable color if output is not a terminal
+	}
+
 	return &Options{
 		logLevel:   "INFO",
 		loggerType: "zerolog",
-		writer:     os.Stdout,
+		writer:     output,
 		filepath:   "citest.log",
 	}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -12,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
+	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
@@ -421,6 +423,13 @@ func initLogger(serviceName string) ulogger.Logger {
 		ulogger.WithLevel(logLevel),
 	}
 
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	output := zerolog.ConsoleWriter{
+		Out:     os.Stdout,
+		NoColor: !isTerminal, // Disable color if output is not a terminal
+	}
+
 	// sentry
 	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
@@ -439,8 +448,10 @@ func initLogger(serviceName string) ulogger.Logger {
 			panic("sentry.Init: " + err.Error())
 		}
 
-		multi := zerolog.MultiLevelWriter(os.Stdout, w)
+		multi := zerolog.MultiLevelWriter(output, w)
 		logOptions = append(logOptions, ulogger.WithWriter(multi))
+	} else {
+		logOptions = append(logOptions, ulogger.WithWriter(output))
 	}
 
 	useLogger, ok := gocore.Config().Get("logger")

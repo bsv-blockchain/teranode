@@ -8,7 +8,6 @@ import { switchh } from '../components/switch'
 import { tab } from '../components/tab'
 import { link } from '../components/link'
 import { header } from '../components/header'
-import { footer } from '../components/footer'
 import { table } from '../components/table'
 import { toast } from '../components/toast'
 
@@ -23,7 +22,6 @@ export const defaults = {
   tab: { ...tab },
   link: { ...link },
   header: { ...header },
-  footer: { ...footer },
   table: { ...table },
   toast: { ...toast },
 }

@@ -50,8 +50,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
 	// How long to wait between mining the last few blocks
-	waitFinal, _ := gocore.Config().Get("mine_initial_blocks_final_wait", "5s")
-	initialBlockFinalWaitDuration, err := time.ParseDuration(waitFinal)
+	initialBlockFinalWaitDuration, err, _ := gocore.Config().GetDuration("mine_initial_blocks_final_wait", 5*time.Second)
 	if err != nil {
 		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_final_wait: %v", err)
 	}

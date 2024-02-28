@@ -177,12 +177,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
 
-					quickValidation := gocore.Config().GetBool("blockvalidation_quick_validation", false)
+					quickValidation := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
 					maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-					retrySleepString, _ := gocore.Config().Get("blockvalidation_validation_retry_sleep", "10s")
-					retrySleepDuration, err := time.ParseDuration(retrySleepString)
+					retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 					if err != nil {
-						panic(fmt.Sprintf("invalid value %s for blockvalidation_quick_validation_retry_sleep", retrySleepString))
+						panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
 					}
 
 					// this will block if the concurrency limit is reached
@@ -722,13 +721,13 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		timeoutCancel()
 	}()
 
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_abandon_validation_threshold", 0)
+	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 
 	subtreeSpan.LogKV("hash", subtreeHash.String())
 	v := ValidateSubtree{
 		SubtreeHash:      subtreeHash,
 		BaseUrl:          baseUrl,
-		Quick:            false,
+		FailFast:         false,
 		SubtreeHashes:    nil,
 		AbandonThreshold: abandonTxThreshold,
 	}

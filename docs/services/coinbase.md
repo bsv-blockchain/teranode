@@ -18,7 +18,7 @@
 
 The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
-In the UBSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
+In the Teranode context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
 
 The Coinbase primary function is to monitor all blocks being mined, ensuring accurate tracking of the blocks that have been mined along with their Coinbase Unspent Transaction Outputs (UTXOs).
 
@@ -80,7 +80,7 @@ The Coinbase Service uses gRPC for communication between nodes. The protobuf def
 
 ## 4. Data Model
 
-The Service receives blocks and processes them, extracting the Coinbase transaction and storing it in the database. The Block and Transaction data model will not be covered in this document, as it is sufficiently covered in other documents (please refer to the [Architecture Overview](../architecture/ubsv-architecture.md).
+The Service receives blocks and processes them, extracting the Coinbase transaction and storing it in the database. The Block and Transaction data model will not be covered in this document, as it is sufficiently covered in other documents (please refer to the [Architecture Overview](../architecture/teranode-architecture.md).
 
 The Coinbase Service stores the Coinbase UTXOs in a database, along with their maturity. The maturity is the number of blocks that must be mined on top of the block that contains the Coinbase transaction before the UTXO can be spent.
 
@@ -189,23 +189,24 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
+### Server and Client Configuration
+- **`coinbase_grpcListenAddress`**: Determines the gRPC server listen address for the Coinbase service. It is checked within the `Enabled()` function to decide if the Coinbase service should be active.
+- **`coinbase_store`**: URL for the Coinbase store, required for initializing the Coinbase service by connecting to the specified database for storing and managing Coinbase transactions and UTXOs.
+- **`coinbase_grpcAddress`**: Specifies the gRPC address for the Coinbase client, used for connecting to the Coinbase service from a client application.
 
-1. `coinbase_wallet_private_key`: The private key for the coinbase wallet, used to sign transactions and claim block rewards.
+### Coinbase Configuration
+- **`coinbase_wallet_private_key`**: The private key associated with the Coinbase wallet, necessary for signing transactions and managing Coinbase UTXOs.
+- **`distributor_backoff_duration`**: Configures the backoff duration for the distributor, which is used when retrying failed transaction distributions.
+- **`distributor_max_retries`**: The maximum number of retry attempts for distributing transactions.
+- **`distributor_failure_tolerance`**: The failure tolerance level for the distributor, indicating how many distribution failures are acceptable before marking a distribution as failed.
+- **`blockchain_store_dbTimeoutMillis`**: The timeout in milliseconds for database operations within the blockchain store, impacting performance and responsiveness of data access and manipulation.
+- **`propagation_grpcAddresses`**: A list of gRPC addresses for peer services, used for network communication and data propagation among peers.
+- **`peerStatus_timeout`**: The timeout for peer status checks, ensuring timely validation of peer connectivity and synchronization status.
+- **`coinbase_wait_for_peers`**: A boolean flag indicating whether the Coinbase service should wait for peers to be in sync before proceeding with its operations.
+- **`coinbase_notification_threshold`**: The threshold for sending notifications about the Coinbase balance or UTXO count, used for monitoring and alerting purposes.
+- **`coinbase_should_wait`** and **`coinbase_wait_until_block`**: These settings control whether the Coinbase service should delay its start until the blockchain reaches a certain block height, ensuring synchronization with the network.
 
-2. `coinbase_grpcListenAddress`: The gRPC listen address for the coinbase service.
-
-3. `coinbase_store`: The URL for the coinbase store, typically a database connection string.
-
-4. `blockchain_store_dbTimeoutMillis`: The timeout setting in milliseconds for database operations.
-
-5. `coinbase_notification_threshold`: A threshold value that triggers a notification when the number of spendable UTXOs drops below it.
-
-6. `coinbase_assetGrpcAddress`: The gRPC address for the asset service, used by the coinbase service to interact with the asset service.
-
-7. `asset_grpcAddress`: An alternative gRPC address for the asset service, likely used as a fallback if `coinbase_assetGrpcAddress` is not found.
-
-8. `coinbase_should_wait`: A boolean flag indicating whether the coinbase service should wait for a certain block height before starting operations.
-
-9. `coinbase_wait_until_block`: The specific block height until which the coinbase service should wait if `coinbase_should_wait` is set to true.
-
-10. `asset_clientName`: A name identifier for the asset client, possibly used in logging or notifications.
+### Miscellaneous Configuration
+- **`coinbase_assetGrpcAddress`** and **`asset_grpcAddress`**: Addresses for connecting to the asset service via gRPC. These are used for fetching blockchain data, such as blocks and transactions, necessary for Coinbase operations.
+- **`use_open_tracing`**: Indicates whether open tracing should be used for gRPC clients, aiding in monitoring and troubleshooting by tracing the request flow.
+- **`use_prometheus_grpc_metrics`**: Specifies whether Prometheus metrics should be collected for gRPC operations, useful for performance monitoring and analysis.

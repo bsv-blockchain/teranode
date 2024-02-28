@@ -65,23 +65,20 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		blockValidationBatcherEnabled: enabled,
 	}
 
-	timeoutStr, _ := gocore.Config().Get("blockvalidation_txMetaCacheBatcherSendTimeout", "1s")
-	timeout, err := time.ParseDuration(timeoutStr)
+	timeout, err, _ := gocore.Config().GetDuration("blockvalidation_txMetaCacheBatcherSendTimeout", 1*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration like 1s or 5000ms (%s)", timeoutStr))
+		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration: %v", err))
 	}
 
 	maxRetries, _ := gocore.Config().GetInt("validator_blockvalidation_maxRetries", 3)
-	durationString, _ := gocore.Config().Get("validator_blockvalidation_retrySleep", "1s")
-	duration, err := time.ParseDuration(durationString)
+	duration, err, _ := gocore.Config().GetDuration("validator_blockvalidation_retrySleep", 1*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("invalid setting value %s for validator_blockvalidation_retrySleep", durationString))
+		panic(fmt.Sprintf("invalid setting value for validator_blockvalidation_retrySleep: %v", err))
 	}
 
-	delayString, _ := gocore.Config().Get("validator_blockvalidation_delay", "0")
-	delay, err := time.ParseDuration(delayString)
+	delay, err, _ := gocore.Config().GetDuration("validator_blockvalidation_delay", 0*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("invalid setting value %s for validator_blockvalidation_delay", durationString))
+		panic(fmt.Sprintf("invalid setting value for validator_blockvalidation_delay: %v", err))
 	}
 
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
