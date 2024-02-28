@@ -102,7 +102,7 @@
     },
     "toolbar": {
       "reverse": "Reverse",
-      "placeholder": "Block Hash / Subtree Hash / TxID / UTXO Hash"
+      "placeholder": "Block Height / Hash, Subtree, TxID, UTXO Hash"
     },
     "breadcrumbs": {
       "page": {
