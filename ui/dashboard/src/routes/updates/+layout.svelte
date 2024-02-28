@@ -65,31 +65,24 @@
     {#if slug}
       <div
         class="slug"
-        class:maxMsg={maxMsg && showExpand}
+        class:maxMsg
+        class:showToPosts={!showExpand}
         in:fly={{ x: 200, opacity: 0, duration: 300 }}
         out:fade={{ delay: 100 }}
       >
-        {#if showExpand}
-          <div
-            class="expand"
-            on:click={onMaxMsg}
-            use:$tippy={{
-              content: maxMsg ? t('tooltip.collapse') : t('tooltip.expand'),
-            }}
-          >
-            <Icon name="icon-chevron-left-line" size={15} />
-          </div>
-        {:else}
-          <div
-            class="expand"
-            on:click={onPosts}
-            use:$tippy={{
-              content: t('tooltip.to-posts'),
-            }}
-          >
-            <Icon name="icon-chevron-up-line" size={15} />
-          </div>
-        {/if}
+        <div
+          class="expand"
+          on:click={showExpand ? onMaxMsg : onPosts}
+          use:$tippy={{
+            content: showExpand
+              ? maxMsg
+                ? t('tooltip.collapse')
+                : t('tooltip.expand')
+              : t('tooltip.to-posts'),
+          }}
+        >
+          <Icon name="icon-chevron-left-line" size={15} />
+        </div>
         <slot />
       </div>
     {/if}
@@ -178,6 +171,9 @@
   }
   .slug.maxMsg .expand {
     transform: rotate(180deg);
+  }
+  .slug.showToPosts .expand {
+    transform: rotate(90deg);
   }
   .expand:hover {
     color: rgba(255, 255, 255, 0.5);
