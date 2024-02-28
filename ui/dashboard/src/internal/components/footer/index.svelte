@@ -27,7 +27,7 @@
         variant="text"
         size="sm"
         value={t(`${tKey}.copyright`, { year })}
-        color="var(--footer-link-hover-color)"
+        color="var(--footer-link-color)"
       />
     </div>
     <div class="right">

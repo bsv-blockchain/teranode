@@ -6,7 +6,7 @@ export const footer = {
     color: 'transparent',
   },
   border: {
-    color: 'rgba(255, 255, 255, 0.08)',
+    color: 'rgba(255, 255, 255, 0.04)',
   },
   link: {
     color: 'rgba(255, 255, 255, 0.66)',
