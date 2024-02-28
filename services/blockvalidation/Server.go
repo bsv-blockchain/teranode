@@ -177,11 +177,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
 
-					quickValidation := gocore.Config().GetBool("blockvalidation_quick_validation", false)
+					quickValidation := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
 					maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
 					retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 					if err != nil {
-						panic(fmt.Sprintf("invalid value for blockvalidation_quick_validation_retry_sleep: %v", err))
+						panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
 					}
 
 					// this will block if the concurrency limit is reached
