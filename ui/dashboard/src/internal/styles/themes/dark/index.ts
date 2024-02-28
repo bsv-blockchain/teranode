@@ -9,6 +9,7 @@ import { toast } from './toast'
 import { msgbox } from './msgbox'
 import { switchh } from './switch'
 import { tab } from './tab'
+import { footer } from './footer'
 // import { banner } from './banner'
 
 export const dark = {
@@ -53,6 +54,7 @@ export const dark = {
   },
   comp: { ...comp },
   // banner: { ...banner },
+  footer: { ...footer },
   input: { ...input },
   dropdown: { ...dropdown },
   table: { ...table },

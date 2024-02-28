@@ -27,7 +27,7 @@
         variant="text"
         size="sm"
         value={t(`${tKey}.copyright`, { year })}
-        color="rgba(255, 255, 255, 0.66)"
+        color="var(--footer-link-hover-color)"
       />
     </div>
     <div class="right">
@@ -36,8 +36,8 @@
           variant="text"
           size="sm"
           value={t(`${tKey}.privacy`)}
-          color="rgba(255, 255, 255, 0.66)"
-          hoverColor="rgba(255, 255, 255, 0.88)"
+          color="var(--footer-link-color)"
+          hoverColor="var(--footer-link-hover-color)"
         />
       </a>
       <a href={t(`${tKey}.terms_url`)}>
@@ -45,8 +45,8 @@
           variant="text"
           size="sm"
           value={t(`${tKey}.terms`)}
-          color="rgba(255, 255, 255, 0.66)"
-          hoverColor="rgba(255, 255, 255, 0.88)"
+          color="var(--footer-link-color)"
+          hoverColor="var(--footer-link-hover-color)"
         />
       </a>
     </div>
@@ -64,7 +64,7 @@
     height: var(--footer-height);
     flex: 0;
 
-    background-color: transparent;
+    background-color: var(--footer-bg-color);
   }
 
   .content {
@@ -74,7 +74,7 @@
     align-items: center;
     justify-content: space-between;
 
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--footer-border-color);
   }
 
   .right {
