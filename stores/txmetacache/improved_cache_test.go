@@ -237,7 +237,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 			errCounter++
 		}
 	}
-	fmt.Println("errors:", errCounter)
+	fmt.Println("Number or errors:", errCounter)
 
 	// X times call cleanLockedMap
 	// 2 chunks are deleted per adjustment

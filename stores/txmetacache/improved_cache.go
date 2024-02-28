@@ -420,18 +420,17 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 
-			// numOfChunksToKeep = 3, umber of chunks to remove  =1
 			// Shift the more recent half of the chunks to the start of the array
 			for i := 0; i < numOfChunksToKeep; i++ {
 				chunks[i] = chunks[i+numOfChunksToRemove]
 			}
 
 			// Clear the rest of the chunks
-			//itemsZeroed := 0
 			for i := numOfChunksToKeep; i < len(chunks); i++ {
 				chunks[i] = make([]byte, chunkSize)
 			}
 
+			// writing needs to start form the end of the kept chunks.
 			idx = chunkSize * uint64(numOfChunksToKeep)
 			idxNew = idx + kvLen
 			// calculate the where the next write should occur based on new index
@@ -460,6 +459,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	return nil
 }
 
+// TODO: Simplfy by removing references to generations, generations are not relevant for bucket.
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
@@ -615,7 +615,7 @@ func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
 	}
 }
 
-// SetOld skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+// Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
