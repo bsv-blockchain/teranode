@@ -74,7 +74,7 @@
 </script>
 
 {#if showMobileNavbar}
-  <MobileNavbar offsetTop={'var(--banner-height, 0)'}>
+  <MobileNavbar offsetTop={'var(--banner-height, 0px)'}>
     <div class="navbar-content">
       <div class="logo-container" on:click={onLogo}>
         <Logo name="teranode" height={28} />
@@ -93,8 +93,8 @@
   class="content-container"
   data-test-id={testId}
   style:--offset-top={showMobileNavbar
-    ? `calc(var(--header-height) + var(--banner-height, 0))`
-    : 'var(--banner-height, 0)'}
+    ? `calc(var(--header-height) + var(--banner-height, 0px))`
+    : 'var(--banner-height, 0px)'}
   style:--offset-left={showMobileNavbar ? '0px' : `${$contentLeft}px`}
 >
   <ContentMenu>
@@ -111,7 +111,7 @@
     enableCollapse={!showMobileNavbar}
     minWidth={60}
     maxWidth={212}
-    offsetTop={'var(--banner-height, 0)'}
+    offsetTop={'var(--banner-height, 0px)'}
     collapsed={!expanded}
     showCover={showMobileNavbar}
     showHeader={!showMobileNavbar}
