@@ -168,8 +168,6 @@
 
 <style>
   .tools-container {
-    flex: 1;
-
     width: 100%;
     min-height: 50px;
     padding: 24px;
