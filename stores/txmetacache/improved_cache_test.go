@@ -15,9 +15,11 @@ import (
 func TestImprovedCache_SetGetTest(t *testing.T) {
 	// initialize improved cache with 1MB capacity
 	cache := NewImprovedCache(256 * 1024 * 1024)
-	cache.Set([]byte("key"), []byte("value"))
+	err := cache.Set([]byte("key"), []byte("value"))
+	require.NoError(t, err)
 	dst := make([]byte, 0)
-	_ = cache.Get(&dst, []byte("key"))
+	err = cache.Get(&dst, []byte("key"))
+	require.NoError(t, err)
 	require.Equal(t, []byte("value"), dst)
 
 }
@@ -25,11 +27,11 @@ func TestImprovedCache_SetGetTest(t *testing.T) {
 func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 	// initialize improved cache with 1MB capacity
 	cache := NewImprovedCache(1*1024*1024, true)
-	cache.Set([]byte("key"), []byte("value"))
+	err := cache.Set([]byte("key"), []byte("value"))
+	require.NoError(t, err)
 	dst := make([]byte, 0)
 	_ = cache.Get(&dst, []byte("key"))
 	require.Equal(t, []byte("value"), dst)
-
 }
 func TestImprovedCache_GetBigKV(t *testing.T) {
 	cache := NewImprovedCache(256 * 1024 * 1024)
@@ -39,11 +41,13 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 	key = hash[:]
 	_, err := rand.Read(value)
 	require.NoError(t, err)
-	cache.Set(key, value)
+	err = cache.Set(key, value)
+	require.NoError(t, err)
 
 	// get the value
 	dst := make([]byte, 0)
-	_ = cache.Get(&dst, key)
+	err = cache.Get(&dst, key)
+	require.NoError(t, err)
 	require.Equal(t, value, dst)
 }
 
@@ -71,7 +75,7 @@ func TestImprovedCache_GetBigKVUnallocated(t *testing.T) {
 }
 
 func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
-	cache := NewImprovedCache(1*1024*2, true) //100 * 1024 * 1024)
+	cache := NewImprovedCache(256*1024*2, true) //100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
 	valueSecond := []byte("second")
@@ -115,18 +119,21 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
 	numberOfKeys := 2_000 * bucketsCount
+	var err error
 
 	for i := 0; i < numberOfKeys; i++ {
 		_, err := rand.Read(key)
 		require.NoError(t, err)
 		allKeys = append(allKeys, key)
 	}
+
 	startTime := time.Now()
-	//var prevValue []byte
 	for i := 0; i < numberOfKeys; i++ {
 		val := make([]byte, 0) // Create a new slice for each iteration
-		_ = cache.Get(&val, allKeys[i])
-		cache.Set(allKeys[i], []byte("valuevalue"))
+		err = cache.Set(allKeys[i], []byte("valuevalue"))
+		require.NoError(t, err)
+		err = cache.Get(&val, allKeys[i])
+		require.NoError(t, err)
 	}
 	t.Log("Set took:", time.Since(startTime))
 
@@ -138,7 +145,7 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	util.SkipVeryLongTests(t)
+	//util.SkipVeryLongTests(t)
 
 	cache := NewImprovedCache(256 * 1024 * 1024)
 	allKeys := make([][]byte, 0)

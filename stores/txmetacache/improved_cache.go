@@ -29,9 +29,6 @@ import (
 // 256 GB for the cache
 // 256 / 1024 = 0.25 GB per bucket
 
-// 1- allocate memory in the beginning for all chunks in bucket init
-// 2- check collision for Sum64 of transaction ID that is 32 bytes.
-
 const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
@@ -100,7 +97,7 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 	var c ImprovedCache
 	maxBucketBytes := uint64((maxBytes + bucketsCount - 1) / bucketsCount)
 
-	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 25)
+	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
 
 	fmt.Println("number of buckets", bucketsCount, ", maxBucketBytes", maxBucketBytes)
 
@@ -211,7 +208,6 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		bucketIdx = h % bucketsCount
 		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
 		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
-		//fmt.Println("h: ", h, "bucketIdx: ", bucketIdx, " len of batchedKeys: ", len(batchedKeys[bucketIdx]))
 	}
 
 	g := errgroup.Group{}
@@ -225,7 +221,6 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			//fmt.Println("\n\nCalling set multi for bucket ", bucketIdx)
 			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
@@ -297,7 +292,7 @@ type bucket struct {
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
 	m map[uint64]uint64
-	// pass txId directly. How is memory?
+	// TODO: maybe pass txId directly. Check how does it affect memory.
 	// m map[[32]byte]uint64
 
 	// idx points to chunks for writing the next (k, v) pair.
@@ -317,11 +312,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 
-	// calculate number of chunks per bucket
-
-	// allocate memory for chunks
-	// data holds 1024 (chunksPerAlloc) chunks of chunkSize (64) bytes each.
-	// data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 
 	if err != nil {
@@ -386,8 +377,8 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 	for i, key := range keys {
 		//fmt.Println("\nInside bucket Setmulti, key: ", key, ", value", values[i], "bucket current index: ", b.idx)
 		hash = xxhash.Sum64(key)
-		b.Set(key, values[i], hash, true)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, values[i], hash, true)
 	}
 }
 
@@ -398,7 +389,8 @@ func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hash
 
 	for _, key := range keys {
 		hash = xxhash.Sum64(key)
-		b.Set(key, value, hash, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, value, hash, true)
 	}
 }
 
@@ -436,17 +428,13 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
-	//fmt.Println("\n\nInside SetNew, k: ", k, "v: ", v, "h: ", h, "idx: ", b.idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "chunkIdxNew: ", chunkIdxNew, "len of chunks: ", len(chunks))
-	//fmt.Println("chunks: \n", chunks)
+
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
-		//	fmt.Println("chunkIdxNew", chunkIdxNew, " > ", " chunkIdx", chunkIdx)
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			//fmt.Println("Will request adjustment: chunkIdxNew", chunkIdxNew, " >= ", " len(chunks)", len(chunks))
 			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
-			//fmt.Println(" num of chunks to remove: ", numOfChunksToRemove, " num of chunks to keep: ", numOfChunksToKeep)
 
 			// numOfChunksToKeep = 3, umber of chunks to remove  =1
 			// Shift the more recent half of the chunks to the start of the array
@@ -457,10 +445,8 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			// Clear the rest of the chunks
 			//itemsZeroed := 0
 			for i := numOfChunksToKeep; i < len(chunks); i++ {
-				chunks[i] = make([]byte, chunkSize, chunkSize)
+				chunks[i] = make([]byte, chunkSize)
 			}
-
-			//fmt.Println("idx before reset: ", idx)
 
 			idx = chunkSize * uint64(numOfChunksToKeep)
 			idxNew = idx + kvLen
@@ -477,29 +463,16 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		}
 	}
 
-	//fmt.Println("idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "len of chunks: ", len(chunks))
 	chunk := chunks[chunkIdx]
-	if chunk == nil || len(chunk) == 0 {
-		fmt.Println("YOU SHOULD NEVER ENTER HERE!,  chunks: ", chunks, "idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx)
-		panic(fmt.Errorf("YOU SHOULD NEVER ENTER HERE!, chunk is nil or empty"))
-		//chunk = b.getChunk()
-		//chunk = chunk[:0]
+	if len(chunk) == 0 {
+		panic(fmt.Errorf("SHOULD NEVER ENTER HERE, chunk is nil or empty"))
 	}
 	data := append(append(kvLenBuf[:], k...), v...)
-	// check if the chunk is 0, i.e. first time to write data over 0 chunk
-	// if chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 0 {
-	// 	copy(chunk, data)
-	// } else {
-	// 	chunk = append(chunk, data...)
-	// }
-	//fmt.Println("\nbefore copy: ", chunk, ", idx: ", idx, ", and data: ", data, ", chunkIdx: ", chunkIdx)
 	copy(chunk[idx%chunkSize:], data)
-	//fmt.Println("\nafter copy: ", chunk)
 
 	chunks[chunkIdx] = chunk
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
-	//fmt.Println("\nSET NEW Result chunks:\n", chunks)
 	return nil
 }
 
@@ -654,7 +627,8 @@ func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
 		//fmt.Println("for key : ", key, ", get result was: ", res, ", value is: ", value, ", and prevValue:", prevValue)
-		b.Set(key, prevValue, hash, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, prevValue, hash, true)
 	}
 }
 
@@ -794,7 +768,8 @@ func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte)
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true)
 		//fmt.Println("for key : ", key, ", get result was: ", res, ", value is: ", value, ", and prevValue:", prevValue)
-		b.Set(key, prevValue, hash, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, prevValue, hash, true)
 	}
 }
 

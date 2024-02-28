@@ -74,7 +74,10 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	t.cache.Set(hash[:], txMeta.MetaBytes())
+	err := t.cache.Set(hash[:], txMeta.MetaBytes())
+	if err != nil {
+		return err
+	}
 
 	t.metrics.insertions.Add(1)
 
