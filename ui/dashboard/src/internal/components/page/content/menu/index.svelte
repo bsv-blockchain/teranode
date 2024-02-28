@@ -19,7 +19,7 @@
   style:--padding="0 {gutterW}px"
   style:--margin-top={marginTop + 'px'}
   style:--margin-bottom={marginBottom + 'px'}
-  style:--min-height-local="calc(100% - {marginTop + marginBottom}px - var(--footer-height, 0))"
+  style:--min-height-local="calc(100% - {marginTop + marginBottom}px - var(--footer-height, 0px))"
 >
   <slot />
 </div>
@@ -34,6 +34,7 @@
     align-items: center;
 
     width: 100%;
+    min-height: var(--min-height-local);
     padding: var(--padding);
     margin-left: 0;
 

@@ -1,7 +1,11 @@
 {
   "comp": {
     "footer": {
-      "copyright": "© {{ year }} Teranode"
+      "copyright": "© {{ year }} BSV Blockchain Org.",
+      "privacy": "Privacy",
+      "privacy_url": "https://www.bsvblockchain.org/privacy",
+      "terms": "Terms of Use",
+      "terms_url": "https://www.bsvblockchain.org/terms"
     },
     "pager": {
       "prev": "Prev",

@@ -7,6 +7,7 @@
   import Logo from '$lib/components/logo/index.svelte'
   import Menu from '$lib/components/navigation/menu/index.svelte'
   import Toolbar from '$internal/components/toolbar/index.svelte'
+  import Footer from '$internal/components/footer/index.svelte'
   // import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
@@ -103,6 +104,8 @@
     {/if}
     <slot />
   </ContentMenu>
+
+  <Footer />
 </div>
 
 {#if showDrawer}
