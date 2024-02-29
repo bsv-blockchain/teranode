@@ -121,6 +121,12 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
+	httpmock.RegisterResponder(
+		"POST",
+		`=~^/txs`,
+		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
+	)
+
 	txMetaStore := memory.New(ulogger.TestLogger{})
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
@@ -420,8 +426,25 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 //}
 
 func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
-	// Create a new instance of BlockValidation
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, nil, nil, nil)
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	subtree, err := util.NewTreeByLeafCount(1)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*hash1, 121, 0))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
 
 	// Create a mock context
 	ctx := context.Background()
@@ -431,16 +454,11 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		SubtreeHash:   *hash1,
 		BaseUrl:       "http://localhost:8000",
 		FailFast:      false,
-		SubtreeHashes: []chainhash.Hash{*hash1},
+		SubtreeHashes: nil,
 	}
 
 	// Call the validateSubtreeInternal method
-	err := blockValidation.validateSubtreeInternal(ctx, v)
+	err = blockValidation.validateSubtreeInternal(ctx, v)
+	require.NoError(t, err)
 
-	// Check if there was an error
-	if err != nil {
-		t.Errorf("validateSubtreeInternal returned an error: %v", err)
-	}
-
-	// TODO: Add more test cases to cover different scenarios
 }
