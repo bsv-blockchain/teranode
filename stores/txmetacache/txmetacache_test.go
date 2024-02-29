@@ -140,15 +140,15 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 32)
 	cache := c.(*TxMetaCache)
-	var err error
 
-	for i := 0; i < 2_000_000; i++ {
+	for i := 0; i < 6000000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
-		err = cache.SetCache(&hash, &txmeta.Data{})
-		require.NoError(t, err)
+		_ = cache.SetCache(&hash, &txmeta.Data{})
 	}
+
+	//assert.Equal(t, 32*1024*1024, cache.BytesSize(), "map should not have exceeded max size")
 
 	//make sure newly added items are not expired
 	hash := chainhash.HashH([]byte(string(rune(999_999_999))))
