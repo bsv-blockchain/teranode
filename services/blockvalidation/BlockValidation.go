@@ -443,18 +443,18 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
-	go func() {
-		optimisticMiningWg.Wait()
+	// go func() {
+	optimisticMiningWg.Wait()
 
-		// this happens in the background, since we have already added the block to the blockchain
-		// TODO should we recover this somehow if it fails?
-		// what are the consequences of this failing?
-		err = u.finalizeBlockValidation(setCtx, block)
-		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
-		}
-		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
-	}()
+	// this happens in the background, since we have already added the block to the blockchain
+	// TODO should we recover this somehow if it fails?
+	// what are the consequences of this failing?
+	err = u.finalizeBlockValidation(setCtx, block)
+	if err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
+	}
+	u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
+	// }()
 
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
