@@ -84,14 +84,17 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	subtreeGroup := errgroup.Group{}
 	subtreeGroup.SetLimit(subtreeGroupConcurrency)
 
+	blockFoundChBuffer, _ := gocore.Config().GetInt("blockvalidation_blockFoundCh_buffer_size", 1)
+	catchupChBuffer, _ := gocore.Config().GetInt("blockvalidation_catchupCh_buffer_size", 1)
+
 	bVal := &Server{
 		utxoStore:            utxoStore,
 		logger:               logger,
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
 		validatorClient:      validatorClient,
-		blockFoundCh:         make(chan processBlockFound, 200), // this is excessive, but useful in testing
-		catchupCh:            make(chan processBlockCatchup, 10),
+		blockFoundCh:         make(chan processBlockFound, blockFoundChBuffer),
+		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		subtreeFoundQueue:    NewLockFreeQueue(),
 	}
