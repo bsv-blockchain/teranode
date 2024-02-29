@@ -39,6 +39,7 @@ COPY --from=0 /app/wait.sh /app/wait.sh
 FROM --platform=linux/arm64 ${RUN_IMG} as linux-arm64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 ENV TARGETARCH=${TARGETARCH}
