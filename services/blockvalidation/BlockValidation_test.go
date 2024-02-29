@@ -44,7 +44,7 @@ func newTx(random uint32) *bt.Tx {
 	return tx
 }
 
-func TestBlockValidation_validateSubtree(t *testing.T) {
+func TestBlockValidationValidateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
 		initPrometheusMetrics()
 
@@ -96,21 +96,21 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 	})
 }
 
-func TestBlockValidation_blessMissingTransaction(t *testing.T) {
-	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-		initPrometheusMetrics()
+// func TestBlockValidation_blessMissingTransaction(t *testing.T) {
+// 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
+// 		initPrometheusMetrics()
 
-		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
-		defer deferFunc()
+// 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
+// 		defer deferFunc()
 
-		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
-		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
-		require.NoError(t, err)
+// 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
+// 		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
+// 		require.NoError(t, err)
 
-		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
-		require.NoError(t, err)
-	})
-}
+// 		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
+// 		require.NoError(t, err)
+// 	})
+// }
 
 func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
@@ -418,3 +418,29 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 //
 //	return calculatedMerkleRootHash, nil
 //}
+
+func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
+	// Create a new instance of BlockValidation
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, nil, nil, nil)
+
+	// Create a mock context
+	ctx := context.Background()
+
+	// Create a mock ValidateSubtree struct
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseUrl:       "http://localhost:8000",
+		FailFast:      false,
+		SubtreeHashes: []chainhash.Hash{*hash1},
+	}
+
+	// Call the validateSubtreeInternal method
+	err := blockValidation.validateSubtreeInternal(ctx, v)
+
+	// Check if there was an error
+	if err != nil {
+		t.Errorf("validateSubtreeInternal returned an error: %v", err)
+	}
+
+	// TODO: Add more test cases to cover different scenarios
+}

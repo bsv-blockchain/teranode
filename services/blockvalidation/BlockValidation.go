@@ -733,54 +733,54 @@ func (u *BlockValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err e
 	return tx, nil
 }
 
-func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
-	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
-	defer func() {
-		//stat.AddTime(startTotal)
-	}()
+// func (u *BlockValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
+// 	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
+// 	defer func() {
+// 		//stat.AddTime(startTotal)
+// 	}()
 
-	// get transaction from network over http using the baseUrl
-	if baseUrl == "" {
-		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
-	}
+// 	// get transaction from network over http using the baseUrl
+// 	if baseUrl == "" {
+// 		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
+// 	}
 
-	//start := gocore.CurrentTime()
-	alreadyHaveTransaction := true
-	txBytes, err := u.txStore.Get(ctx, txHash[:])
-	//stat.NewStat("getTxFromStore").AddTime(start)
-	if txBytes == nil || err != nil {
-		alreadyHaveTransaction = false
+// 	//start := gocore.CurrentTime()
+// 	alreadyHaveTransaction := true
+// 	txBytes, err := u.txStore.Get(ctx, txHash[:])
+// 	//stat.NewStat("getTxFromStore").AddTime(start)
+// 	if txBytes == nil || err != nil {
+// 		alreadyHaveTransaction = false
 
-		// do http request to baseUrl + txHash.String()
-		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
-		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-		//startM := gocore.CurrentTime()
-		//statM := stat.NewStat("http fetch missing tx")
-		txBytes, err = util.DoHTTPRequest(ctx, url)
-		//statM.AddTime(startM)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
-		}
-	}
+// 		// do http request to baseUrl + txHash.String()
+// 		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
+// 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
+// 		//startM := gocore.CurrentTime()
+// 		//statM := stat.NewStat("http fetch missing tx")
+// 		txBytes, err = util.DoHTTPRequest(ctx, url)
+// 		//statM.AddTime(startM)
+// 		if err != nil {
+// 			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
+// 		}
+// 	}
 
-	// validate the transaction by creating a transaction object
-	tx, err := bt.NewTxFromBytes(txBytes)
-	if err != nil {
-		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
-	}
+// 	// validate the transaction by creating a transaction object
+// 	tx, err := bt.NewTxFromBytes(txBytes)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
+// 	}
 
-	if !alreadyHaveTransaction {
-		//start = gocore.CurrentTime()
-		// store the transaction, we did not get it via propagation
-		err = u.txStore.Set(ctx, txHash[:], txBytes)
-		//stat.NewStat("storeTx").AddTime(start)
-		if err != nil {
-			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
-		}
-	}
+// 	if !alreadyHaveTransaction {
+// 		//start = gocore.CurrentTime()
+// 		// store the transaction, we did not get it via propagation
+// 		err = u.txStore.Set(ctx, txHash[:], txBytes)
+// 		//stat.NewStat("storeTx").AddTime(start)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
+// 		}
+// 	}
 
-	return tx, nil
-}
+// 	return tx, nil
+// }
 
 func (u *BlockValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
