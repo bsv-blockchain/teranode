@@ -60,7 +60,8 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
-	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
+	optimisticMining := gocore.Config().GetBool("optimisticMining", false)
+	logger.Infof("optimisticMining = %s", optimisticMining)
 
 	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 128)
 
