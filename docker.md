@@ -1,5 +1,8 @@
 # For anyone with an apple silicon macbook pro and want to test the fan…
 
+## node setup
+Ensure node version is greater than 20.
+
 ## docker setup
 
 I give docker 32GB RAM and 128GB disk and 10 CPU (not sure of the minimum requirement yet)
@@ -20,6 +23,6 @@ It will mine the initial blocks, generate splitting coinbase txs and run 3 blast
 Occasionally, ubsv-1, ubsv-2 or ubsv-3 fail to start because aerospike/postgres wasn’t ready at that moment. Just run the ‘up’ command again. (If anyone knows how to make ubsv containers wait for their dependent services to be ‘ready’…)
 
 ## To delete everything
-`$ docker compose f docker-compose-ci-ext-p2p.yml down`
+`$ docker compose -f docker-compose-ci-ext-p2p.yml down`
 
 (This can take a minute or two to complete)

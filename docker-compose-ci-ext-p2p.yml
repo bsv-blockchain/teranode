@@ -92,6 +92,7 @@ services:
     <<: *ubsv-base
     depends_on:
             - aerospike-1
+            - postgres
     entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
