@@ -44,7 +44,8 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	initPrometheusMetrics()
 
 	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
-	if len(options) > 0 {
+
+	if len(options) > 0 && options[0] > 256 {
 		maxMB = options[0]
 	}
 
@@ -84,7 +85,10 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	t.cache.Set(hash[:], txMeta.MetaBytes())
+	err := t.cache.Set(hash[:], txMeta.MetaBytes())
+	if err != nil {
+		return err
+	}
 
 	t.metrics.insertions.Add(1)
 
