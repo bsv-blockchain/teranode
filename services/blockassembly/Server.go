@@ -223,11 +223,13 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case blockSubmission := <-ba.blockSubmissionChan:
 				// _, _, c := util.NewStatFromContext(ctx, "blockSubmissionChan", channelStats, false)
+				ok := true
 				if _, err := ba.submitMiningSolution(ctx, blockSubmission); err != nil {
 					ba.logger.Warnf("Failed to submit block [%s]", err)
+					ok = false
 				}
 				if blockSubmission.responseChan != nil {
-					blockSubmission.responseChan <- true
+					blockSubmission.responseChan <- ok
 				}
 				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 			}
@@ -640,15 +642,17 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 	}
 	ba.blockSubmissionChan <- request
 
+	ok := true
+
 	if waitForResponse {
-		<-request.responseChan
-		ba.logger.Infof("block submission - finished in %s", time.Since(start).String())
+		ok = <-request.responseChan
+		ba.logger.Infof("block submission success=%v - finished in %s", ok, time.Since(start).String())
 	}
 
 	prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
-		Ok: true,
+		Ok: ok,
 	}, nil
 }
 
