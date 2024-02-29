@@ -281,5 +281,13 @@ services:
       - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
+  prometheus:
+    image: prom/prometheus:v2.44.0
+    ports:
+      - "9090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
 
 # Add more ubsv nodes as needed
