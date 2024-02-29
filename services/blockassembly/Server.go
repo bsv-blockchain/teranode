@@ -31,12 +31,17 @@ import (
 )
 
 var (
-	// blockAssemblyStat = gocore.NewStat("blockassembly")
+	blockAssemblyStat = gocore.NewStat("blockassembly")
 	// addTxBatchGrpc = blockAssemblyStat.NewStat("AddTxBatch_grpc", true)
 
 	// channelStats = blockAssemblyStat.NewStat("channels", false)
 	jobTTL = 10 * time.Minute
 )
+
+type BlockSubmissionRequest struct {
+	*blockassembly_api.SubmitMiningSolutionRequest
+	responseChan chan bool
+}
 
 // BlockAssembly type carries the logger within it
 type BlockAssembly struct {
@@ -53,7 +58,7 @@ type BlockAssembly struct {
 	assetClient               WrapperInterface
 	blockValidationClient     WrapperInterface
 	jobStore                  *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan       chan *blockassembly_api.SubmitMiningSolutionRequest
+	blockSubmissionChan       chan *BlockSubmissionRequest
 	blockAssemblyDisabled     bool
 	blockAssemblyCreatesUTXOs bool
 	localSetMined             bool
@@ -91,7 +96,7 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		assetClient:               AssetClient,
 		blockValidationClient:     blockValidationClient,
 		jobStore:                  ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		blockSubmissionChan:       make(chan *blockassembly_api.SubmitMiningSolutionRequest),
+		blockSubmissionChan:       make(chan *BlockSubmissionRequest),
 		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
 		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
 		localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
@@ -220,6 +225,9 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				// _, _, c := util.NewStatFromContext(ctx, "blockSubmissionChan", channelStats, false)
 				if _, err := ba.submitMiningSolution(ctx, blockSubmission); err != nil {
 					ba.logger.Warnf("Failed to submit block [%s]", err)
+				}
+				if blockSubmission.responseChan != nil {
+					blockSubmission.responseChan <- true
 				}
 				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 			}
@@ -614,14 +622,29 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 }
 
 func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	// start := gocore.CurrentTime()
-	// defer func() {
-	// 	blockAssemblyStat.NewStat("SubmitMiningSolution_grpc", true).AddTime(start)
-	// }()
+	start := gocore.CurrentTime()
+	defer blockAssemblyStat.NewStat("SubmitMiningSolution_grpc", true).AddTime(start)
+
+	waitForResponse := gocore.Config().GetBool("blockassembly_SubmitMiningSolution_waitForResponse", true)
+	var responseChan chan bool
+	if waitForResponse {
+		responseChan = make(chan bool)
+		defer close(responseChan)
+	}
 
 	// we don't have the processing to handle multiple huge blocks at the same time, so we limit it to 1
 	// at a time, this is a temporary solution for now
-	ba.blockSubmissionChan <- req
+	request := &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: req,
+		responseChan:                responseChan,
+	}
+	ba.blockSubmissionChan <- request
+
+	if waitForResponse {
+		<-request.responseChan
+		ba.logger.Infof("block submission - finished in %s", time.Since(start).String())
+	}
+
 	prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
@@ -629,11 +652,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 	}, nil
 }
 
-func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	// start, stat, ctx := util.NewStatFromContext(cntxt, "submitMiningSolution", blockAssemblyStat)
-	start := time.Now()
+func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockSubmissionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	start, stat, ctx := util.NewStatFromContext(cntxt, "submitMiningSolution", blockAssemblyStat)
 	defer func() {
-		// stat.AddTime(start)
+		stat.AddTime(start)
 		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
@@ -759,7 +781,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	startTime := time.Now()
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(cntxt, nil, nil, nil, nil, nil); !ok {
+	if ok, err := block.Valid(ctx, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}
@@ -779,11 +801,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 
 	ba.logger.Infof("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	// add block to the blockchain
-	if err = ba.blockchainClient.AddBlock(cntxt, block, ""); err != nil {
+	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
 
-	ids, err := ba.blockchainClient.GetBlockHeaderIDs(cntxt, block.Header.Hash(), 1)
+	ids, err := ba.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
 	if err != nil {
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to get block header ids: %w", jobID, block.Hash().String(), err)
 	}
@@ -794,7 +816,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *blocka
 	}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := opentracing.SpanFromContext(cntxt)
+	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	go func() {
