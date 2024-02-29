@@ -15,7 +15,7 @@ const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
 const chunksPerAlloc = 1024
 
-const bucketsCount = 512
+const bucketsCount = 1024
 
 const chunkSize = maxValueSizeKB * 1024 * 32
 
@@ -33,6 +33,7 @@ const maxBucketSize uint64 = 1 << bucketSizeBits
 type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
 	EntriesCount uint64
+	TrimCount    uint64
 }
 
 // Reset resets s, so it may be re-used again in Cache.UpdateStats.
@@ -255,6 +256,8 @@ type bucket struct {
 	// free chunks per bucket
 	freeChunks []*[chunkSize]byte
 	//freeChunksLock sync.Mutex
+
+	trimCount uint64
 }
 
 func (b *bucket) Init(maxBytes uint64) {
@@ -309,11 +312,14 @@ func (b *bucket) cleanLocked() {
 		}
 		b.m = bmNew
 	}
+
+	b.trimCount++
 }
 
 func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
+	s.TrimCount = b.trimCount
 	b.mu.RUnlock()
 }
 
