@@ -77,5 +77,9 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 		})
 	}
 
-	return int(missed.Load()), g.Wait()
+	if err := g.Wait(); err != nil {
+		return int(missed.Load()), err
+	}
+
+	return int(missed.Load()), nil
 }

@@ -368,12 +368,12 @@ func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 		return c.String(http.StatusOK, "OK")
 	})
 	e.GET("/subtree/:hash", func(c echo.Context) error {
-		txHashStr := c.Param("hash")
-		txHash, err := chainhash.NewHashFromStr(txHashStr)
+		hashStr := c.Param("hash")
+		hash, err := chainhash.NewHashFromStr(hashStr)
 		if err != nil {
 			return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
 		}
-		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), txHash[:])
+		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), hash[:])
 		if err != nil {
 			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to get subtree: %v", err))
 		}
