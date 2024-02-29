@@ -43,7 +43,7 @@ while true; do
   rm "$tmp1" "$tmp2" "$tmp3"
 
   # Countdown before the next update
-  for (( i=10; i>0; i-- )); do
+  for (( i=5; i>0; i-- )); do
     echo -ne "  Refreshing in $i seconds  \r"
     sleep 1
   done

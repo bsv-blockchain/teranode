@@ -13,6 +13,7 @@ var (
 	prometheusBlockValidationTxMetaCacheMisses     prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheGetOrigin  prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheEvictions  prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheTrims      prometheus.Gauge
 )
 
 var prometheusMetricsInitialised = false
@@ -67,6 +68,14 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "tx_meta_cache_evictions",
 			Help:      "Number of evictions in the tx meta cache",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheTrims = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "tx_meta_cache_trims",
+			Help:      "Number of trim operations in the tx meta cache",
 		},
 	)
 

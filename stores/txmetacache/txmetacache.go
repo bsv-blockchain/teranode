@@ -43,9 +43,13 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	initPrometheusMetrics()
 
-	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 32)
+	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
 	if len(options) > 0 {
 		maxMB = options[0]
+	}
+
+	if maxMB < 256 {
+		maxMB = 256
 	}
 
 	m := &TxMetaCache{
@@ -69,6 +73,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
+					prometheusBlockValidationTxMetaCacheTrims.Set(float64(m.TrimCount()))
 				}
 			}
 		}
@@ -264,4 +269,10 @@ func (t *TxMetaCache) Length() int {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.EntriesCount)
+}
+
+func (t *TxMetaCache) TrimCount() int {
+	s := &Stats{}
+	t.cache.UpdateStats(s)
+	return int(s.TrimCount)
 }

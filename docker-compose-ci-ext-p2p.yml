@@ -107,6 +107,7 @@ services:
       txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
+      mine_initial_blocks_count: 2000
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       startBootstrap: false
       startP2P: true
@@ -215,7 +216,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=1000", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -244,7 +245,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=1000", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
@@ -273,7 +274,7 @@ services:
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
-    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=1000", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
