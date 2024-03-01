@@ -672,15 +672,10 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				SubtreeHashes: subtreeBytesMap[*subtreeHash],
 				AllowFailFast: false,
 			}
-			var wasDeduplicated bool
-			for i := 0; i < 3; i++ {
-				wasDeduplicated, err = u.validateSubtree(ctx1, v)
-				if wasDeduplicated && err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
-					// keep going all the while it's deduplicating and we have a threshold exceeded error
-					u.logger.Warnf("[validateBlockSubtrees][%s] deduplicating subtree validation [%s] and threshold exceeded, will try again: %v", block.Hash().String(), subtreeHash.String(), err)
-					continue
-				}
-				break
+			wasDeduplicated, err := u.validateSubtree(ctx1, v)
+			if wasDeduplicated && err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+				// do it again, this time it will not be fail-fast mode
+				err = u.validateSubtreeInternal(ctx1, v)
 			}
 			if err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
