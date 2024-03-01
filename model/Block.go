@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -205,7 +206,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -308,7 +309,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
+		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
 		if err != nil {
 			return false, err
 		}
@@ -382,7 +383,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
@@ -476,7 +477,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 					if foundInPreviousBlock && foundInSameBlock {
 						return fmt.Errorf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
 					} else if !foundInPreviousBlock && !foundInSameBlock {
-						return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
+						// return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
+						logger.Warnf("parent transaction %s not found in the last 100 blocks (maybe BlockValidation.localSetTxMined() has not finished processing previous block)", subtreeNode.Hash.String())
 					}
 
 				}

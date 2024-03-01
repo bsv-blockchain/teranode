@@ -399,7 +399,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			defer optimisticMiningWg.Done()
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
-			if ok, err := block.Valid(validateCtx, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
+			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
 				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
 				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
@@ -410,7 +410,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	} else {
 		// validate the block
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-		if ok, err := block.Valid(spanCtx, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
+		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
