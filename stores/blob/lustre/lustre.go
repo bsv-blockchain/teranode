@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type s3Store interface {
@@ -157,29 +158,46 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
-	bytes, err := os.ReadFile(fileName)
+	maxRetries, _ := gocore.Config().GetInt("lustre_store_max_retries", 3)
+	retrySleepDuration, err, _ := gocore.Config().GetDuration("lustre_store_retry_sleep_duration", 500*time.Millisecond)
 	if err != nil {
+		panic(fmt.Errorf("failed to get duration from config: %w", err))
+	}
+
+	var bytes []byte
+
+	for i := 0; i < maxRetries; i++ {
+		bytes, err = os.ReadFile(fileName)
+		if err == nil {
+			break
+		}
+
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
-			if err != nil {
-				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) {
-					// check s3
-					bytes, err = s.s3Client.Get(ctx, hash)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
-						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
-					}
-					return bytes, nil
-				}
-				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+			if err == nil {
+				break
 			}
-			return bytes, nil
 		}
-		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+
+		s.logger.Warnf("[%s][attempt #%d] failed to load subtree file from temp and persist dirs: %v", i, fileName, err)
+
+		if errors.Is(err, os.ErrNotExist) {
+			// check s3
+			bytes, err = s.s3Client.Get(ctx, hash)
+			if err == nil {
+				break
+			}
+		}
+
+		if errors.Is(err, os.ErrNotExist) {
+			err = ubsverrors.ErrNotFound
+			if i < maxRetries-1 {
+				time.Sleep(retrySleepDuration)
+			}
+		} else {
+			return nil, fmt.Errorf("[%s][attempt #%d]  unable to open file: %v", fileName, i, err)
+		}
 	}
 
 	return bytes, err
