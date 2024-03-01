@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -69,7 +70,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 						if data.Data == nil {
 							newMissed := missed.Add(1)
 							if failFast && newMissed > int32(missingTxThreshold) {
-								return fmt.Errorf("missed threshold breached %d", missingTxThreshold)
+								return ubsverrors.ErrThresholdExceeded
 							}
 							continue
 						}
@@ -122,7 +123,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 						newMissed := missed.Add(1)
 						if failFast && newMissed > int32(missingTxThreshold) {
-							return fmt.Errorf("missed threshold breached %d", missingTxThreshold)
+							return ubsverrors.ErrThresholdExceeded
 						}
 					}
 				}

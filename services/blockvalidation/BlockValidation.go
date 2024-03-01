@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
@@ -671,10 +672,12 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				SubtreeHashes: subtreeBytesMap[*subtreeHash],
 				AllowFailFast: false,
 			}
-			if err = u.validateSubtree(ctx1, v); err != nil {
-				if err = u.validateSubtree(ctx1, v); err != nil { // just try one more time (deduplication may mean its doing a failfast validation and a threshold is exceeded)
-					return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
-				}
+			err = u.validateSubtree(ctx1, v)
+			if err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+				err = u.validateSubtree(ctx1, v) // just try one more time (deduplication may mean it was doing a fail-fast validation when we didn't want it to)
+			}
+			if err != nil {
+				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
 			}
 		}
 	}
