@@ -617,6 +617,10 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		return err
 	}
 
+	if len(missingSubtrees) > 0 {
+		u.logger.Infof("[validateBlockSubtrees][%s] missing %d of %d subtrees", block.Hash().String(), len(missingSubtrees), len(block.Subtrees))
+	}
+
 	startGet := gocore.CurrentTime()
 	statGet := stat.NewStat("1b. GetSubtrees")
 
