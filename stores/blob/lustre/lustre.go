@@ -218,8 +218,8 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byt
 }
 
 func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
-	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
+	s.logger.Infof("[Lustre] Exists: %s", fileName)
 
 	_, err := os.Stat(fileName)
 	if err != nil {
