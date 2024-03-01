@@ -298,6 +298,7 @@ func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
 		}
 
 		if os.IsNotExist(err) {
+			err = nil
 			exists = false
 			if i < maxRetries-1 {
 				time.Sleep(retrySleepDuration)
