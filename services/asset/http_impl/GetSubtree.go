@@ -5,11 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 
@@ -30,18 +31,90 @@ func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
 	return speed
 }
 
+// func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
+// 	return func(c echo.Context) error {
+// 		var b []byte
+
+// 		start := gocore.CurrentTime()
+// 		stat := AssetStat.NewStat("GetSubtree_http")
+
+// 		defer func() {
+// 			stat.AddTime(start)
+// 			duration := time.Since(start)
+// 			sizeInKB := float64(len(b)) / 1024
+
+// 			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
+// 		}()
+
+// 		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+// 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+// 		if err != nil {
+// 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+// 		}
+
+// 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+
+// 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
+
+// 		if mode == JSON {
+// 			start2 := gocore.CurrentTime()
+// 			// get subtree is much less efficient than get subtree reader and then only deserializing the nodes
+// 			// this is only needed for the json response
+// 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
+// 			if err != nil {
+// 				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+// 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
+// 				} else {
+// 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+// 				}
+// 			}
+// 			_ = stat.NewStat("Get Subtree from repository").AddTime(start2)
+
+// 			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
+// 			return c.JSONPretty(200, subtree, "  ")
+// 		}
+
+// 		// get subtree reader is much more efficient than get subtree
+// 		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
+// 		if err != nil {
+// 			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+// 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+// 			} else {
+// 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+// 			}
+// 		}
+
+// 		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
+// 		b, err = util.DeserializeNodesFromReader(subtreeReader)
+// 		if err != nil {
+// 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+// 		}
+
+// 		switch mode {
+// 		case BINARY_STREAM:
+// 			h.logger.Infof("[GetSubtree][%s] sending to client in binary (%d bytes)", hash.String(), len(b))
+// 			return c.Blob(200, echo.MIMEOctetStream, b)
+
+// 		case HEX:
+// 			h.logger.Infof("[GetSubtree][%s] sending to client in hex (%d bytes)", hash.String(), len(b))
+// 			return c.String(200, hex.EncodeToString(b))
+
+//			default:
+//				err = errors.New("bad read mode")
+//				return sendError(c, http.StatusInternalServerError, 52, err)
+//			}
+//		}
+//	}
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		var b []byte
 
 		start := gocore.CurrentTime()
 		stat := AssetStat.NewStat("GetSubtree_http")
+		sizeInKB := 0.0
 
 		defer func() {
 			stat.AddTime(start)
 			duration := time.Since(start)
-			sizeInKB := float64(len(b)) / 1024
-
 			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
 		}()
 
@@ -82,26 +155,44 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+		defer subtreeReader.Close()
 
 		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
-		b, err = util.DeserializeNodesFromReader(subtreeReader)
+		reader, err := util.DeserializeNodesFromReader(subtreeReader)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		switch mode {
 		case BINARY_STREAM:
-			h.logger.Infof("[GetSubtree][%s] sending to client in binary (%d bytes)", hash.String(), len(b))
-			return c.Blob(200, echo.MIMEOctetStream, b)
+			// h.logger.Infof("[GetSubtree][%s] sending to client in binary (%d bytes)", hash.String(), len(b))
+			// return c.Blob(200, echo.MIMEOctetStream, b)
+			h.logger.Infof("[GetSubtree][%s] streaming to client in binary", hash.String())
+			c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
+			c.Response().WriteHeader(http.StatusOK)
+			written, err := io.Copy(c.Response().Writer, reader)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			h.logger.Infof("[GetSubtree][%s] streamed %d bytes to client in binary", hash.String(), written)
 
 		case HEX:
-			h.logger.Infof("[GetSubtree][%s] sending to client in hex (%d bytes)", hash.String(), len(b))
-			return c.String(200, hex.EncodeToString(b))
+			// h.logger.Infof("[GetSubtree][%s] sending to client in hex (%d bytes)", hash.String(), len(b))
+			// return c.String(200, hex.EncodeToString(b))
+			h.logger.Infof("[GetSubtree][%s] streaming to client in hex", hash.String())
+			encoder := hex.NewEncoder(c.Response().Writer)
+			written, err := io.Copy(encoder, reader)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			h.logger.Infof("[GetSubtree][%s] streamed %d bytes to client in hex", hash.String(), written)
 
 		default:
 			err = errors.New("bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
+
+		return nil
 	}
 }
 

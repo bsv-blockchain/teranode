@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -218,10 +219,12 @@ func Test_Serialize(t *testing.T) {
 	t.Run("DeserializeNodes with reader", func(t *testing.T) {
 		st, serializedBytes := getSubtreeBytes(t)
 
-		subtreeBytes, err := DeserializeNodesFromReader(bytes.NewReader(serializedBytes))
+		reader, err := DeserializeNodesFromReader(bytes.NewReader(serializedBytes))
 		require.NoError(t, err)
 
-		require.Equal(t, chainhash.HashSize*4, len(subtreeBytes))
+		subtreeBytes, err := io.ReadAll(reader)
+		require.NoError(t, err)
+
 		for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
 			txHash := chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
 			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), txHash.String())

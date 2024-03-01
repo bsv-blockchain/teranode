@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"crypto/rand"
+	"io"
 	"net/url"
 	"testing"
 
@@ -96,10 +97,12 @@ func TestSubtreeReader(t *testing.T) {
 	txns, key, repo := setupSubtreeData(t)
 
 	// Get the subtree node bytes from the repository
-	reader, err := repo.GetSubtreeReader(context.Background(), key)
+	subtreeReader, err := repo.GetSubtreeReader(context.Background(), key)
 	require.NoError(t, err)
 
-	b, err := util.DeserializeNodesFromReader(reader)
+	reader, err := util.DeserializeNodesFromReader(subtreeReader)
+
+	b, err := io.ReadAll(reader)
 	require.NoError(t, err)
 
 	subtreeNodes := make([]chainhash.Hash, len(b)/32)

@@ -232,13 +232,13 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 
 			if len(subtreeTxIDBytes) == 0 {
 				// get the subtree, it was not loaded in the block
-				if reader, err = u.subtreeStore.GetIoReader(gCtx, subtreeHash[:]); err != nil {
-					return fmt.Errorf("[localSetMined][%s] failed to get subtree from store: %v", blockHash.String(), err)
-				}
-				defer reader.Close()
-
-				if subtreeTxIDBytes, err = util.DeserializeNodesFromReader(reader); err != nil {
+				reader, err := util.DeserializeNodesFromReader(reader)
+				if err != nil {
 					return fmt.Errorf("[localSetMined][%s] failed to deserialize subtree from reader: %v", blockHash.String(), err)
+				}
+				subtreeTxIDBytes, err = io.ReadAll(reader)
+				if err != nil {
+					return fmt.Errorf("[localSetMined][%s] failed to read subtree from reader: %v", blockHash.String(), err)
 				}
 			}
 
