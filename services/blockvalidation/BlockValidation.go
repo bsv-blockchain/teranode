@@ -672,7 +672,9 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				AllowFailFast: false,
 			}
 			if err = u.validateSubtree(ctx1, v); err != nil {
-				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
+				if err = u.validateSubtree(ctx1, v); err != nil { // just try one more time (deduplication may mean its doing a failfast validation and a threshold is exceeded)
+					return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
+				}
 			}
 		}
 	}
