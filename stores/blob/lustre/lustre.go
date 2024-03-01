@@ -146,9 +146,9 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, e
 			if err == nil {
 				break
 			}
-		} else {
-			s.logger.Warnf("[%s][attempt #%d] file not found in subtree temp dir: %v", fileName, i, err)
 		}
+
+		s.logger.Warnf("[%s][attempt #%d] file not found in subtree temp dir or persist dir: %v", fileName, i, err)
 
 		if errors.Is(err, os.ErrNotExist) {
 			// check s3
@@ -197,7 +197,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 			}
 		}
 
-		s.logger.Warnf("[%s][attempt #%d] failed to load subtree file from temp and persist dirs: %v", i, fileName, err)
+		s.logger.Warnf("[%s][attempt #%d] failed to load subtree file from temp or persist dirs: %v", i, fileName, err)
 
 		if errors.Is(err, os.ErrNotExist) {
 			// check s3
@@ -244,9 +244,9 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byt
 			if err == nil {
 				break
 			}
-		} else {
-			s.logger.Warnf("[%s][attempt #%d] file not found in subtree temp dir: %v", fileName, i, err)
 		}
+
+		s.logger.Warnf("[%s][attempt #%d] file not found in subtree temp dir or persist dir: %v", fileName, i, err)
 
 		if errors.Is(err, os.ErrNotExist) {
 			// check s3
