@@ -478,7 +478,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						return fmt.Errorf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
 					} else if !foundInPreviousBlock && !foundInSameBlock {
 						// return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
-						logger.Warnf("parent transaction %s not found in the last 100 blocks (maybe BlockValidation.localSetTxMined() has not finished processing previous block)", subtreeNode.Hash.String())
+						// logger.Warnf("parent transaction %s not found in the last 100 blocks (maybe BlockValidation.localSetTxMined() has not finished processing previous block)", subtreeNode.Hash.String())
 					}
 
 				}
