@@ -60,7 +60,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
-	optimisticMining := gocore.Config().GetBool("optimisticMining", false)
+	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 	logger.Infof("optimisticMining = %s", optimisticMining)
 
 	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
@@ -443,18 +443,18 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	callerSpan := opentracing.SpanFromContext(spanCtx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
-	// go func() {
-	optimisticMiningWg.Wait()
+	go func() {
+		optimisticMiningWg.Wait()
 
-	// this happens in the background, since we have already added the block to the blockchain
-	// TODO should we recover this somehow if it fails?
-	// what are the consequences of this failing?
-	err = u.finalizeBlockValidation(setCtx, block)
-	if err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
-	}
-	u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
-	// }()
+		// this happens in the background, since we have already added the block to the blockchain
+		// TODO should we recover this somehow if it fails?
+		// what are the consequences of this failing?
+		err = u.finalizeBlockValidation(setCtx, block)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
+		}
+		u.logger.Infof("[ValidateBlock][%s] finalizeBlockValidation DONE", block.Hash().String())
+	}()
 
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -952,6 +952,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
+			if txHash.Equal(*model.CoinbasePlaceholderHash) {
+				return fmt.Errorf("[validateSubtreeInternal][%s] tx meta is nil for coinbase placeholder at index %d", v.SubtreeHash.String(), idx)
+			}
 			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice [%s]", v.SubtreeHash.String(), txHash.String())
 		}
 
