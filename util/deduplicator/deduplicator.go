@@ -46,6 +46,8 @@ func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn f
 			deDupEntry.cond.Wait()
 		}
 
+		delete(u.cache, key)
+
 		u.mu.Unlock()
 
 		stat.NewStat("2a. Received broadcast").AddTime(start)
