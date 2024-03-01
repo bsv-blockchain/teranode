@@ -44,7 +44,7 @@ func newTx(random uint32) *bt.Tx {
 	return tx
 }
 
-func TestBlockValidation_validateSubtree(t *testing.T) {
+func TestBlockValidationValidateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
 		initPrometheusMetrics()
 
@@ -70,6 +70,11 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		_, err = txMetaStore.Create(context.Background(), tx4)
 		require.NoError(t, err)
 
+		t.Log(tx1.TxIDChainHash().String())
+		t.Log(tx2.TxIDChainHash().String())
+		t.Log(tx3.TxIDChainHash().String())
+		t.Log(tx4.TxIDChainHash().String())
+
 		nodeBytes, err := subtree.SerializeNodes()
 		require.NoError(t, err)
 
@@ -80,26 +85,32 @@ func TestBlockValidation_validateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-		err = blockValidation.validateSubtree(context.Background(), subtree.RootHash(), "http://localhost:8000")
+		v := ValidateSubtree{
+			SubtreeHash:   *subtree.RootHash(),
+			BaseUrl:       "http://localhost:8000",
+			FailFast:      false,
+			SubtreeHashes: nil,
+		}
+		err = blockValidation.validateSubtree(context.Background(), v)
 		require.NoError(t, err)
 	})
 }
 
-func TestBlockValidation_blessMissingTransaction(t *testing.T) {
-	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-		initPrometheusMetrics()
+// func TestBlockValidation_blessMissingTransaction(t *testing.T) {
+// 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
+// 		initPrometheusMetrics()
 
-		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
-		defer deferFunc()
+// 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
+// 		defer deferFunc()
 
-		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
-		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
-		require.NoError(t, err)
+// 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
+// 		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
+// 		require.NoError(t, err)
 
-		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
-		require.NoError(t, err)
-	})
-}
+// 		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
+// 		require.NoError(t, err)
+// 	})
+// }
 
 func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
@@ -107,6 +118,12 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 	httpmock.RegisterResponder(
 		"GET",
 		`=~^/tx/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
+	)
+
+	httpmock.RegisterResponder(
+		"POST",
+		`=~^/txs`,
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
@@ -128,7 +145,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
 
@@ -165,7 +182,13 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	start := time.Now()
 
-	err = blockValidation.validateSubtree(context.Background(), rootHash, "http://localhost:8000")
+	v := ValidateSubtree{
+		SubtreeHash:   *rootHash,
+		BaseUrl:       "http://localhost:8000",
+		FailFast:      false,
+		SubtreeHashes: nil,
+	}
+	err = blockValidation.validateSubtree(context.Background(), v)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -373,4 +396,69 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
+}
+
+// copied from BigBlock_test
+//func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
+//	var calculatedMerkleRootHash *chainhash.Hash
+//	if len(hashes) == 1 {
+//		calculatedMerkleRootHash = hashes[0]
+//	} else if len(hashes) > 0 {
+//		// Create a new subtree with the hashes of the subtrees
+//		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+//		if err != nil {
+//			return nil, err
+//		}
+//		for _, hash := range hashes {
+//			err := st.AddNode(*hash, 1, 0)
+//			if err != nil {
+//				return nil, err
+//			}
+//		}
+//
+//		calculatedMerkleRoot := st.RootHash()
+//		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
+//		if err != nil {
+//			return nil, err
+//		}
+//	}
+//
+//	return calculatedMerkleRootHash, nil
+//}
+
+func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	subtree, err := util.NewTreeByLeafCount(1)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*hash1, 121, 0))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+
+	// Create a mock context
+	ctx := context.Background()
+
+	// Create a mock ValidateSubtree struct
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseUrl:       "http://localhost:8000",
+		FailFast:      false,
+		SubtreeHashes: nil,
+	}
+
+	// Call the validateSubtreeInternal method
+	err = blockValidation.validateSubtreeInternal(ctx, v)
+	require.NoError(t, err)
 }

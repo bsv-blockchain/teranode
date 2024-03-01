@@ -16,7 +16,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		stat.AddTime(start)
 	}()
 
-	cacheId := *blockHash
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeight-%s", blockHash.String())))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(uint32); ok && cacheData != 0 {

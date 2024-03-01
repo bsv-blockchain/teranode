@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import { getDetailsUrl } from '$internal/utils/urls'
   import i18n from '../../i18n'
+  import posts from '$internal/assets/blog/index.json'
 
   export let showOnRoot = false
 
@@ -42,8 +43,25 @@
             tmp.push({
               label: $i18n.t(`${baseKey}.viewer.page.${type}.title`),
               path: getDetailsUrl(type, hash),
-              selected: paths.length === 2,
+              selected: true,
             })
+          }
+          break
+        case 'updates':
+          tmp.push({
+            label: $i18n.t('page.updates.title'),
+            path: '/updates/',
+            selected: paths.length === 1,
+          })
+          if (paths.length === 2) {
+            const matches = posts.posts.filter((item) => item.slug === paths[1])
+            if (matches.length === 1) {
+              tmp.push({
+                label: matches[0].title,
+                path: `/updates/${paths[1]}`,
+                selected: true,
+              })
+            }
           }
           break
       }

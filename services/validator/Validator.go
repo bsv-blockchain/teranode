@@ -46,6 +46,7 @@ type Validator struct {
 	blockAssemblyDisabled         bool
 	blockAssemblyCreatesUTXOs     bool
 	blockValidationBatcherEnabled bool
+	txsChan                       chan []byte
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store, blockValidationClient blockValidationTxMetaClient) (Interface, error) {
@@ -64,10 +65,20 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		blockValidationBatcherEnabled: enabled,
 	}
 
-	timeoutStr, _ := gocore.Config().Get("blockvalidation_txMetaCacheBatcherSendTimeout", "1s")
-	timeout, err := time.ParseDuration(timeoutStr)
+	timeout, err, _ := gocore.Config().GetDuration("blockvalidation_txMetaCacheBatcherSendTimeout", 1*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration like 1s or 5000ms (%s)", timeoutStr))
+		panic(fmt.Sprintf("blockvalidation_txMetaCacheBatcherSendTimeout value must be a valid duration: %v", err))
+	}
+
+	maxRetries, _ := gocore.Config().GetInt("validator_blockvalidation_maxRetries", 3)
+	duration, err, _ := gocore.Config().GetDuration("validator_blockvalidation_retrySleep", 1*time.Second)
+	if err != nil {
+		panic(fmt.Sprintf("invalid setting value for validator_blockvalidation_retrySleep: %v", err))
+	}
+
+	delay, err, _ := gocore.Config().GetDuration("validator_blockvalidation_delay", 0*time.Second)
+	if err != nil {
+		panic(fmt.Sprintf("invalid setting value for validator_blockvalidation_delay: %v", err))
 	}
 
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
@@ -77,17 +88,27 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				blockValidationStat.AddTime(startTime)
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
-				if err := recover(); err != nil {
-					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
-				}
+				// if err := recover(); err != nil {
+				// 	validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				// }
 			}()
 
-			ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			for i := 1; i <= maxRetries+1; i++ {
+				time.Sleep(delay)
 
-			// add data to block validation cache
-			if err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch); err != nil {
-				validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+
+				err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch)
+				if err != nil {
+					if i < maxRetries+1 {
+						validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
+						time.Sleep(duration)
+						continue
+					}
+					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				}
+				break
 			}
 		}
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
@@ -104,7 +125,15 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			_, validator.kafkaProducer, err = util.ConnectToKafka(kafkaURL)
+			validator.txsChan = make(chan []byte, 10000)
+			go func() {
+				// TODO add retry
+				if err := util.StartAsyncProducer(validator.logger, kafkaURL, validator.txsChan); err != nil {
+					validator.logger.Errorf("[Validator] error starting kafka producer: %v", err)
+					return
+				}
+			}()
+
 			if err != nil {
 				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
@@ -421,13 +450,17 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	}()
 
 	if v.kafkaProducer != nil {
-		if err := v.publishToKafka(traceSpan, bData); err != nil {
+		if err := v.publishToKafka(traceSpan, nil, bData); err != nil {
 			if reverseErr := v.reverseSpends(traceSpan, reservedUtxos); reverseErr != nil {
 				err = errors.Join(err, fmt.Errorf("error reversing utxos: %v", reverseErr))
 			}
 			traceSpan.RecordError(err)
 			return fmt.Errorf("error sending tx to kafka: %v", err)
 		}
+	} else if v.txsChan != nil {
+		start := time.Now()
+		v.txsChan <- bData.Bytes()
+		prometheusValidatorSendToKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
 		for i, h := range bData.UtxoHashes {
@@ -493,7 +526,7 @@ func (v *Validator) reverseStores(traceSpan tracing.Span, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.Data) error {
+func (v *Validator) publishToKafka(traceSpan tracing.Span, key []byte, bData *blockassembly.Data) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "publishToKafka")
 	defer func() {
 		stat.AddTime(start)
@@ -503,5 +536,5 @@ func (v *Validator) publishToKafka(traceSpan tracing.Span, bData *blockassembly.
 	kafkaSpan := tracing.Start(ctx, "Validator:Validate:publishToKafka")
 	defer kafkaSpan.Finish()
 
-	return v.kafkaProducer.Send(bData.TxIDChainHash[:], bData.Bytes())
+	return v.kafkaProducer.Send(key, bData.Bytes())
 }

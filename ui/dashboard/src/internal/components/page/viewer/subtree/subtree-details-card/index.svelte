@@ -1,20 +1,14 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  // import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
 
   import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
-  import {
-    getDetailsUrl,
-    DetailType,
-    DetailTab,
-    reverseHashParam,
-    getHashLinkProps,
-  } from '$internal/utils/urls'
+  import { DetailType, DetailTab, reverseHashParam, getHashLinkProps } from '$internal/utils/urls'
 
+  import { addNumCommas, dataSize } from '$lib/utils/format'
   import { Button, Icon } from '$lib/components'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
@@ -45,12 +39,6 @@
   function onReverseHash(hash) {
     reverseHashParam(hash)
   }
-
-  // function navToSubtree(hash) {
-  //   if (hash) {
-  //     goto(getDetailsUrl(DetailType.subtree, hash))
-  //   }
-  // }
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
@@ -112,11 +100,11 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
-            <div class="value">{expandedData.transactionCount}</div>
+            <div class="value">{addNumCommas(expandedData.transactionCount)}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
-            <div class="value">{expandedData.fee}</div>
+            <div class="value">{addNumCommas(expandedData.fee)}</div>
           </div>
           <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
@@ -126,11 +114,15 @@
         <div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
-            <div class="value">{expandedData.fee / expandedData.transactionCount}</div>
+            <div class="value">
+              {addNumCommas(expandedData.fee / expandedData.transactionCount)}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{t('unit.value.kb', { value: expandedData.size / 1000 })}</div>
+            <div class="value">
+              {dataSize(expandedData.size)}
+            </div>
           </div>
           <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.bits`)}</div>

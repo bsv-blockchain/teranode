@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
+	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -101,6 +102,11 @@ func init() {
 			"error",    // error returned
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type Store struct {
@@ -125,8 +131,6 @@ var (
 )
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	//asl.Logger.SetLevel(asl.DEBUG)
-
 	namespace := u.Path[1:]
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")

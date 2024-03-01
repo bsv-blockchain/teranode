@@ -21,7 +21,7 @@
 
 ## 1. Description
 
-The Bootstrap Service, helps nodes find peers within a UBSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
+The Bootstrap Service, helps nodes find peers within a Teranode network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
 The service manages a set of subscribers and broadcast notifications and keep-alives to them, to keep them updated about network participants.
 
@@ -106,7 +106,7 @@ The `Start` function in the `Server` struct is a method written in Go that initi
 
 4. **Starting gRPC Server**:
    - We initiate a gRPC server (`util.StartGRPCServer` and `bootstrap_api.RegisterBootstrapAPIServer(server, s)`).
-   - The server will listen to gRPC notifications from other UBSV nodes, with the following types:
+   - The server will listen to gRPC notifications from other Teranodes, with the following types:
      - `Type_ADD` - new nodes join the network, and announce themselves to the server, for inclusion in the list of nodes.
      - `Type_REMOVE` - nodes notify they are leaving the network, and should be removed from the list of nodes.
      - `Type_PING` - nodes notify they are still alive, and should be kept in the list of nodes.

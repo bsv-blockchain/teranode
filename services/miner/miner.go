@@ -50,8 +50,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
 	// How long to wait between mining the last few blocks
-	waitFinal, _ := gocore.Config().Get("mine_initial_blocks_final_wait", "5s")
-	initialBlockFinalWaitDuration, err := time.ParseDuration(waitFinal)
+	initialBlockFinalWaitDuration, err, _ := gocore.Config().GetDuration("mine_initial_blocks_final_wait", 5*time.Second)
 	if err != nil {
 		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_final_wait: %v", err)
 	}
@@ -222,11 +221,11 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 		generateBlocks = false
 	}
 
+	blockHash, _ := chainhash.NewHash(solution.BlockHash)
+
 	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
-
-		blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
 		m.logger.Infof("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
 
@@ -244,8 +243,6 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 			}
 		}
 	} else {
-		blockHash, _ := chainhash.NewHash(solution.BlockHash)
-
 		m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
 
 		if candidate.Height > uint32(initialBlockCount-5) {
@@ -255,7 +252,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	}
 
-	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
+	m.logger.Infof("[Miner] submitting mining solution for job: %s [%s]", candidateId, blockHash.String())
 	m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)

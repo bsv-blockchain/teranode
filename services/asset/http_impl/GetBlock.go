@@ -2,7 +2,9 @@ package http_impl
 
 import (
 	"encoding/hex"
+	"errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,7 +36,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 		block, err := h.repository.GetBlockByHeight(c.Request().Context(), uint32(height))
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -83,7 +85,7 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 
 		block, err := h.repository.GetBlockByHash(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

@@ -55,7 +55,7 @@ export const table = {
       },
     },
     font: {
-      size: '13px',
+      size: '12px',
       weight: 700,
     },
     line: {
@@ -73,7 +73,7 @@ export const table = {
       bottom: '1px solid rgba(255, 255, 255, 0.08)',
     },
     font: {
-      size: '15px',
+      size: '14px',
       weight: 400,
     },
     line: {

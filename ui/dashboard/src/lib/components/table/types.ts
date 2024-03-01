@@ -1,6 +1,8 @@
 export interface ColDef {
   id: string
   name?: string
+  type?: string
+  format?: string
   props: any
 }
 

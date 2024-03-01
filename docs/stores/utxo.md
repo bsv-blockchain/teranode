@@ -47,7 +47,7 @@ The UTXO Store uses a number of different datastores, either in-memory or persis
 
 ![UTXO_Store_Component_Context_Diagram.png](..%2F..%2Fdocs%2Fservices%2Fimg%2FUTXO_Store_Component_Context_Diagram.png)
 
-The UTXO store implementation is consistent within a UBSV node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
+The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
 
 ```go
 
@@ -94,7 +94,7 @@ More details about the specific stores can be found in the [Technology](#5-techn
 
 ## 2.1. What is an UTXO?
 
-The UBSV UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:
+The Teranode UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:
 
 - **Transaction Outputs**: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).
 
@@ -352,12 +352,12 @@ UTXO Store Package Structure (stores/utxo)
 - **utils.go**: Utility functions used across UTXO store implementations.
 
 
-## 7. Running the Service Locally
+## 7. Running the Store Locally
 
 
 ###     How to run
 
-To run the UTXO Service locally, you can execute the following command:
+To run the UTXO Store locally, you can execute the following command:
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1

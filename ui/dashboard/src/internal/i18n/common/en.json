@@ -1,7 +1,11 @@
 {
   "comp": {
     "footer": {
-      "copyright": "© {{ year }} Teranode"
+      "copyright": "© {{ year }} BSV Blockchain Org.",
+      "privacy": "Privacy",
+      "privacy_url": "https://www.bsvblockchain.org/privacy",
+      "terms": "Terms of Use",
+      "terms_url": "https://www.bsvblockchain.org/terms"
     },
     "pager": {
       "prev": "Prev",
@@ -98,7 +102,7 @@
     },
     "toolbar": {
       "reverse": "Reverse",
-      "placeholder": "Block Hash / Subtree Hash / TxID / UTXO Hash"
+      "placeholder": "Block Height / Hash, Subtree, TxID, UTXO Hash"
     },
     "breadcrumbs": {
       "page": {
@@ -116,6 +120,9 @@
             },
             "tx": {
               "title": "Transaction Details"
+            },
+            "utxo": {
+              "title": "UTXO Details"
             }
           }
         },
@@ -156,15 +163,16 @@
       "menu-label": "Dashboard",
       "stats": {
         "title": "24h Stats",
+        "alternateTitle": "Stats since last restart",
         "live": "Live",
         "fields": {
           "loading": "Loading...",
           "block_count": "Total Blocks",
-          "tx_count": "Mined Transactions",
+          "tx_count": "Mined Tx",
           "max_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",
           "avg_tx_count_per_block": "Average Tx / Block",
-          "txns_per_second": "Txns / Second"
+          "txns_per_second": "Tx / Second"
         }
       },
       "txs": {
@@ -185,7 +193,7 @@
         "coinbaseValue": "Block Reward",
         "transactionCount": "Tx",
         "tps": "TPS",
-        "size": "Size (Bytes)"
+        "size": "Size"
       }
     },
     "viewer-block": {
@@ -291,6 +299,11 @@
         "load-more": "Load 10 More"
       }
     },
+    "viewer-utxo": {
+      "details": {
+        "title": "UTXO Details"
+      }
+    },
     "metrics": {
       "menu-label": "Metrics"
     },
@@ -304,6 +317,7 @@
     },
     "network": {
       "menu-label": "Network",
+      "live": "Live",
       "nodes": {
         "title": "Connected Nodes",
         "fields": {
@@ -316,15 +330,11 @@
           "previousblockhash": "Previous hash",
           "receivedAt": "Last seen"
         }
-      },
-      "chaintip": {}
+      }
     },
-    "status": {
-      "menu-label": "Status",
-      "title": "Status",
-      "filter": "Filter",
-      "live": "Live",
-      "paused": "Paused"
+    "updates": {
+      "menu-label": "Updates",
+      "title": "Updates"
     }
   },
   "notifications": {
@@ -347,10 +357,16 @@
   "tooltip": {
     "copy-hash-to-clipboard": "Copy hash",
     "copy-url-to-clipboard": "Copy URL",
+    "copy-json-to-clipboard": "Copy JSON",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
     "next-block": "Next block",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "expand-all": "Expand all",
+    "collapse-all": "Collapse all",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "to-posts": "To posts"
   },
   "graph": {
     "series": {
@@ -358,9 +374,8 @@
       "tx_count": "Tx Count"
     }
   },
-  "unit": {
-    "value": {
-      "kb": "{{ value }} KB"
-    }
+  "global": {
+    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets.",
+    "warning_2": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }

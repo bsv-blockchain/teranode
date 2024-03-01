@@ -12,9 +12,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/ordishs/gocore"
 )
 
 /**
@@ -104,11 +106,18 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
 
-	clusterAdmin, err := sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
+	clusterAdmin, err := createTopic(kafkaURL, config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error while creating cluster admin: %v", err)
+		return nil, nil, err
 	}
 
+	flushBytes := 16 * 1024
+	fb, err := strconv.Atoi(kafkaURL.Query().Get("flush"))
+	if err == nil {
+		flushBytes = fb
+	}
+
+	// DRY it up
 	partitions := 1
 	partitionsStr := kafkaURL.Query().Get("partitions")
 	if partitionsStr != "" {
@@ -118,12 +127,35 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 		}
 	}
 
+	producer, err := ConnectProducer(brokersUrl, kafkaURL.Path[1:], int32(partitions), flushBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to connect to kafka: %v", err)
+	}
+
+	return clusterAdmin, producer, nil
+}
+
+func createTopic(kafkaURL *url.URL, config *sarama.Config) (sarama.ClusterAdmin, error) {
+	clusterAdmin, err := sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
+	if err != nil {
+		return nil, fmt.Errorf("error while creating cluster admin: %v", err)
+	}
+
+	partitions := 1
+	partitionsStr := kafkaURL.Query().Get("partitions")
+	if partitionsStr != "" {
+		partitions, err = strconv.Atoi(partitionsStr)
+		if err != nil {
+			return nil, fmt.Errorf("error while parsing partitions: %v", err)
+		}
+	}
+
 	replicationFactor := 1
 	replicationFactorStr := kafkaURL.Query().Get("replication")
 	if replicationFactorStr != "" {
 		replicationFactor, err = strconv.Atoi(replicationFactorStr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error while parsing replication: %v", err)
+			return nil, fmt.Errorf("error while parsing replication: %v", err)
 		}
 	}
 
@@ -133,18 +165,7 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 		ReplicationFactor: int16(replicationFactor),
 	}, false)
 
-	flushBytes := 16 * 1024
-	fb, err := strconv.Atoi(kafkaURL.Query().Get("flush"))
-	if err == nil {
-		flushBytes = fb
-	}
-
-	producer, err := ConnectProducer(brokersUrl, kafkaURL.Path[1:], int32(partitions), flushBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to connect to kafka: %v", err)
-	}
-
-	return clusterAdmin, producer, nil
+	return clusterAdmin, nil
 }
 
 func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
@@ -206,7 +227,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 					} else {
 						// mark the message after no error
 						msg.Session.MarkMessage(msg.Message, "")
-						//msg.Session.Commit()
+						// msg.Session.Commit()
 						n.Add(1)
 					}
 				}
@@ -244,19 +265,43 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 	}()
 }
 
+func StartConsumerGroupListeners(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, numConsumers int) {
+	var wg sync.WaitGroup
+
+	for i := 0; i < numConsumers; i++ {
+		wg.Add(1)
+		go func(consumerId int) {
+			defer wg.Done()
+			err := StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh)
+			if err != nil {
+				return
+			}
+		}(i)
+	}
+
+	// Wait for all consumers to finish
+	wg.Wait()
+}
 func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
-	/**
-	 * Set up a new Sarama consumer group
-	 */
+	ctx, cancel := context.WithCancel(ctx)
+	// ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-signals
+		cancel()
+	}()
+
 	consumer := KafkaConsumer{
 		ready:    make(chan bool),
 		workerCh: workerCh,
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 	client, err := sarama.NewConsumerGroup(brokersUrl, groupID, config)
 	if err != nil {
@@ -266,19 +311,11 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 
 	topics := []string{kafkaURL.Path[1:]}
 
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		for {
-			// `Consume` should be called inside an infinite loop, when a
-			// server-side re-balance happens, the consumer session will need to be
-			// recreated to get the new claims
-			if err = client.Consume(ctx, topics, &consumer); err != nil {
-				logger.Errorf("Error from consumer: %v", err)
+			if err := client.Consume(ctx, topics, &consumer); err != nil {
+				logger.Fatalf("Error from consumer: %v", err)
 			}
-
-			// check if context was cancelled, signalling that the consumer should stop
 			if ctx.Err() != nil {
 				return
 			}
@@ -286,34 +323,77 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		}
 	}()
 
-	//<-consumer.ready // Await till the consumer has been set up
-	logger.Infof("Kafka consumer up and running for %s on topic %s", groupID, topics[0])
+	<-consumer.ready // Await till the consumer has been set up
+	logger.Infof("[kafka] consumer up and running for %s on topic %s", groupID, topics[0])
 
-	sigusr1 := make(chan os.Signal, 1)
-	signal.Notify(sigusr1, syscall.SIGUSR1)
-
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-
-	keepRunning := true
-	for keepRunning {
-		select {
-		case <-ctx.Done():
-			logger.Infof("[Kafka] %s: terminating: context cancelled", groupID)
-			keepRunning = false
-		case <-sigterm:
-			logger.Infof("[Kafka] %s: terminating: via signal", groupID)
-			keepRunning = false
-		case <-sigusr1:
-			//toggleConsumptionFlow(client, &consumptionIsPaused)
-		}
-	}
-	cancel()
-	wg.Wait()
+	<-ctx.Done()
+	logger.Infof("[kafka] shutting down consumer for %s", groupID)
 
 	if err = client.Close(); err != nil {
 		logger.Errorf("[Kafka] %s: error closing client: %v", groupID, err)
 	}
 
+	return nil
+}
+
+func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan []byte) error {
+	logger.Debugf("Starting async producer")
+	topic := kafkaURL.Path[1:]
+	brokersUrl := strings.Split(kafkaURL.Host, ",")
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+
+	config := sarama.NewConfig()
+	config.Producer.Return.Successes = true
+
+	flushBytes, _ := gocore.Config().GetInt("blockassembly_kafka_flushBytes", 1048576)
+	flushMessages, _ := gocore.Config().GetInt("blockassembly_kafka_flushMessages", 50000)
+	flushFrequency, _ := gocore.Config().GetInt("blockassembly_kafka_flushFrequency", 1)
+
+	config.Producer.Flush.Bytes = flushBytes
+	config.Producer.Flush.Messages = flushMessages
+	config.Producer.Flush.Frequency = time.Duration(flushFrequency) * time.Second
+
+	clusterAdmin, err := createTopic(kafkaURL, config)
+	if err != nil {
+		return err
+	}
+
+	defer clusterAdmin.Close()
+
+	producer, err := sarama.NewAsyncProducer(brokersUrl, config)
+	if err != nil {
+		logger.Fatalf("Failed to start Sarama producer: %v", err)
+	}
+	defer producer.AsyncClose()
+
+	// Start a goroutine to handle successful message deliveries
+	go func() {
+		for range producer.Successes() {
+			// Handle successful deliveries here, e.g., log them
+		}
+	}()
+
+	// Start a goroutine to handle errors
+	go func() {
+		for err := range producer.Errors() {
+			logger.Debugf("Failed to deliver message: %v", err)
+		}
+	}()
+
+	// Sending a batch of 50 messages asynchronously
+	go func() {
+		for rawTx := range txsChan {
+			message := &sarama.ProducerMessage{
+				Topic: topic,
+				Value: sarama.StringEncoder(rawTx),
+			}
+			producer.Input() <- message
+		}
+	}()
+
+	// Wait for a signal to exit
+	<-signals
+	logger.Debugf("Shutting down producer...")
 	return nil
 }

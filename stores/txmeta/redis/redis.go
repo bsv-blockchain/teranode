@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -169,19 +170,22 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 	return data, nil
 }
 
-func (r *Redis) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
+func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := r.Get(ctx, hash)
+	for _, item := range items {
+		data, err := r.Get(ctx, item.Hash)
 		if err != nil {
-			return nil, err
+			if uerr, ok := err.(*ubsverrors.Error); ok {
+				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+					continue
+				}
+			}
+			return err
 		}
-		results[*hash] = data
+		item.Data = data
 	}
 
-	return results, nil
+	return nil
 }
 
 func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
