@@ -698,7 +698,7 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		SubtreeHashes: nil,
 		AllowFailFast: true,
 	}
-	if err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
+	if _, err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
 		u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 	}
 

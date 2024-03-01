@@ -92,7 +92,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			SubtreeHashes: nil,
 			AllowFailFast: false,
 		}
-		err = blockValidation.validateSubtree(context.Background(), v)
+		_, err = blockValidation.validateSubtree(context.Background(), v)
 		require.NoError(t, err)
 	})
 }
@@ -189,7 +189,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		SubtreeHashes: nil,
 		AllowFailFast: false,
 	}
-	err = blockValidation.validateSubtree(context.Background(), v)
+	_, err = blockValidation.validateSubtree(context.Background(), v)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))

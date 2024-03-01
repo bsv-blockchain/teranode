@@ -672,9 +672,15 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				SubtreeHashes: subtreeBytesMap[*subtreeHash],
 				AllowFailFast: false,
 			}
-			err = u.validateSubtree(ctx1, v)
-			if err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
-				err = u.validateSubtree(ctx1, v) // just try one more time (deduplication may mean it was doing a fail-fast validation when we didn't want it to)
+			var wasDeduplicated bool
+			for i := 0; i < 3; i++ {
+				wasDeduplicated, err = u.validateSubtree(ctx1, v)
+				if wasDeduplicated && err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+					// keep going all the while it's deduplicating and we have a threshold exceeded error
+					u.logger.Warnf("[validateBlockSubtrees][%s] deduplicating subtree validation [%s] and threshold exceeded, will try again: %v", block.Hash().String(), subtreeHash.String(), err)
+					continue
+				}
+				break
 			}
 			if err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
@@ -842,7 +848,7 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-func (u *BlockValidation) validateSubtree(ctx context.Context, v ValidateSubtree) error {
+func (u *BlockValidation) validateSubtree(ctx context.Context, v ValidateSubtree) (bool, error) {
 	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
 	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
 	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
