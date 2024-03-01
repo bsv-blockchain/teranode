@@ -590,22 +590,21 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
-	missingSubtreesMu := sync.Mutex{}
 	for idx, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		idx := idx
 		// first check all the subtrees exist or not in our store, in parallel, and gather what is missing
 		g.Go(func() error {
 			// get subtree from store
+			u.logger.Infof("[validateBlockSubtrees][%s] checking if subtree exists in storeBBB: %s", block.Hash().String(), subtreeHash.String())
 			subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 			if err != nil {
 				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
 			}
 			if !subtreeExists {
+				u.logger.Infof("[validateBlockSubtrees][%s] subtree does not exist in storeAAA: %s", block.Hash().String(), subtreeHash.String())
 				// subtree already exists in store, which means it's valid
-				missingSubtreesMu.Lock()
 				missingSubtrees[idx] = subtreeHash
-				missingSubtreesMu.Unlock()
 			}
 
 			return nil
@@ -617,8 +616,15 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		return err
 	}
 
-	if len(missingSubtrees) > 0 {
-		u.logger.Infof("[validateBlockSubtrees][%s] missing %d of %d subtrees", block.Hash().String(), len(missingSubtrees), len(block.Subtrees))
+	count := 0
+	for _, subtreeHash := range missingSubtrees {
+		if subtreeHash != nil {
+			count++
+		}
+	}
+
+	if count > 0 {
+		u.logger.Infof("[validateBlockSubtrees][%s] missing %d of %d subtrees", block.Hash().String(), count, len(block.Subtrees))
 	}
 
 	startGet := gocore.CurrentTime()
