@@ -85,64 +85,30 @@ func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
 	return subtree, nil
 }
 
-// func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err error) {
-// buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err error) {
+	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
 
-// // root len(st.rootHash[:]) bytes
-// // first 8 bytes, fees
-// // second 8 bytes, sizeInBytes
-// // third 8 bytes, number of leaves
-// // total read at once = len(st.rootHash[:]) + 8 + 8 + 8
-// byteBuffer := make([]byte, chainhash.HashSize+24)
-// if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-// 	return nil, fmt.Errorf("unable to read subtree root information : %v", err)
-// }
+	// root len(st.rootHash[:]) bytes
+	// first 8 bytes, fees
+	// second 8 bytes, sizeInBytes
+	// third 8 bytes, number of leaves
+	// total read at once = len(st.rootHash[:]) + 8 + 8 + 8
+	byteBuffer := make([]byte, chainhash.HashSize+24)
+	if _, err = io.ReadFull(buf, byteBuffer); err != nil {
+		return nil, fmt.Errorf("unable to read subtree root information : %v", err)
+	}
 
-// numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
-// subtreeBytes = make([]byte, chainhash.HashSize*int(numLeaves))
-
-// byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
-// for i := uint64(0); i < numLeaves; i++ {
-// 	if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-// 		return nil, fmt.Errorf("unable to read subtree node information : %v", err)
-// 	}
-// 	copy(subtreeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize], byteBuffer[:chainhash.HashSize])
-// }
-
-// return subtreeBytes, nil
-// }
-
-func DeserializeNodesFromReader(inputReader io.Reader) (io.Reader, error) {
-	pr, pw := io.Pipe()
-
-	go func() {
-		defer pw.Close() // Ensure the writer is closed when the goroutine completes.
-
-		buf := bufio.NewReaderSize(inputReader, 1024*1024*4) // 4MB buffer
-		byteBuffer := make([]byte, chainhash.HashSize+24)
-		if _, err := io.ReadFull(buf, byteBuffer); err != nil {
-			pw.CloseWithError(fmt.Errorf("unable to read subtree root information: %v", err))
-			return
+	numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
+	subtreeBytes = make([]byte, chainhash.HashSize*int(numLeaves))
+	byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
+	for i := uint64(0); i < numLeaves; i++ {
+		if _, err = io.ReadFull(buf, byteBuffer); err != nil {
+			return nil, fmt.Errorf("unable to read subtree node information : %v", err)
 		}
+		copy(subtreeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize], byteBuffer[:chainhash.HashSize])
+	}
 
-		numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
-		byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
-		for i := uint64(0); i < numLeaves; i++ {
-			if _, err := io.ReadFull(buf, byteBuffer); err != nil {
-				pw.CloseWithError(fmt.Errorf("unable to read subtree node information: %v", err))
-				return
-			}
-
-			// Write each deserialized node to the pipe writer.
-			if _, err := pw.Write(byteBuffer[:chainhash.HashSize]); err != nil {
-				// If writing to the pipe fails, close the pipe with error.
-				pw.CloseWithError(err)
-				return
-			}
-		}
-	}()
-
-	return pr, nil // Return the pipe reader as the streaming interface.
+	return subtreeBytes, nil
 }
 
 func (st *Subtree) Duplicate() *Subtree {
