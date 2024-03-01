@@ -124,34 +124,51 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error
 }
 
 func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, error) {
-	fileName := s.filename(hash)
-
-	file, err := os.Open(fileName)
+	maxRetries, _ := gocore.Config().GetInt("lustre_store_max_retries", 3)
+	retrySleepDuration, err, _ := gocore.Config().GetDuration("lustre_store_retry_sleep_duration", 500*time.Millisecond)
 	if err != nil {
+		panic(fmt.Errorf("failed to get duration from config: %w", err))
+	}
+
+	var file io.ReadCloser
+
+	for i := 0; i < maxRetries; i++ {
+		fileName := s.filename(hash)
+
+		file, err = os.Open(fileName)
+		if err == nil {
+			break
+		}
+
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
 			file, err = os.Open(s.getFileNameForPersist(fileName))
-			if err != nil {
-				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) {
-					// check s3
-					fileReader, err := s.s3Client.GetIoReader(ctx, hash)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
-						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
-					}
-					return fileReader, nil
-				}
-				return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+			if err == nil {
+				break
 			}
-			return file, nil
 		}
-		return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+
+		s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
+
+		if errors.Is(err, os.ErrNotExist) {
+			// check s3
+			file, err = s.s3Client.GetIoReader(ctx, hash)
+			if err == nil {
+				break
+			}
+		}
+
+		if errors.Is(err, os.ErrNotExist) {
+			err = ubsverrors.ErrNotFound
+			if i < maxRetries-1 {
+				time.Sleep(retrySleepDuration)
+			}
+		} else {
+			s.logger.Warnf("[%s] unable to open s3 entry: %v", fileName, err)
+		}
 	}
 
-	return file, nil
+	return file, err
 }
 
 func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
@@ -196,7 +213,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 				time.Sleep(retrySleepDuration)
 			}
 		} else {
-			return nil, fmt.Errorf("[%s][attempt #%d]  unable to open file: %v", fileName, i, err)
+			s.logger.Warnf("[%s][attempt #%d]  unable to open s3 entry: %v", fileName, i, err)
 		}
 	}
 
@@ -207,29 +224,46 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byt
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
-	bytes, err := os.ReadFile(fileName)
+	maxRetries, _ := gocore.Config().GetInt("lustre_store_max_retries", 3)
+	retrySleepDuration, err, _ := gocore.Config().GetDuration("lustre_store_retry_sleep_duration", 500*time.Millisecond)
 	if err != nil {
+		panic(fmt.Errorf("failed to get duration from config: %w", err))
+	}
+
+	var bytes []byte
+
+	for i := 0; i < maxRetries; i++ {
+		bytes, err = os.ReadFile(fileName)
+		if err == nil {
+			break
+		}
+
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
-			if err != nil {
-				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) {
-					// check s3
-					bytes, err = s.s3Client.Get(ctx, hash)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
-						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
-					}
-					return bytes, nil
-				}
-				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+			if err == nil {
+				break
 			}
-			return bytes, nil
 		}
-		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+
+		s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
+
+		if errors.Is(err, os.ErrNotExist) {
+			// check s3
+			bytes, err = s.s3Client.Get(ctx, hash)
+			if err == nil {
+				break
+			}
+		}
+
+		if errors.Is(err, os.ErrNotExist) {
+			err = ubsverrors.ErrNotFound
+			if i < maxRetries-1 {
+				time.Sleep(retrySleepDuration)
+			}
+		} else {
+			s.logger.Warnf("[%s] unable to open file: %v", fileName, err)
+		}
 	}
 
 	return bytes, err
@@ -239,23 +273,39 @@ func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName := s.filename(hash)
 
-	_, err := os.Stat(fileName)
+	maxRetries, _ := gocore.Config().GetInt("lustre_store_max_retries", 3)
+	retrySleepDuration, err, _ := gocore.Config().GetDuration("lustre_store_retry_sleep_duration", 500*time.Millisecond)
 	if err != nil {
+		panic(fmt.Errorf("failed to get duration from config: %w", err))
+	}
+
+	var exists bool
+
+	for i := 0; i < maxRetries; i++ {
+		_, err = os.Stat(fileName)
+		if err == nil {
+			exists = true
+			break
+		}
+
 		if os.IsNotExist(err) {
 			// check the persist sub dir
 			_, err = os.Stat(s.getFileNameForPersist(fileName))
-			if err != nil {
-				if os.IsNotExist(err) {
-					return false, nil
-				}
-				return false, fmt.Errorf("failed to read data from file: %w", err)
+			if err == nil {
+				exists = true
+				break
 			}
-			return true, nil
 		}
-		return false, fmt.Errorf("failed to read data from file: %w", err)
+
+		if os.IsNotExist(err) {
+			exists = false
+			if i < maxRetries-1 {
+				time.Sleep(retrySleepDuration)
+			}
+		}
 	}
 
-	return true, nil
+	return exists, err
 }
 
 func (s *Lustre) Del(_ context.Context, hash []byte) error {
