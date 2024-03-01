@@ -85,11 +85,12 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
 			BaseUrl:       "http://localhost:8000",
-			FailFast:      false,
 			SubtreeHashes: nil,
+			AllowFailFast: false,
 		}
 		err = blockValidation.validateSubtree(context.Background(), v)
 		require.NoError(t, err)
@@ -185,8 +186,8 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *rootHash,
 		BaseUrl:       "http://localhost:8000",
-		FailFast:      false,
 		SubtreeHashes: nil,
+		AllowFailFast: false,
 	}
 	err = blockValidation.validateSubtree(context.Background(), v)
 	require.NoError(t, err)
@@ -453,8 +454,8 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *hash1,
 		BaseUrl:       "http://localhost:8000",
-		FailFast:      false,
 		SubtreeHashes: nil,
+		AllowFailFast: false,
 	}
 
 	// Call the validateSubtreeInternal method

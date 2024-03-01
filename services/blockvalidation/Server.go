@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -159,8 +158,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	g := errgroup.Group{}
 	g.SetLimit(subtreeFoundChConcurrency)
 
-	iteration := atomic.Int32{}
-
 	go func() {
 		u.logger.Infof("[Init] starting subtree found channel")
 		for {
@@ -180,44 +177,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
 
-					quickValidation := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
-					maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-					retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
-					if err != nil {
-						panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
-					}
-
 					// this will block if the concurrency limit is reached
 					g.Go(func() error {
 						prometheusBlockValidationSubtreeFoundChWaitDuration.Observe(float64(time.Since(time.UnixMilli(subtreeFoundItem.time)).Microseconds()) / 1_000_000)
 
-						quick := quickValidation
-						id := iteration.Add(1)
-
-						for attempt := 1; attempt <= maxRetries+1; attempt++ {
-
-							if attempt > maxRetries {
-								quick = false
-								u.logger.Infof("[Init] [go #%d attempt #%d] final attempt to process subtree, this time with full checks enabled [%s]", id, attempt, subtreeFoundItem.hash.String())
-							} else {
-								u.logger.Infof("[Init] [go #%d attempt #%d] (quick=%v) process subtree begin [%s]", id, attempt, quick, subtreeFoundItem.hash.String())
-							}
-
-							if err := u.subtreeFound(ctx, subtreeFoundItem.hash, subtreeFoundItem.baseURL, quick); err != nil {
-
-								if quickValidation && attempt <= maxRetries {
-									time.Sleep(retrySleepDuration)
-
-									u.logger.Warnf("[Init] [go #%d attempt #%d] failed to process subtree found (quick check only, will retry) [%s] [%v]", id, attempt, subtreeFoundItem.hash.String(), err)
-								} else {
-									u.logger.Warnf("[Init] [go #%d attempt #%d] failed to process subtree found [%s] [%v]", id, attempt, subtreeFoundItem.hash.String(), err)
-								}
-
-							} else {
-								u.logger.Infof("[Init] [go #%d attempt #%d] process subtree complete [%s]", id, attempt, subtreeFoundItem.hash.String())
-								break
-							}
-
+						if err := u.subtreeFound(ctx, subtreeFoundItem.hash, subtreeFoundItem.baseURL); err != nil {
+							u.logger.Infof("[Init] process subtree failed [%s]: %v", subtreeFoundItem.hash.String(), err)
+						} else {
+							u.logger.Infof("[Init] process subtree complete [%s]", subtreeFoundItem.hash.String())
 						}
 
 						prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
@@ -681,7 +648,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, baseUrl string, quick bool) error {
+func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, baseUrl string) error {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:SubtreeFound")
 	defer func() {
@@ -724,27 +691,15 @@ func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, b
 		timeoutCancel()
 	}()
 
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
-
 	subtreeSpan.LogKV("hash", subtreeHash.String())
 	v := ValidateSubtree{
-		SubtreeHash:      subtreeHash,
-		BaseUrl:          baseUrl,
-		FailFast:         false,
-		SubtreeHashes:    nil,
-		AbandonThreshold: abandonTxThreshold,
+		SubtreeHash:   subtreeHash,
+		BaseUrl:       baseUrl,
+		SubtreeHashes: nil,
+		AllowFailFast: true,
 	}
-	if quick {
-		// having strange troubles with Dedupe
-		if err := u.blockValidation.validateSubtreeInternal(timeoutCtx, v); err != nil {
-			if quick {
-				return err
-			}
-		}
-	} else {
-		if err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
-			u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
-		}
+	if err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
+		u.logger.Errorf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
 	}
 
 	return nil
