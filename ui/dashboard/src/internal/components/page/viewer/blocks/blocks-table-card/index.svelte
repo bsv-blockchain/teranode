@@ -48,7 +48,7 @@
   $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
   $: showTableFooter = showPagerSize
 
-  let variant = $tableVariant
+  let variant = 'dynamic'
   function onToggle(e) {
     const value = e.detail.value
     variant = $tableVariant = value
