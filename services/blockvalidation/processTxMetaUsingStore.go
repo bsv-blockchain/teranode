@@ -25,7 +25,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 1000)
+	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 0)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
@@ -69,7 +69,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 					for _, data := range missingTxHashesCompacted {
 						if data.Data == nil {
 							newMissed := missed.Add(1)
-							if failFast && newMissed > int32(missingTxThreshold) {
+							if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
 								return ubsverrors.ErrThresholdExceeded
 							}
 							continue

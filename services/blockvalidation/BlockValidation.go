@@ -925,7 +925,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
 		}
 
-		if failFast && missed > abandonTxThreshold {
+		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
 			u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries (fail fast  check only, will retry)", v.SubtreeHash.String()))
 			time.Sleep(retrySleepDuration)
 			continue

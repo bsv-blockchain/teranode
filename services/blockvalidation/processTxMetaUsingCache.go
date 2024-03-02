@@ -68,7 +68,7 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 					}
 
 					newMissed := missed.Add(1)
-					if failFast && newMissed > int32(missingTxThreshold) {
+					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
 						return ubsverrors.ErrThresholdExceeded
 					}
 				}
