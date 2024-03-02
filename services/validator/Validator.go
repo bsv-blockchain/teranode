@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"runtime"
+	"sync"
 	"time"
 
 	defaultvalidator "github.com/TAAL-GmbH/arc/validator/default" // TODO move this to UBSV repo - add recover to validation
@@ -83,16 +84,19 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 	}
 
 	if blockValidationClient != nil && validator.blockValidationBatcherEnabled {
+
+		attemptCounts := make(map[int]int) // key: attempt number, value: count of batches
+		attemptLock := sync.Mutex{}
+
 		sendBatch := func(batch []*txmeta.Data) {
-			startTime := gocore.CurrentTime()
-			defer func() {
+			defer func(startTime time.Time) {
 				blockValidationStat.AddTime(startTime)
 				prometheusValidatorSetTxMetaCache.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 				// if err := recover(); err != nil {
 				// 	validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
 				// }
-			}()
+			}(gocore.CurrentTime())
 
 			for i := 1; i <= maxRetries+1; i++ {
 				time.Sleep(delay)
@@ -100,7 +104,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				ctxTimeout, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 
-				err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch)
+				err := blockValidationClient.SetTxMeta(ctxTimeout, batch)
 				if err != nil {
 					if i < maxRetries+1 {
 						// validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
@@ -108,16 +112,36 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 						time.Sleep(randomDuration)
 						continue
 					}
-					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
-				} else if i > 1 {
-					validator.logger.Debugf("[Validator] successfully sent tx meta batch to block validation cache after %d attempts", i)
+					logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
 				}
+
+				attemptLock.Lock()
+				attemptCounts[i]++
+				attemptLock.Unlock()
+
 				break
 			}
 		}
+
 		batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchSize", 100)
 		batchTimeOut, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheBatchTimeoutMillis", 10)
 		validator.blockValidationBatcher = *batcher.New[txmeta.Data](batchSize, time.Duration(batchTimeOut)*time.Millisecond, sendBatch, true)
+
+		logAndResetAttemptCounts := func() {
+			for {
+				time.Sleep(5 * time.Minute)
+
+				attemptLock.Lock()
+				for attempt, count := range attemptCounts {
+					logger.Infof("[Validator] batches needing %d attempts: %d", attempt, count)
+				}
+				attemptCounts = make(map[int]int)
+				attemptLock.Unlock()
+			}
+		}
+
+		go logAndResetAttemptCounts()
+
 	}
 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
