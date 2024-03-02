@@ -443,6 +443,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
 							}
 							logger.Warnf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+							return nil
 						}
 					}
 				}
@@ -456,6 +457,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
 							}
 							logger.Warnf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+							return nil
 						}
 					}
 
@@ -466,6 +468,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 						}
 						logger.Warnf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						return nil
 					}
 					if parentTxMeta == nil {
 						continue
@@ -489,11 +492,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							return fmt.Errorf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
 						}
 						logger.Warnf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
+						return nil
 					} else if !foundInPreviousBlock && !foundInSameBlock {
 						if throwErrors {
 							return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
 						}
 						logger.Warnf("parent transaction %s not found in the last 100 blocks (maybe BlockValidation.localSetTxMined() has not finished processing previous block)", subtreeNode.Hash.String())
+						return nil
 					}
 
 				}
