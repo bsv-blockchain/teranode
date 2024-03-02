@@ -103,7 +103,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				err := validator.blockValidationClient.SetTxMeta(ctxTimeout, batch)
 				if err != nil {
 					if i < maxRetries+1 {
-						validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
+						// validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
 						randomDuration := time.Duration(rand.Int63n(int64(maxDuration)))
 						time.Sleep(randomDuration)
 						continue
