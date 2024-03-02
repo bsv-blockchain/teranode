@@ -131,10 +131,6 @@ func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.I
 	if err != nil {
 		return err
 	}
-	if blockHeight < currentHeight {
-		logger.Warnf("block height %d is less than current block height %d - ignoring and sticking with current block height", blockHeight, currentHeight)
-		return nil
-	}
 	err = utxoStore.SetBlockHeight(blockHeight)
 	return err
 }
