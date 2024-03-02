@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"time"
 
@@ -71,7 +72,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 	}
 
 	maxRetries, _ := gocore.Config().GetInt("validator_blockvalidation_maxRetries", 3)
-	duration, err, _ := gocore.Config().GetDuration("validator_blockvalidation_retrySleep", 1*time.Second)
+	maxDuration, err, _ := gocore.Config().GetDuration("validator_blockvalidation_retrySleep", 1*time.Second)
 	if err != nil {
 		panic(fmt.Sprintf("invalid setting value for validator_blockvalidation_retrySleep: %v", err))
 	}
@@ -103,7 +104,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				if err != nil {
 					if i < maxRetries+1 {
 						validator.logger.Warnf("[Validator] error sending tx meta batch to block validation cache (attempt #%d): %v", i, err)
-						time.Sleep(duration)
+						randomDuration := time.Duration(rand.Int63n(int64(maxDuration)))
+						time.Sleep(randomDuration)
 						continue
 					}
 					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
