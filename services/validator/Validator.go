@@ -109,6 +109,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 						continue
 					}
 					validator.logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+				} else if i > 1 {
+					validator.logger.Infof("[Validator] successfully sent tx meta batch to block validation cache after %d attempts", i)
 				}
 				break
 			}
