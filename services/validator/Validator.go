@@ -133,6 +133,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 
 				attemptLock.Lock()
 				for attempt, count := range attemptCounts {
+					if attempt == 1 {
+						// no need to log the things that worked first time
+						continue
+					}
 					logger.Infof("[Validator] batches needing %d attempts: %d", attempt, count)
 				}
 				attemptCounts = make(map[int]int)
