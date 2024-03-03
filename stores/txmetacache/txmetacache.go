@@ -53,9 +53,11 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 		maxMB = 256
 	}
 
+	localSetMined := gocore.Config().GetBool("blockvalidation_localSetMined", false)
+
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB * 1024 * 1024),
+		cache:       NewImprovedCache(maxMB*1024*1024, !localSetMined),
 		metrics:     metrics{},
 		logger:      logger,
 	}
