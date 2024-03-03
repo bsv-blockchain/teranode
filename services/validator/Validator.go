@@ -16,11 +16,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-bitcoin"
-	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 )
 
@@ -42,7 +42,7 @@ type Validator struct {
 	blockAssembler                blockassembly.Store
 	txMetaStore                   txmeta.Store
 	blockValidationClient         blockValidationTxMetaClient
-	blockValidationBatcher        batcher.Batcher[txmeta.Data]
+	blockValidationBatcher        batcher.Batcher2[txmeta.Data]
 	kafkaProducer                 util.KafkaProducerI
 	saveInParallel                bool
 	blockAssemblyDisabled         bool

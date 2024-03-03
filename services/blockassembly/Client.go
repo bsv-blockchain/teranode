@@ -10,8 +10,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils/batcher"
 	"github.com/ordishs/gocore"
 )
 
@@ -23,7 +23,7 @@ type Client struct {
 	logger              ulogger.Logger
 	batchSize           int
 	batchCh             chan []*blockassembly_api.AddTxRequest
-	batcher             batcher.Batcher[blockassembly_api.AddTxRequest]
+	batcher             batcher.Batcher2[blockassembly_api.AddTxRequest]
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
