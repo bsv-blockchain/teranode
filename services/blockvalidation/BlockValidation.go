@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ordishs/go-utils/expiringmap"
@@ -48,6 +49,7 @@ type BlockValidation struct {
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
 	blockExists         *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
 	subtreeExists       *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeCount        atomic.Int32
 }
 
 type missingTx struct {
@@ -81,6 +83,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:         expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:       expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
+		subtreeCount:        atomic.Int32{},
 	}
 
 	go func() {
@@ -904,9 +907,11 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	if err != nil {
 		panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
 	}
+	subtreeWarmupCount, _ := gocore.Config().GetInt("blockvalidation_validation_warmup_count", 128)
 
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
-	failFast := v.AllowFailFast && failfast
+	subtreeCount := u.subtreeCount.Add(1)
+	failFast := v.AllowFailFast && failfast && subtreeCount > int32(subtreeWarmupCount)
 
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
 
