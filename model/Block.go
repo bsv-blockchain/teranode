@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -95,7 +96,7 @@ type Block struct {
 	hash            *chainhash.Hash
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           util.TxMap
+	txMap           *txmetacache.ImprovedCache
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
@@ -355,20 +356,23 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	g := errgroup.Group{}
 	g.SetLimit(concurrency)
 
-	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
-	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
+	b.txMap = txmetacache.NewImprovedCache(int(b.TransactionCount*(chainhash.HashSize)), true)
 	for subIdx, subtree := range b.SubtreeSlices {
 		subIdx := subIdx
 		subtree := subtree
 		g.Go(func() (err error) {
 			for txIdx, subtreeNode := range subtree.Nodes {
-				// in a tx map, Put is mutually exclusive, can only be called once per key
-				err = b.txMap.Put(subtreeNode.Hash, uint64((subIdx*len(subtree.Nodes))+txIdx))
-				if err != nil {
+				key := subtreeNode.Hash[:16] // only use the first 16 bytes of the hash, reduce memory usage
+				exists := b.txMap.Has(key)
+				if exists {
 					// TODO TEMP TEMP TEMP turn duplicate check back on
 					// this is only temporary to allow us to test the inter node communication without a valid utxo store
 					duplicateCheckLogger.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
 					//return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
+				} else {
+					value := make([]byte, 8)
+					binary.LittleEndian.PutUint64(value, uint64((subIdx*len(subtree.Nodes))+txIdx))
+					b.txMap.Set(key, value)
 				}
 			}
 
@@ -416,10 +420,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					continue
 				}
 
-				txIdx, ok := b.txMap.Get(subtreeNode.Hash)
-				if !ok {
+				key := subtreeNode.Hash[:16] // only use the first 16 bytes of the hash, reduce memory usage
+				bytes := make([]byte, 8)
+				err := b.txMap.Get(&bytes, key)
+				if err != nil {
 					return fmt.Errorf("transaction %s is not in the txMap", subtreeNode.Hash.String())
 				}
+				txIdx := binary.LittleEndian.Uint64(bytes)
 
 				txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 				if err != nil {
@@ -449,8 +456,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				}
 
 				for _, parentTxHash := range txMeta.ParentTxHashes {
-					parentTxIdx, foundInSameBlock := b.txMap.Get(parentTxHash)
+					key := parentTxHash[:16] // only use the first 16 bytes of the hash, reduce memory usage
+					bytes := make([]byte, 8)
+					err := b.txMap.Get(&bytes, key)
+					foundInSameBlock := err == nil
 					if foundInSameBlock {
+						parentTxIdx := binary.LittleEndian.Uint64(bytes)
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
 							if throwErrors {
