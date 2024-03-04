@@ -780,7 +780,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	start, stat, _ := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

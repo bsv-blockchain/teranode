@@ -65,6 +65,6 @@ func NewConsumer() {
 		}(i)
 	}
 
-	util.StartKafkaGroupListener(context.Background(), logger, kafkaUrl, "kafkatest", workerCh, consumerCount)
+	_ = util.StartKafkaGroupListener(context.Background(), logger, kafkaUrl, "kafkatest", workerCh, consumerCount)
 	select {}
 }
