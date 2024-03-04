@@ -112,7 +112,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 						time.Sleep(randomDuration)
 						continue
 					}
-					logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+					//check is deadline error
+					if ctxTimeout.Err() != context.DeadlineExceeded {
+						logger.Errorf("[Validator] error sending tx meta batch to block validation cache: %v", err)
+					}
 				}
 
 				attemptLock.Lock()
@@ -137,7 +140,11 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 						// no need to log the things that worked first time
 						continue
 					}
-					logger.Infof("[Validator] batches needing %d attempts: %d", attempt, count)
+					if attempt == maxRetries+1 {
+						logger.Errorf("[Validator] batches failing after all attempts: %d", count)
+					} else {
+						logger.Infof("[Validator] batches needing %d attempts: %d", attempt, count)
+					}
 				}
 				attemptCounts = make(map[int]int)
 				attemptLock.Unlock()
