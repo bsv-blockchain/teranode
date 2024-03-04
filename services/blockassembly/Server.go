@@ -423,7 +423,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 					ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
 				}
 
-				prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+				prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
 		}()
 	}

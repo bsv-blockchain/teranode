@@ -76,7 +76,6 @@ func NewProducer(ctx context.Context) {
 	// Wait for a signal to exit
 	<-signals
 	logger.Debugf("Shutting down producer...")
-	return
 }
 
 func publishToKafka(bData []byte) {

@@ -57,17 +57,15 @@ func (b *Batcher2[T]) worker() {
 		}
 	saveBatch:
 		if len(b.batch) > 0 {
-			copyBatch := make([]*T, len(b.batch))
-
-			copy(copyBatch, b.batch)
-
-			b.batch = b.batch[:0] // Clear the batch slice without reallocating the underlying memory
+			batch := b.batch
 
 			if b.background {
-				go b.fn(copyBatch)
+				go b.fn(batch)
 			} else {
-				b.fn(copyBatch)
+				b.fn(batch)
 			}
+
+			b.batch = make([]*T, 0, b.size)
 		}
 	}
 }

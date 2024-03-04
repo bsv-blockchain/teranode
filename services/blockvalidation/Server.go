@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -11,8 +12,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -61,6 +60,7 @@ type Server struct {
 	blockValidation              *BlockValidation
 	subtreeAssemblyKafkaProducer util.KafkaProducerI
 	subtreeFoundQueue            *LockFreeQueue
+	SetTxMetaQ                   *LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -97,6 +97,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		subtreeFoundQueue:    NewLockFreeQueue(),
+		SetTxMetaQ:           NewLockFreeQ[[][]byte](),
 	}
 
 	// create a caching tx meta store
@@ -122,6 +123,44 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient)
 
 	go u.processSubtreeNotify.Start()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				u.logger.Infof("[Init] closing block found channel")
+				return
+			default:
+				data := u.SetTxMetaQ.dequeue()
+				if data == nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				go func(data *[][]byte) {
+					prometheusBlockValidationSetTxMetaQueueCh.Dec()
+
+					keys := make([][]byte, 0)
+					values := make([][]byte, 0)
+
+					for _, meta := range *data {
+						if len(meta) < 32 {
+							u.logger.Errorf("meta data is too short: %v", meta)
+							return
+						}
+
+						// first 32 bytes is hash
+						keys = append(keys, meta[:32])
+						values = append(values, meta[32:])
+					}
+
+					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
+						u.logger.Errorf("failed to set tx meta data: %v", err)
+					}
+				}(data)
+			}
+		}
+	}()
 
 	// process blocks found from channel
 	go func() {
@@ -641,7 +680,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	}
 
-	u.subtreeFoundQueue.enqueue(&subtreeFound{
+	u.subtreeFoundQueue.enqueue(&queueItem{
 		hash:    *subtreeHash,
 		baseURL: req.GetBaseUrl(),
 	})
@@ -740,36 +779,24 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	start, stat, _ := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	prometheusBlockValidationSetTXMetaCache.Inc()
-	go func(data [][]byte) {
-		keys := make([][]byte, 0)
-		values := make([][]byte, 0)
-		for _, meta := range data {
-			if len(meta) < 32 {
-				u.logger.Errorf("meta data is too short: %v", meta)
-				return
-			}
+	// number of items added
+	prometheusBlockValidationSetTXMetaCache.Add(float64(len(request.Data)))
 
-			// first 32 bytes is hash
-			hash := chainhash.Hash(meta[:32])
-			keys = append(keys, hash[:])
-			values = append(values, meta[32:])
-		}
+	// queue size
+	prometheusBlockValidationSetTxMetaQueueCh.Inc()
 
-		if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
-			u.logger.Errorf("failed to set tx meta data: %v", err)
-		}
-	}(request.Data)
+	u.SetTxMetaQ.enqueue(request.Data)
 
 	return &blockvalidation_api.SetTxMetaResponse{
 		Ok: true,
 	}, nil
 }
+
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
@@ -846,25 +873,39 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	workerCh := make(chan util.KafkaMessage)
 	for i := 0; i < workers; i++ {
 		go func() {
+			batchSize := 100
+			keys := make([][]byte, 0, batchSize)
+			values := make([][]byte, 0, batchSize)
+
+			n := 0
 			for msg := range workerCh {
 				startTime := time.Now()
 
 				data, err := blockassembly.NewFromBytes(msg.Message.Value)
 				if err != nil {
-					u.logger.Errorf("[BlockValidation] failed to decode kafka message: %s", err)
+					u.logger.Errorf("failed to create block assembly from bytes: %v", err)
+					continue
 				}
 
-				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-				for i, hash := range data.UtxoHashes {
-					utxoHashesBytes[i] = hash.CloneBytes()
-				}
+				keys = append(keys, data.TxIDChainHash.CloneBytes())
 
-				if err := u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
+				txMeta := &txmeta_store.Data{
 					Fee:            data.Fee,
 					SizeInBytes:    data.Size,
 					ParentTxHashes: data.ParentTxHashes,
-				}); err != nil {
-					u.logger.Errorf("failed to set tx meta data: %v", err)
+				}
+				values = append(values, txMeta.MetaBytes())
+
+				if n >= batchSize {
+					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
+						u.logger.Errorf("failed to set tx meta data: %v", err)
+					}
+
+					keys = make([][]byte, 0, batchSize)
+					values = make([][]byte, 0, batchSize)
+					n = 0
+				} else {
+					n++
 				}
 
 				prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
