@@ -12,8 +12,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
@@ -875,25 +873,27 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	workerCh := make(chan util.KafkaMessage)
 	for i := 0; i < workers; i++ {
 		go func() {
+			batchSize := 100
+			keys := make([][]byte, 0, batchSize)
+			values := make([][]byte, 0, batchSize)
+
+			n := 0
 			for msg := range workerCh {
 				startTime := time.Now()
 
-				data, err := blockassembly.NewFromBytes(msg.Message.Value)
-				if err != nil {
-					u.logger.Errorf("[BlockValidation] failed to decode kafka message: %s", err)
-				}
+				keys = append(keys, msg.Message.Value[:chainhash.HashSize])
+				values = append(values, msg.Message.Value[chainhash.HashSize:])
 
-				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-				for i, hash := range data.UtxoHashes {
-					utxoHashesBytes[i] = hash.CloneBytes()
-				}
+				if n >= batchSize {
+					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
+						u.logger.Errorf("failed to set tx meta data: %v", err)
+					}
 
-				if err := u.blockValidation.SetTxMetaCache(ctx, data.TxIDChainHash, &txmeta_store.Data{
-					Fee:            data.Fee,
-					SizeInBytes:    data.Size,
-					ParentTxHashes: data.ParentTxHashes,
-				}); err != nil {
-					u.logger.Errorf("failed to set tx meta data: %v", err)
+					keys = make([][]byte, 0, batchSize)
+					values = make([][]byte, 0, batchSize)
+					n = 0
+				} else {
+					n++
 				}
 
 				prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
