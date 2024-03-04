@@ -7,18 +7,21 @@ import (
 )
 
 var (
-	prometheusBlockValidationHealth                          prometheus.Counter
-	prometheusBlockValidationBlockFoundCh                    prometheus.Gauge
-	prometheusBlockValidationBlockFound                      prometheus.Counter
-	prometheusBlockValidationBlockFoundDuration              prometheus.Histogram
-	prometheusBlockValidationCatchupCh                       prometheus.Gauge
-	prometheusBlockValidationCatchup                         prometheus.Counter
-	prometheusBlockValidationCatchupDuration                 prometheus.Histogram
-	prometheusBlockValidationProcessBlockFoundDuration       prometheus.Histogram
-	prometheusBlockValidationSubtreeFound                    prometheus.Counter
-	prometheusBlockValidationSubtreeFoundCh                  prometheus.Gauge
-	prometheusBlockValidationSubtreeFoundChWaitDuration      prometheus.Histogram
-	prometheusBlockValidationSubtreeFoundDuration            prometheus.Histogram
+	prometheusBlockValidationHealth                     prometheus.Counter
+	prometheusBlockValidationBlockFoundCh               prometheus.Gauge
+	prometheusBlockValidationBlockFound                 prometheus.Counter
+	prometheusBlockValidationBlockFoundDuration         prometheus.Histogram
+	prometheusBlockValidationCatchupCh                  prometheus.Gauge
+	prometheusBlockValidationCatchup                    prometheus.Counter
+	prometheusBlockValidationCatchupDuration            prometheus.Histogram
+	prometheusBlockValidationProcessBlockFoundDuration  prometheus.Histogram
+	prometheusBlockValidationSubtreeFound               prometheus.Counter
+	prometheusBlockValidationSubtreeFoundCh             prometheus.Gauge
+	prometheusBlockValidationSubtreeFoundChWaitDuration prometheus.Histogram
+	prometheusBlockValidationSubtreeFoundDuration       prometheus.Histogram
+	prometheusBlockValidationSetTxMetaQueueCh           prometheus.Gauge
+	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
+	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
 	prometheusBlockValidationValidateBlock                   prometheus.Counter
 	prometheusBlockValidationValidateBlockDuration           prometheus.Histogram
 	prometheusBlockValidationValidateSubtree                 prometheus.Counter
@@ -149,6 +152,32 @@ func initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	prometheusBlockValidationSetTxMetaQueueCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_meta_queue_ch",
+			Help:      "Number of tx meta queue buffered in the set tx meta queue channel",
+		},
+	)
+
+	//prometheusBlockValidationSetTxMetaQueueChWaitDuration = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockvalidation",
+	//		Name:      "set_tx_meta_queue_ch_wait_duration_millis",
+	//		Help:      "Duration of set tx meta queue channel wait",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
+	//
+	//prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockvalidation",
+	//		Name:      "set_tx_meta_queue_duration_millis",
+	//		Help:      "Duration of set tx meta from queue",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
 
 	prometheusBlockValidationValidateBlock = promauto.NewCounter(
 		prometheus.CounterOpts{

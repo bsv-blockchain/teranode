@@ -9,7 +9,7 @@ type node[T any] struct {
 	next  atomic.Pointer[node[T]]
 }
 
-// LockFreeQueue represents a FIFO structure with operations to enqueue
+// LockFreeQ represents a FIFO structure with operations to enqueue
 // and dequeue generic values.
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
@@ -19,7 +19,7 @@ type LockFreeQ[T any] struct {
 	previousTail *node[T]
 }
 
-// NewLockFreeQueue creates and initializes a LockFreeQueue
+// NewLockFreeQ creates and initializes a LockFreeQueue
 func NewLockFreeQ[T any]() *LockFreeQ[T] {
 	firstTail := &node[T]{}
 	lf := &LockFreeQ[T]{

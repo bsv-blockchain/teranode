@@ -133,13 +133,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			default:
 				data := u.SetTxMetaQ.dequeue()
-
 				if data == nil {
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 
 				go func(data *[][]byte) {
+					prometheusBlockValidationSetTxMetaQueueCh.Dec()
+
 					keys := make([][]byte, 0)
 					values := make([][]byte, 0)
 
@@ -681,7 +682,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	}
 
-	u.subtreeFoundQueue.enqueue(&subtreeFound{
+	u.subtreeFoundQueue.enqueue(&queueItem{
 		hash:    *subtreeHash,
 		baseURL: req.GetBaseUrl(),
 	})
@@ -785,7 +786,11 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 		stat.AddTime(start)
 	}()
 
+	// number of items added
 	prometheusBlockValidationSetTXMetaCache.Add(float64(len(request.Data)))
+
+	// queue size
+	prometheusBlockValidationSetTxMetaQueueCh.Inc()
 
 	u.SetTxMetaQ.enqueue(request.Data)
 
@@ -793,6 +798,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 		Ok: true,
 	}, nil
 }
+
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
