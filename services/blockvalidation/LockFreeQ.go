@@ -20,12 +20,10 @@ type LockFreeQ[T any] struct {
 
 // NewLockFreeQ creates and initializes a LockFreeQueue
 func NewLockFreeQ[T any]() *LockFreeQ[T] {
-	lf := &LockFreeQ[T]{
+	return &LockFreeQ[T]{
 		tail: atomic.Pointer[node[T]]{},
 		head: &node[T]{},
 	}
-
-	return lf
 }
 
 // Enqueue adds a series of Request to the queue
