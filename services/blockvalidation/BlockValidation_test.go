@@ -141,7 +141,7 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 
 func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing of the current size in improved cache constants
-	util.SkipLongTests(t)
+	util.SkipVeryLongTests(t)
 	initPrometheusMetrics()
 
 	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
