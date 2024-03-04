@@ -56,6 +56,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+	maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
 
 	return &Miner{
 		logger:                        logger,
@@ -143,14 +144,10 @@ func (m *Miner) Start(ctx context.Context) error {
 			}
 			previousCandidate = candidate
 
-			maxSubtreeCount := m.maxSubtreeCount
-			// vary the max subtree count by 10% to avoid all miners mining at the same time
-			maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
-
 			waitSeconds := m.waitSeconds
-			if candidate.SubtreeCount > uint32(maxSubtreeCount) {
+			if candidate.SubtreeCount > uint32(m.maxSubtreeCount) {
 				// mine without waiting
-				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, maxSubtreeCount)
+				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, m.maxSubtreeCount)
 				waitSeconds = 1
 			}
 			// start mining in a new goroutine, so we can cancel it if we need to
@@ -260,6 +257,10 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
 		return fmt.Errorf("error submitting mining solution for job %s: %w", candidateId, err)
 	}
+
+	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+	// after mining a block, set it again to a new value -> vary the max subtree count by 10% to avoid all miners mining at the same time
+	m.maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
 
 	prometheusBlockMined.Inc()
 	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
