@@ -14,15 +14,15 @@ type node[T any] struct {
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
 type LockFreeQ[T any] struct {
-	tail atomic.Pointer[node[T]]
 	head *node[T]
+	tail atomic.Pointer[node[T]]
 }
 
 // NewLockFreeQ creates and initializes a LockFreeQueue
 func NewLockFreeQ[T any]() *LockFreeQ[T] {
 	return &LockFreeQ[T]{
-		tail: atomic.Pointer[node[T]]{},
 		head: &node[T]{},
+		tail: atomic.Pointer[node[T]]{},
 	}
 }
 
