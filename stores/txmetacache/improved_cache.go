@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"unsafe"
 
@@ -12,12 +13,12 @@ import (
 )
 
 // Example calculation for the improved cache:
-// cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
-// number of buckets: 1024
-// bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
-// chunk size: 2 * 1024 * 16 = 32 KB
-// number of total chunks: 2 GB / 32 KB = 65536 chunks
-// number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
+// cache size : 2 * 2 *  1024 -> 4 KB
+// number of buckets: 4
+// bucket size: 4 KB / 4 = 1 KB
+// chunk size: 2 * 128 = 256 bytes
+// number of total chunks: 4 KB / 256 bytes = 16 chunks
+// number of chunks per bucket: 16 / 4 = 4 chunks
 
 // 600 Million keys per block * 5 blocks = 3 Billion keys
 // 3 billion keys
@@ -102,6 +103,8 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 	maxBucketBytes := uint64(maxBytes / bucketsCount)
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
+
+	//fmt.Println("maxBytes: ", maxBytes, ", maxBucketBytes: ", maxBucketBytes)
 
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
 	if len(unallocatedCache) > 0 && unallocatedCache[0] {
@@ -212,14 +215,15 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
+			//fmt.Println("\n\nbucketIdx: ", bucketIdx, "batchedKeys len: ", len(batchedKeys[bucketIdx]))
 			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
-	}
+	// if err := g.Wait(); err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
@@ -316,6 +320,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 		b.chunks = append(b.chunks, p[:])
 		data = data[chunkSize:]
 	}
+	// fmt.Println("number of chunks: ", len(b.chunks))
 
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
@@ -374,6 +379,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 
 	for i, key := range keys {
 		hash = xxhash.Sum64(key)
+		// fmt.Println("calling setmulti for key index: ", i)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, values[i], hash, true)
 	}
@@ -426,11 +432,15 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
 
+	//fmt.Println("Inside SETMULTI: idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "chunkIdxNew: ", chunkIdxNew)
+
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
+			//fmt.Println("I am here: ", float64(len(chunks)*b.trimRatio)/float64(100))
+			numOfChunksToRemove := int(math.Ceil(float64(len(chunks)*b.trimRatio) / float64(100)))
+			//fmt.Println("numOfChunksToRemove: ", numOfChunksToRemove)
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 
 			// Shift the more recent half of the chunks to the start of the array
@@ -458,6 +468,8 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			chunkIdx = chunkIdxNew
 		}
 	}
+
+	//fmt.Println("current chunk idx: ", chunkIdx, "chunks length: ", len(chunks))
 
 	chunk := chunks[chunkIdx]
 	if len(chunk) == 0 {

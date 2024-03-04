@@ -158,7 +158,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	cache := NewImprovedCache(256*1024*1024, false)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("0) Total memory used: %v bytes", m.Alloc)
+	t.Logf("0) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
@@ -193,7 +193,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	}
 
 	runtime.ReadMemStats(&m)
-	t.Logf("0.5) Total memory used: %v bytes", m.Alloc)
+	t.Logf("0.5) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
@@ -202,7 +202,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	//var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("1) Total memory used: %v bytes", m.Alloc)
+	t.Logf("1) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	for i, key := range allKeys {
 		dst := make([]byte, 0)
@@ -211,15 +211,15 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 
-	// err = cache.SetMulti(allKeys, allValues)
-	// require.NoError(t, err)
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
 
-	// for i, key := range allKeys {
-	// 	dst := make([]byte, 0)
-	// 	err := cache.Get(&dst, key)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, allValues[i], dst)
-	// }
+	for i, key := range allKeys {
+		dst := make([]byte, 0)
+		err := cache.Get(&dst, key)
+		require.NoError(t, err)
+		require.Equal(t, allValues[i], dst)
+	}
 
 	err = pprof.WriteHeapProfile(f)
 	if err != nil {
@@ -228,13 +228,17 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	//var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("2) Total memory used: %v bytes", m.Alloc)
+	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
-	util.SkipVeryLongTests(t)
+	//util.SkipVeryLongTests(t)
 
-	cache := NewImprovedCache(256 * 1024 * 1024)
+	cache := NewImprovedCache(256*1024*1024, false)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
@@ -279,6 +283,66 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	// 2 chunks are deleted per adjustment
 	// there are 481 keys per chunk: 32768 bytes per chunk
 	// 1 adjustment = 481 * 2 = 962 keys are deleted.
-
 	require.NotZero(t, errCounter)
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
+}
+
+func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
+	// skipping this test, because config is not suitable for it.
+	// It is necessary to keep the test for manual inspection with suitable config.
+	util.SkipVeryLongTests(t)
+
+	cache := NewImprovedCache(4*1024, false)
+	allKeys := make([][]byte, 0)
+	allValues := make([][]byte, 0)
+	var err error
+	numberOfKeys := 100
+
+	// cache size : 4 KB
+	// 4 buckets
+	// number of buckets: 1024
+	// bucket size: 4 KB / 4 = 1 KB
+	// chunk size: 2 * 128 = 256 bytes
+	// 1 KB / 256 bytes = 4 chunks per bucket
+	// 256 bytes / 68  = 3 key-value pairs per chunk
+	// 3 * 4 = 12 key-value pairs per bucket
+	// 12 * 4 = 48 key-value pairs per cache
+
+	for i := 0; i < numberOfKeys; i++ {
+		key := make([]byte, 32)
+		value := make([]byte, 32)
+		_, err = rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key)
+		binary.LittleEndian.PutUint64(value, uint64(i))
+		allValues = append(allValues, value)
+	}
+
+	startTime := time.Now()
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti took:", time.Since(startTime))
+
+	errCounter := 0
+	for _, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cache.Get(&dst, key)
+		if err != nil {
+			errCounter++
+		}
+	}
+	fmt.Println("Number or errors:", errCounter)
+
+	// X times call cleanLockedMap
+	// 2 chunks are deleted per adjustment
+	// there are 481 keys per chunk: 32768 bytes per chunk
+	// 1 adjustment = 481 * 2 = 962 keys are deleted.
+	require.NotZero(t, errCounter)
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
 }
