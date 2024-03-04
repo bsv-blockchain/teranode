@@ -30,13 +30,17 @@ import (
 // 256 GB for the cache
 // 256 / 1024 = 0.25 GB per bucket
 
+// 256 GB / 1024 = 0.25 GB per bucket
+// 0.25 GB * 1024 = 256 MB per bucket
+// 256 MB / 8 MB =  32 chunks per bucket
+
 const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 1024
+const bucketsCount = 8 * 1024 // 8
 
-const chunkSize = maxValueSizeKB * 1024 * 16 // 32 KB
+const chunkSize = maxValueSizeKB * 2 * 1024 * 1024 // maxValueSizeKB * 2 * 1024
 
 const bucketSizeBits = 40
 
@@ -102,7 +106,7 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 
 	maxBucketBytes := uint64(maxBytes / bucketsCount)
 
-	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
+	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
 
 	//fmt.Println("maxBytes: ", maxBytes, ", maxBucketBytes: ", maxBucketBytes)
 
@@ -114,6 +118,7 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 		}
 	} else { // if the cache is allocated cache, unallocatedCache is true, txMetaCache
 		c.trimRatio = trimRatio
+
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucket{}
 			c.buckets[i].Init(maxBucketBytes, c.trimRatio)
@@ -221,9 +226,9 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		})
 	}
 
-	// if err := g.Wait(); err != nil {
-	// 	return err
-	// }
+	if err := g.Wait(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -310,9 +315,9 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 
 	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
-
+	fmt.Println("chunk size: ", chunkSize, "maxBytes: ", maxBytes, "number of chunks: ", maxBytes/chunkSize)
 	if err != nil {
-		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", maxBytes, err))
 	}
 	for len(data) > 0 {
 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -342,7 +347,9 @@ func (b *bucket) getMapSize() uint64 {
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMap(startingOffset int) {
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
-	bmNew := make(map[uint64]uint64, len(b.m))
+
+	bmSize := len(b.m)
+	bmNew := make(map[uint64]uint64, bmSize)
 
 	for k, v := range b.m {
 		idx := v & ((1 << bucketSizeBits) - 1)
@@ -438,9 +445,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			//fmt.Println("I am here: ", float64(len(chunks)*b.trimRatio)/float64(100))
 			numOfChunksToRemove := int(math.Ceil(float64(len(chunks)*b.trimRatio) / float64(100)))
-			//fmt.Println("numOfChunksToRemove: ", numOfChunksToRemove)
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 
 			// Shift the more recent half of the chunks to the start of the array
@@ -588,10 +593,13 @@ func (b *bucketUnallocated) Reset() {
 
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucketUnallocated) cleanLockedMap() {
+
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 	bIdx := b.idx
 	bm := b.m
+	//bmSize := len(b.m)
 	newItems := 0
+
 	for _, v := range bm {
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
@@ -689,7 +697,6 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 			if b.gen&((1<<genSizeBits)-1) == 0 {
 				b.gen++
 			}
-
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
