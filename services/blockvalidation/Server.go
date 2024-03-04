@@ -873,7 +873,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 		key   []byte
 		value []byte
 	}
-	txMetaQueue := LockFreeQ[txMetaQueueItem]{}
+	txMetaQueue := NewLockFreeQ[txMetaQueueItem]()
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheKafkaBatchSize", 10*1024)
 	keys := make([][]byte, 0, batchSize)

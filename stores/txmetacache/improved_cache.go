@@ -106,6 +106,10 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 
 	maxBucketBytes := uint64(maxBytes / bucketsCount)
 
+	if maxBucketBytes < chunkSize {
+		maxBucketBytes = chunkSize * 8
+	}
+
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
 
 	//fmt.Println("maxBytes: ", maxBytes, ", maxBucketBytes: ", maxBucketBytes)
