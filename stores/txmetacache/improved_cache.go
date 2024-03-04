@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"unsafe"
 
@@ -12,12 +13,12 @@ import (
 )
 
 // Example calculation for the improved cache:
-// cache size : 2048 * 1024 * 1024 bytes -> 2GB -> 2048 MB
-// number of buckets: 1024
-// bucket size: 2048 MB / 512 = 4096 KB -> 4 MB
-// chunk size: 2 * 1024 * 16 = 32 KB
-// number of total chunks: 2 GB / 32 KB = 65536 chunks
-// number of chunks per bucket: 65536 / 512 = 128 chunks per bucket
+// cache size : 2 * 2 *  1024 -> 4 KB
+// number of buckets: 4
+// bucket size: 4 KB / 4 = 1 KB
+// chunk size: 2 * 128 = 256 bytes
+// number of total chunks: 4 KB / 256 bytes = 16 chunks
+// number of chunks per bucket: 16 / 4 = 4 chunks
 
 // 600 Million keys per block * 5 blocks = 3 Billion keys
 // 3 billion keys
@@ -29,13 +30,17 @@ import (
 // 256 GB for the cache
 // 256 / 1024 = 0.25 GB per bucket
 
+// 256 GB / 1024 = 0.25 GB per bucket
+// 0.25 GB * 1024 = 256 MB per bucket
+// 256 MB / 8 MB =  32 chunks per bucket
+
 const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 1024
+const bucketsCount = 8 * 1024 // 8
 
-const chunkSize = maxValueSizeKB * 1024 * 16 // 32 KB
+const chunkSize = maxValueSizeKB * 2 * 1024 * 1024 // maxValueSizeKB * 2 * 1024
 
 const bucketSizeBits = 40
 
@@ -101,7 +106,9 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 
 	maxBucketBytes := uint64(maxBytes / bucketsCount)
 
-	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
+	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
+
+	//fmt.Println("maxBytes: ", maxBytes, ", maxBucketBytes: ", maxBucketBytes)
 
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
 	if len(unallocatedCache) > 0 && unallocatedCache[0] {
@@ -111,6 +118,7 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 		}
 	} else { // if the cache is allocated cache, unallocatedCache is true, txMetaCache
 		c.trimRatio = trimRatio
+
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucket{}
 			c.buckets[i].Init(maxBucketBytes, c.trimRatio)
@@ -212,6 +220,7 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
+			//fmt.Println("\n\nbucketIdx: ", bucketIdx, "batchedKeys len: ", len(batchedKeys[bucketIdx]))
 			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
@@ -306,9 +315,9 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 
 	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
-
+	fmt.Println("chunk size: ", chunkSize, "maxBytes: ", maxBytes, "number of chunks: ", maxBytes/chunkSize)
 	if err != nil {
-		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", maxBytes, err))
 	}
 	for len(data) > 0 {
 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -316,6 +325,7 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 		b.chunks = append(b.chunks, p[:])
 		data = data[chunkSize:]
 	}
+	// fmt.Println("number of chunks: ", len(b.chunks))
 
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
@@ -337,7 +347,9 @@ func (b *bucket) getMapSize() uint64 {
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMap(startingOffset int) {
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
-	bmNew := make(map[uint64]uint64, len(b.m))
+
+	bmSize := len(b.m)
+	bmNew := make(map[uint64]uint64, bmSize)
 
 	for k, v := range b.m {
 		idx := v & ((1 << bucketSizeBits) - 1)
@@ -374,6 +386,7 @@ func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
 
 	for i, key := range keys {
 		hash = xxhash.Sum64(key)
+		// fmt.Println("calling setmulti for key index: ", i)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, values[i], hash, true)
 	}
@@ -426,11 +439,13 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
 
+	//fmt.Println("Inside SETMULTI: idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "chunkIdxNew: ", chunkIdxNew)
+
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
 		if chunkIdxNew >= uint64(len(chunks)) {
-			numOfChunksToRemove := len(chunks) * b.trimRatio / 100
+			numOfChunksToRemove := int(math.Ceil(float64(len(chunks)*b.trimRatio) / float64(100)))
 			numOfChunksToKeep := len(chunks) - numOfChunksToRemove
 
 			// Shift the more recent half of the chunks to the start of the array
@@ -458,6 +473,8 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			chunkIdx = chunkIdxNew
 		}
 	}
+
+	//fmt.Println("current chunk idx: ", chunkIdx, "chunks length: ", len(chunks))
 
 	chunk := chunks[chunkIdx]
 	if len(chunk) == 0 {
@@ -576,10 +593,13 @@ func (b *bucketUnallocated) Reset() {
 
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucketUnallocated) cleanLockedMap() {
+
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 	bIdx := b.idx
 	bm := b.m
+	//bmSize := len(b.m)
 	newItems := 0
+
 	for _, v := range bm {
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
@@ -677,7 +697,6 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 			if b.gen&((1<<genSizeBits)-1) == 0 {
 				b.gen++
 			}
-
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset

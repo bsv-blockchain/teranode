@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,9 @@ var (
 )
 
 func Test_txMetaCache_GetMeta(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
+
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -139,6 +143,8 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 }
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	ctx := context.Background()
 	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
 	cache := c.(*TxMetaCache)

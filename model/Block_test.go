@@ -206,6 +206,9 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 }
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
+	//  skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
+
 	leafCount := 8
 	subtree, err := util.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
@@ -349,6 +352,8 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
+	//  skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	leafCount := 8
 	subtree, err := util.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
