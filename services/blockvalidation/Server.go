@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -880,8 +881,20 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 			for msg := range workerCh {
 				startTime := time.Now()
 
-				keys = append(keys, msg.Message.Value[:chainhash.HashSize])
-				values = append(values, msg.Message.Value[chainhash.HashSize:])
+				data, err := blockassembly.NewFromBytes(msg.Message.Value)
+				if err != nil {
+					u.logger.Errorf("failed to create block assembly from bytes: %v", err)
+					continue
+				}
+
+				keys = append(keys, data.TxIDChainHash.CloneBytes())
+
+				txMeta := &txmeta_store.Data{
+					Fee:            data.Fee,
+					SizeInBytes:    data.Size,
+					ParentTxHashes: data.ParentTxHashes,
+				}
+				values = append(values, txMeta.MetaBytes())
 
 				if n >= batchSize {
 					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
