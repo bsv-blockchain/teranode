@@ -867,34 +867,34 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	}
 
 	consumerCount := partitions / partitionConsumerRatio
-
 	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
 
-	workerCh := make(chan util.KafkaMessage)
-	for i := 0; i < workers; i++ {
-		go func() {
-			batchSize := 100
-			keys := make([][]byte, 0, batchSize)
-			values := make([][]byte, 0, batchSize)
+	type txMetaQueueItem struct {
+		key   []byte
+		value []byte
+	}
+	txMetaQueue := LockFreeQ[txMetaQueueItem]{}
 
-			n := 0
-			for msg := range workerCh {
-				startTime := time.Now()
-
-				data, err := blockassembly.NewFromBytes(msg.Message.Value)
-				if err != nil {
-					u.logger.Errorf("failed to create block assembly from bytes: %v", err)
+	batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheKafkaBatchSize", 10*1024)
+	keys := make([][]byte, 0, batchSize)
+	values := make([][]byte, 0, batchSize)
+	n := 0
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				u.logger.Infof("[BlockValidation] closing kafka listener")
+				return
+			default:
+				data := txMetaQueue.dequeue()
+				if data == nil {
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 
-				keys = append(keys, data.TxIDChainHash.CloneBytes())
-
-				txMeta := &txmeta_store.Data{
-					Fee:            data.Fee,
-					SizeInBytes:    data.Size,
-					ParentTxHashes: data.ParentTxHashes,
-				}
-				values = append(values, txMeta.MetaBytes())
+				keys = append(keys, data.key)
+				values = append(values, data.value)
+				n++
 
 				if n >= batchSize {
 					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
@@ -904,16 +904,33 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 					keys = make([][]byte, 0, batchSize)
 					values = make([][]byte, 0, batchSize)
 					n = 0
-				} else {
-					n++
 				}
-
-				prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
-		}()
-	}
+		}
+	}()
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh, partitionConsumerRatio); err != nil {
+	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, partitionConsumerRatio, func(msg util.KafkaMessage) {
+		startTime := time.Now()
+
+		data, err := blockassembly.NewFromBytes(msg.Message.Value)
+		if err != nil {
+			u.logger.Errorf("failed to create block assembly from bytes: %v", err)
+			return
+		}
+
+		txMeta := &txmeta_store.Data{
+			Fee:            data.Fee,
+			SizeInBytes:    data.Size,
+			ParentTxHashes: data.ParentTxHashes,
+		}
+
+		txMetaQueue.enqueue(txMetaQueueItem{
+			key:   data.TxIDChainHash.CloneBytes(),
+			value: txMeta.MetaBytes(),
+		})
+
+		prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}); err != nil {
 		u.logger.Errorf("[BlockValidation] Failed to start Kafka listener: %v", err)
 	}
 }

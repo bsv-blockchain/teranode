@@ -396,39 +396,32 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		}
 	}()
 
-	workerCh := make(chan util.KafkaMessage)
-	for i := 0; i < workers; i++ {
-		go func() {
-			for msg := range workerCh {
-				startTime := time.Now()
+	if err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) {
+		startTime := time.Now()
 
-				data, err := NewFromBytes(msg.Message.Value)
-				if err != nil {
-					ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
-					continue
-				}
+		data, err := NewFromBytes(msg.Message.Value)
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+			return
+		}
 
-				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-				for i, hash := range data.UtxoHashes {
-					utxoHashesBytes[i] = hash.CloneBytes()
-				}
+		utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
+		for i, hash := range data.UtxoHashes {
+			utxoHashesBytes[i] = hash.CloneBytes()
+		}
 
-				if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-					Txid:     data.TxIDChainHash.CloneBytes(),
-					Fee:      data.Fee,
-					Size:     data.Size,
-					Locktime: data.LockTime,
-					Utxos:    utxoHashesBytes,
-				}); err != nil {
-					ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
-				}
+		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
+			Txid:     data.TxIDChainHash.CloneBytes(),
+			Fee:      data.Fee,
+			Size:     data.Size,
+			Locktime: data.LockTime,
+			Utxos:    utxoHashesBytes,
+		}); err != nil {
+			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
+		}
 
-				prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-			}
-		}()
-	}
-
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh, consumerCount); err != nil {
+		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}); err != nil {
 		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
 	}
 }

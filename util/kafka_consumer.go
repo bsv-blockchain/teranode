@@ -6,21 +6,24 @@ import (
 
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
-	ready    chan bool
-	workerCh chan KafkaMessage
+	workerCh        chan KafkaMessage
+	consumerClosure func(KafkaMessage)
 }
 
-func NewKafkaConsumer(workerCh chan KafkaMessage, readyCh chan bool) *KafkaConsumer {
-	return &KafkaConsumer{
+func NewKafkaConsumer(workerCh chan KafkaMessage, consumerClosure ...func(message KafkaMessage)) *KafkaConsumer {
+	consumer := &KafkaConsumer{
 		workerCh: workerCh,
-		ready:    readyCh,
 	}
+
+	if len(consumerClosure) > 0 {
+		consumer.consumerClosure = consumerClosure[0]
+	}
+
+	return consumer
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (kc *KafkaConsumer) Setup(sarama.ConsumerGroupSession) error {
-	// Mark the kc as ready
-	close(kc.ready)
 	return nil
 }
 
@@ -38,7 +41,13 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	for {
 		select {
 		case message := <-claim.Messages():
-			kc.workerCh <- KafkaMessage{Message: message, Session: session}
+			if kc.consumerClosure != nil {
+				kc.consumerClosure(KafkaMessage{Message: message, Session: session})
+				continue
+			} else {
+				kc.workerCh <- KafkaMessage{Message: message, Session: session}
+			}
+
 			//log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s", string(message.Value), message.Timestamp, message.Topic)
 			//session.MarkMessage(message, "")
 

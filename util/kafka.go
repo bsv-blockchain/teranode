@@ -263,7 +263,10 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 		}
 	}()
 }
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int) error {
+
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int,
+	consumerClosure ...func(KafkaMessage)) error {
+
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 	// config.Consumer.Offsets.Initial = sarama.OffsetOldest
@@ -279,9 +282,11 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		cancel()
 	}()
 
-	consumer := KafkaConsumer{
-		ready:    make(chan bool),
-		workerCh: workerCh,
+	var consumerClosureFunc func(KafkaMessage)
+	if len(consumerClosure) > 0 {
+		consumerClosureFunc = consumerClosure[0]
+	} else {
+		consumerClosureFunc = nil
 	}
 
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
@@ -304,7 +309,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 					// Context cancelled, exit goroutine
 					return
 				default:
-					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, make(chan bool))); err != nil {
+					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, consumerClosureFunc)); err != nil {
 						logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 						// Consider delay before retry or exit based on error type
 					}
@@ -317,21 +322,6 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	<-signals
 	cancel()
 	logger.Infof("[kafka] Shutting down consumers for group %s", groupID)
-
-	// go func() {
-	// 	for {
-	// 		if err := client.Consume(ctx, topics, &consumer); err != nil {
-	// 			logger.Fatalf("Error from consumer: %v", err)
-	// 		}
-	// 		if ctx.Err() != nil {
-	// 			return
-	// 		}
-	// 		consumer.ready = make(chan bool)
-	// 	}
-	// }()
-
-	<-consumer.ready // Await till the consumer has been set up
-	logger.Infof("[kafka] consumer up and running for %s on topic %s", groupID, topics[0])
 
 	<-ctx.Done()
 	logger.Infof("[kafka] shutting down consumer for %s", groupID)
