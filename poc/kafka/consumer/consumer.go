@@ -3,6 +3,7 @@ package consumer
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -12,6 +13,7 @@ import (
 
 func NewConsumer() {
 	logger := ulogger.TestLogger{}
+	bufferSize := 1024 * 1024
 
 	kafkaUrl, err, ok := gocore.Config().GetURL("kafkatest_kafkaBrokers")
 	if err != nil || !ok {
@@ -23,10 +25,26 @@ func NewConsumer() {
 		// no workers, nothing to do
 		return
 	}
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	if partitionConsumerRatio < 1 {
+		partitionConsumerRatio = 1
+	}
 
-	fmt.Printf("starting Kafka on address: %s, with %d workers\n", kafkaUrl.String(), workers)
+	partitions := 1
+	partitionsStr := kafkaUrl.Query().Get("partitions")
+	if partitionsStr != "" {
+		partitions, err = strconv.Atoi(partitionsStr)
+		if err != nil {
+			logger.Errorf("error while parsing partitions: %v", err)
+			return
+		}
+	}
 
-	workerCh := make(chan util.KafkaMessage)
+	consumerCount := partitions / partitionConsumerRatio
+
+	fmt.Printf("starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaUrl.String(), consumerCount, workers)
+
+	workerCh := make(chan util.KafkaMessage, bufferSize)
 	for i := 0; i < workers; i++ {
 		go func(workerNo int) {
 
@@ -47,7 +65,6 @@ func NewConsumer() {
 		}(i)
 	}
 
-	if err := util.StartKafkaGroupListener(context.Background(), logger, kafkaUrl, "kafkatest", workerCh); err != nil {
-		logger.Errorf(" failed to start Kafka listener: %s", err)
-	}
+	util.StartKafkaGroupListener(context.Background(), logger, kafkaUrl, "kafkatest", workerCh, consumerCount)
+	select {}
 }

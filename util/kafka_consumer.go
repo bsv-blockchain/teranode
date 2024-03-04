@@ -10,6 +10,13 @@ type KafkaConsumer struct {
 	workerCh chan KafkaMessage
 }
 
+func NewKafkaConsumer(workerCh chan KafkaMessage, readyCh chan bool) *KafkaConsumer {
+	return &KafkaConsumer{
+		workerCh: workerCh,
+		ready:    readyCh,
+	}
+}
+
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (kc *KafkaConsumer) Setup(sarama.ConsumerGroupSession) error {
 	// Mark the kc as ready

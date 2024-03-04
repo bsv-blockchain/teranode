@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -822,7 +823,25 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 		return
 	}
 
-	u.logger.Infof("[BlockValidation] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	if partitionConsumerRatio < 1 {
+		partitionConsumerRatio = 1
+	}
+
+	partitions := 1
+	var err error
+	partitionsStr := kafkaBrokersURL.Query().Get("partitions")
+	if partitionsStr != "" {
+		partitions, err = strconv.Atoi(partitionsStr)
+		if err != nil {
+			u.logger.Errorf("error while parsing partitions: %v", err)
+			return
+		}
+	}
+
+	consumerCount := partitions / partitionConsumerRatio
+
+	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
 
 	workerCh := make(chan util.KafkaMessage)
 	for i := 0; i < workers; i++ {
@@ -853,7 +872,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 		}()
 	}
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", workerCh, partitionConsumerRatio); err != nil {
 		u.logger.Errorf("[BlockValidation] Failed to start Kafka listener: %v", err)
 	}
 }

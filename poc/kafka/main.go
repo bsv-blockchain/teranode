@@ -31,8 +31,8 @@ const (
 
 func main() {
 
-	// mode := flag.String("mode", "consumer", "Run producer or consumer")
-	mode := flag.String("mode", "producer", "Run producer or consumer")
+	mode := flag.String("mode", "consumer", "Run producer or consumer")
+	// mode := flag.String("mode", "producer", "Run producer or consumer")
 	// txCount := flag.Int("txcount", 500_000, "Number of transactions to send to kafka")
 
 	flag.Parse()

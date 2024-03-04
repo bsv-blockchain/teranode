@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"strconv"
 	"time"
 
 	"go.uber.org/atomic"
@@ -365,7 +366,25 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		return
 	}
 
-	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	if partitionConsumerRatio < 1 {
+		partitionConsumerRatio = 1
+	}
+
+	partitions := 1
+	var err error
+	partitionsStr := kafkaBrokersURL.Query().Get("partitions")
+	if partitionsStr != "" {
+		partitions, err = strconv.Atoi(partitionsStr)
+		if err != nil {
+			ba.logger.Errorf("error while parsing partitions: %v", err)
+			return
+		}
+	}
+
+	consumerCount := partitions / partitionConsumerRatio
+
+	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
 
 	// updates the stats every 5 seconds
 	go func() {
@@ -409,7 +428,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		}()
 	}
 
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh, consumerCount); err != nil {
 		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
 	}
 }

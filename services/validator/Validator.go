@@ -491,6 +491,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	} else if v.txsChan != nil {
 		start := time.Now()
 		v.txsChan <- bData.Bytes()
+		// TODO: Don't need to reverse spends here. That should be taken care of on another topic
 		prometheusValidatorSendToKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
