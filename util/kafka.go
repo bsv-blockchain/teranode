@@ -266,7 +266,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest
+	// config.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	ctx, cancel := context.WithCancel(ctx)
 	// ctx, cancel := context.WithCancel(context.Background())
