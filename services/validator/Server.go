@@ -144,7 +144,12 @@ func (v *Server) Start(ctx context.Context) error {
 
 				var partitions int
 				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
-					log.Fatal("[Validator] unable to parse Kafka partitions: ", err)
+					v.logger.Fatalf("[Validator] unable to parse Kafka partitions: ", err)
+				}
+
+				partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+				if partitionConsumerRatio < 1 {
+					partitionConsumerRatio = 1
 				}
 
 				var replicationFactor int
@@ -152,12 +157,16 @@ func (v *Server) Start(ctx context.Context) error {
 					log.Fatal("[Validator] unable to parse Kafka replication factor: ", err)
 				}
 
+				consumerCount := partitions / partitionConsumerRatio
+
+				v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
+
 				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 					NumPartitions:     int32(partitions),
 					ReplicationFactor: int16(replicationFactor),
 				}, false)
 
-				err = util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "validators", workerCh)
+				err = util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "validators", workerCh, partitionConsumerRatio)
 				if err != nil {
 					v.logger.Errorf("[Validator] Kafka listener failed to start: %s", err)
 				}
