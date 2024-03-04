@@ -149,8 +149,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						}
 
 						// first 32 bytes is hash
-						hash := chainhash.Hash(meta[:32])
-						keys = append(keys, hash[:])
+						keys = append(keys, meta[:32])
 						values = append(values, meta[32:])
 					}
 

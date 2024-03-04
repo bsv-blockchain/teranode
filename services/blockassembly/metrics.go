@@ -231,7 +231,7 @@ func initPrometheusMetrics() {
 
 	prometheusBlockAssemblerSetFromKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "blockassembly",
 			Name:      "set_from_kafka_duration_micros",
 			Help:      "Duration of setting from kafka in block assembler",
 			Buckets:   util.MetricsBucketsMicroSeconds,
