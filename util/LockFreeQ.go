@@ -1,4 +1,4 @@
-package blockvalidation
+package util
 
 import (
 	"sync/atomic"
@@ -27,8 +27,8 @@ func NewLockFreeQ[T any]() *LockFreeQ[T] {
 }
 
 // Enqueue adds a series of Request to the queue
-// enqueue is thread safe, it uses atomic operations to add to the queue
-func (q *LockFreeQ[T]) enqueue(v T) {
+// Enqueue is thread safe, it uses atomic operations to add to the queue
+func (q *LockFreeQ[T]) Enqueue(v T) {
 	node := &node[T]{value: v}
 	prev := q.tail.Swap(node)
 
@@ -41,8 +41,8 @@ func (q *LockFreeQ[T]) enqueue(v T) {
 }
 
 // Dequeue removes a Request from the queue
-// dequeue is not thread safe, it should only be called from a single thread !!!
-func (q *LockFreeQ[T]) dequeue() *T {
+// Dequeue is not thread safe, it should only be called from a single thread !!!
+func (q *LockFreeQ[T]) Dequeue() *T {
 	next := q.head.next.Load()
 
 	if next == nil {
@@ -53,6 +53,6 @@ func (q *LockFreeQ[T]) dequeue() *T {
 	return &next.value
 }
 
-func (q *LockFreeQ[T]) isEmpty() bool {
+func (q *LockFreeQ[T]) IsEmpty() bool {
 	return q.head.next.Load() == nil
 }

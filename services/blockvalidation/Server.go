@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"net/http"
 	"net/url"
 	"runtime"
 	"strconv"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 
 	"golang.org/x/sync/errgroup"
 
@@ -60,7 +61,7 @@ type Server struct {
 	blockValidation              *BlockValidation
 	subtreeAssemblyKafkaProducer util.KafkaProducerI
 	subtreeFoundQueue            *LockFreeQueue
-	SetTxMetaQ                   *LockFreeQ[[][]byte]
+	SetTxMetaQ                   *util.LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -97,7 +98,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		subtreeFoundQueue:    NewLockFreeQueue(),
-		SetTxMetaQ:           NewLockFreeQ[[][]byte](),
+		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 	}
 
 	// create a caching tx meta store
@@ -131,7 +132,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				u.logger.Infof("[Init] closing block found channel")
 				return
 			default:
-				data := u.SetTxMetaQ.dequeue()
+				data := u.SetTxMetaQ.Dequeue()
 				if data == nil {
 					time.Sleep(100 * time.Millisecond)
 					continue
@@ -790,7 +791,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 	// queue size
 	prometheusBlockValidationSetTxMetaQueueCh.Inc()
 
-	u.SetTxMetaQ.enqueue(request.Data)
+	u.SetTxMetaQ.Enqueue(request.Data)
 
 	return &blockvalidation_api.SetTxMetaResponse{
 		Ok: true,
@@ -873,7 +874,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 		key   []byte
 		value []byte
 	}
-	txMetaQueue := NewLockFreeQ[txMetaQueueItem]()
+	txMetaQueue := util.NewLockFreeQ[txMetaQueueItem]()
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheKafkaBatchSize", 10*1024)
 	keys := make([][]byte, 0, batchSize)
@@ -886,7 +887,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 				u.logger.Infof("[BlockValidation] closing kafka listener")
 				return
 			default:
-				data := txMetaQueue.dequeue()
+				data := txMetaQueue.Dequeue()
 				if data == nil {
 					time.Sleep(10 * time.Millisecond)
 					continue
@@ -924,7 +925,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 			ParentTxHashes: data.ParentTxHashes,
 		}
 
-		txMetaQueue.enqueue(txMetaQueueItem{
+		txMetaQueue.Enqueue(txMetaQueueItem{
 			key:   data.TxIDChainHash.CloneBytes(),
 			value: txMeta.MetaBytes(),
 		})

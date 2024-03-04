@@ -1,4 +1,4 @@
-package blockvalidation
+package util
 
 import (
 	"sync"
@@ -9,20 +9,20 @@ func TestEnqueueDequeue(t *testing.T) {
 	q := NewLockFreeQ[int]() // Assuming your LockFreeQ works with int for this example
 
 	// Enqueue elements
-	q.enqueue(1)
-	q.enqueue(2)
+	q.Enqueue(1)
+	q.Enqueue(2)
 
 	// Dequeue and check elements
-	if val := q.dequeue(); val == nil || *val != 1 {
+	if val := q.Dequeue(); val == nil || *val != 1 {
 		t.Errorf("Expected 1, got %v", val)
 	}
 
-	if val := q.dequeue(); val == nil || *val != 2 {
+	if val := q.Dequeue(); val == nil || *val != 2 {
 		t.Errorf("Expected 2, got %v", val)
 	}
 
 	// Check if queue is empty
-	if !q.isEmpty() {
+	if !q.IsEmpty() {
 		t.Errorf("Expected queue to be empty")
 	}
 }
@@ -38,7 +38,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < numEnqueues; j++ {
-				q.enqueue(workerID*numEnqueues + j)
+				q.Enqueue(workerID*numEnqueues + j)
 			}
 		}(i)
 	}
@@ -50,7 +50,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 	// This part of the test will need adjustment based on your dequeue method's thread safety.
 	seen := make(map[int]bool)
 	for i := 0; i < numWorkers*numEnqueues; i++ {
-		val := q.dequeue()
+		val := q.Dequeue()
 		if val == nil {
 			t.Fatalf("Expected a value, got nil at iteration %d", i)
 		}
@@ -60,7 +60,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 		seen[*val] = true
 	}
 
-	if !q.isEmpty() {
+	if !q.IsEmpty() {
 		t.Errorf("Expected queue to be empty after all dequeues")
 	}
 }
