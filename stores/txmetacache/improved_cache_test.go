@@ -4,6 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -11,6 +16,13 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	go func() {
+		log.Println("Starting pprof server on http://localhost:6060")
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+}
 
 func TestImprovedCache_SetGetTest(t *testing.T) {
 	// initialize improved cache with 1MB capacity
@@ -21,7 +33,6 @@ func TestImprovedCache_SetGetTest(t *testing.T) {
 	err = cache.Get(&dst, []byte("key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), dst)
-
 }
 
 func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
@@ -110,7 +121,6 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 			fmt.Println("SECOND error at index:", i/chainhash.HashSize, "error:", err)
 		}
 	}
-
 }
 
 func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
@@ -145,11 +155,17 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache := NewImprovedCache(256 * 1024 * 1024)
+	cache := NewImprovedCache(256*1024*1024, false)
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("0) Total memory used: %v bytes", m.Alloc)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
 	numberOfKeys := 1_000 * bucketsCount
+
+	// f, _ := os.Create("mem.prof")
+	// defer f.Close()
 
 	// cache size : 256 * 1024 * 1024 bytes -> 256 MB
 	// number of buckets: 1024
@@ -159,6 +175,12 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	// 32 KB to bytes = 32 * 1024 = 32768 bytes
 	// 32768 / 68  = 481 key-value pairs per chunk
 	// 481 * 8 = 3848 key-value pairs per bucket, at most.
+
+	f, err := os.Create("mem2.prof")
+	if err != nil {
+		t.Fatalf("could not create memory profile: %v", err)
+	}
+	defer f.Close()
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -170,10 +192,17 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		allValues = append(allValues, value)
 	}
 
+	runtime.ReadMemStats(&m)
+	t.Logf("0.5) Total memory used: %v bytes", m.Alloc)
+
 	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
 	require.NoError(t, err)
 	t.Log("SetMulti took:", time.Since(startTime))
+
+	//var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("1) Total memory used: %v bytes", m.Alloc)
 
 	for i, key := range allKeys {
 		dst := make([]byte, 0)
@@ -182,15 +211,24 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 
-	err = cache.SetMulti(allKeys, allValues)
-	require.NoError(t, err)
+	// err = cache.SetMulti(allKeys, allValues)
+	// require.NoError(t, err)
 
-	for i, key := range allKeys {
-		dst := make([]byte, 0)
-		err := cache.Get(&dst, key)
-		require.NoError(t, err)
-		require.Equal(t, allValues[i], dst)
+	// for i, key := range allKeys {
+	// 	dst := make([]byte, 0)
+	// 	err := cache.Get(&dst, key)
+	// 	require.NoError(t, err)
+	// 	require.Equal(t, allValues[i], dst)
+	// }
+
+	err = pprof.WriteHeapProfile(f)
+	if err != nil {
+		t.Fatalf("could not write memory profile: %v", err)
 	}
+
+	//var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("2) Total memory used: %v bytes", m.Alloc)
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {

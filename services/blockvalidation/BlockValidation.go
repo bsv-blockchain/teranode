@@ -75,7 +75,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		subtreeTTL:          subtreeTTL,
 		txStore:             txStore,
 		txMetaStore:         txMetaStore,
-		minedBlockStore:     txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, true), // new unallocated cache
+		minedBlockStore:     txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, true), // new unallocated cache, it doesn't pre-allocate
 		validatorClient:     validatorClient,
 		subtreeDeDuplicator: deduplicator.New(subtreeTTL),
 		optimisticMining:    optimisticMining,

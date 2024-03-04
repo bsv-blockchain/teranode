@@ -35,7 +35,7 @@ const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
 const bucketsCount = 1024
 
-const chunkSize = maxValueSizeKB * 1024 * 16 //32 KB
+const chunkSize = maxValueSizeKB * 1024 * 16 // 32 KB
 
 const bucketSizeBits = 40
 
@@ -54,6 +54,7 @@ type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
 	EntriesCount uint64
 	TrimCount    uint64
+	TotalMapSize uint64
 }
 
 // Reset resets s, so it may be re-used again in Cache.UpdateStats.
@@ -72,6 +73,7 @@ type bucketInterface interface {
 	Del(k uint64)
 	UpdateStats(s *Stats)
 	listChunks()
+	getMapSize() uint64
 }
 
 // ImprovedCache is a fast thread-safe inmemory cache optimized for big number
@@ -96,17 +98,18 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
 	}
 	var c ImprovedCache
-	maxBucketBytes := uint64((maxBytes + bucketsCount - 1) / bucketsCount)
+
+	maxBucketBytes := uint64(maxBytes / bucketsCount)
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 10)
 
-	// if the cache is unallocated cache
+	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
 	if len(unallocatedCache) > 0 && unallocatedCache[0] {
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucketUnallocated{}
 			c.buckets[i].Init(maxBucketBytes, 0)
 		}
-	} else { // if the cache is allocated cache
+	} else { // if the cache is allocated cache, unallocatedCache is true, txMetaCache
 		c.trimRatio = trimRatio
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucket{}
@@ -327,6 +330,10 @@ func (b *bucket) Reset() {
 	b.mu.Unlock()
 }
 
+func (b *bucket) getMapSize() uint64 {
+	return uint64(len(b.m))
+}
+
 // cleanLockedMap removes expired k-v pairs from bucket map.
 func (b *bucket) cleanLockedMap(startingOffset int) {
 	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
@@ -351,6 +358,7 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
 	s.TrimCount = b.trimCount
+	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
 
@@ -598,6 +606,7 @@ func (b *bucketUnallocated) cleanLockedMap() {
 func (b *bucketUnallocated) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
+	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
 
@@ -794,4 +803,8 @@ func (b *bucketUnallocated) Del(h uint64) {
 	b.mu.Lock()
 	delete(b.m, h)
 	b.mu.Unlock()
+}
+
+func (b *bucketUnallocated) getMapSize() uint64 {
+	return uint64(len(b.m))
 }

@@ -53,11 +53,9 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 		maxMB = 256
 	}
 
-	localSetMined := gocore.Config().GetBool("blockvalidation_localSetMined", false)
-
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB*1024*1024, !localSetMined),
+		cache:       NewImprovedCache(maxMB*1024*1024, false),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -77,6 +75,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
 					prometheusBlockValidationTxMetaCacheTrims.Set(float64(m.TrimCount()))
+					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(m.CacheMapSize()))
 				}
 			}
 		}
@@ -281,4 +280,10 @@ func (t *TxMetaCache) TrimCount() int {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.TrimCount)
+}
+
+func (t *TxMetaCache) CacheMapSize() int {
+	s := &Stats{}
+	t.cache.UpdateStats(s)
+	return int(s.TotalMapSize)
 }
