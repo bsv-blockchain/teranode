@@ -871,7 +871,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, consumerCount, func(msg util.KafkaMessage) {
 		startTime := time.Now()
 
-		if msg.Message.Value == nil || len(msg.Message.Value) > chainhash.HashSize {
+		if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
 			go func() {
 				if err := u.blockValidation.SetTxMetaCacheFromBytes(ctx, msg.Message.Value[:chainhash.HashSize], msg.Message.Value[chainhash.HashSize:]); err != nil {
 					u.logger.Errorf("failed to set tx meta data: %v", err)
