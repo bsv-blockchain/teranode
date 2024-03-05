@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -33,7 +32,7 @@ type Batcher struct {
 type BatchItem struct {
 	hash  chainhash.Hash
 	value []byte
-	next  atomic.Pointer[BatchItem]
+	// next  atomic.Pointer[BatchItem]
 }
 
 type BlobStore interface {
