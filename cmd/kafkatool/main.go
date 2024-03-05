@@ -24,11 +24,11 @@ func main() {
 func resetTopic(configName string) error {
 	url, err, ok := gocore.Config().GetURL(configName)
 	if err != nil {
-		return fmt.Errorf("Error getting Kafka URL (%s): %w", configName, err)
+		return fmt.Errorf("error getting Kafka URL (%s): %w", configName, err)
 	}
 
 	if !ok {
-		return fmt.Errorf("Kafka URL not found (%s)", configName)
+		return fmt.Errorf("kafka URL not found (%s)", configName)
 	}
 
 	hosts := strings.Split(url.Host, ",")
@@ -40,7 +40,7 @@ func resetTopic(configName string) error {
 
 	admin, err := sarama.NewClusterAdmin(hosts, config)
 	if err != nil {
-		return fmt.Errorf("Error creating cluster admin: %w", err)
+		return fmt.Errorf("error creating cluster admin: %w", err)
 	}
 	defer admin.Close()
 
@@ -56,12 +56,12 @@ func resetTopic(configName string) error {
 
 	partitions, err := strconv.Atoi(partitionsStr)
 	if err != nil {
-		return fmt.Errorf("Failed to parse partitions: %w", err)
+		return fmt.Errorf("failed to parse partitions: %w", err)
 	}
 
 	replication, err := strconv.Atoi(replicationStr)
 	if err != nil {
-		return fmt.Errorf("Failed to parse replication: %w", err)
+		return fmt.Errorf("failed to parse replication: %w", err)
 	}
 
 	// Recreate Topic
@@ -71,7 +71,7 @@ func resetTopic(configName string) error {
 	}
 	err = admin.CreateTopic(topic, topicDetail, false)
 	if err != nil {
-		return fmt.Errorf("Failed to create topic %s: %w", topic, err)
+		return fmt.Errorf("failed to create topic %s: %w", topic, err)
 	}
 
 	return nil
