@@ -468,10 +468,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
-	if !gocore.Config().GetBool("blockvalidation_processBlockFound_enabled", true) {
-		return nil
-	}
-
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
 	span.LogKV("hash", hash.String())
 	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", stats)
