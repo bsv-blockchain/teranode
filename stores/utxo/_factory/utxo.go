@@ -117,8 +117,8 @@ func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore u
 					go func() {
 						// trying to keep up, when we use GetBestBlockHeader it is often very slightly behind
 						// causing errors saving coinbase splitting tx. This is an experiment.
-						// _, meta, err := blockchainClient.GetBlockHeader(ctx, notification.Hash)
-						_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
+						_, meta, err := blockchainClient.GetBlockHeader(ctx, notification.Hash)
+						// _, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 						if err != nil {
 							logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 						} else {
