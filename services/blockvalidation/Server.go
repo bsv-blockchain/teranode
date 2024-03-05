@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-
 	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -870,65 +868,16 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	consumerCount := partitions / partitionConsumerRatio
 	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
 
-	type txMetaQueueItem struct {
-		key   []byte
-		value []byte
-	}
-	txMetaQueue := util.NewLockFreeQ[txMetaQueueItem]()
-
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_txMetaCacheKafkaBatchSize", 10*1024)
-	keys := make([][]byte, 0, batchSize)
-	values := make([][]byte, 0, batchSize)
-	n := 0
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				u.logger.Infof("[BlockValidation] closing kafka listener")
-				return
-			default:
-				data := txMetaQueue.Dequeue()
-				if data == nil {
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-
-				keys = append(keys, data.key)
-				values = append(values, data.value)
-				n++
-
-				if n >= batchSize {
-					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
-						u.logger.Errorf("failed to set tx meta data: %v", err)
-					}
-
-					keys = make([][]byte, 0, batchSize)
-					values = make([][]byte, 0, batchSize)
-					n = 0
-				}
-			}
-		}
-	}()
-
 	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, partitionConsumerRatio, func(msg util.KafkaMessage) {
 		startTime := time.Now()
 
-		data, err := blockassembly.NewFromBytes(msg.Message.Value)
-		if err != nil {
-			u.logger.Errorf("failed to create block assembly from bytes: %v", err)
-			return
+		if msg.Message.Value == nil || len(msg.Message.Value) > chainhash.HashSize {
+			go func() {
+				if err := u.blockValidation.SetTxMetaCacheFromBytes(ctx, msg.Message.Value[:chainhash.HashSize], msg.Message.Value[chainhash.HashSize:]); err != nil {
+					u.logger.Errorf("failed to set tx meta data: %v", err)
+				}
+			}()
 		}
-
-		txMeta := &txmeta_store.Data{
-			Fee:            data.Fee,
-			SizeInBytes:    data.Size,
-			ParentTxHashes: data.ParentTxHashes,
-		}
-
-		txMetaQueue.Enqueue(txMetaQueueItem{
-			key:   data.TxIDChainHash.CloneBytes(),
-			value: txMeta.MetaBytes(),
-		})
 
 		prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}); err != nil {

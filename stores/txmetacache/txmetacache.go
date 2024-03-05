@@ -96,6 +96,17 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error 
 	return nil
 }
 
+func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
+	err := t.cache.Set(key, txMetaBytes)
+	if err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(1)
+
+	return nil
+}
+
 func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	err := t.cache.SetMulti(keys, values)
 	if err != nil {
