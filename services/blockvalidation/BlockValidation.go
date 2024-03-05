@@ -382,26 +382,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {
-		// make sure the proof of work is enough
-		headerValid, _, err := block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			return fmt.Errorf("invalid block header: %s - %v", block.Header.Hash().String(), err)
-		}
-
-		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
-		// must be set before AddBlock is called
-		u.lastValidatedBlocks.Set(*block.Hash(), block)
-
-		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
-		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
-			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
-		}
-		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
-
-		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
-		}
-
 		// decouple the tracing context to not cancel the context when finalize the block processing in the background
 		callerSpan := opentracing.SpanFromContext(spanCtx)
 		validateCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -426,24 +406,24 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
-
-		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
-		// must be set before AddBlock is called
-		u.lastValidatedBlocks.Set(*block.Hash(), block)
-
-		// if valid, store the block
-		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
-
-		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
-			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
-		}
-
-		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
-		}
-
-		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 	}
+
+	// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
+	// must be set before AddBlock is called
+	u.lastValidatedBlocks.Set(*block.Hash(), block)
+
+	// if valid, store the block
+	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
+
+	if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+	}
+
+	if err = u.SetBlockExists(block.Header.Hash()); err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+	}
+
+	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
