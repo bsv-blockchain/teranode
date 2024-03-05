@@ -114,15 +114,17 @@ func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore u
 				return
 			case notification := <-blockchainSubscriptionCh:
 				if notification.Type == model.NotificationType_Block {
-					// trying to keep up, when we use GetBestBlockHeader it is often very slightly behind
-					// causing errors saving coinbase splitting tx. This is an experiment.
-					_, meta, err := blockchainClient.GetBlockHeader(ctx, notification.Hash)
-					// _, meta, err := blockchainClient.GetBestBlockHeader(ctx)
-					if err != nil {
-						logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
-						continue
-					}
-					setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
+					go func() {
+						// trying to keep up, when we use GetBestBlockHeader it is often very slightly behind
+						// causing errors saving coinbase splitting tx. This is an experiment.
+						// _, meta, err := blockchainClient.GetBlockHeader(ctx, notification.Hash)
+						_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
+						if err != nil {
+							logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+						} else {
+							setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
+						}
+					}()
 				}
 			}
 		}
@@ -130,5 +132,7 @@ func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore u
 }
 
 func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string, blockHeight uint32) error {
-	return utxoStore.SetBlockHeight(blockHeight)
+	if blockHeight > utxoStore.GetBlockHeight() {
+		return utxoStore.SetBlockHeight(blockHeight)
+	}
 }
