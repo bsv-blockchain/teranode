@@ -85,13 +85,14 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		)
 
 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient)
+
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
 			BaseUrl:       "http://localhost:8000",
-			FailFast:      false,
 			SubtreeHashes: nil,
+			AllowFailFast: false,
 		}
-		err = blockValidation.validateSubtree(context.Background(), v)
+		_, err = blockValidation.validateSubtree(context.Background(), v)
 		require.NoError(t, err)
 	})
 }
@@ -139,6 +140,8 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 }
 
 func TestBlockValidationValidateBigSubtree(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing of the current size in improved cache constants
+	util.SkipVeryLongTests(t)
 	initPrometheusMetrics()
 
 	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
@@ -185,10 +188,10 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *rootHash,
 		BaseUrl:       "http://localhost:8000",
-		FailFast:      false,
 		SubtreeHashes: nil,
+		AllowFailFast: false,
 	}
-	err = blockValidation.validateSubtree(context.Background(), v)
+	_, err = blockValidation.validateSubtree(context.Background(), v)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -454,8 +457,8 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *hash1,
 		BaseUrl:       "http://localhost:8000",
-		FailFast:      false,
 		SubtreeHashes: nil,
+		AllowFailFast: false,
 	}
 
 	// Call the validateSubtreeInternal method

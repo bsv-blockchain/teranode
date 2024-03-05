@@ -195,12 +195,13 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	v, err := b.Valid(context.Background(), subtreeStore, txMetaStore, nil, currentChain, currentChainIDs)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, nil, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	require.True(t, v)
 }
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
+	util.SkipVeryLongTests(t)
 	fileDir = "./test-generated_test_data/"
 	fileNameTemplate = fileDir + "subtree-%d.bin"
 	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
@@ -248,12 +249,14 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	v, err := block.Valid(context.Background(), subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
 	require.NoError(t, err)
 	require.True(t, v)
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
+	//  skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	leafCount := 8
 	subtree, err := util.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
@@ -367,7 +370,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	_, _ = b.Valid(context.Background(), subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
+	_, _ = b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
 	// TODO reactivate this test when we have a way to check for duplicate transactions
 	// require.Error(t, err)
 	// require.False(t, v)

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import { SortOrder } from './utils'
   import { filterData, sortData, paginateData } from './hooks'
   import type { I18n } from '$lib/types'
@@ -18,7 +19,7 @@
   //
 
   // core
-  export let variant: TableVariantType = 'standard'
+  export let variant: string = TableVariant.dynamic
   export let name
   export let colDefs: ColDef[] = []
   export let data: any[] = []
@@ -147,7 +148,7 @@
 
   let renderComp: any = null
 
-  async function setRenderComp(variant: TableVariantType) {
+  async function setRenderComp(variant: string) {
     try {
       if (variant === TableVariant.div) {
         renderComp = (await import('./variant/div-table/index.svelte')).default
@@ -159,7 +160,11 @@
     }
   }
   $: {
-    setRenderComp(variant)
+    let useVariant = variant
+    if (variant === TableVariant.dynamic) {
+      useVariant = $mediaSize <= MediaSize.sm ? TableVariant.div : TableVariant.standard
+    }
+    setRenderComp(useVariant)
   }
 
   let renderProps = {}

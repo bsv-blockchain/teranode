@@ -4,6 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -12,7 +17,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func init() {
+	go func() {
+		log.Println("Starting pprof server on http://localhost:6060")
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+}
+
 func TestImprovedCache_SetGetTest(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	// initialize improved cache with 1MB capacity
 	cache := NewImprovedCache(256 * 1024 * 1024)
 	err := cache.Set([]byte("key"), []byte("value"))
@@ -21,12 +35,13 @@ func TestImprovedCache_SetGetTest(t *testing.T) {
 	err = cache.Get(&dst, []byte("key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), dst)
-
 }
 
 func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	// initialize improved cache with 1MB capacity
-	cache := NewImprovedCache(1*1024*1024, true)
+	cache := NewImprovedCache(256*1024*1024, true)
 	err := cache.Set([]byte("key"), []byte("value"))
 	require.NoError(t, err)
 	dst := make([]byte, 0)
@@ -34,6 +49,8 @@ func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 	require.Equal(t, []byte("value"), dst)
 }
 func TestImprovedCache_GetBigKV(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	cache := NewImprovedCache(256 * 1024 * 1024)
 	key, value := make([]byte, (1*1024)), make([]byte, (1*1024))
 	binary.LittleEndian.PutUint64(key, uint64(0))
@@ -52,6 +69,8 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 }
 
 func TestImprovedCache_GetBigKVUnallocated(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	cache := NewImprovedCache(256*1024*1024, true)
 	key, value, tooBigValue := make([]byte, (2048)), make([]byte, (2047)), make([]byte, (2048))
 	binary.LittleEndian.PutUint64(key, uint64(0))
@@ -75,7 +94,9 @@ func TestImprovedCache_GetBigKVUnallocated(t *testing.T) {
 }
 
 func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
-	cache := NewImprovedCache(256*1024*2, true) //100 * 1024 * 1024)
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
+	cache := NewImprovedCache(256*1024*1024, true) //100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
 	valueSecond := []byte("second")
@@ -110,12 +131,13 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 			fmt.Println("SECOND error at index:", i/chainhash.HashSize, "error:", err)
 		}
 	}
-
 }
 
 func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	// We test appending performance, so we will use unallocated cache
-	cache := NewImprovedCache(100*1024*1024, true)
+	cache := NewImprovedCache(256*1024*1024, true)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
 	numberOfKeys := 2_000 * bucketsCount
@@ -145,11 +167,19 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache := NewImprovedCache(256 * 1024 * 1024)
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
+	cache := NewImprovedCache(256*1024*1024, false)
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("0) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
 	numberOfKeys := 1_000 * bucketsCount
+
+	// f, _ := os.Create("mem.prof")
+	// defer f.Close()
 
 	// cache size : 256 * 1024 * 1024 bytes -> 256 MB
 	// number of buckets: 1024
@@ -159,6 +189,12 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	// 32 KB to bytes = 32 * 1024 = 32768 bytes
 	// 32768 / 68  = 481 key-value pairs per chunk
 	// 481 * 8 = 3848 key-value pairs per bucket, at most.
+
+	f, err := os.Create("mem2.prof")
+	if err != nil {
+		t.Fatalf("could not create memory profile: %v", err)
+	}
+	defer f.Close()
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -170,10 +206,17 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		allValues = append(allValues, value)
 	}
 
+	runtime.ReadMemStats(&m)
+	t.Logf("0.5) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
+
 	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
 	require.NoError(t, err)
 	t.Log("SetMulti took:", time.Since(startTime))
+
+	//var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("1) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	for i, key := range allKeys {
 		dst := make([]byte, 0)
@@ -191,26 +234,114 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, allValues[i], dst)
 	}
+
+	err = pprof.WriteHeapProfile(f)
+	if err != nil {
+		t.Fatalf("could not write memory profile: %v", err)
+	}
+
+	//var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	util.SkipVeryLongTests(t)
 
-	cache := NewImprovedCache(256 * 1024 * 1024)
+	cache := NewImprovedCache(256*1024*1024, false)
+	cacheUnallocated := NewImprovedCache(256*1024*1024, true)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 3936256 + 1
+	numberOfKeys := 4_000_000
+	// 1024 times less of everything in scaling
 
-	// cache size : 256 * 1024 * 1024 bytes -> 256 MB
+	// cache size : 512 * 1024 * 1024 bytes -> 256 MB
+	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling
+	// bucket size: 256 MB / 8 = 32 MB per bucket
+	// chunk size: 4 KB
+	// 32 MB / 4 KB = 8192 chunks per bucket
+	// 4096 / 68  = 60 key-value pairs per chunk
+	// 60 * 8192 = 491520 key-value pairs per bucket
+	// 491520 * 8 = 3932160 key-value pairs per cache
+
+	for i := 0; i < numberOfKeys; i++ {
+		// convert int i to byte array element key
+		key := make([]byte, 32)
+		_, err = rand.Read(key)
+		require.NoError(t, err)
+		allKeys = append(allKeys, key)
+
+		value := make([]byte, 32)
+		binary.LittleEndian.PutUint64(value, uint64(i))
+		allValues = append(allValues, value)
+	}
+
+	startTime2 := time.Now()
+	err = cacheUnallocated.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti with unallocated took:", time.Since(startTime2))
+
+	startTime := time.Now()
+	err = cache.SetMulti(allKeys, allValues)
+	require.NoError(t, err)
+	t.Log("SetMulti pre-allocated took:", time.Since(startTime))
+
+	errCounter := 0
+	for _, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cache.Get(&dst, key)
+		if err != nil {
+			errCounter++
+		}
+	}
+	fmt.Println("Pre-allocated Cache Number or errors:", errCounter)
+
+	errCounter = 0
+	for _, key := range allKeys {
+		dst := make([]byte, 0)
+		err = cacheUnallocated.Get(&dst, key)
+		if err != nil {
+			errCounter++
+		}
+	}
+	fmt.Println("Unallocated Cache Number or errors:", errCounter)
+
+	// X times call cleanLockedMap
+	// 2 chunks are deleted per adjustment
+	// there are 481 keys per chunk: 32768 bytes per chunk
+	// 1 adjustment = 481 * 2 = 962 keys are deleted.
+	require.NotZero(t, errCounter)
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
+}
+
+func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
+	// skipping this test, because config is not suitable for it.
+	// It is necessary to keep the test for manual inspection with suitable config.
+	util.SkipVeryLongTests(t)
+
+	cache := NewImprovedCache(4*1024, false)
+	allKeys := make([][]byte, 0)
+	allValues := make([][]byte, 0)
+	var err error
+	numberOfKeys := 100
+
+	// cache size : 4 KB
+	// 4 buckets
 	// number of buckets: 1024
-	// bucket size: 256 MB / 1024 = 256 KB
-	// chunk size: 2 * 1024 * 16 = 32 KB
-	// 256 KB / 32 KB = 8 chunks per bucket
-	// 32 KB to bytes = 32 * 1024 = 32768 bytes
-	// 32768 / 68  = 481 key-value pairs per chunk
-	// 481 * 8 = 3848 key-value pairs per bucket
-	// 3848 * 1024 = 3936256 key-value pairs per cache
+	// bucket size: 4 KB / 4 = 1 KB
+	// chunk size: 2 * 128 = 256 bytes
+	// 1 KB / 256 bytes = 4 chunks per bucket
+	// 256 bytes / 68  = 3 key-value pairs per chunk
+	// 3 * 4 = 12 key-value pairs per bucket
+	// 12 * 4 = 48 key-value pairs per cache
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -241,6 +372,9 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	// 2 chunks are deleted per adjustment
 	// there are 481 keys per chunk: 32768 bytes per chunk
 	// 1 adjustment = 481 * 2 = 962 keys are deleted.
-
 	require.NotZero(t, errCounter)
+
+	s := &Stats{}
+	cache.UpdateStats(s)
+	fmt.Println("Stats, total map size:", s.TotalMapSize)
 }

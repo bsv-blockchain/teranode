@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"strconv"
 	"time"
 
 	"go.uber.org/atomic"
@@ -365,7 +366,25 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		return
 	}
 
-	ba.logger.Infof("[BlockAssembly] Starting Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	if partitionConsumerRatio < 1 {
+		partitionConsumerRatio = 1
+	}
+
+	partitions := 1
+	var err error
+	partitionsStr := kafkaBrokersURL.Query().Get("partitions")
+	if partitionsStr != "" {
+		partitions, err = strconv.Atoi(partitionsStr)
+		if err != nil {
+			ba.logger.Errorf("error while parsing partitions: %v", err)
+			return
+		}
+	}
+
+	consumerCount := partitions / partitionConsumerRatio
+
+	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
 
 	// updates the stats every 5 seconds
 	go func() {
@@ -377,39 +396,32 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		}
 	}()
 
-	workerCh := make(chan util.KafkaMessage)
-	for i := 0; i < workers; i++ {
-		go func() {
-			for msg := range workerCh {
-				startTime := time.Now()
+	if err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) {
+		startTime := time.Now()
 
-				data, err := NewFromBytes(msg.Message.Value)
-				if err != nil {
-					ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
-					continue
-				}
+		data, err := NewFromBytes(msg.Message.Value)
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+			return
+		}
 
-				utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-				for i, hash := range data.UtxoHashes {
-					utxoHashesBytes[i] = hash.CloneBytes()
-				}
+		utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
+		for i, hash := range data.UtxoHashes {
+			utxoHashesBytes[i] = hash.CloneBytes()
+		}
 
-				if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-					Txid:     data.TxIDChainHash.CloneBytes(),
-					Fee:      data.Fee,
-					Size:     data.Size,
-					Locktime: data.LockTime,
-					Utxos:    utxoHashesBytes,
-				}); err != nil {
-					ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
-				}
+		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
+			Txid:     data.TxIDChainHash.CloneBytes(),
+			Fee:      data.Fee,
+			Size:     data.Size,
+			Locktime: data.LockTime,
+			Utxos:    utxoHashesBytes,
+		}); err != nil {
+			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
+		}
 
-				prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-			}
-		}()
-	}
-
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", workerCh); err != nil {
+		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}); err != nil {
 		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
 	}
 }
@@ -785,7 +797,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	startTime := time.Now()
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(ctx, nil, nil, nil, nil, nil); !ok {
+	if ok, err := block.Valid(ctx, ba.logger, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}

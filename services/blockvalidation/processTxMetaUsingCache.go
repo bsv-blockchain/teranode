@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -67,8 +68,8 @@ func (u *BlockValidation) processTxMetaUsingCache(ctx context.Context, txHashes 
 					}
 
 					newMissed := missed.Add(1)
-					if failFast && newMissed > int32(missingTxThreshold) {
-						return fmt.Errorf("missed threshold reached")
+					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
+						return ubsverrors.ErrThresholdExceeded
 					}
 				}
 			}

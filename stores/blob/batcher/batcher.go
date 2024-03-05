@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/exp/rand"
@@ -23,7 +23,7 @@ type Batcher struct {
 	blobStore        BlobStore
 	sizeInBytes      int
 	writeKeys        bool
-	queue            *LockFreeQueue
+	queue            *util.LockFreeQ[BatchItem]
 	queueCtx         context.Context
 	currentBatch     []byte
 	currentBatchKeys []byte
@@ -32,7 +32,7 @@ type Batcher struct {
 type BatchItem struct {
 	hash  chainhash.Hash
 	value []byte
-	next  atomic.Pointer[BatchItem]
+	// next  atomic.Pointer[BatchItem]
 }
 
 type BlobStore interface {
@@ -46,7 +46,7 @@ func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys 
 		blobStore:        blobStore,
 		sizeInBytes:      sizeInBytes,
 		writeKeys:        writeKeys,
-		queue:            NewLockFreeQueue(),
+		queue:            util.NewLockFreeQ[BatchItem](),
 		queueCtx:         context.Background(),
 		currentBatch:     make([]byte, 0, sizeInBytes),
 		currentBatchKeys: make([]byte, 0, sizeInBytes),
@@ -60,7 +60,7 @@ func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys 
 			case <-b.queueCtx.Done():
 				return
 			default:
-				batchItem = b.queue.dequeue()
+				batchItem = b.queue.Dequeue()
 				if batchItem == nil {
 					time.Sleep(10 * time.Millisecond)
 					continue
@@ -165,7 +165,7 @@ func (b *Batcher) Close(_ context.Context) error {
 
 	// dequeue all items
 	for {
-		batchItem := b.queue.dequeue()
+		batchItem := b.queue.Dequeue()
 		if batchItem == nil {
 			break
 		}
@@ -196,7 +196,7 @@ func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadC
 }
 
 func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	b.queue.enqueue(&BatchItem{
+	b.queue.Enqueue(BatchItem{
 		hash:  chainhash.Hash(hash),
 		value: value,
 	})

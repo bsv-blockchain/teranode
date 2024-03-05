@@ -41,6 +41,8 @@ services:
       POSTGRES_DB: postgres
     ports:
       - 5432:5432
+    expose:
+      - 5432
     volumes:
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
@@ -96,18 +98,18 @@ services:
     entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
-      logLevel: "INFO"
+      logLevel: "DEBUG"
       # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       utxostore: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
+      # startTxStore: "true"
+      # txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
-      mine_initial_blocks_count: 2000
+      mine_initial_blocks_count: 1000
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       startBootstrap: false
       startP2P: true
@@ -122,7 +124,7 @@ services:
     #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
       - "18081-18089:8081-8089"
-      - "18090-18092:8090-8092"
+      - "18090-18093:8090-8093"
       - "19091:9091"
 
   ubsv-2:
@@ -132,15 +134,15 @@ services:
     entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
-      logLevel: "INFO"
+      logLevel: "DEBUG"
       # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       utxostore: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      startTxStore: "true"
-      txstore: file:///data/ubsv2/txstore
+      # startTxStore: "true"
+      # txstore: file:///data/ubsv2/txstore
       subtreestore: file:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       startBootstrap: false
@@ -157,7 +159,7 @@ services:
       - ./data/ubsv2/subtreestore:/data/ubsv2/subtreestore
     ports:
       - "28081-28089:8081-8089"
-      - "28090-28092:8090-8092"
+      - "28090-28093:8090-8093"
       - "29091:9091"
 
   ubsv-3:
@@ -167,15 +169,15 @@ services:
     entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
-      logLevel: "INFO"
+      logLevel: "DEBUG"
       # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       utxostore: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      startTxStore: "true"
-      txstore: file:///data/ubsv3/txstore
+      # startTxStore: "true"
+      # txstore: file:///data/ubsv3/txstore
       subtreestore: file:///data/ubsv3/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       startBootstrap: false
@@ -192,7 +194,7 @@ services:
       - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
     ports:
       - "38081-38089:8081-8089"
-      - "38090-38092:8090-8092"
+      - "38090-38093:8090-8093"
       - "39091:9091"
 
   tx-blaster-1:

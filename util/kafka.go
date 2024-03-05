@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -258,33 +257,19 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 			ReplicationFactor: int16(replicationFactor),
 		}, false)
 
-		err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh)
+		err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh, 1)
 		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
 	}()
 }
 
-func StartConsumerGroupListeners(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, numConsumers int) {
-	var wg sync.WaitGroup
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int,
+	consumerClosure ...func(KafkaMessage)) error {
 
-	for i := 0; i < numConsumers; i++ {
-		wg.Add(1)
-		go func(consumerId int) {
-			defer wg.Done()
-			err := StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh)
-			if err != nil {
-				return
-			}
-		}(i)
-	}
-
-	// Wait for all consumers to finish
-	wg.Wait()
-}
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage) error {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
+	// config.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	ctx, cancel := context.WithCancel(ctx)
 	// ctx, cancel := context.WithCancel(context.Background())
@@ -297,9 +282,11 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		cancel()
 	}()
 
-	consumer := KafkaConsumer{
-		ready:    make(chan bool),
-		workerCh: workerCh,
+	var consumerClosureFunc func(KafkaMessage)
+	if len(consumerClosure) > 0 {
+		consumerClosureFunc = consumerClosure[0]
+	} else {
+		consumerClosureFunc = nil
 	}
 
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
@@ -311,20 +298,30 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 
 	topics := []string{kafkaURL.Path[1:]}
 
-	go func() {
-		for {
-			if err := client.Consume(ctx, topics, &consumer); err != nil {
-				logger.Fatalf("Error from consumer: %v", err)
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			consumer.ready = make(chan bool)
-		}
-	}()
+	for i := 0; i < consumerCount; i++ {
+		go func(consumerIndex int) {
+			// defer consumer.Close() // Ensure cleanup, if necessary
+			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s", consumerIndex, groupID, topics[0])
 
-	<-consumer.ready // Await till the consumer has been set up
-	logger.Infof("[kafka] consumer up and running for %s on topic %s", groupID, topics[0])
+			for {
+				select {
+				case <-ctx.Done():
+					// Context cancelled, exit goroutine
+					return
+				default:
+					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, consumerClosureFunc)); err != nil {
+						logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
+						// Consider delay before retry or exit based on error type
+					}
+				}
+			}
+		}(i)
+	}
+
+	// Wait for signal to cancel context
+	<-signals
+	cancel()
+	logger.Infof("[kafka] Shutting down consumers for group %s", groupID)
 
 	<-ctx.Done()
 	logger.Infof("[kafka] shutting down consumer for %s", groupID)
@@ -348,11 +345,15 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan [
 
 	flushBytes, _ := gocore.Config().GetInt("blockassembly_kafka_flushBytes", 1048576)
 	flushMessages, _ := gocore.Config().GetInt("blockassembly_kafka_flushMessages", 50000)
-	flushFrequency, _ := gocore.Config().GetInt("blockassembly_kafka_flushFrequency", 1)
+	flushFrequency, _ := gocore.Config().GetInt("blockassembly_kafka_flushFrequencyMs", 1000)
 
 	config.Producer.Flush.Bytes = flushBytes
 	config.Producer.Flush.Messages = flushMessages
-	config.Producer.Flush.Frequency = time.Duration(flushFrequency) * time.Second
+	config.Producer.Flush.Frequency = time.Duration(flushFrequency) * time.Millisecond
+
+	// try turning off acks
+	// config.Producer.RequiredAcks = sarama.NoResponse // Equivalent to 'acks=0'
+	// config.Producer.Return.Successes = false
 
 	clusterAdmin, err := createTopic(kafkaURL, config)
 	if err != nil {
@@ -397,3 +398,5 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan [
 	logger.Debugf("Shutting down producer...")
 	return nil
 }
+
+// kafka consumer

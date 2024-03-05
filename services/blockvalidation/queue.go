@@ -1,16 +1,17 @@
 package blockvalidation
 
 import (
-	"github.com/libsv/go-bt/v2/chainhash"
 	"sync/atomic"
 	"time"
+
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-type subtreeFound struct {
+type queueItem struct {
 	hash    chainhash.Hash
 	baseURL string
 	time    int64
-	next    atomic.Pointer[subtreeFound]
+	next    atomic.Pointer[queueItem]
 }
 
 // LockFreeQueue represents a FIFO structure with operations to enqueue
@@ -18,25 +19,18 @@ type subtreeFound struct {
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
 type LockFreeQueue struct {
-	head         atomic.Pointer[subtreeFound]
-	tail         *subtreeFound
-	previousTail *subtreeFound
-	queueLength  atomic.Int64
+	head        *queueItem
+	tail        atomic.Pointer[queueItem]
+	queueLength atomic.Int64
 }
 
 // NewLockFreeQueue creates and initializes a LockFreeQueue
 func NewLockFreeQueue() *LockFreeQueue {
-	firstTail := &subtreeFound{}
-	lf := &LockFreeQueue{
-		head:         atomic.Pointer[subtreeFound]{},
-		tail:         firstTail,
-		previousTail: firstTail,
-		queueLength:  atomic.Int64{},
+	return &LockFreeQueue{
+		head:        &queueItem{},
+		tail:        atomic.Pointer[queueItem]{},
+		queueLength: atomic.Int64{},
 	}
-
-	lf.head.Store(nil)
-
-	return lf
 }
 
 func (q *LockFreeQueue) length() int64 {
@@ -45,11 +39,11 @@ func (q *LockFreeQueue) length() int64 {
 
 // Enqueue adds a series of Request to the queue
 // enqueue is thread safe, it uses atomic operations to add to the queue
-func (q *LockFreeQueue) enqueue(v *subtreeFound) {
+func (q *LockFreeQueue) enqueue(v *queueItem) {
 	v.time = time.Now().UnixMilli()
-	prev := q.head.Swap(v)
+	prev := q.tail.Swap(v)
 	if prev == nil {
-		q.tail.next.Store(v)
+		q.head.next.Store(v)
 		return
 	}
 	prev.next.Store(v)
@@ -58,23 +52,20 @@ func (q *LockFreeQueue) enqueue(v *subtreeFound) {
 
 // Dequeue removes a Request from the queue
 // dequeue is not thread safe, it should only be called from a single thread !!!
-func (q *LockFreeQueue) dequeue() *subtreeFound {
-	next := q.tail.next.Load()
+func (q *LockFreeQueue) dequeue() *queueItem {
+	next := q.head.next.Load()
 
-	if next == nil || next == q.previousTail {
+	if next == nil {
 		return nil
 	}
 
-	if next != nil {
-		q.tail = next
-	}
+	q.head = next
 
-	q.previousTail = next
 	q.queueLength.Add(-1)
 	return next
 }
 
 // IsEmpty Checks if the queue is empty.
 func (q *LockFreeQueue) IsEmpty() bool {
-	return q.previousTail == q.tail
+	return q.head.next.Load() == nil
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import Toggle from '$lib/components/toggle/index.svelte'
   import i18n from '$internal/i18n'
 
@@ -7,11 +8,20 @@
 
   $: t = $i18n.t
 
-  export let value = 'div'
+  export let value
+
+  let useValue
+  $: {
+    useValue = value
+    if (value === 'dynamic') {
+      useValue = $mediaSize <= MediaSize.sm ? 'div' : 'standard'
+    }
+  }
 
   const dispatch = createEventDispatcher()
 
   function onSelect(e) {
+    value = e.detail.value
     dispatch('change', e.detail)
   }
 </script>
@@ -23,6 +33,6 @@
     { icon: 'Icon-menu-line', value: 'standard', tooltip: t(`${baseKey}.tooltip.standard`) },
     { icon: 'icon-card-line', value: 'div', tooltip: t(`${baseKey}.tooltip.div`) },
   ]}
-  bind:value
+  value={useValue}
   on:change={onSelect}
 />

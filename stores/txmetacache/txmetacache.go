@@ -55,7 +55,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB * 1024 * 1024),
+		cache:       NewImprovedCache(maxMB*1024*1024, false),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -75,6 +75,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
 					prometheusBlockValidationTxMetaCacheTrims.Set(float64(m.TrimCount()))
+					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(m.CacheMapSize()))
 				}
 			}
 		}
@@ -86,6 +87,17 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
 	err := t.cache.Set(hash[:], txMeta.MetaBytes())
+	if err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(1)
+
+	return nil
+}
+
+func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
+	err := t.cache.Set(key, txMetaBytes)
 	if err != nil {
 		return err
 	}
@@ -279,4 +291,10 @@ func (t *TxMetaCache) TrimCount() int {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
 	return int(s.TrimCount)
+}
+
+func (t *TxMetaCache) CacheMapSize() int {
+	s := &Stats{}
+	t.cache.UpdateStats(s)
+	return int(s.TotalMapSize)
 }

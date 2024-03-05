@@ -7,20 +7,22 @@ import (
 )
 
 var (
-	prometheusHealth                       prometheus.Counter
-	prometheusProcessedTransactions        prometheus.Counter
-	prometheusInvalidTransactions          prometheus.Counter
-	prometheusTransactionValidateTotal     prometheus.Histogram
-	prometheusTransactionValidate          prometheus.Histogram
-	prometheusTransactionValidateBatch     prometheus.Histogram
-	prometheusTransactionStoreUtxos        prometheus.Histogram
-	prometheusTransactionSpendUtxos        prometheus.Histogram
-	prometheusTransactionDuration          prometheus.Histogram
-	prometheusTransactionSize              prometheus.Histogram
-	prometheusValidatorSendToBlockAssembly prometheus.Histogram
-	prometheusValidatorSendToKafka         prometheus.Histogram
-	prometheusValidatorSetTxMeta           prometheus.Histogram
-	prometheusValidatorSetTxMetaCache      prometheus.Histogram
+	prometheusHealth                              prometheus.Counter
+	prometheusProcessedTransactions               prometheus.Counter
+	prometheusInvalidTransactions                 prometheus.Counter
+	prometheusTransactionValidateTotal            prometheus.Histogram
+	prometheusTransactionValidate                 prometheus.Histogram
+	prometheusTransactionValidateBatch            prometheus.Histogram
+	prometheusTransactionStoreUtxos               prometheus.Histogram
+	prometheusTransactionSpendUtxos               prometheus.Histogram
+	prometheusTransactionDuration                 prometheus.Histogram
+	prometheusTransactionSize                     prometheus.Histogram
+	prometheusValidatorSendToBlockAssembly        prometheus.Histogram
+	prometheusValidatorSendToBlockAssemblyKafka   prometheus.Histogram
+	prometheusValidatorSendToBlockValidation      prometheus.Histogram
+	prometheusValidatorSendToBlockValidationKafka prometheus.Histogram
+	prometheusValidatorSetTxMeta                  prometheus.Histogram
+	prometheusValidatorSetTxMetaCache             prometheus.Histogram
 )
 
 var prometheusMetricsInitialised = false
@@ -115,11 +117,19 @@ func initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
-	prometheusValidatorSendToKafka = promauto.NewHistogram(
+	prometheusValidatorSendToBlockAssemblyKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "validator_send_to_kafka_micros",
-			Help:      "Duration of sending transactions to kafka",
+			Name:      "send_to_blockassembly_kafka_micros",
+			Help:      "Duration of sending transactions to the block assembly kafka",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+	prometheusValidatorSendToBlockValidationKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "validator",
+			Name:      "send_to_blockvalidation_kafka_micros",
+			Help:      "Duration of sending transactions to block validation kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

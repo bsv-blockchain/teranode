@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -205,7 +206,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -308,7 +309,7 @@ func (b *Block) Valid(ctx context.Context, subtreeStore blob.Store, txMetaStore 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
+		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
 		if err != nil {
 			return false, err
 		}
@@ -382,7 +383,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
@@ -396,6 +397,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()/2)
 	}
+	throwErrors := gocore.Config().GetBool("block_validOrderAndBlessed_throw_errors", true)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -437,7 +439,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 					for i := 0; i < len(blockIDBytes); i += 4 {
 						blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
 						if _, ok := currentBlockHeaderIDsMap[blockID]; ok {
-							return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+							if throwErrors {
+								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+							}
+							logger.Warnf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+							return nil
 						}
 					}
 				}
@@ -447,14 +453,22 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 					if foundInSameBlock {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
-							return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+							if throwErrors {
+								return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+							}
+							logger.Warnf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
+							return nil
 						}
 					}
 
 					// check whether the parent is in a block on our chain
 					parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
 					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-						return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						if throwErrors {
+							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						}
+						logger.Warnf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						return nil
 					}
 					if parentTxMeta == nil {
 						continue
@@ -474,9 +488,17 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, txMetaStore txmetastor
 					}
 
 					if foundInPreviousBlock && foundInSameBlock {
-						return fmt.Errorf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
+						if throwErrors {
+							return fmt.Errorf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
+						}
+						logger.Warnf("parent transaction %s is in the current block AND in previous block %s", parentTxHash.String(), subtreeNode.Hash.String())
+						return nil
 					} else if !foundInPreviousBlock && !foundInSameBlock {
-						return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
+						if throwErrors {
+							return fmt.Errorf("parent transaction %s not found in the last 100 blocks", subtreeNode.Hash.String())
+						}
+						logger.Warnf("parent transaction %s not found in the last 100 blocks (maybe BlockValidation.localSetTxMined() has not finished processing previous block)", subtreeNode.Hash.String())
+						return nil
 					}
 
 				}
