@@ -421,9 +421,13 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	}
 
 	if v.blockvalidationKafkaChan != nil {
+		startKafka := time.Now()
 		v.blockvalidationKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...)
+		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	} else if v.blockValidationClient != nil && v.blockValidationBatcherEnabled {
+		startBlockValidation := time.Now()
 		v.blockValidationBatcher.Put(data)
+		prometheusValidatorSendToBlockValidation.Observe(float64(time.Since(startBlockValidation).Microseconds()) / 1_000_000)
 	}
 
 	return data, nil
@@ -516,7 +520,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		start := time.Now()
 		v.blockassemblyKafkaChan <- bData.Bytes()
 		// TODO: Don't need to reverse spends here. That should be taken care of on another topic
-		prometheusValidatorSendToKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
 		for i, h := range bData.UtxoHashes {
