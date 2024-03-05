@@ -573,6 +573,11 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		// we don't have a method to revert anything that goes wrong anyway
 		c.g.Go(func() error {
 			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
+			delay, err, _ := gocore.Config().GetDuration("coinbase_store_createSpendingUtxos_delay", 5*time.Second)
+			if err != nil {
+				panic(fmt.Sprintf("could not parse coinbase_store_createSpendingUtxos_delay: %v", err))
+			}
+			time.Sleep(delay)
 			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
 				return fmt.Errorf("could not split utxo: %w", err)
 			}
