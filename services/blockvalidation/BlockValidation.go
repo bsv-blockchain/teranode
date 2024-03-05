@@ -935,13 +935,16 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		// 1. First attempt to load the txMeta from the cache...
 		missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
 		if err != nil {
+			if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+				u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String()))
+				time.Sleep(retrySleepDuration)
+				continue
+			}
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries (fail fast  check only, will retry)", v.SubtreeHash.String()))
-			time.Sleep(retrySleepDuration)
-			continue
+			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] abandoned - too many missing txmeta entries", v.SubtreeHash.String()), err)
 		}
 
 		if missed > 0 {
