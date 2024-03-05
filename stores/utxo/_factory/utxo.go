@@ -132,7 +132,9 @@ func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore u
 }
 
 func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string, blockHeight uint32) error {
-	if blockHeight > utxoStore.GetBlockHeight() {
+	height, _ := utxoStore.GetBlockHeight()
+	if blockHeight > height {
 		return utxoStore.SetBlockHeight(blockHeight)
 	}
+	return nil
 }
