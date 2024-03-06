@@ -10,6 +10,7 @@ import (
 )
 
 type SubtreeMeta struct {
+	Subtree        *Subtree
 	RootHash       chainhash.Hash
 	ParentTxHashes [][]chainhash.Hash
 	ParentTxMeta   map[chainhash.Hash]txmeta.Data
@@ -18,10 +19,11 @@ type SubtreeMeta struct {
 // NewSubtreeMeta creates a new SubtreeMeta object
 // the size parameter is the number of nodes in the subtree,
 // the index in that array should match the index of the node in the subtree
-func NewSubtreeMeta(rootHash chainhash.Hash, size int) *SubtreeMeta {
+func NewSubtreeMeta(subtree *Subtree) *SubtreeMeta {
 	return &SubtreeMeta{
-		RootHash:       rootHash,
-		ParentTxHashes: make([][]chainhash.Hash, size),
+		Subtree:        subtree,
+		RootHash:       *subtree.RootHash(),
+		ParentTxHashes: make([][]chainhash.Hash, subtree.Size()),
 		ParentTxMeta:   make(map[chainhash.Hash]txmeta.Data),
 	}
 }
@@ -50,13 +52,15 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 			return nil, fmt.Errorf("unable to read parent tx hash length: %v", err)
 		}
 		hashLen := binary.LittleEndian.Uint64(bytesUint64[:])
-		s.ParentTxHashes[i] = make([]chainhash.Hash, hashLen)
-		for j := uint64(0); j < hashLen; j++ {
-			_, err = io.ReadFull(buf, hashBytes[:])
-			if err != nil {
-				return nil, fmt.Errorf("unable to read parent tx hash: %v", err)
+		if hashLen > 0 {
+			s.ParentTxHashes[i] = make([]chainhash.Hash, hashLen)
+			for j := uint64(0); j < hashLen; j++ {
+				_, err = io.ReadFull(buf, hashBytes[:])
+				if err != nil {
+					return nil, fmt.Errorf("unable to read parent tx hash: %v", err)
+				}
+				s.ParentTxHashes[i][j] = hashBytes
 			}
-			s.ParentTxHashes[i][j] = hashBytes
 		}
 	}
 
@@ -67,41 +71,56 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 	}
 	parentTxMetaLen := binary.LittleEndian.Uint64(bytesUint64[:])
 
+	s.ParentTxMeta = make(map[chainhash.Hash]txmeta.Data)
+
 	// read the parent tx meta
 	var meta *txmeta.Data
+	var hash chainhash.Hash
 	for i := uint64(0); i < parentTxMetaLen; i++ {
-		var hash chainhash.Hash
 		_, err = io.ReadFull(buf, hashBytes[:])
 		if err != nil {
 			return nil, fmt.Errorf("unable to read parent tx hash: %v", err)
 		}
 		copy(hash[:], hashBytes[:])
 
-		metaLen := binary.LittleEndian.Uint64(dataBytes[40+32*parentTxHashesLen+8+32*i : 40+32*parentTxHashesLen+8+32*i+8])
-
-		metaBytes := make([]byte, metaLen)
-		_, err = io.ReadFull(buf, metaBytes)
+		// read meta len from buffer
+		_, err = io.ReadFull(buf, bytesUint64[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to read parent tx meta: %v", err)
+			return nil, fmt.Errorf("unable to read number of parent tx meta: %v", err)
 		}
+		metaLen := binary.LittleEndian.Uint64(bytesUint64[:])
+		if metaLen > 0 {
+			metaBytes := make([]byte, metaLen)
+			_, err = io.ReadFull(buf, metaBytes)
+			if err != nil {
+				return nil, fmt.Errorf("unable to read parent tx meta: %v", err)
+			}
+			meta = &txmeta.Data{}
+			txmeta.NewMetaDataFromBytes(&metaBytes, meta)
+			if err != nil {
+				return nil, fmt.Errorf("unable to create parent tx meta: %v", err)
+			}
 
-		meta, err = txmeta.NewDataFromBytes(metaBytes)
-		if err != nil {
-			return nil, fmt.Errorf("unable to create parent tx meta: %v", err)
+			s.ParentTxMeta[hash] = *meta
 		}
-
-		s.ParentTxMeta[hash] = *meta
 	}
 
 	return s, nil
 }
 
 // SetParentTxHash sets the parent tx hash for a given node in the subtree
-func (s *SubtreeMeta) SetParentTxHash(index int, parentTxHash chainhash.Hash) {
+func (s *SubtreeMeta) SetParentTxHash(index int, parentTxHash chainhash.Hash) error {
 	if s.ParentTxHashes[index] == nil {
 		s.ParentTxHashes[index] = make([]chainhash.Hash, 0)
 	}
+
+	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
+		return fmt.Errorf("node at index %d is not set in subtree", index)
+	}
+
 	s.ParentTxHashes[index] = append(s.ParentTxHashes[index], parentTxHash)
+
+	return nil
 }
 
 // SetParentTxMeta sets the parent tx meta for a given node in the subtree
@@ -154,7 +173,7 @@ func (s *SubtreeMeta) Serialize() ([]byte, error) {
 		if _, err = buf.Write(hash[:]); err != nil {
 			return nil, fmt.Errorf("unable to write parent tx hash: %v", err)
 		}
-		metaBytes := meta.Bytes()
+		metaBytes := meta.MetaBytes()
 
 		binary.LittleEndian.PutUint64(bytesUint64[:], uint64(len(metaBytes)))
 		if _, err = buf.Write(bytesUint64[:]); err != nil {
