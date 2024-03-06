@@ -14,4 +14,6 @@ activate Node2
 Node2 -> Node2: Handle rejected transaction notification
 deactivate Node2
 
+left footer Last Modified On: 17-Jan-2024
+
 @enduml
