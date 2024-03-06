@@ -298,6 +298,7 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
+
 func TestBlockValidation_validateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
@@ -463,5 +464,4 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	// Call the validateSubtreeInternal method
 	err = blockValidation.validateSubtreeInternal(ctx, v)
 	require.NoError(t, err)
-
 }
