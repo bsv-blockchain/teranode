@@ -10,7 +10,6 @@ import (
 )
 
 var (
-	hash0 = hash1
 	hash1 = chainhash.HashH([]byte{0x01})
 	hash2 = chainhash.HashH([]byte{0x02})
 	hash3 = chainhash.HashH([]byte{0x03})
