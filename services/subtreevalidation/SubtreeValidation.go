@@ -388,6 +388,8 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 		return err
 	}
 
+	//subtreeMeta := util.NewSubtreeMeta(subtree)
+
 	failfast := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
 	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
@@ -487,6 +489,7 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice [%s]", v.SubtreeHash.String(), txHash.String())
 		}
 
+		//err = subtreeMeta.AddNode(txHash, txMeta)
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add node to subtree", v.SubtreeHash.String()), err)
