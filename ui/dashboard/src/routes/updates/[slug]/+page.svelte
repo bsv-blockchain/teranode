@@ -77,4 +77,9 @@
   :global(.post-details table th, .msg-contaienr table td) {
     border: 1px solid white;
   }
+
+  :global(.post-details img) {
+    max-width: 100%;
+    height: auto;
+  }
 </style>
