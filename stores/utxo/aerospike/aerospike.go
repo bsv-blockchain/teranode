@@ -626,12 +626,12 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
 			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
-			lockTime, ok := value.Bins["locktime"].(uint32)
+			lockTime, ok := value.Bins["locktime"].(int)
 			if !ok {
 				lockTime = 0
 			}
 
-			return utxostore.NewErrLockTime(lockTime, s.blockHeight.Load())
+			return utxostore.NewErrLockTime(uint32(lockTime), s.blockHeight.Load())
 		}
 
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)

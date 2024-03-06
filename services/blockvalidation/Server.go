@@ -688,6 +688,10 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 }
 
 func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, baseUrl string) error {
+	if !gocore.Config().GetBool("blockvalidation_subtreeFound_enabled", true) {
+		return nil
+	}
+
 	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:SubtreeFound")
 	defer func() {
@@ -866,12 +870,12 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 	}
 
 	consumerCount := partitions / partitionConsumerRatio
-	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
+	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers\n", kafkaBrokersURL.String(), consumerCount)
 
-	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, partitionConsumerRatio, func(msg util.KafkaMessage) {
+	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, consumerCount, func(msg util.KafkaMessage) {
 		startTime := time.Now()
 
-		if msg.Message.Value == nil || len(msg.Message.Value) > chainhash.HashSize {
+		if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
 			go func() {
 				if err := u.blockValidation.SetTxMetaCacheFromBytes(ctx, msg.Message.Value[:chainhash.HashSize], msg.Message.Value[chainhash.HashSize:]); err != nil {
 					u.logger.Errorf("failed to set tx meta data: %v", err)

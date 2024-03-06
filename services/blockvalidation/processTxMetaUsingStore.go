@@ -48,6 +48,11 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 					default:
 
+						if txHashes[i+j].Equal(*model.CoinbasePlaceholderHash) {
+							// coinbase placeholder is not in the store
+							continue
+						}
+
 						if txMetaSlice[i+j] == nil {
 							missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
 								Hash: &txHashes[i+j],
@@ -122,7 +127,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 						}
 
 						newMissed := missed.Add(1)
-						if failFast && newMissed > int32(missingTxThreshold) {
+						if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
 							return ubsverrors.ErrThresholdExceeded
 						}
 					}

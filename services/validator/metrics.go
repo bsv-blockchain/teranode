@@ -125,6 +125,14 @@ func initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+	prometheusValidatorSendToBlockValidation = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "validator",
+			Name:      "send_to_blockvalidation_micros",
+			Help:      "Duration of sending transactions to block validation",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
 	prometheusValidatorSendToBlockValidationKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
