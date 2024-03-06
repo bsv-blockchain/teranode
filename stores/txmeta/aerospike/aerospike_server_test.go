@@ -50,6 +50,7 @@ func TestAerospike(t *testing.T) {
 	parentTx := bt.NewTx()
 	parentTx.LockTime = 1
 	parentTxHash := parentTx.TxIDChainHash()
+	require.NoError(t, err)
 
 	tx := bt.NewTx()
 	tx.Inputs = []*bt.Input{
@@ -69,6 +70,7 @@ func TestAerospike(t *testing.T) {
 	})
 	tx.LockTime = 0
 	hash := tx.TxIDChainHash()
+	require.NoError(t, err)
 
 	tx2 := tx.Clone()
 	tx2.Inputs[0].PreviousTxSatoshis = 202
