@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -55,7 +56,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB*1024*1024, false),
+		cache:       NewImprovedCache(maxMB*1024*1024, types.Trimmed),
 		metrics:     metrics{},
 		logger:      logger,
 	}
