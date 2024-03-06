@@ -63,6 +63,10 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 * Via settings in the `settings.conf` and `settings_local.conf` files, embedded within the Docker image.
 * By Kubernetes pod-specific settings. These settings can override configurations defined in the `.conf` files, allowing for dynamic adjustment based on the deployment environment or specific operational requirements.
 
+### Kubernetes Resolver for gRPC
+
+* [Kubernetes Resolver for gRPC](../../../k8sresolver/README.md)
+
 
 ## How to
 
