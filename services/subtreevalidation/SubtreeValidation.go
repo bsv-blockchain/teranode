@@ -509,10 +509,19 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 	}
 
 	start = gocore.CurrentTime()
+	// store subtree meta in store
+	u.logger.Infof("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
+	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
+	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
+	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String()), err)
+	}
+
+	start = gocore.CurrentTime()
 	// store subtree in store
 	u.logger.Infof("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
-	stat.NewStat("7. storeSubtree").AddTime(start)
+	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String()), err)
 	}
