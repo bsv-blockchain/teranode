@@ -31,7 +31,7 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 	// read the root hash
 	copy(s.RootHash[:], dataBytes[:32])
 
-	// read the number of parent tx hashes
+	// read the number of tx txmeta
 	txMetaLen := binary.LittleEndian.Uint64(dataBytes[32:40])
 
 	buf := bytes.NewReader(dataBytes[40:])
@@ -39,11 +39,13 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 	var err error
 	var bytesUint64 [8]byte
 
-	// read the parent tx hashes
-	var txMeta *txmeta.Data
+	// read the tx meta
 	s.TxMeta = make([]txmeta.Data, txMetaLen)
 	for i := uint64(0); i < txMetaLen; i++ {
 		_, err = buf.Read(bytesUint64[:])
+		if err != nil {
+			return nil, fmt.Errorf("unable to read tx meta len: %v", err)
+		}
 		metaLen := binary.LittleEndian.Uint64(bytesUint64[:])
 
 		metaBytes := make([]byte, metaLen)
@@ -52,7 +54,7 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 			return nil, fmt.Errorf("unable to read tx meta: %v", err)
 		}
 
-		txMeta = &txmeta.Data{}
+		txMeta := &txmeta.Data{}
 		txmeta.NewMetaDataFromBytes(&metaBytes, txMeta)
 
 		s.TxMeta[i] = *txMeta
@@ -114,6 +116,7 @@ func (s *SubtreeMeta) Serialize() ([]byte, error) {
 	// write tx meta
 	for _, meta := range s.TxMeta {
 		metaBytes := meta.MetaBytes()
+
 		metaBytesLen := len(metaBytes)
 		binary.LittleEndian.PutUint64(bytesUint64[:], uint64(metaBytesLen))
 		if _, err = buf.Write(bytesUint64[:]); err != nil {

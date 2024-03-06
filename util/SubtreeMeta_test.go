@@ -51,7 +51,8 @@ func TestNewSubtreeMeta(t *testing.T) {
 		subtree, _ := NewTreeByLeafCount(4)
 		subtreeMeta := NewSubtreeMeta(subtree)
 
-		subtreeMeta.AddNode(hash1, txMeta1)
+		err := subtreeMeta.AddNode(hash1, txMeta1)
+		require.NoError(t, err)
 
 		assert.Equal(t, 4, len(subtreeMeta.TxMeta))
 		assert.Equal(t, txMeta1, &subtreeMeta.TxMeta[0])
@@ -61,10 +62,14 @@ func TestNewSubtreeMeta(t *testing.T) {
 		subtree, _ := NewTreeByLeafCount(4)
 		subtreeMeta := NewSubtreeMeta(subtree)
 
-		subtreeMeta.AddNode(hash1, txMeta1)
-		subtreeMeta.AddNode(hash2, txMeta2)
-		subtreeMeta.AddNode(hash3, txMeta3)
-		subtreeMeta.AddNode(hash4, txMeta4)
+		err := subtreeMeta.AddNode(hash1, txMeta1)
+		require.NoError(t, err)
+		err = subtreeMeta.AddNode(hash2, txMeta2)
+		require.NoError(t, err)
+		err = subtreeMeta.AddNode(hash3, txMeta3)
+		require.NoError(t, err)
+		err = subtreeMeta.AddNode(hash4, txMeta4)
+		require.NoError(t, err)
 
 		assert.Equal(t, 4, len(subtreeMeta.TxMeta))
 
