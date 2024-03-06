@@ -2,11 +2,12 @@ package lustre
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"net/url"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -82,15 +83,27 @@ func TestFile_filename(t *testing.T) {
 
 		filename := f.filename([]byte("key"))
 		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
+		persistFilename := f.getFileNameForPersist(filename)
+		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
 	})
-
-	t.Run("filename persist", func(t *testing.T) {
+	t.Run("getFileNameForGet", func(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
-		filename := f.filename([]byte("key"))
+		filename, err := f.getFileNameForGet([]byte("key"))
+		assert.NoError(t, err)
 		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
 		persistFilename := f.getFileNameForPersist(filename)
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
+	})
+	t.Run("getFileNameForGet with extension", func(t *testing.T) {
+		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+		require.NoError(t, err)
+
+		filename, err := f.getFileNameForGet([]byte("key"), options.WithFileExtension("meta"))
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/ubsv-tests/79656b.meta", filename)
+		persistFilename := f.getFileNameForPersist(filename)
+		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b.meta", persistFilename)
 	})
 }

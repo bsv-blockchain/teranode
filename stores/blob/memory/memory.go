@@ -56,12 +56,12 @@ func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	return nil
 }
 
-func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
+func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
 	// not supported in memory store yet
 	return errors.New("TTL is not supported in a memory store")
 }
 
-func (m *Memory) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	b, err := m.Get(ctx, key)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
-func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {
+func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 
@@ -85,7 +85,7 @@ func (m *Memory) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, nil
 }
 
-func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	b, err := m.Get(context.Background(), hash)
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int) ([]byte,
 	return b[:nrOfBytes], nil
 }
 
-func (m *Memory) Exists(_ context.Context, hash []byte) (bool, error) {
+func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 
@@ -109,7 +109,7 @@ func (m *Memory) Exists(_ context.Context, hash []byte) (bool, error) {
 	return ok, nil
 }
 
-func (m *Memory) Del(_ context.Context, hash []byte) error {
+func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	// hash should have been a chainhash.Hash
 	key := chainhash.Hash(hash)
 

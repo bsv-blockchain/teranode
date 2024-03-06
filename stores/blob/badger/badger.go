@@ -149,7 +149,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	return nil
 }
 
-func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
 	// s.logger.Debugf("[Badger] SetTTL: %s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack())
 	start := gocore.CurrentTime()
 	defer func() {
@@ -169,7 +169,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	return s.Set(ctx, key, objectBytes, options.WithTTL(ttl))
 }
 
-func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (s *Badger) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	b, err := s.Get(ctx, key)
 	if err != nil {
 		return nil, err
@@ -178,7 +178,7 @@ func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
-func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
+func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	//s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {
@@ -219,7 +219,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return result, err
 }
 
-func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	b, err := s.Get(ctx, hash)
 	if err != nil {
 		return nil, err
@@ -232,7 +232,7 @@ func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byt
 	return b[:nrOfBytes], nil
 }
 
-func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
+func (s *Badger) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {
@@ -266,7 +266,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *Badger) Del(ctx context.Context, hash []byte) error {
+func (s *Badger) Del(ctx context.Context, hash []byte, opts ...options.Options) error {
 	//s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {

@@ -67,7 +67,7 @@ func (r Wrapper) Health(ctx context.Context) (int, string, error) {
 	return r.store.Health(ctx)
 }
 
-func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
+func (r Wrapper) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	ok, err := r.store.Exists(ctx, key)
 	if err != nil {
 		r.logger.Errorf("failed to check if key %s exists in store: %v", utils.ReverseAndHexEncodeSlice(key), err)
@@ -81,7 +81,7 @@ func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
 	return ok && okAsset, nil
 }
 
-func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (r Wrapper) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	// first get from local ttl cache
 	if r.localTTLCache != nil {
 		subtreeReader, err := r.localTTLCache.GetIoReader(ctx, key)
@@ -133,7 +133,7 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewReader(subtreeBytes)), err
 }
 
-func (r Wrapper) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+func (r Wrapper) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	b, err := r.Get(ctx, key)
 	if err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func (r Wrapper) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte
 	return b[:nrOfBytes], nil
 }
 
-func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (r Wrapper) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	// first get from local ttl cache
 	if r.localTTLCache != nil {
 		subtreeBytes, err := r.localTTLCache.Get(ctx, key)
@@ -211,11 +211,11 @@ func (r Wrapper) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	return r.AssetClient.Set(ctx, key, value, opts...)
 }
 
-func (r Wrapper) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (r Wrapper) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
 	return r.AssetClient.SetTTL(ctx, key, ttl)
 }
 
-func (r Wrapper) Del(_ context.Context, key []byte) error {
+func (r Wrapper) Del(_ context.Context, key []byte, opts ...options.Options) error {
 	return fmt.Errorf("not implemented")
 }
 

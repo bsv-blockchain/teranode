@@ -426,12 +426,12 @@ func (l localSubtreeStore) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (l localSubtreeStore) Exists(_ context.Context, key []byte) (bool, error) {
+func (l localSubtreeStore) Exists(_ context.Context, key []byte, opts ...options.Options) (bool, error) {
 	_, ok := l.files[chainhash.Hash(key)]
 	return ok, nil
 }
 
-func (l localSubtreeStore) Get(_ context.Context, key []byte) ([]byte, error) {
+func (l localSubtreeStore) Get(_ context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	file, ok := l.files[chainhash.Hash(key)]
 	if !ok {
 		return nil, fmt.Errorf("file not found")
@@ -445,7 +445,7 @@ func (l localSubtreeStore) Get(_ context.Context, key []byte) ([]byte, error) {
 	return subtreeBytes, nil
 }
 
-func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte) (io.ReadCloser, error) {
+func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	file, ok := l.files[chainhash.Hash(key)]
 	if !ok {
 		return nil, fmt.Errorf("file not found")
@@ -467,15 +467,15 @@ func (l localSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadC
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+func (l localSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) Del(_ context.Context, _ []byte) error {
+func (l localSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.Options) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+func (l localSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
 	panic("not implemented")
 }
 
@@ -511,11 +511,11 @@ func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ []byte, _ ...options.
 	return nil
 }
 
-func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
 	return nil
 }
 
-func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, opts ...options.Options) (io.ReadCloser, error) {
 	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
 	// read the file
@@ -527,7 +527,7 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser,
 	return subtreeReader, nil
 }
 
-func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
+func (n *BlobStoreStub) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
 	// read the file
@@ -539,14 +539,14 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return subtreeBytes, nil
 }
 
-func (n *BlobStoreStub) Exists(_ context.Context, _ []byte) (bool, error) {
+func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, opts ...options.Options) (bool, error) {
 	return false, nil
 }
 
-func (n *BlobStoreStub) Del(_ context.Context, _ []byte) error {
+func (n *BlobStoreStub) Del(_ context.Context, _ []byte, opts ...options.Options) error {
 	return nil
 }
 
-func (n *BlobStoreStub) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+func (n *BlobStoreStub) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
 	return nil, nil
 }
