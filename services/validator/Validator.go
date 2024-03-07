@@ -158,7 +158,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
 	validator.blockAssemblyCreatesUTXOs = gocore.Config().GetBool("blockassembly_creates_utxos", false)
 
-	blockassemblyKafkaURL, _, found := gocore.Config().GetURL("blockassembly_kafkaBrokers")
+	txsKafkaURL, _, found := gocore.Config().GetURL("txs_kafkaConfig")
 	if found {
 		workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
 		// only start the kafka producer if there are workers listening
@@ -167,7 +167,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 			validator.blockassemblyKafkaChan = make(chan []byte, 10000)
 			go func() {
 				// TODO add retry
-				if err := util.StartAsyncProducer(validator.logger, blockassemblyKafkaURL, validator.blockassemblyKafkaChan); err != nil {
+				if err := util.StartAsyncProducer(validator.logger, txsKafkaURL, validator.blockassemblyKafkaChan); err != nil {
 					validator.logger.Errorf("[Validator] error starting kafka producer: %v", err)
 					return
 				}
@@ -177,11 +177,11 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
 
-			logger.Infof("[Validator] connected to kafka at %s", blockassemblyKafkaURL.Host)
+			logger.Infof("[Validator] connected to kafka at %s", txsKafkaURL.Host)
 		}
 	}
 
-	blockvalidationKafkaURL, _, found := gocore.Config().GetURL("blockvalidation_kafkaBrokers")
+	txmetaKafkaURL, _, found := gocore.Config().GetURL("txmeta_kafkaConfig")
 	if found {
 		workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
 		// only start the kafka producer if there are workers listening
@@ -190,7 +190,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 			validator.blockvalidationKafkaChan = make(chan []byte, 10000)
 			go func() {
 				// TODO add retry
-				if err := util.StartAsyncProducer(validator.logger, blockvalidationKafkaURL, validator.blockvalidationKafkaChan); err != nil {
+				if err := util.StartAsyncProducer(validator.logger, txmetaKafkaURL, validator.blockvalidationKafkaChan); err != nil {
 					validator.logger.Errorf("[Validator] error starting kafka producer: %v", err)
 					return
 				}
@@ -200,7 +200,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 				return nil, fmt.Errorf("[Validator] unable to connect to kafka: %v", err)
 			}
 
-			logger.Infof("[Validator] connected to kafka at %s", blockvalidationKafkaURL.Host)
+			logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
 		}
 	}
 

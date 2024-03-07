@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"strconv"
 	"time"
 
 	"go.uber.org/atomic"
@@ -298,9 +297,9 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
 	}
 
-	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockassembly_kafkaBrokers")
+	kafkaURL, err, ok := gocore.Config().GetURL("txs_kafkaConfig")
 	if err == nil && ok {
-		go ba.startKafkaListener(ctx, kafkaBrokersURL)
+		go ba.startKafkaListener(ctx, kafkaURL)
 	}
 
 	// Experimental fRPC server - to test throughput at scale
@@ -359,7 +358,7 @@ func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) err
 	return nil
 }
 
-func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
 	if workers < 1 {
 		// no workers, nothing to do
@@ -371,20 +370,11 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		partitionConsumerRatio = 1
 	}
 
-	partitions := 1
-	var err error
-	partitionsStr := kafkaBrokersURL.Query().Get("partitions")
-	if partitionsStr != "" {
-		partitions, err = strconv.Atoi(partitionsStr)
-		if err != nil {
-			ba.logger.Errorf("error while parsing partitions: %v", err)
-			return
-		}
-	}
+	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
 
 	consumerCount := partitions / partitionConsumerRatio
 
-	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaBrokersURL.String(), consumerCount, workers)
+	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
 
 	// updates the stats every 5 seconds
 	go func() {
@@ -396,7 +386,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaBrokersURL
 		}
 	}()
 
-	if err = util.StartKafkaGroupListener(ctx, ba.logger, kafkaBrokersURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) {
+	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) {
 		startTime := time.Now()
 
 		data, err := NewFromBytes(msg.Message.Value)

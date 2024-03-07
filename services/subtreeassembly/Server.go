@@ -49,17 +49,17 @@ func (ps *Server) Init(_ context.Context) (err error) {
 // Start function
 func (ps *Server) Start(ctx context.Context) (err error) {
 
-	blockKafkaBrokersURL, err, ok := gocore.Config().GetURL("block_kafkaBrokers")
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("block_kafkaConfig")
 	if err == nil && ok {
-		ps.startKafkaBlocksListener(ctx, blockKafkaBrokersURL)
+		ps.startKafkaBlocksListener(ctx, blocksKafkaURL)
 	}
 
-	subtreeKafkaBrokersURL, err, ok := gocore.Config().GetURL("subtree_kafkaBrokers")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("subtrees_kafkaConfig")
 	if err == nil && ok {
-		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreeKafkaBrokersURL); err != nil {
+		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL); err != nil {
 			return fmt.Errorf("[SubtreeAssembly] error connecting to kafka: %s", err)
 		}
-		ps.startKafkaSubtreesListener(ctx, subtreeKafkaBrokersURL)
+		ps.startKafkaSubtreesListener(ctx, subtreesKafkaURL)
 	}
 
 	return nil
@@ -148,16 +148,16 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 }
 
 // startKafkaBlocksListener listens to all new blocks on the blocks topic and processes the subtree hashes into the subtrees topic
-func (ps *Server) startKafkaBlocksListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+func (ps *Server) startKafkaBlocksListener(ctx context.Context, kafkaURL *url.URL) {
 	workers, _ := gocore.Config().GetInt("block_kafkaWorkers", runtime.NumCPU()*2)
 	if workers < 1 {
 		// no workers, nothing to do
 		return
 	}
 
-	ps.logger.Infof("[SubtreeAssembly] Starting block Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+	ps.logger.Infof("[SubtreeAssembly] Starting block Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
 
-	util.StartKafkaListener(ctx, ps.logger, kafkaBrokersURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
 			prometheusSubtreeAssemblyBlocks.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
@@ -185,16 +185,16 @@ func (ps *Server) startKafkaBlocksListener(ctx context.Context, kafkaBrokersURL 
 }
 
 // startKafkaSubtreesListener listens to all new subtrees on the subtrees topic and processes the subtree data into the subtree store
-func (ps *Server) startKafkaSubtreesListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+func (ps *Server) startKafkaSubtreesListener(ctx context.Context, kafkaURL *url.URL) {
 	workers, _ := gocore.Config().GetInt("subtree_kafkaWorkers", runtime.NumCPU()*2)
 	if workers < 1 {
 		// no workers, nothing to do
 		return
 	}
 
-	ps.logger.Infof("[SubtreeAssembly] Starting subtree Kafka on address: %s, with %d workers", kafkaBrokersURL.String(), workers)
+	ps.logger.Infof("[SubtreeAssembly] Starting subtree Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
 
-	util.StartKafkaListener(ctx, ps.logger, kafkaBrokersURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
 			prometheusSubtreeAssemblySubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)

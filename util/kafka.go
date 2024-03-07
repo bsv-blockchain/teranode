@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/gocore"
 )
 
 /**
@@ -105,66 +105,32 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
 
-	clusterAdmin, err := createTopic(kafkaURL, config)
+	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("error while creating cluster admin: %v", err)
 	}
 
-	flushBytes := 16 * 1024
-	fb, err := strconv.Atoi(kafkaURL.Query().Get("flush"))
-	if err == nil {
-		flushBytes = fb
-	}
+	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
+	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
+	topic := kafkaURL.Path[1:]
 
-	// DRY it up
-	partitions := 1
-	partitionsStr := kafkaURL.Query().Get("partitions")
-	if partitionsStr != "" {
-		partitions, err = strconv.Atoi(partitionsStr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error while parsing partitions: %v", err)
+	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+		NumPartitions:     int32(partitions),
+		ReplicationFactor: int16(replicationFactor),
+	}, false); err != nil {
+		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			return nil, nil, err
 		}
 	}
 
-	producer, err := ConnectProducer(brokersUrl, kafkaURL.Path[1:], int32(partitions), flushBytes)
+	flushBytes := GetQueryParamInt(kafkaURL, "flush_bytes", 1024)
+
+	producer, err := ConnectProducer(brokersUrl, topic, int32(partitions), flushBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to connect to kafka: %v", err)
 	}
 
 	return clusterAdmin, producer, nil
-}
-
-func createTopic(kafkaURL *url.URL, config *sarama.Config) (sarama.ClusterAdmin, error) {
-	clusterAdmin, err := sarama.NewClusterAdmin(strings.Split(kafkaURL.Host, ","), config)
-	if err != nil {
-		return nil, fmt.Errorf("error while creating cluster admin: %v", err)
-	}
-
-	partitions := 1
-	partitionsStr := kafkaURL.Query().Get("partitions")
-	if partitionsStr != "" {
-		partitions, err = strconv.Atoi(partitionsStr)
-		if err != nil {
-			return nil, fmt.Errorf("error while parsing partitions: %v", err)
-		}
-	}
-
-	replicationFactor := 1
-	replicationFactorStr := kafkaURL.Query().Get("replication")
-	if replicationFactorStr != "" {
-		replicationFactor, err = strconv.Atoi(replicationFactorStr)
-		if err != nil {
-			return nil, fmt.Errorf("error while parsing replication: %v", err)
-		}
-	}
-
-	topic := kafkaURL.Path[1:]
-	_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-		NumPartitions:     int32(partitions),
-		ReplicationFactor: int16(replicationFactor),
-	}, false)
-
-	return clusterAdmin, nil
 }
 
 func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
@@ -205,7 +171,7 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 	//}, nil
 }
 
-func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokersURL *url.URL, workers int,
+func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
 	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 
 	// create the workers to process all messages
@@ -235,29 +201,33 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaBrokers
 	}
 
 	go func() {
-		clusterAdmin, _, err := ConnectToKafka(kafkaBrokersURL)
+		clusterAdmin, _, err := ConnectToKafka(kafkaURL)
 		if err != nil {
 			logger.Fatalf("[%s] unable to connect to kafka: %s", service, err)
 		}
 		defer func() { _ = clusterAdmin.Close() }()
 
-		topic := kafkaBrokersURL.Path[1:]
+		topic := kafkaURL.Path[1:]
 		var partitions int
-		if partitions, err = strconv.Atoi(kafkaBrokersURL.Query().Get("partitions")); err != nil {
+		if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
 			logger.Fatalf("[%s] unable to parse Kafka partitions: %s", service, err)
 		}
 
 		var replicationFactor int
-		if replicationFactor, err = strconv.Atoi(kafkaBrokersURL.Query().Get("replication")); err != nil {
+		if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
 			logger.Fatalf("[%s] unable to parse Kafka replication factor: %s", service, err)
 		}
 
-		_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+		if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 			NumPartitions:     int32(partitions),
 			ReplicationFactor: int16(replicationFactor),
-		}, false)
+		}, false); err != nil {
+			if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+				logger.Fatalf("[%s] unable to create topic: %s", service, err)
+			}
+		}
 
-		err = StartKafkaGroupListener(ctx, logger, kafkaBrokersURL, groupID, workerCh, 1)
+		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
 		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
@@ -343,24 +313,31 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 
-	flushBytes, _ := gocore.Config().GetInt("blockassembly_kafka_flushBytes", 1048576)
-	flushMessages, _ := gocore.Config().GetInt("blockassembly_kafka_flushMessages", 50000)
-	flushFrequency, _ := gocore.Config().GetInt("blockassembly_kafka_flushFrequencyMs", 1000)
-
-	config.Producer.Flush.Bytes = flushBytes
-	config.Producer.Flush.Messages = flushMessages
-	config.Producer.Flush.Frequency = time.Duration(flushFrequency) * time.Millisecond
+	config.Producer.Flush.Bytes = GetQueryParamInt(kafkaURL, "flush_bytes", 1024*1024)
+	config.Producer.Flush.Messages = GetQueryParamInt(kafkaURL, "flush_messages", 50_000)
+	config.Producer.Flush.Frequency = GetQueryParamDuration(kafkaURL, "flush_frequency", 10*time.Second)
 
 	// try turning off acks
 	// config.Producer.RequiredAcks = sarama.NoResponse // Equivalent to 'acks=0'
 	// config.Producer.Return.Successes = false
 
-	clusterAdmin, err := createTopic(kafkaURL, config)
+	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
 	if err != nil {
-		return err
+		return fmt.Errorf("error while creating cluster admin: %v", err)
 	}
-
 	defer clusterAdmin.Close()
+
+	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
+	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
+
+	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
+		NumPartitions:     int32(partitions),
+		ReplicationFactor: int16(replicationFactor),
+	}, false); err != nil {
+		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			return fmt.Errorf("unable to create topic: %w", err)
+		}
+	}
 
 	producer, err := sarama.NewAsyncProducer(brokersUrl, config)
 	if err != nil {
@@ -378,7 +355,7 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	// Start a goroutine to handle errors
 	go func() {
 		for err := range producer.Errors() {
-			logger.Debugf("Failed to deliver message: %v", err)
+			logger.Errorf("Failed to deliver message: %v", err)
 		}
 	}()
 
@@ -398,5 +375,3 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	logger.Debugf("Shutting down producer...")
 	return nil
 }
-
-// kafka consumer

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
-	"strconv"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -244,9 +243,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 
-	kafkaBrokersURL, err, ok := gocore.Config().GetURL("blockvalidation_kafkaBrokers")
+	txmetaKafkaURL, err, ok := gocore.Config().GetURL("txmeta_kafkaConfig")
 	if err == nil && ok {
-		go u.startKafkaListener(ctx, kafkaBrokersURL)
+		go u.startKafkaListener(ctx, txmetaKafkaURL)
 	}
 
 	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
@@ -265,9 +264,9 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	subtreeAssemblyKafkaBrokersURL, err, ok := gocore.Config().GetURL("subtreeassembly_kafkaBrokers")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("subtrees_kafkaConfig")
 	if err == nil && ok {
-		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreeAssemblyKafkaBrokersURL)
+		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
 		if err != nil {
 			u.logger.Errorf("[BlockValidation] unable to connect to kafka for subtree assembly: %v", err)
 		} else {
@@ -846,7 +845,7 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	}, nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.URL) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 	workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
 	if workers < 1 {
 		// no workers, nothing to do
@@ -858,21 +857,12 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaBrokersURL *url.UR
 		partitionConsumerRatio = 1
 	}
 
-	partitions := 1
-	var err error
-	partitionsStr := kafkaBrokersURL.Query().Get("partitions")
-	if partitionsStr != "" {
-		partitions, err = strconv.Atoi(partitionsStr)
-		if err != nil {
-			u.logger.Errorf("error while parsing partitions: %v", err)
-			return
-		}
-	}
+	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
 
 	consumerCount := partitions / partitionConsumerRatio
-	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers\n", kafkaBrokersURL.String(), consumerCount)
+	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers\n", kafkaURL.String(), consumerCount)
 
-	if err = util.StartKafkaGroupListener(ctx, u.logger, kafkaBrokersURL, "blockvalidation", nil, consumerCount, func(msg util.KafkaMessage) {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, "blockvalidation", nil, consumerCount, func(msg util.KafkaMessage) {
 		startTime := time.Now()
 
 		if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {

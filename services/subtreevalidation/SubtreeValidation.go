@@ -155,37 +155,6 @@ func (u *SubtreeValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chain
 	return nil
 }
 
-//nolint:all //TODO: fix linter errors
-func (u *SubtreeValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:updateSubtreesTTL")
-	defer func() {
-		span.Finish()
-	}()
-
-	subtreeTTLConcurrency, _ := gocore.Config().GetInt("blockvalidation_subtreeTTLConcurrency", 32)
-
-	// update the subtree TTLs
-	g, gCtx := errgroup.WithContext(spanCtx)
-	g.SetLimit(subtreeTTLConcurrency)
-
-	for _, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			err = u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0)
-			if err != nil {
-				return errors.Join(errors.New("failed to update subtree TTL"), err)
-			}
-			return nil
-		})
-	}
-
-	if err = g.Wait(); err != nil {
-		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
-	}
-
-	return nil
-}
-
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
 func (u *SubtreeValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []txmeta.MissingTxHash, baseUrl string) ([]*bt.Tx, error) {

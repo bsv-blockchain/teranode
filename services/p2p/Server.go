@@ -153,17 +153,21 @@ func NewServer(logger ulogger.Logger) *Server {
 		notificationCh:    make(chan *notificationMsg),
 	}
 
-	subtreeKafkaURL, _, found := gocore.Config().GetURL("subtree_kafkaBrokers")
+	subtreesKafkaURL, err, found := gocore.Config().GetURL("subtrees_kafkaConfig")
+	if err != nil {
+		panic(fmt.Sprintf("[P2P] error getting kafka url: %v", err))
+	}
+
 	if found {
 		p2pServer.subtreeCh = make(chan []byte, 10)
 		go func() {
-			if err := util.StartAsyncProducer(logger, subtreeKafkaURL, p2pServer.subtreeCh); err != nil {
+			if err := util.StartAsyncProducer(logger, subtreesKafkaURL, p2pServer.subtreeCh); err != nil {
 				logger.Errorf("[P2P] error starting kafka producer: %v", err)
 				return
 			}
 		}()
 
-		logger.Infof("[P2P] connected to kafka at %s", subtreeKafkaURL.Host)
+		logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
 	}
 
 	return p2pServer
@@ -175,11 +179,6 @@ func (s *Server) Health(ctx context.Context) (int, string, error) {
 
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("P2P service initialising")
-
-	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
-	if err != nil {
-		return fmt.Errorf("could not create blockchain client [%w]", err)
-	}
 
 	AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
@@ -193,17 +192,24 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 	s.AssetHttpAddressURL = AssetHttpAddressURL.String()
 
+	return nil
+}
+
+func (s *Server) Start(ctx context.Context) error {
+	s.logger.Infof("P2P service starting")
+	var err error
+
+	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
+	if err != nil {
+		return fmt.Errorf("could not create blockchain client [%w]", err)
+	}
+
 	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
 
 	s.validatorClient, err = validator.NewClient(ctx, s.logger)
 	if err != nil {
 		return fmt.Errorf("could not create validator client [%w]", err)
 	}
-	return nil
-}
-
-func (s *Server) Start(ctx context.Context) error {
-	s.logger.Infof("P2P service starting")
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -231,7 +237,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 
-	err := s.P2PNode.Start(
+	err = s.P2PNode.Start(
 		ctx,
 		bestBlockTopicName,
 		blockTopicName,
@@ -587,11 +593,13 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		b = append(b, hash.CloneBytes()...)
 		b = append(b, []byte(subtreeMessage.DataHubUrl)...)
 		s.subtreeCh <- b
+	} else {
+
+		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
+			s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
+		}
 	}
 
-	if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
-		s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
-	}
 }
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {

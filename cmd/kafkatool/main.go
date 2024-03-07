@@ -3,26 +3,29 @@ package main
 import (
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
 )
 
 func main() {
-	if err := resetTopic("block_kafkaBrokers"); err != nil {
+	if err := resetTopic("blocks_kafkaConfig"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := resetTopic("blockvalidation_kafkaBrokers"); err != nil {
+	if err := resetTopic("subtrees_kafkaConfig"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := resetTopic("subtree_kafkaBrokers"); err != nil {
+	if err := resetTopic("txs_kafkaConfig"); err != nil {
 		log.Fatal(err)
 	}
 
+	if err := resetTopic("txmeta_kafkaConfig"); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func resetTopic(configName string) error {
@@ -58,19 +61,8 @@ func resetTopic(configName string) error {
 		log.Printf("WARN: Failed to delete topic %s: %v", topic, err)
 	}
 
-	queryParams := url.Query()
-	partitionsStr := queryParams.Get("partitions")
-	replicationStr := queryParams.Get("replication")
-
-	partitions, err := strconv.Atoi(partitionsStr)
-	if err != nil {
-		return fmt.Errorf("failed to parse partitions: %w", err)
-	}
-
-	replication, err := strconv.Atoi(replicationStr)
-	if err != nil {
-		return fmt.Errorf("failed to parse replication: %w", err)
-	}
+	partitions := util.GetQueryParamInt(url, "partitions", 1)
+	replication := util.GetQueryParamInt(url, "replication", 1)
 
 	// Recreate Topic
 	topicDetail := &sarama.TopicDetail{

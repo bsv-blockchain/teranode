@@ -3,7 +3,6 @@ package consumer
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -30,15 +29,7 @@ func NewConsumer() {
 		partitionConsumerRatio = 1
 	}
 
-	partitions := 1
-	partitionsStr := kafkaUrl.Query().Get("partitions")
-	if partitionsStr != "" {
-		partitions, err = strconv.Atoi(partitionsStr)
-		if err != nil {
-			logger.Errorf("error while parsing partitions: %v", err)
-			return
-		}
-	}
+	partitions := util.GetQueryParamInt(kafkaUrl, "partitions", 1)
 
 	consumerCount := partitions / partitionConsumerRatio
 
