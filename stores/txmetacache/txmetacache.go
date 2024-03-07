@@ -69,8 +69,8 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if prometheusBlockValidationTxMetaCacheSize != nil {
-					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
+				if prometheusBlockValidationTxMetaCacheInsertions != nil {
+					//prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
@@ -282,11 +282,11 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (t *TxMetaCache) Length() int {
-	s := &Stats{}
-	t.cache.UpdateStats(s)
-	return int(s.EntriesCount)
-}
+// func (t *TxMetaCache) Length() int {
+// 	s := &Stats{}
+// 	t.cache.UpdateStats(s)
+// 	return int(s.EntriesCount)
+// }
 
 func (t *TxMetaCache) TrimCount() int {
 	s := &Stats{}
