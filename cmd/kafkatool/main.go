@@ -11,19 +11,21 @@ import (
 )
 
 func main() {
-	if err := resetTopic("blocks_kafkaConfig"); err != nil {
+	// log.Println(gocore.Config().Stats())
+
+	if err := resetTopic("kafka_blocksConfig"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := resetTopic("subtrees_kafkaConfig"); err != nil {
+	if err := resetTopic("kafka_subtreesConfig"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := resetTopic("txs_kafkaConfig"); err != nil {
+	if err := resetTopic("kafka_txsConfig"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := resetTopic("txmeta_kafkaConfig"); err != nil {
+	if err := resetTopic("kafka_txmetaConfig"); err != nil {
 		log.Fatal(err)
 	}
 }

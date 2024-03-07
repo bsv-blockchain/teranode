@@ -297,7 +297,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
 	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("txs_kafkaConfig")
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_txsConfig")
 	if err == nil && ok {
 		go ba.startKafkaListener(ctx, kafkaURL)
 	}

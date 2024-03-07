@@ -54,7 +54,7 @@ func (ps *Server) Start(ctx context.Context) (err error) {
 		ps.startKafkaBlocksListener(ctx, blocksKafkaURL)
 	}
 
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("subtrees_kafkaConfig")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL); err != nil {
 			return fmt.Errorf("[SubtreeAssembly] error connecting to kafka: %s", err)

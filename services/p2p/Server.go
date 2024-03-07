@@ -153,7 +153,7 @@ func NewServer(logger ulogger.Logger) *Server {
 		notificationCh:    make(chan *notificationMsg),
 	}
 
-	subtreesKafkaURL, err, found := gocore.Config().GetURL("subtrees_kafkaConfig")
+	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err != nil {
 		panic(fmt.Sprintf("[P2P] error getting kafka url: %v", err))
 	}

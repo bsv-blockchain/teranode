@@ -243,7 +243,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("txmeta_kafkaConfig")
+	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
 		go u.startKafkaListener(ctx, txmetaKafkaURL)
 	}
@@ -264,7 +264,7 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("subtrees_kafkaConfig")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
 		if err != nil {

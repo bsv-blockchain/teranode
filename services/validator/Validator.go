@@ -158,7 +158,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
 	validator.blockAssemblyCreatesUTXOs = gocore.Config().GetBool("blockassembly_creates_utxos", false)
 
-	txsKafkaURL, _, found := gocore.Config().GetURL("txs_kafkaConfig")
+	txsKafkaURL, _, found := gocore.Config().GetURL("kafka_txsConfig")
 	if found {
 		workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
 		// only start the kafka producer if there are workers listening
@@ -181,7 +181,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		}
 	}
 
-	txmetaKafkaURL, _, found := gocore.Config().GetURL("txmeta_kafkaConfig")
+	txmetaKafkaURL, _, found := gocore.Config().GetURL("kafka_txmetaConfig")
 	if found {
 		workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
 		// only start the kafka producer if there are workers listening
