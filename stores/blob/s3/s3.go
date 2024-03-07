@@ -110,7 +110,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -118,7 +120,6 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		Body:   reader,
 	}
 
-	o := options.NewSetOptions(opts...)
 	if o.TTL > 0 {
 		expires := time.Now().Add(o.TTL)
 		uploadInput.Expires = &expires
@@ -141,7 +142,9 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
@@ -152,7 +155,6 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Expires
 
-	o := options.NewSetOptions(opts...)
 	if o.TTL > 0 {
 		expires := time.Now().Add(o.TTL)
 		uploadInput.Expires = &expires
@@ -189,7 +191,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -217,7 +221,9 @@ func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]b
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -255,7 +261,9 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...op
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -298,7 +306,9 @@ func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -337,7 +347,9 @@ func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) erro
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	cache.Delete(*objectKey)
 
@@ -363,13 +375,13 @@ func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) erro
 	return nil
 }
 
-func (g *S3) getObjectKey(key []byte) *string {
+func (g *S3) getObjectKey(key []byte, extension string) *string {
 	objectKey := g.generateKey(key)
 
 	if g.prefixDir > 0 {
 		// take the first n bytes of the key and use them as a prefix directory
 		objectKeyStr := *objectKey
-		objectKey = aws.String(fmt.Sprintf("%s/%s", objectKeyStr[:g.prefixDir], objectKeyStr))
+		objectKey = aws.String(fmt.Sprintf("%s/%s%s", objectKeyStr[:g.prefixDir], objectKeyStr, extension))
 	}
 
 	return objectKey
