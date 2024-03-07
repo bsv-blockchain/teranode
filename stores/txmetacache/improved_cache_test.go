@@ -326,7 +326,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 	// skipping this test, because config is not suitable for it.
 	// It is necessary to keep the test for manual inspection with suitable config.
-	// util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 
 	cache := NewImprovedCache(4*1024, types.Trimmed)
 	allKeys := make([][]byte, 0)
