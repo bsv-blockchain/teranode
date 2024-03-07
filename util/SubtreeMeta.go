@@ -29,28 +29,53 @@ func NewSubtreeMeta(subtree *Subtree) *SubtreeMeta {
 	}
 }
 
-func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
-	s := &SubtreeMeta{}
+func NewSubtreeMetaFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeMeta, error) {
+	s := &SubtreeMeta{
+		Subtree: subtree,
+	}
+	if err := s.serializeFromReader(bytes.NewReader(dataBytes)); err != nil {
+		return nil, fmt.Errorf("unable to create subtree meta from bytes: %v", err)
+	}
 
-	// read the root hash
-	s.rootHash = chainhash.Hash(dataBytes[:32])
+	return s, nil
+}
 
-	// read the number of parent tx hashes
-	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[32:40])
+func NewSubtreeMetaFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeMeta, error) {
+	s := &SubtreeMeta{
+		Subtree: subtree,
+	}
+	if err := s.serializeFromReader(dataReader); err != nil {
+		return nil, fmt.Errorf("unable to create subtree meta from reader: %v", err)
+	}
 
-	buf := bytes.NewReader(dataBytes[40:])
+	return s, nil
+}
 
+func (s *SubtreeMeta) serializeFromReader(buf io.Reader) error {
 	var err error
 	var bytesUint64 [8]byte
+	var hashBytes [32]byte
+
+	// read the root hash
+	if _, err = io.ReadFull(buf, hashBytes[:]); err != nil {
+		return fmt.Errorf("unable to read root hash: %v", err)
+	}
+	s.rootHash = hashBytes
+
+	var dataBytes [8]byte
+	// read the number of parent tx hashes
+	if _, err = io.ReadFull(buf, dataBytes[:]); err != nil {
+		return fmt.Errorf("unable to read number of parent tx hashes: %v", err)
+	}
+	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[:])
 
 	// read the parent tx hashes
-	var hashBytes [32]byte
 	s.ParentTxHashes = make([][]chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		// read hash len from buffer
 		_, err = io.ReadFull(buf, bytesUint64[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to read parent tx hash length: %v", err)
+			return fmt.Errorf("unable to read parent tx hash length: %v", err)
 		}
 		hashLen := binary.LittleEndian.Uint64(bytesUint64[:])
 		if hashLen > 0 {
@@ -58,7 +83,7 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 			for j := uint64(0); j < hashLen; j++ {
 				_, err = io.ReadFull(buf, hashBytes[:])
 				if err != nil {
-					return nil, fmt.Errorf("unable to read parent tx hash: %v", err)
+					return fmt.Errorf("unable to read parent tx hash: %v", err)
 				}
 				s.ParentTxHashes[i][j] = hashBytes
 			}
@@ -68,7 +93,7 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 	// read the number of parent tx meta
 	_, err = io.ReadFull(buf, bytesUint64[:])
 	if err != nil {
-		return nil, fmt.Errorf("unable to read number of parent tx meta: %v", err)
+		return fmt.Errorf("unable to read number of parent tx meta: %v", err)
 	}
 	parentTxMetaLen := binary.LittleEndian.Uint64(bytesUint64[:])
 
@@ -80,33 +105,33 @@ func NewSubtreeMetaFromBytes(dataBytes []byte) (*SubtreeMeta, error) {
 	for i := uint64(0); i < parentTxMetaLen; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to read parent tx hash: %v", err)
+			return fmt.Errorf("unable to read parent tx hash: %v", err)
 		}
 		copy(hash[:], hashBytes[:])
 
 		// read meta len from buffer
 		_, err = io.ReadFull(buf, bytesUint64[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to read number of parent tx meta: %v", err)
+			return fmt.Errorf("unable to read number of parent tx meta: %v", err)
 		}
 		metaLen := binary.LittleEndian.Uint64(bytesUint64[:])
 		if metaLen > 0 {
 			metaBytes := make([]byte, metaLen)
 			_, err = io.ReadFull(buf, metaBytes)
 			if err != nil {
-				return nil, fmt.Errorf("unable to read parent tx meta: %v", err)
+				return fmt.Errorf("unable to read parent tx meta: %v", err)
 			}
 			meta = &txmeta.Data{}
 			txmeta.NewMetaDataFromBytes(&metaBytes, meta)
 			if err != nil {
-				return nil, fmt.Errorf("unable to create parent tx meta: %v", err)
+				return fmt.Errorf("unable to create parent tx meta: %v", err)
 			}
 
 			s.ParentTxMeta[hash] = *meta
 		}
 	}
 
-	return s, nil
+	return nil
 }
 
 // SetParentTxHash sets the parent tx hash for a given node in the subtree

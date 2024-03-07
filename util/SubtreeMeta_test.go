@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -97,7 +98,32 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 
 		bytes, err := subtreeMeta.Serialize()
 		require.NoError(t, err)
-		subtreeMeta2, err := NewSubtreeMetaFromBytes(bytes)
+		subtreeMeta2, err := NewSubtreeMetaFromBytes(subtree, bytes)
+		require.NoError(t, err)
+
+		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
+		assert.Equal(t, len(subtreeMeta.ParentTxHashes), len(subtreeMeta2.ParentTxHashes))
+		for i := 0; i < 4; i++ {
+			assert.Equal(t, len(subtreeMeta.ParentTxHashes[i]), len(subtreeMeta2.ParentTxHashes[i]))
+			for j := 0; j < len(subtreeMeta.ParentTxHashes[i]); j++ {
+				assert.Equal(t, subtreeMeta.ParentTxHashes[i][j], subtreeMeta2.ParentTxHashes[i][j])
+			}
+		}
+		assert.Equal(t, len(subtreeMeta.ParentTxMeta), len(subtreeMeta2.ParentTxMeta))
+	})
+
+	t.Run("TestNewSubtreeMetaFromReader", func(t *testing.T) {
+		subtree, _ := NewTreeByLeafCount(4)
+		_ = subtree.AddNode(hash1, 1, 1)
+		subtreeMeta := NewSubtreeMeta(subtree)
+		_ = subtreeMeta.SetParentTxHash(0, hash1)
+
+		b, err := subtreeMeta.Serialize()
+		require.NoError(t, err)
+
+		buf := bytes.NewReader(b)
+
+		subtreeMeta2, err := NewSubtreeMetaFromReader(subtree, buf)
 		require.NoError(t, err)
 
 		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
@@ -151,7 +177,7 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 
 		bytes, err := subtreeMeta.Serialize()
 		require.NoError(t, err)
-		subtreeMeta2, err := NewSubtreeMetaFromBytes(bytes)
+		subtreeMeta2, err := NewSubtreeMetaFromBytes(subtree, bytes)
 		require.NoError(t, err)
 
 		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
