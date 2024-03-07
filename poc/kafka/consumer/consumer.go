@@ -24,7 +24,7 @@ func NewConsumer() {
 		// no workers, nothing to do
 		return
 	}
-	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRatio", 8)
 	if partitionConsumerRatio < 1 {
 		partitionConsumerRatio = 1
 	}

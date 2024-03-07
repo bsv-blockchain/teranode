@@ -365,7 +365,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 		return
 	}
 
-	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRation", 8)
+	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRatio", 8)
 	if partitionConsumerRatio < 1 {
 		partitionConsumerRatio = 1
 	}

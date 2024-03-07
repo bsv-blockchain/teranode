@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// log.Println(gocore.Config().Stats())
+	log.Println(gocore.Config().Stats())
 
 	if err := resetTopic("kafka_blocksConfig"); err != nil {
 		log.Fatal(err)

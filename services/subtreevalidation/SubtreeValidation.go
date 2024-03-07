@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -73,11 +74,29 @@ func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
 }
 
 func (u *SubtreeValidation) Start(ctx context.Context) error {
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
+	if err == nil && ok {
+		go u.startKafkaListener(ctx, subtreesKafkaURL)
+	}
+
 	return nil
 }
 
 func (u *SubtreeValidation) Stop(_ context.Context) error {
 	return nil
+}
+
+func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
+	u.logger.Infof("[SubtreeValidation] starting Kafka on address: %s", kafkaURL.String())
+
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, "subtreevalidation", nil, 1, func(msg util.KafkaMessage) {
+		if msg.Message != nil {
+			u.logger.Infof("[stval] Received subtree message of %d bytes", len(msg.Message.Value))
+		}
+
+	}); err != nil {
+		u.logger.Errorf("[SubtreeValidation] Failed to start Kafka listener: %v", err)
+	}
 }
 
 func (u *SubtreeValidation) SetSubtreeExists(hash *chainhash.Hash) error {
