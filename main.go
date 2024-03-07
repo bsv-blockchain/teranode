@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
@@ -119,6 +120,7 @@ func main() {
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
+	startSubtreeValidation := shouldStart("SubtreeValidation")
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
 	startPropagation := shouldStart("Propagation")
@@ -277,6 +279,29 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
+		}
+	}
+
+	// subtreeValidation
+	if startSubtreeValidation {
+		validatorClient, err := validator.New(ctx,
+			logger,
+			getUtxoStore(ctx, logger),
+			getTxMetaStore(logger),
+			nil,
+		)
+		if err != nil {
+			logger.Fatalf("could not create validator [%v]", err)
+		}
+
+		if err := sm.AddService("Subtree Validation", subtreevalidation.NewSubtreeValidation(
+			logger.New("sval"),
+			getSubtreeStore(logger),
+			getTxStore(logger),
+			getTxMetaStore(logger),
+			validatorClient,
+		)); err != nil {
+			panic(err)
 		}
 	}
 

@@ -68,6 +68,18 @@ func NewSubtreeValidation(logger ulogger.Logger, subtreeStore blob.Store,
 	return bv
 }
 
+func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
+	return nil
+}
+
+func (u *SubtreeValidation) Start(ctx context.Context) error {
+	return nil
+}
+
+func (u *SubtreeValidation) Stop(_ context.Context) error {
+	return nil
+}
+
 func (u *SubtreeValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 	// TODO: implement for local storage
 	return nil
