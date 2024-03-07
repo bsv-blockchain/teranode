@@ -295,7 +295,7 @@ func main() {
 		}
 
 		if err := sm.AddService("Subtree Validation", subtreevalidation.NewSubtreeValidation(
-			logger.New("sval"),
+			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),
 			getTxMetaStore(logger),
