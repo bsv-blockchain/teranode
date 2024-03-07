@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -22,25 +23,20 @@ import (
 
 // 600 Million keys per block * 5 blocks = 3 Billion keys
 // 3 billion keys
-// 1024 bucket * 1024 chunks = 1,048,576 chunks
-// 3 billion / 1,048,576 = 2867 keys per chunk
-// 2867 * 68 bytes = 194,156 bytes per chunk -> 194 KB
-// 194 KB * 1024 chunks = 198,656 KB -> 194 MB per bucket
-// 194 MB * 1024 buckets = 198,656 MB -> 194 GB
-// 256 GB for the cache
-// 256 / 1024 = 0.25 GB per bucket
-
-// 256 GB / 1024 = 0.25 GB per bucket
-// 0.25 GB * 1024 = 256 MB per bucket
-// 256 MB / 8 MB =  32 chunks per bucket
+// 16 * 1024 buckets = 16,384 buckets, 256 GB / 16,384 buckets = 16 MB per bucket
+// 1024 chunks per bucket = 16 MB / 1024 chunks = 16 KB per chunk
+// (16 * 1024) bucket * 1024 chunks per bucket = 16,777,216 chunks
+// 3 billion / 16,777,216 = 178 keys per chunk
+// 178 * 68 bytes = 194,156 bytes per chunk -> 194 KB
+// For 128 GB, 8 * 1024 buckets, 1.5 Billion keys.
 
 const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 8 * 1024 // 8
+const bucketsCount = 8 * 1024
 
-const chunkSize = maxValueSizeKB * 2 * 1024 * 1024 // maxValueSizeKB * 2 * 1024
+const chunkSize = maxValueSizeKB * 8 * 1024 // 16 KB
 
 const bucketSizeBits = 40
 
@@ -98,7 +94,7 @@ type ImprovedCache struct {
 
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
 // trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
-func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
+func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache {
 	if maxBytes <= 0 {
 		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
 	}
@@ -112,20 +108,23 @@ func NewImprovedCache(maxBytes int, unallocatedCache ...bool) *ImprovedCache {
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
 
-	//fmt.Println("maxBytes: ", maxBytes, ", maxBucketBytes: ", maxBucketBytes)
-
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
-	if len(unallocatedCache) > 0 && unallocatedCache[0] {
+	if bucketType == types.Unallocated {
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucketUnallocated{}
 			c.buckets[i].Init(maxBucketBytes, 0)
 		}
-	} else { // if the cache is allocated cache, unallocatedCache is true, txMetaCache
+	} else if bucketType == types.Preallocated {
 		c.trimRatio = trimRatio
 
 		for i := 0; i < bucketsCount; i++ {
-			c.buckets[i] = &bucket{}
+			c.buckets[i] = &bucketPreallocated{}
 			c.buckets[i].Init(maxBucketBytes, c.trimRatio)
+		}
+	} else { // trimmed cache
+		for i := 0; i < bucketsCount; i++ {
+			c.buckets[i] = &bucketTrimmed{}
+			c.buckets[i].Init(maxBucketBytes, 0)
 		}
 	}
 	return &c
@@ -224,7 +223,6 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
-			//fmt.Println("\n\nbucketIdx: ", bucketIdx, "batchedKeys len: ", len(batchedKeys[bucketIdx]))
 			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
@@ -286,7 +284,293 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 	}
 }
 
-type bucket struct {
+type bucketTrimmed struct {
+	mu sync.RWMutex
+
+	// chunks is a ring buffer with encoded (k, v) pairs.
+	// It consists of maxValueSizeKB chunks.
+	chunks [][]byte
+
+	// m maps hash(k) to idx of (k, v) pair in chunks.
+	m map[uint64]uint64
+	// pass txId directly. How is memory?
+	// m map[[32]byte]uint64
+
+	// idx points to chunks for writing the next (k, v) pair.
+	idx uint64
+
+	// gen is the generation of chunks.
+	gen uint64
+
+	// free chunks per bucket
+	freeChunks []*[chunkSize]byte
+}
+
+func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
+	if maxBytes == 0 {
+		panic(fmt.Errorf("maxBytes cannot be zero"))
+	}
+	if maxBytes >= maxBucketSize {
+		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+	}
+	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
+	b.chunks = make([][]byte, maxChunks)
+	b.m = make(map[uint64]uint64)
+	b.Reset()
+}
+
+func (b *bucketTrimmed) Reset() {
+	b.mu.Lock()
+	chunks := b.chunks
+	for i := range chunks {
+		b.putChunk(chunks[i])
+		chunks[i] = nil
+	}
+	b.m = make(map[uint64]uint64)
+	b.idx = 0
+	b.gen = 1
+	b.mu.Unlock()
+}
+
+// cleanLockedMap removes expired k-v pairs from bucket map.
+func (b *bucketTrimmed) cleanLockedMap() {
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	bIdx := b.idx
+	bm := b.m
+	newItems := 0
+
+	for _, v := range bm {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+			newItems++
+		}
+	}
+	if newItems < len(bm) {
+		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
+		// This should reduce memory fragmentation and the number Go objects behind b.m.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
+		bmNew := make(map[uint64]uint64, newItems)
+		for k, v := range bm {
+			gen := v >> bucketSizeBits
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+				bmNew[k] = v
+			}
+		}
+		b.m = bmNew
+	}
+}
+
+func (b *bucketTrimmed) UpdateStats(s *Stats) {
+	b.mu.RLock()
+	s.EntriesCount += uint64(len(b.m))
+	s.TotalMapSize += b.getMapSize()
+	b.mu.RUnlock()
+}
+
+func (b *bucketTrimmed) listChunks() {
+	fmt.Println("chunks: ", b.chunks)
+}
+
+func (b *bucketTrimmed) SetMulti(keys [][]byte, values [][]byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var hash uint64
+	var prevValue []byte
+
+	for i, key := range keys {
+		prevValue = values[i]
+		hash = xxhash.Sum64(key)
+		b.Get(&prevValue, key, hash, true, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, prevValue, hash, true)
+	}
+}
+
+// Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
+	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
+		// Too big key or value - its length cannot be encoded
+		// with 2 bytes (see below). Skip the entry.
+		return fmt.Errorf("too big key or value")
+	}
+	var kvLenBuf [4]byte
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	if kvLen >= chunkSize {
+		// Do not store too big keys and values, since they do not
+		// fit a chunk.
+		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
+	}
+	chunks := b.chunks
+	needClean := false
+
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+
+	// calculate the idx of the k-v pair to be added
+	// adjust idxNew, calculate where the new k-v pair will end
+	// the new k-v pair must be in the same chunk.
+	idx := b.idx
+	idxNew := idx + kvLen
+	chunkIdx := idx / chunkSize
+	chunkIdxNew := idxNew / chunkSize
+	// check if we are crossing the chunk boundary, we need to allocate a new chunk
+	if chunkIdxNew > chunkIdx {
+		// if there are no more chunks to allocate, we need to reset the bucket
+		if chunkIdxNew >= uint64(len(chunks)) {
+			// writing needs to start over from the beginning.
+			idx = 0
+			idxNew = kvLen
+			// the chunk index is set to 0
+			chunkIdx = 0
+			// the generation of the bucket is incremented
+			b.gen++
+			if b.gen&((1<<genSizeBits)-1) == 0 {
+				b.gen++
+			}
+			needClean = true
+		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
+			// calculate the index as byte offset
+			idx = chunkIdxNew * chunkSize
+			idxNew = idx + kvLen
+			chunkIdx = chunkIdxNew
+		}
+		chunks[chunkIdx] = chunks[chunkIdx][:0]
+	}
+	chunk := chunks[chunkIdx]
+	if chunk == nil {
+		chunk = b.getChunk()
+		chunk = chunk[:0]
+	}
+	chunk = append(chunk, kvLenBuf[:]...)
+	chunk = append(chunk, k...)
+	chunk = append(chunk, v...)
+	chunks[chunkIdx] = chunk
+	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.idx = idxNew
+	if needClean {
+		b.cleanLockedMap()
+	}
+	return nil
+}
+
+// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+	found := false
+	chunks := b.chunks
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.RLock()
+		defer b.mu.RUnlock()
+	}
+
+	v := b.m[h]
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	if v > 0 {
+		// shift the v to the right by 40 bits, to get the generation
+		gen := v >> bucketSizeBits
+		// mask lower 40 bits 00000..40bitsSetTo1...., extract the index
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
+			chunkIdx := idx / chunkSize
+			if chunkIdx >= uint64(len(chunks)) {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			chunk := chunks[chunkIdx]
+			idx %= chunkSize
+			if idx+4 >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			kvLenBuf := chunk[idx : idx+4]
+			keyLen := (uint64(kvLenBuf[0]) << 8) | uint64(kvLenBuf[1])
+			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
+			idx += 4
+			if idx+keyLen+valLen >= chunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+			if string(k) == string(chunk[idx:idx+keyLen]) {
+				idx += keyLen
+				if returnDst {
+					*dst = append(*dst, chunk[idx:idx+valLen]...)
+				}
+				found = true
+			}
+		}
+	}
+end:
+	return found
+}
+
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the exsiting v value, doesn't overwrite.
+func (b *bucketTrimmed) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var prevValue []byte
+	var hash uint64
+
+	for _, key := range keys {
+		prevValue = value
+		hash = xxhash.Sum64(key)
+		b.Get(&prevValue, key, hash, true, true)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, prevValue, hash, true)
+	}
+}
+
+func (b *bucketTrimmed) getChunk() []byte {
+	if len(b.freeChunks) == 0 {
+		// Allocate offheap memory, so GOGC won't take into account cache size.
+		// This should reduce free memory waste.
+		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		if err != nil {
+			panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+		}
+		for len(data) > 0 {
+			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+			b.freeChunks = append(b.freeChunks, p)
+			data = data[chunkSize:]
+		}
+	}
+	n := len(b.freeChunks) - 1
+	p := b.freeChunks[n]
+	b.freeChunks[n] = nil
+	b.freeChunks = b.freeChunks[:n]
+	return p[:]
+}
+
+func (b *bucketTrimmed) putChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	chunk = chunk[:chunkSize]
+	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+
+	b.freeChunks = append(b.freeChunks, p)
+}
+
+func (b *bucketTrimmed) Del(h uint64) {
+	b.mu.Lock()
+	delete(b.m, h)
+	b.mu.Unlock()
+}
+
+func (b *bucketTrimmed) getMapSize() uint64 {
+	return uint64(len(b.m))
+}
+
+// bucketPreallocated is a bucket with preallocated memory for chunks.
+// it allocates memory at the beginning, and then uses it for the entire lifetime of the bucket.
+// it als operforms trimming
+type bucketPreallocated struct {
 	mu sync.RWMutex
 
 	// chunks is a ring buffer with encoded (k, v) pairs.
@@ -309,7 +593,7 @@ type bucket struct {
 	trimCount uint64
 }
 
-func (b *bucket) Init(maxBytes uint64, trimRatio int) {
+func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) {
 	if maxBytes == 0 {
 		panic(fmt.Errorf("maxBytes cannot be zero"))
 	}
@@ -319,24 +603,21 @@ func (b *bucket) Init(maxBytes uint64, trimRatio int) {
 
 	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
-	fmt.Println("chunk size: ", chunkSize, "maxBytes: ", maxBytes, "number of chunks: ", maxBytes/chunkSize)
 	if err != nil {
 		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", maxBytes, err))
 	}
 	for len(data) > 0 {
 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
-		//b.freeChunks = append(b.freeChunks, p)
 		b.chunks = append(b.chunks, p[:])
 		data = data[chunkSize:]
 	}
-	// fmt.Println("number of chunks: ", len(b.chunks))
 
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
 	b.Reset()
 }
 
-func (b *bucket) Reset() {
+func (b *bucketPreallocated) Reset() {
 	b.mu.Lock()
 	b.m = make(map[uint64]uint64)
 	b.idx = 0
@@ -344,14 +625,12 @@ func (b *bucket) Reset() {
 	b.mu.Unlock()
 }
 
-func (b *bucket) getMapSize() uint64 {
+func (b *bucketPreallocated) getMapSize() uint64 {
 	return uint64(len(b.m))
 }
 
 // cleanLockedMap removes expired k-v pairs from bucket map.
-func (b *bucket) cleanLockedMap(startingOffset int) {
-	// TODO: check if  make(map[uint64]uint64, len(bm)/2) is more efficient.
-
+func (b *bucketPreallocated) cleanLockedMap(startingOffset int) {
 	bmSize := len(b.m)
 	bmNew := make(map[uint64]uint64, bmSize)
 
@@ -370,7 +649,7 @@ func (b *bucket) cleanLockedMap(startingOffset int) {
 	b.trimCount++
 }
 
-func (b *bucket) UpdateStats(s *Stats) {
+func (b *bucketPreallocated) UpdateStats(s *Stats) {
 	b.mu.RLock()
 	s.EntriesCount += uint64(len(b.m))
 	s.TrimCount = b.trimCount
@@ -378,25 +657,24 @@ func (b *bucket) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
-func (b *bucket) listChunks() {
+func (b *bucketPreallocated) listChunks() {
 	fmt.Println("chunks: ", b.chunks)
 }
 
 // SetMulti stores multiple (k, v) entries with 1-1 mapping for the same bucket. OWERWRITES.
-func (b *bucket) SetMulti(keys [][]byte, values [][]byte) {
+func (b *bucketPreallocated) SetMulti(keys [][]byte, values [][]byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var hash uint64
 
 	for i, key := range keys {
 		hash = xxhash.Sum64(key)
-		// fmt.Println("calling setmulti for key index: ", i)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, values[i], hash, true)
 	}
 }
 
-func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
+func (b *bucketPreallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var hash uint64
@@ -410,7 +688,7 @@ func (b *bucket) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hash
 
 // SetNew skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 // removes only half of the each chunk when the chunk is full
-func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
+func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
@@ -427,7 +705,6 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		// fit a chunk.
 		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
-
 	chunks := b.chunks
 
 	if len(skipLocking) == 0 || !skipLocking[0] {
@@ -442,8 +719,6 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
-
-	//fmt.Println("Inside SETMULTI: idx: ", idx, "idxNew: ", idxNew, "chunkIdx: ", chunkIdx, "chunkIdxNew: ", chunkIdxNew)
 
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
@@ -478,8 +753,6 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		}
 	}
 
-	//fmt.Println("current chunk idx: ", chunkIdx, "chunks length: ", len(chunks))
-
 	chunk := chunks[chunkIdx]
 	if len(chunk) == 0 {
 		panic(fmt.Errorf("SHOULD NEVER ENTER HERE, chunk is nil or empty"))
@@ -495,7 +768,7 @@ func (b *bucket) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 
 // TODO: Simplfy by removing references to generations, generations are not relevant for bucket.
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-func (b *bucket) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+func (b *bucketPreallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
 	chunks := b.chunks
 	if len(skipLocking) == 0 || !skipLocking[0] {
@@ -541,7 +814,7 @@ end:
 	return found
 }
 
-func (b *bucket) Del(h uint64) {
+func (b *bucketPreallocated) Del(h uint64) {
 	b.mu.Lock()
 	delete(b.m, h)
 	b.mu.Unlock()
@@ -780,7 +1053,6 @@ func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte)
 	defer b.mu.Unlock()
 	var prevValue []byte
 	var hash uint64
-	//var res bool
 
 	for _, key := range keys {
 		prevValue = value

@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -55,7 +56,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB*1024*1024, false),
+		cache:       NewImprovedCache(maxMB*1024*1024, types.Trimmed),
 		metrics:     metrics{},
 		logger:      logger,
 	}
@@ -68,8 +69,8 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if prometheusBlockValidationTxMetaCacheSize != nil {
-					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
+				if prometheusBlockValidationTxMetaCacheInsertions != nil {
+					//prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
@@ -281,11 +282,11 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (t *TxMetaCache) Length() int {
-	s := &Stats{}
-	t.cache.UpdateStats(s)
-	return int(s.EntriesCount)
-}
+// func (t *TxMetaCache) Length() int {
+// 	s := &Stats{}
+// 	t.cache.UpdateStats(s)
+// 	return int(s.EntriesCount)
+// }
 
 func (t *TxMetaCache) TrimCount() int {
 	s := &Stats{}

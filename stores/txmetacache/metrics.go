@@ -7,7 +7,7 @@ import (
 
 var (
 	// tx meta cache stats
-	prometheusBlockValidationTxMetaCacheSize       prometheus.Gauge
+	//prometheusBlockValidationTxMetaCacheSize       prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheHits       prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheMisses     prometheus.Gauge
@@ -24,13 +24,13 @@ func initPrometheusMetrics() {
 		return
 	}
 
-	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_size",
-			Help:      "Number of items in the tx meta cache",
-		},
-	)
+	// prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
+	// 	prometheus.GaugeOpts{
+	// 		Namespace: "blockvalidation",
+	// 		Name:      "tx_meta_cache_size",
+	// 		Help:      "Number of items in the tx meta cache",
+	// 	},
+	// )
 
 	prometheusBlockValidationTxMetaCacheInsertions = promauto.NewGauge(
 		prometheus.GaugeOpts{
