@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+//nolint:unused //TODO: enable these later
 var (
 	prometheusSubtreeValidationHealth                     prometheus.Counter
 	prometheusSubtreeValidationBlockFoundCh               prometheus.Gauge

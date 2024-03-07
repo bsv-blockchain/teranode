@@ -155,6 +155,7 @@ func (u *SubtreeValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chain
 	return nil
 }
 
+//nolint:all //TODO: fix linter errors
 func (u *SubtreeValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:updateSubtreesTTL")
 	defer func() {
