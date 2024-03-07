@@ -98,7 +98,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	}()
 
 	if bv.localSetMined {
-		// start a blockchain listener and process all the blocks that are mined into the txmetastore
+		// start a blockchain listener and process all the blocks that are mined into the txmeta store
 		// this should only be done when shared storage is available, and the block validation has access to all subtrees locally
 		ctx := context.Background()
 		go func() {
@@ -206,9 +206,16 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 		}
 	}
 
+	blockSubtrees, err := block.GetSubtrees(ctx, u.logger, u.subtreeStore)
+	if err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+	}
+
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
 		return fmt.Errorf("[localSetMined][%s] failed to get block header ids: %v", blockHash.String(), err)
 	}
+
+	blockID := ids[0]
 
 	// add the transactions in this block to the txMeta block hashes
 	startTime := time.Now()
@@ -248,7 +255,7 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 			}
 
 			blockIDBytes := make([]byte, 4)
-			binary.LittleEndian.PutUint32(blockIDBytes, ids[0])
+			binary.LittleEndian.PutUint32(blockIDBytes, blockID)
 			if err = u.minedBlockStore.SetMultiKeysSingleValueAppended(subtreeTxIDBytes, blockIDBytes, chainhash.HashSize); err != nil {
 				return fmt.Errorf("[localSetMined][%s] failed to set tx mined for subtree: %v", blockHash.String(), err)
 			}
@@ -262,6 +269,15 @@ func (u *BlockValidation) localSetTxMined(ctx context.Context, blockHash *chainh
 	if err = g.Wait(); err != nil {
 		return fmt.Errorf("[localSetMined][%s] failed to update tx mined for block: %v", blockHash.String(), err)
 	}
+
+	// add the transactions in this block to the txMeta block IDs in the txMeta store
+	u.logger.Infof("[ValidateBlock][%s] update tx mined", block.Hash().String())
+	if err = model.UpdateTxMinedStatus(gCtx, u.logger, u.txMetaStore, blockSubtrees, blockID); err != nil {
+		// TODO this should be a fatal error, but for now we just log it
+		//return nil, fmt.Errorf("[ValidateBlock] error updating tx mined status: %w", err)
+		u.logger.Errorf("[ValidateBlock][%s] error updating tx mined status: %w", block.Hash().String(), err)
+	}
+	u.logger.Infof("[ValidateBlock][%s] update tx mined DONE", block.Hash().String())
 
 	// delete the block from the cache, if it was there
 	if blockWasAlreadyCached {
@@ -480,7 +496,7 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 
 	// get all the subtrees from the block. This should have been loaded during validation, so should be instant
 	u.logger.Infof("[ValidateBlock][%s] get subtrees", block.Hash().String())
-	blockSubtrees, err := block.GetSubtrees(u.subtreeStore)
+	blockSubtrees, err := block.GetSubtrees(spanCtx, u.logger, u.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}

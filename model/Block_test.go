@@ -398,7 +398,7 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 	}
 
 	mockBlobStore, _ := New(ulogger.TestLogger{})
-	err = b.GetAndValidateSubtrees(context.Background(), mockBlobStore)
+	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore)
 	require.NoError(t, err)
 }
 

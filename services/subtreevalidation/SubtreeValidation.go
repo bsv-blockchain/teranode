@@ -482,14 +482,6 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String()), err)
 		}
-		for _, parentTxHash := range txMeta.ParentTxHashes {
-			if !subtreeMeta.IsSetParentTxMeta(parentTxHash) {
-				parentTxMeta, _ := u.txMetaStore.GetMeta(spanCtx, &parentTxHash)
-				if parentTxMeta != nil {
-					subtreeMeta.SetParentTxMeta(parentTxHash, *parentTxMeta)
-				}
-			}
-		}
 	}
 	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start)
 
