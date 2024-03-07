@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -42,6 +43,7 @@ type Server struct {
 	AssetHttpAddressURL   string
 	e                     *echo.Echo
 	notificationCh        chan *notificationMsg
+	subtreeCh             chan []byte
 }
 
 type BestBlockMessage struct {
@@ -144,12 +146,27 @@ func NewServer(logger ulogger.Logger) *Server {
 
 	p2pNode := p2p.NewP2PNode(logger, config)
 
-	return &Server{
+	p2pServer := &Server{
 		P2PNode:           p2pNode,
 		logger:            logger,
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		notificationCh:    make(chan *notificationMsg),
 	}
+
+	subtreeKafkaURL, _, found := gocore.Config().GetURL("subtree_kafkaBrokers")
+	if found {
+		p2pServer.subtreeCh = make(chan []byte, 10)
+		go func() {
+			if err := util.StartAsyncProducer(logger, subtreeKafkaURL, p2pServer.subtreeCh); err != nil {
+				logger.Errorf("[P2P] error starting kafka producer: %v", err)
+				return
+			}
+		}()
+
+		logger.Infof("[P2P] connected to kafka at %s", subtreeKafkaURL.Host)
+	}
+
+	return p2pServer
 }
 
 func (s *Server) Health(ctx context.Context) (int, string, error) {
@@ -564,6 +581,14 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		s.logger.Errorf("error getting chainhash from string %s", subtreeMessage.Hash, err)
 		return
 	}
+
+	if s.subtreeCh != nil {
+		b := make([]byte, 0, 128)
+		b = append(b, hash.CloneBytes()...)
+		b = append(b, []byte(subtreeMessage.DataHubUrl)...)
+		s.subtreeCh <- b
+	}
+
 	if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
 		s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
 	}

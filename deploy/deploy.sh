@@ -143,9 +143,15 @@ case $REGION in
         ;;
 
     "docker-desktop")
+        if [[ -z $NAMESPACE ]]; then
+            kubectl create namespace miner-lo-1 >&2
+            kubectl change-context docker-desktop --namespace miner-lo-1 >&2
+            NAMESPACE=miner-lo-1
+        fi
+
         LEGAL_NAMESPACES=("miner-lo-1")
         LEGAL_ENVIRONMENT=("docker-desktop")
-
+        
         TRAEFIK=$(kubectl get namespaces traefik --output 'jsonpath={..name}' 2> /dev/null)
         if [[ -z $TRAEFIK ]]; then
             # Check if helm is installed

@@ -2,16 +2,27 @@
 
 ## Index
 
+1. [Description](#1-description)
+2. [Functionality](#2-functionality)
+- [2.1 Service Initialization](#21-service-initialization)
+- [2.2 Receiving a new Block Notification](#22-receiving-a-new-block-notification)
+- [2.3 Processing a Subtree](#23-processing-a-subtree)
+3. [Data Model](#3-data-model)
+4. [Technology](#4-technology)
+5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
+6. [How to run](#6-how-to-run)
+7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+
 
 ## 1. Description
 
-The Subtree Assembly service is an overlay microservice responsible for post-processing subtrees after they have been added to blocks.
+The Subtree Assembly service functions as an overlay microservice, designed to post-process subtrees after their integration into blocks.
 
-When a new block is added to the blockchain, the Subtree Assembly decorates all transactions in the block subtrees, making sure the tx meta data is included (extended tx format).
+Whenever a new block is introduced to the blockchain, the Subtree Assembly service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (extended transaction format).
 
-This service fulfills a critical role in the Teranode network, ensuring that subtrees are correctly processed and saved with the necessary metadata for required audit / traceability.
+This service plays a key role within the Teranode network, guaranteeing that subtrees are accurately processed and stored with the essential metadata for necessary audit and traceability purposes.
 
-It must be noted that the post-processed subtree data is not automatically consumed by any other service from this point on. The decorated subtrees are however valuable for future data inspection.
+It's important to note that the post-processed subtree data is not automatically utilized by any subsequent service. However, the decorated subtrees remain invaluable for future data analysis and inspection.
 
 ![Subtree_Assembly_Service_Container_Diagram.png](img%2FSubtree_Assembly_Service_Container_Diagram.png)
 

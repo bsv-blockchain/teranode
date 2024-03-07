@@ -204,26 +204,26 @@ func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...opti
 	return nil
 }
 
-func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
 	return errors.New("TTL is not supported in a batcher store")
 }
 
-func (b *Batcher) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser, error) {
+func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.Options) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("getIoReader is not supported in a batcher store")
 }
 
-func (b *Batcher) Get(_ context.Context, _ []byte) ([]byte, error) {
+func (b *Batcher) Get(_ context.Context, _ []byte, opts ...options.Options) ([]byte, error) {
 	return nil, fmt.Errorf("get is not supported in a batcher store")
 }
 
-func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int) ([]byte, error) {
+func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
 	return nil, fmt.Errorf("get head is not supported in a batcher store")
 }
 
-func (b *Batcher) Exists(_ context.Context, hash []byte) (bool, error) {
+func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	return false, fmt.Errorf("exists is not supported in a batcher store")
 }
 
-func (b *Batcher) Del(_ context.Context, hash []byte) error {
+func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	return fmt.Errorf("del is not supported in a batcher store")
 }

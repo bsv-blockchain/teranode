@@ -19,6 +19,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if err := resetTopic("subtree_kafkaBrokers"); err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func resetTopic(configName string) error {
@@ -31,9 +35,13 @@ func resetTopic(configName string) error {
 		return fmt.Errorf("kafka URL not found (%s)", configName)
 	}
 
+	// log.Printf("URL: %s", url.String())
+
 	hosts := strings.Split(url.Host, ",")
+	// log.Printf("hosts: %v", hosts)
 
 	topic := url.Path[1:]
+	// log.Printf("topic: %s", topic)
 
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0 // Match this with your Kafka cluster version
@@ -73,6 +81,8 @@ func resetTopic(configName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create topic %s: %w", topic, err)
 	}
+
+	log.Printf("%q topic created successfully with %d partitions and a replication factor of %d", topic, partitions, replication)
 
 	return nil
 }

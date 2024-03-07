@@ -333,7 +333,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	return nil
 }
 
-func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan []byte) error {
+func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) error {
 	logger.Debugf("Starting async producer")
 	topic := kafkaURL.Path[1:]
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
@@ -384,10 +384,10 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, txsChan chan [
 
 	// Sending a batch of 50 messages asynchronously
 	go func() {
-		for rawTx := range txsChan {
+		for msgBytes := range ch {
 			message := &sarama.ProducerMessage{
 				Topic: topic,
-				Value: sarama.StringEncoder(rawTx),
+				Value: sarama.StringEncoder(msgBytes),
 			}
 			producer.Input() <- message
 		}

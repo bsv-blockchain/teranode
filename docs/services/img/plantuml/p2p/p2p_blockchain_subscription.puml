@@ -12,7 +12,7 @@ alt notification.Type == model.NotificationType_Block
     Node1 -> PubSub: s.topics[blockTopicName].Publish(ctx, blockMessageBytes)
 end
 
-PubSub -> Node2: s.subscriptions[blockTopicName]
+PubSub -> Node2: s.topics[blockTopicName]
 activate Node2
 Node2 -> Node2: handleBlockTopic(ctx)
 Node2 -> BlockValidationClient: blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl)
@@ -25,7 +25,7 @@ alt notification.Type == model.NotificationType_MiningOn
     Node1 -> PubSub: s.topics[miningOnTopicName].Publish(ctx, miningOnMessageBytes)
 end
 
-PubSub -> Node2: s.subscriptions[miningOnTopicName]
+PubSub -> Node2: s.topics[miningOnTopicName]
 activate Node2
 Node2 -> Node2: handleMiningOnTopic(ctx)
 Node2 -> notificationChannel: notify miningOnMessage to s.notificationCh
@@ -37,11 +37,13 @@ alt notification.Type == model.NotificationType_Subtree
     Node1 -> PubSub: s.topics[subtreeTopicName].Publish(ctx, subtreeMessageBytes)
 end
 
-PubSub -> Node2: s.subscriptions[subtreeTopicName]
+PubSub -> Node2: s.topics[subtreeTopicName]
 activate Node2
 Node2 -> Node2: handleSubtreeTopic(ctx)
 Node2 -> BlockValidationClient: s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl)
 Node2 -> notificationChannel: notify subtreeMessage to s.notificationCh
 deactivate Node2
+
+left footer Last Modified On: 6-March-2024
 
 @enduml

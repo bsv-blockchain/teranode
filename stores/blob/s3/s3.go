@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -109,7 +110,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -117,7 +120,6 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		Body:   reader,
 	}
 
-	o := options.NewSetOptions(opts...)
 	if o.TTL > 0 {
 		expires := time.Now().Add(o.TTL)
 		uploadInput.Expires = &expires
@@ -140,7 +142,9 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
@@ -151,7 +155,6 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Expires
 
-	o := options.NewSetOptions(opts...)
 	if o.TTL > 0 {
 		expires := time.Now().Add(o.TTL)
 		uploadInput.Expires = &expires
@@ -168,7 +171,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	return nil
 }
 
-func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
@@ -180,7 +183,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	return nil
 }
 
-func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
@@ -188,7 +191,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(key)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(key, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -207,7 +212,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
 	return result.Body, nil
 }
 
-func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
+func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
@@ -216,7 +221,9 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -245,7 +252,7 @@ func (g *S3) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
@@ -254,7 +261,9 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, e
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -289,7 +298,7 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, e
 	return buf.Bytes(), err
 }
 
-func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
+func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
@@ -297,7 +306,9 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -328,7 +339,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (g *S3) Del(ctx context.Context, hash []byte) error {
+func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
@@ -336,7 +347,9 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	objectKey := g.getObjectKey(hash)
+	o := options.NewSetOptions(opts...)
+
+	objectKey := g.getObjectKey(hash, o.Extension)
 
 	cache.Delete(*objectKey)
 
@@ -362,13 +375,13 @@ func (g *S3) Del(ctx context.Context, hash []byte) error {
 	return nil
 }
 
-func (g *S3) getObjectKey(key []byte) *string {
+func (g *S3) getObjectKey(key []byte, extension string) *string {
 	objectKey := g.generateKey(key)
 
 	if g.prefixDir > 0 {
 		// take the first n bytes of the key and use them as a prefix directory
 		objectKeyStr := *objectKey
-		objectKey = aws.String(fmt.Sprintf("%s/%s", objectKeyStr[:g.prefixDir], objectKeyStr))
+		objectKey = aws.String(fmt.Sprintf("%s/%s%s", objectKeyStr[:g.prefixDir], objectKeyStr, extension))
 	}
 
 	return objectKey

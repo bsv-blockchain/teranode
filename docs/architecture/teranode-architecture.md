@@ -19,7 +19,7 @@
 - [2.1. Block Size](#21-block-size)
 - [2.2. Bitcoin Data Model](#22-bitcoin-data-model)
 - [2.3. Teranode Data Model](#23-teranode-data-model)
-- [2.4. Advantages of the Teranode Model](#24-advantages-of-the-teranode-model)
+- [2.4. Advantages of the Teranode BSV Model](#24-advantages-of-the-teranode-bsv-model)
 - [2.5. Network Behavior](#25-network-behavior)
 3. [Node Workflow](#3-node-workflow)
 4. [Services](#4-services)
@@ -34,13 +34,14 @@
     - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
 - [4.6. P2P Service](#46-p2p-service)
 - [4.7. Blockchain Service](#47-blockchain-service)
-- [4.8. Asset Service](#48-asset-service)
-- [4.9. Coinbase Service](#49-coinbase-service)
-- [4.10. Bootstrap](#410-bootstrap)
-- [4.11. P2P Legacy Service](#411-p2p-legacy-service)
-- [4.12. UTXO Store](#412-utxo-store)
-- [4.13. Transaction Meta Store](#413-transaction-meta-store)
-- [4.14. Banlist Service](#414-banlist-service)
+- [4.8 Subtree Assembly Service ](#48-subtree-assembly-service-)
+- [4.9. Asset Service](#49-asset-service)
+- [4.10. Coinbase Service](#410-coinbase-service)
+- [4.11. Bootstrap](#411-bootstrap)
+- [4.12. P2P Legacy Service](#412-p2p-legacy-service)
+- [4.13. UTXO Store](#413-utxo-store)
+- [4.14. Transaction Meta Store](#414-transaction-meta-store)
+- [4.15. Banlist Service](#415-banlist-service)
 
 
 ## 1. Overview
@@ -580,7 +581,37 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ---
 
-### 4.8. Asset Service
+### 4.8 Subtree Assembly Service
+
+The Subtree Assembly service functions as an overlay microservice, designed to post-process subtrees after their integration into blocks.
+
+Whenever a new block is introduced to the blockchain, the Subtree Assembly service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (extended transaction format).
+
+This service plays a key role within the Teranode network, guaranteeing that subtrees are accurately processed and stored with the essential metadata for necessary audit and traceability purposes.
+
+![Subtree_Assembly_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Assembly_Service_Container_Diagram.png)
+
+- **Blockchain Service:**
+    - Sends "new block" notifications to the Subtree Assembly Service.
+
+- **Subtree Assembly Service**
+    - This service is responsible for post-processing transactions (Txs) for all subtrees in new blocks. It subscribes and listens to new block notifications. When a new block is receives, the service decorates all transactions within all subtrees in the block, and updates the subtree into the Subtree Store.
+
+- **Subtree Store:**
+    - Holds the subtree data. The Subtree Assembly Service interacts with this store to both retrieve (Get) and save (Set) subtree data.
+
+- **TX Meta Store:**
+    - Maintains transaction metadata. The Subtree Assembly Service accesses (Get) this store to decorate the transactions within the subtrees with metadata.
+
+
+A more detailed diagram can be seen below, detailing the messaging mechanism between the Blockchain Service and the Subtree Assembly Service.
+
+![Subtree_Assembly_Service_Components_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Assembly_Service_Components_Diagram.png)
+
+
+---
+
+### 4.9. Asset Service
 
 The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
@@ -610,7 +641,7 @@ The various microservices write directly to the data stores, but the asset servi
 
 ---
 
-### 4.9. Coinbase Service
+### 4.10. Coinbase Service
 
 The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
@@ -640,7 +671,7 @@ In essence, the Coinbase Service operates as a straightforward Simplified Paymen
 
 ---
 
-### 4.10. Bootstrap
+### 4.11. Bootstrap
 
 The Bootstrap Service helps new nodes find peers in a Teranode BSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
@@ -651,7 +682,7 @@ The service is implemented using the `libp2p` library, a modular network stack f
 ---
 
 
-### 4.11. P2P Legacy Service
+### 4.12. P2P Legacy Service
 
 The P2P service is responsible for managing communications between BSV and Teranode-BSV nodes, effectively translating between the historical BSV and the new (Teranode BSV) data abstractions. This makes possible to run historical and Teranodes side by side, allowing for a gradual rollout of Teranode.
 
@@ -678,7 +709,7 @@ Here's the breakdown of the components and their functions:
 
 ---
 
-### 4.12. UTXO Store
+### 4.13. UTXO Store
 
 The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
@@ -686,7 +717,7 @@ The UTXO Store service is responsible for tracking spendable UTXOs. These are UT
 
 ---
 
-### 4.13. Transaction Meta Store
+### 4.14. Transaction Meta Store
 
 The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. This is used by many services, including the Validator and Block Assembly services, to retrieve transaction metadata when validating transactions. The Transaction Meta Store service is also used by the Block Assembly service to retrieve transaction metadata when assembling blocks.
 
@@ -704,7 +735,7 @@ The metadata in scope in this service refers to extra fields of interest during 
 
 ---
 
-### 4.14. Banlist Service
+### 4.15. Banlist Service
 
 Bitcoin is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
 

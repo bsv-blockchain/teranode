@@ -1,4 +1,6 @@
-package tx_test
+//go:build e2eTest
+
+package e2e_test
 
 import (
 	"context"
@@ -20,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMainFunctionality(t *testing.T) {
+func TestPropagation(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:8090"
 

@@ -16,15 +16,19 @@ PubSub ->  Peer2: s.handleBestBlockTopic(ctx)
 activate Peer2
 
 
-Peer2 -> Peer2: s.sendPeerMessage(ctx, peer, msgBytes)
+Peer2 -> Peer2: s.P2PNode.SendToPeer(ctx, peer, msgBytes)
 Peer2 -> LibP2P: s.host.NewStream(ctx, peer.ID, protocol.ID(s.bitcoinProtocolId))
 deactivate Peer2
 
 activate LibP2P
 
-LibP2P -> Node1: s.handleBlockchainMessage(ctx, stream)
+LibP2P -> Node1: s.streamHandler(stream)
 deactivate LibP2P
-Node1 -> Node1: s.logger.Debugf("Received block topic message: %s", string(buf))
 
+activate Node1
+Node1 -> Node1: Log the received message \n(no action)
+deactivate Node1
+
+left footer Last Modified On: 6-March-2024
 
 @enduml

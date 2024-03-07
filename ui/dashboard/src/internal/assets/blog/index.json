@@ -13,6 +13,13 @@
       "slug": "first-findings",
       "path": "first-findings.md",
       "timestamp": "1708797533321"
+    },
+    {
+      "title": "Learned so far",
+      "summary": "What we have learned so far",
+      "slug": "learned-so-far",
+      "path": "learned-so-far.md",
+      "timestamp": "1709721534114"
     }
   ]
 }
