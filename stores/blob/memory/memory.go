@@ -10,17 +10,16 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Memory struct {
 	mu    sync.Mutex
-	blobs map[chainhash.Hash][]byte
+	blobs map[string][]byte
 }
 
 func New() *Memory {
 	return &Memory{
-		blobs: make(map[chainhash.Hash][]byte),
+		blobs: make(map[string][]byte),
 	}
 }
 
@@ -45,13 +44,17 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 }
 
 func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	// hash should have been a chainhash.Hash
-	key := chainhash.Hash(hash)
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.blobs[key] = value
+	m.blobs[string(storeKey)] = value
 
 	return nil
 }
@@ -71,13 +74,17 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Op
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
-	// hash should have been a chainhash.Hash
-	key := chainhash.Hash(hash)
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	bytes, ok := m.blobs[key]
+	bytes, ok := m.blobs[string(storeKey)]
 	if !ok {
 		return nil, fmt.Errorf("not found")
 	}
@@ -99,24 +106,32 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 }
 
 func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	// hash should have been a chainhash.Hash
-	key := chainhash.Hash(hash)
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, ok := m.blobs[key]
+	_, ok := m.blobs[string(storeKey)]
 	return ok, nil
 }
 
 func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.Options) error {
-	// hash should have been a chainhash.Hash
-	key := chainhash.Hash(hash)
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.blobs, key)
+	delete(m.blobs, string(storeKey))
 
 	return nil
 }
