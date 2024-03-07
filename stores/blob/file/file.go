@@ -287,6 +287,11 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 	return bytes[:nRead], err
 }
 
+func (s *File) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts)

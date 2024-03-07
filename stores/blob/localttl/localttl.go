@@ -146,6 +146,11 @@ func (l *LocalTTL) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts 
 	return value, nil
 }
 
+func (s *LocalTTL) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (l *LocalTTL) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	found, err := l.ttlStore.Exists(ctx, key, opts...)
 	if err != nil || !found {

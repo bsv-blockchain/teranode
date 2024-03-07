@@ -298,6 +298,11 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...op
 	return buf.Bytes(), err
 }
 
+func (g *S3) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {

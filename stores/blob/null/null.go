@@ -55,6 +55,11 @@ func (n *Null) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
 }
 
+func (n *Null) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (n *Null) Exists(_ context.Context, _ []byte, opts ...options.Options) (bool, error) {
 	return false, nil
 }

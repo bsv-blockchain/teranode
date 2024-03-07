@@ -105,6 +105,11 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 	return b[:nrOfBytes], nil
 }
 
+func (m *Memory) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	setOptions := options.NewSetOptions(opts...)
 

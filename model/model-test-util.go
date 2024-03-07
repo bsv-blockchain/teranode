@@ -426,6 +426,11 @@ func (l localSubtreeStore) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
+func (l localSubtreeStore) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
+
 func (l localSubtreeStore) Exists(_ context.Context, key []byte, opts ...options.Options) (bool, error) {
 	_, ok := l.files[chainhash.Hash(key)]
 	return ok, nil
@@ -537,6 +542,11 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte, opts ...options.Opti
 	}
 
 	return subtreeBytes, nil
+}
+
+func (n *BlobStoreStub) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
 }
 
 func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, opts ...options.Options) (bool, error) {

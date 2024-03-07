@@ -67,6 +67,10 @@ func (r Wrapper) Health(ctx context.Context) (int, string, error) {
 	return r.store.Health(ctx)
 }
 
+func (r *Wrapper) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	// TODO - implement
+	return true, nil
+}
 func (r Wrapper) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	ok, err := r.store.Exists(ctx, key)
 	if err != nil {

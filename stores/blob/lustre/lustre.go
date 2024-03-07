@@ -257,6 +257,44 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 	return true, nil
 }
 
+// TryLockIfNotExists attempts to acquire a lock if the item does not exist.
+// It returns true if the lock was successfully acquired (item did not exist and lock was obtained).
+// It returns false if the item already exists or the lock could not be obtained.
+
+func (s *Lustre) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	b, err := s.Exists(ctx, hash, opts...)
+	if err != nil {
+		return false, err
+	}
+	if b {
+		return false, nil
+	}
+
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return false, err
+	}
+
+	lockPath := fileName + ".lock"
+
+	// Attempt to acquire lock by atomically creating the lock file
+	// The O_CREATE|O_EXCL|O_WRONLY flags ensure the file is created only if it does not already exist
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		// Failed to acquire lock (file already exists or other error)
+		return false, nil
+	}
+	_ = file.Close() // Close the file immediately after creating it
+
+	// Release the lock after 30s if it is still there (to allow someone else to have a go)
+	go func() {
+		time.Sleep(30 * time.Second)
+		_ = os.Remove(lockPath)
+	}()
+
+	return true, nil
+}
+
 func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts...)
