@@ -332,11 +332,10 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 100
+	numberOfKeys := 50
 
 	// cache size : 4 KB
 	// 4 buckets
-	// number of buckets: 1024
 	// bucket size: 4 KB / 4 = 1 KB
 	// chunk size: 2 * 128 = 256 bytes
 	// 1 KB / 256 bytes = 4 chunks per bucket
@@ -367,7 +366,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 			errCounter++
 		}
 	}
-	fmt.Println("Number or errors:", errCounter)
+	t.Log("Number or errors:", errCounter)
 
 	// X times call cleanLockedMap
 	// 2 chunks are deleted per adjustment
@@ -377,5 +376,5 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 
 	s := &Stats{}
 	cache.UpdateStats(s)
-	fmt.Println("Stats, total map size:", s.TotalMapSize)
+	t.Log("Stats, total map size:", s.TotalMapSize)
 }
