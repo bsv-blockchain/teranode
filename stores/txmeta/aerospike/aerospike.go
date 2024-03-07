@@ -315,7 +315,8 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, s.expiration)
+	// s.expiration - expiration is set in SetMined and SetMinedMulti
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	maxRetries := 5
