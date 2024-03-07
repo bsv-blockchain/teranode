@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -205,9 +204,9 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		postgresErr := "duplicate key value violates unique constraint"
 		sqLiteErr := "UNIQUE constraint failed"
 		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
-			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.NewErrTxmetaAlreadyExists(hash))
+			return data, fmt.Errorf("failed to insert tx meta: %w", txmeta.NewErrTxmetaAlreadyExists(hash))
 		}
-		return data, errors.Join(errors.New("failed to insert tx meta"), err)
+		return data, fmt.Errorf("failed to insert tx meta: %w", err)
 	}
 
 	prometheusTxMetaSet.Inc()

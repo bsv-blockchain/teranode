@@ -37,11 +37,6 @@ func (as *AuxiliaryStore) Health(ctx context.Context) (int, string, error) {
 	return as.store.Health(ctx)
 }
 
-func (as *AuxiliaryStore) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	// TODO - implement
-	return true, nil
-}
-
 func (as *AuxiliaryStore) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	if ok, err := as.auxiliaryStore.Exists(ctx, key); ok && err == nil {
 		return true, nil

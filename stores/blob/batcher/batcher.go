@@ -220,11 +220,6 @@ func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Op
 	return nil, fmt.Errorf("get head is not supported in a batcher store")
 }
 
-func (s *Batcher) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	// TODO - implement
-	return true, nil
-}
-
 func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	return false, fmt.Errorf("exists is not supported in a batcher store")
 }

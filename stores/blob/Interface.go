@@ -11,7 +11,6 @@ import (
 type Store interface {
 	Health(ctx context.Context) (int, string, error)
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
-	TryLockIfNotExists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 	Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error)
 	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error)
 	GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error)

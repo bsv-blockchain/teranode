@@ -265,11 +265,6 @@ func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 	return b[:nrOfBytes], nil
 }
 
-func (s *Badger) TryLockIfNotExists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	// TODO - implement
-	return true, nil
-}
-
 func (s *Badger) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()

@@ -292,14 +292,14 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	if err != nil {
 		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
-			v.logger.Debugf("[Validate][%s] tx already exists in meta utxoStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+			v.logger.Debugf("[Validate][%s] tx already exists in metaStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
 			return nil
 		}
 
 		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
-		return errors.Join(ErrInternal, fmt.Errorf("error registering tx in meta utxoStore: %v", err))
+		return errors.Join(ErrInternal, fmt.Errorf("error registering tx in metaStore: %v", err))
 	}
 
 	if !v.blockAssemblyDisabled {
@@ -418,7 +418,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 		if reverseErr := v.reverseSpends(txMetaSpan, spentUtxos); reverseErr != nil {
 			err = errors.Join(err, fmt.Errorf("error reversing utxos: %v", reverseErr))
 		}
-		return data, errors.Join(fmt.Errorf("error sending tx %s to tx meta utxoStore", tx.TxIDChainHash().String()), err)
+		return data, fmt.Errorf("error sending tx %s to txmetaStore: %w", tx.TxIDChainHash().String(), err)
 	}
 
 	if v.blockvalidationKafkaChan != nil {
