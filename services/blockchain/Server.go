@@ -514,13 +514,13 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
-func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeadersFromHeight", stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	blockHeaders, heights, err := b.store.GetBlockHeadersFromHeight(ctx1, req.StartHeight, req.Limit)
+	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx1, req.StartHeight, req.Limit)
 	if err != nil {
 		return nil, ubsverrors.WrapGRPC(err)
 	}
@@ -530,9 +530,14 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 		blockHeaderBytes[i] = blockHeader.Bytes()
 	}
 
-	return &blockchain_api.GetBlockHeadersResponse{
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersFromHeightResponse{
 		BlockHeaders: blockHeaderBytes,
-		Heights:      heights,
+		Metas:        metasBytes,
 	}, nil
 }
 

@@ -182,14 +182,14 @@ func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, 
 	return blockHeaders, heights, nil
 }
 
-func (r *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []uint32, error) {
+func (r *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	r.logger.Debugf("[Repository] GetBlockHeadersFromHeight: %d-%d", height, limit)
-	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeadersFromHeight(ctx, height, limit)
+	blockHeaders, metas, err := r.BlockchainClient.GetBlockHeadersFromHeight(ctx, height, limit)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return blockHeaders, heights, nil
+	return blockHeaders, metas, nil
 }
 
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
