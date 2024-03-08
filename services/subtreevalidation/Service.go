@@ -42,6 +42,7 @@ func NewSubtreeValidation(
 }
 
 func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
+	initPrometheusMetrics()
 	return nil
 }
 
