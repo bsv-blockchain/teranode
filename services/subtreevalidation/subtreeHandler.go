@@ -21,6 +21,9 @@ var (
 
 func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 	if msg.Message != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		startTime := time.Now()
 		defer func() {
 			prometheusSubtreeValidationValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
@@ -44,7 +47,7 @@ func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
 
-		gotLock, err := tryLockIfNotExists(context.Background(), u.subtreeStore, hash)
+		gotLock, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -63,11 +66,10 @@ func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 		}
 
 		// Call the validateSubtreeInternal method
-		if err = u.validateSubtreeInternal(context.Background(), v); err != nil {
+		if err = u.validateSubtreeInternal(ctx, v); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 		}
 	}
-
 }
 
 type Exister interface {
@@ -84,6 +86,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	}
 
 	quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
+	quorumTimeout, _, _ := gocore.Config().GetDuration("subtree_quorum_timeout", 30*time.Second)
 
 	if quorumPath == "" {
 		return true, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
@@ -95,11 +98,11 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 		}
 	})
 
-	lockPath := path.Join(quorumPath, hash.String()) + ".lock"
+	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 
 	// Attempt to acquire lock by atomically creating the lock file
 	// The O_CREATE|O_EXCL|O_WRONLY flags ensure the file is created only if it does not already exist
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			// Failed to acquire lock (file already exists or other error)
@@ -108,15 +111,22 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 
 		return false, err
 	}
-	_ = file.Close() // Close the file immediately after creating it
 
-	// Release the lock after 30s or when context is cancelled
+	// Close the file immediately after creating it
+	if err := file.Close(); err != nil {
+		log.Printf("ERROR: failed to close lock file %q: %v", lockFile, err)
+	}
+
 	go func() {
+		// Release the lock after 30s or when context is cancelled
 		select {
 		case <-ctx.Done():
-		case <-time.After(30 * time.Second):
+		case <-time.After(quorumTimeout):
 		}
-		_ = os.Remove(lockPath)
+
+		if err := os.Remove(lockFile); err != nil {
+			log.Printf("ERROR: failed to remove lock file %q: %v", lockFile, err)
+		}
 	}()
 
 	return true, nil

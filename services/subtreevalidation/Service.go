@@ -2,10 +2,12 @@ package subtreevalidation
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"net/url"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/google/uuid"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -58,12 +60,17 @@ func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
 func (u *SubtreeValidation) Start(ctx context.Context) error {
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
-		go u.startKafkaListener(ctx, subtreesKafkaURL, u.subtreeHandler)
+		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", u.subtreeHandler)
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
-		go u.startKafkaListener(ctx, txmetaKafkaURL, u.txmetaHandler)
+		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
+		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
+		groupID := "subtreevalidation-" + uuid.New().String()
+
+		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, u.txmetaHandler)
 	}
 
 	<-ctx.Done()
@@ -75,10 +82,10 @@ func (u *SubtreeValidation) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL, fn func(msg util.KafkaMessage)) {
+func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, fn func(msg util.KafkaMessage)) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, "subtreevalidation", nil, 1, fn); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, 1, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }
