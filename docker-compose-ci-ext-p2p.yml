@@ -155,29 +155,16 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "DEBUG"
-      # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       utxostore: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      # startTxStore: "true"
-      # txstore: file:///data/ubsv1/txstore
       subtreestore: file:///data/ubsv1/subtreestore
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 1000
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      startBootstrap: false
-      startP2P: true
-      feature_libP2P: true
-      feature_bootstrap: false
-      blockchain_grpcAddress: "ubsv-1:8087"
-      blockvalidation_httpAddress: "http://localhost:8088"
-      propagation_grpcAddresses: localhost:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/ubsv1/txstore
+      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18093:8090-8093"
@@ -193,24 +180,12 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "DEBUG"
-      # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
-      # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       utxostore: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      # startTxStore: "true"
-      # txstore: file:///data/ubsv2/txstore
       subtreestore: file:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      startBootstrap: false
-      feature_bootstrap: false
-      startP2P: true
-      feature_libP2P: true
-      mine_initial_blocks: false
-      blockchain_grpcAddress: "ubsv-2:8087"
-      blockvalidation_httpAddress: "http://localhost:8088"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/ubsv2/txstore:/data/ubsv2/txstore
@@ -230,24 +205,12 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "DEBUG"
-      # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
-      # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       utxostore: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      # startTxStore: "true"
-      # txstore: file:///data/ubsv3/txstore
       subtreestore: file:///data/ubsv3/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      startBootstrap: false
-      feature_bootstrap: false
-      startP2P: true
-      feature_libP2P: true
-      mine_initial_blocks: false
-      blockchain_grpcAddress: "ubsv-3:8087"
-      blockvalidation_httpAddress: "http://localhost:8088"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/ubsv3/txstore:/data/ubsv3/txstore
@@ -274,7 +237,6 @@ services:
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_assetGrpcAddress: ubsv-1:8091
       BLASTER_ARGS: "-workers=2"
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
@@ -303,7 +265,6 @@ services:
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_assetGrpcAddress: ubsv-2:8091
       BLASTER_ARGS: "-workers=2"
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
@@ -332,7 +293,6 @@ services:
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_assetGrpcAddress: ubsv-3:8091
       BLASTER_ARGS: "-workers=2"
-      # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
     # pass arguments to the command
