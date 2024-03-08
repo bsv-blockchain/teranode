@@ -94,6 +94,10 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
+func (c LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []uint32, error) {
+	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
+}
+
 func (c LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	return c.store.InvalidateBlock(ctx, blockHash)
 }

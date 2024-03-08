@@ -315,6 +315,9 @@
       "live": "Live",
       "paused": "Paused"
     },
+    "forks": {
+      "menu-label": "Forks"
+    },
     "network": {
       "menu-label": "Network",
       "live": "Live",

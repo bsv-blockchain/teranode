@@ -328,6 +328,27 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	return headers, resp.Heights, nil
 }
 
+func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []uint32, error) {
+	resp, err := c.client.GetBlockHeadersFromHeight(ctx, &blockchain_api.GetBlockHeadersFromHeightRequest{
+		StartHeight: height,
+		Limit:       limit,
+	})
+	if err != nil {
+		return nil, nil, ubsverrors.UnwrapGRPC(err)
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		headers = append(headers, header)
+	}
+
+	return headers, resp.Heights, nil
+}
+
 func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),
