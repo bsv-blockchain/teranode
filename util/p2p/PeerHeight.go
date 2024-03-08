@@ -70,7 +70,7 @@ func (p *PeerHeight) Start(ctx context.Context) error {
 	if !ok {
 		panic("[PeerHeight] p2p_topic_prefix not set in config")
 	}
-	topic, _ := gocore.Config().Get("p2p_mining_on_topic", "miningon")
+	topic, _ := gocore.Config().Get("p2p_block_topic", "block")
 
 	topicName := fmt.Sprintf("%s-%s", topicPrefix, topic)
 
@@ -79,7 +79,7 @@ func (p *PeerHeight) Start(ctx context.Context) error {
 		return err
 	}
 
-	err = p.P2PNode.SetTopicHandler(ctx, topicName, p.miningOnHandler)
+	err = p.P2PNode.SetTopicHandler(ctx, topicName, p.blockHandler)
 	if err != nil {
 		return err
 	}
@@ -92,13 +92,13 @@ func (p *PeerHeight) Stop(ctx context.Context) error {
 	return err
 }
 
-func (p *PeerHeight) miningOnHandler(ctx context.Context, msg []byte, from string) {
-	miningOnMessage := MiningOnMessage{}
-	err := json.Unmarshal(msg, &miningOnMessage)
+func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) {
+	blockMessage := BlockMessage{}
+	err := json.Unmarshal(msg, &blockMessage)
 	if err != nil {
-		p.logger.Errorf("[PeerHeight] Received miningon message from %s: %v", from, err)
+		p.logger.Errorf("[PeerHeight] Received block message from %s: %v", from, err)
 	} else {
-		p.logger.Debugf("[PeerHeight] Received miningon message from %s: %v", from, miningOnMessage)
+		p.logger.Debugf("[PeerHeight] Received block message from %s: %v", from, blockMessage)
 	}
 
 	before := 0
@@ -107,7 +107,12 @@ func (p *PeerHeight) miningOnHandler(ctx context.Context, msg []byte, from strin
 		return true // continue iterating
 	})
 
-	p.lastMsgByPeerId.Store(from, miningOnMessage)
+	previousBlockMessage, ok := p.lastMsgByPeerId.Load(from)
+	if ok && previousBlockMessage.(BlockMessage).Height > blockMessage.Height {
+		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(BlockMessage).Height)
+	} else {
+		p.lastMsgByPeerId.Store(from, blockMessage)
+	}
 
 	after := 0
 	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
@@ -115,14 +120,14 @@ func (p *PeerHeight) miningOnHandler(ctx context.Context, msg []byte, from strin
 		return true // continue iterating
 	})
 
-	// log if we have received a miningon message from all expected peers. but only once
+	// log if we have received a block message from all expected peers. but only once
 	if after > before && after >= p.numberOfExpectedPeers {
-		p.logger.Infof("[PeerHeight] Received a miningon message from %d peers. Startup complete for checking things are at the same block height.", after)
+		p.logger.Infof("[PeerHeight] Received a block message from %d peers. Startup complete for checking things are at the same block height.", after)
 	}
 }
 
 /*
- * HaveAllPeersReachedMinHeight checks if all peers are mining at the given block height or higher.
+ * HaveAllPeersReachedMinHeight checks if all peers have a block at the given block height or higher.
  * Very crude implementation, we need to allow for natural forks and reorgs.
  */
 func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
@@ -135,8 +140,8 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 		if first {
 			p.logger.Infof("[PeerHeight] Not enough peers to check if at same block height %d/%d", size, p.numberOfExpectedPeers)
 			p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
-				miningon := value.(MiningOnMessage)
-				p.logger.Infof("[PeerHeight] peer=%s %s=%d", miningon.PeerId, miningon.Miner, miningon.Height)
+				block := value.(BlockMessage)
+				p.logger.Infof("[PeerHeight] peer=%s %s=%d", block.PeerId, block.DataHubUrl, block.Height)
 				return true
 			})
 		}
@@ -146,12 +151,12 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 	result := true
 
 	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
-		miningon := value.(MiningOnMessage)
+		block := value.(BlockMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
-		if height > miningon.Height {
+		if height > block.Height {
 
-			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", miningon.PeerId, miningon.Miner, miningon.Height, height)
+			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", block.PeerId, block.DataHubUrl, block.Height, height)
 			result = false
 
 			if !testAllPeers {
