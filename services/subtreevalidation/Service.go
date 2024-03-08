@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"golang.org/x/sync/errgroup"
 	"net/url"
 	"runtime"
 	"sync/atomic"
@@ -62,10 +63,18 @@ func (u *SubtreeValidation) Start(ctx context.Context) error {
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		consumerCount, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConsumerCount", util.Max(4, runtime.NumCPU()-16))
+		subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
+
+		g := errgroup.Group{}
+		g.SetLimit(subtreeConcurrency)
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, u.subtreeHandler)
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", 1, func(msg util.KafkaMessage) {
+			g.Go(func() error {
+				u.subtreeHandler(msg)
+				return nil
+			})
+		})
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
