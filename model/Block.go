@@ -590,7 +590,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				// get subtree meta
 				subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
 				if err != nil {
-					return errors.Join(fmt.Errorf("failed to get subtree meta %s", subtreeHash.String()), err)
+					logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
+					return nil
 				}
 				defer func() {
 					_ = subtreeMetaReader.Close()
@@ -598,8 +599,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 				b.SubtreeMetaSlices[i], err = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 				if err != nil {
-					logger.Errorf("failed to deserialize subtree meta %s: %v", subtreeHash.String(), err)
-					//return errors.Join(fmt.Errorf("failed to deserialize subtree meta %s", subtreeHash.String()), err)
+					logger.Warnf("failed to deserialize subtree meta %s: %w", subtreeHash.String(), err)
 				}
 
 				return nil

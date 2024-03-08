@@ -71,6 +71,7 @@ func (u *SubtreeValidation) Start(ctx context.Context) error {
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
 		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", 1, func(msg util.KafkaMessage) {
 			g.Go(func() error {
+				// TODO is there a way to return an error here and have Kafka mark the message as not done?
 				u.subtreeHandler(msg)
 				return nil
 			})

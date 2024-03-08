@@ -905,9 +905,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	}
 
 	failfast := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
+	//abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-	retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
+	//retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 	if err != nil {
 		panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
 	}
@@ -929,19 +929,20 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 		// 1. First attempt to load the txMeta from the cache...
-		missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
-		if err != nil {
-			if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
-				u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String()))
-				time.Sleep(retrySleepDuration)
-				continue
-			}
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
-		}
-
-		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] abandoned - too many missing txmeta entries", v.SubtreeHash.String()), err)
-		}
+		missed := len(txHashes)
+		//missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
+		//if err != nil {
+		//	if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+		//		u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String()))
+		//		time.Sleep(retrySleepDuration)
+		//		continue
+		//	}
+		//	return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", v.SubtreeHash.String()), err)
+		//}
+		//
+		//if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
+		//	return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] abandoned - too many missing txmeta entries", v.SubtreeHash.String()), err)
+		//}
 
 		if missed > 0 {
 			batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
@@ -978,7 +979,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 			stat5.AddTime(start)
 		}
 
-		break
+		//break
 	}
 
 	start = gocore.CurrentTime()
