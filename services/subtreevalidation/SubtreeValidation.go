@@ -59,7 +59,10 @@ func (u *SubtreeValidation) tryLockIfNotExists(ctx context.Context, hash *chainh
 		return true, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
 	}
 
-	_ = os.MkdirAll(quorumPath, 0755)
+	err = os.MkdirAll(quorumPath, 0755)
+	if err != nil {
+		return false, err
+	}
 
 	lockPath := path.Join(quorumPath, hash.String(), ".lock")
 
