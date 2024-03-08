@@ -105,12 +105,12 @@ function get(url, options: any = {}, done?, fail?) {
 //   return callApi(url, { ...options, method: 'DELETE' }, done, fail)
 // }
 
-//let baseUrl = ''
-const baseUrl = 'https://m1.scaling.ubsv.dev/api/v1'
+let baseUrl = ''
+//const baseUrl = 'https://m1.scaling.ubsv.dev/api/v1'
 
-// assetHTTPAddress.subscribe((value) => {
-//   baseUrl = value
-// })
+assetHTTPAddress.subscribe((value) => {
+  baseUrl = value
+})
 
 export const getItemApiUrl = (type: ItemType, hash: string) => {
   return `${baseUrl}/${type}/${hash}/json`
