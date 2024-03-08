@@ -13,10 +13,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	"github.com/libsv/go-bk/bec"
@@ -242,12 +242,12 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 			}
 		}
 
+		if outerRetry == 2 { // Last retry
+			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
+		}
+
 		// Retry in 5 seconds
 		time.Sleep(5 * time.Second)
-	}
-
-	if err != nil {
-		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s with %d outputs", tx.TxIDChainHash().String(), len(tx.Outputs))
