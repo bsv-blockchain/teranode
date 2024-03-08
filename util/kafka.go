@@ -253,6 +253,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	}()
 
 	var consumerClosureFunc func(KafkaMessage)
+
 	if len(consumerClosure) > 0 {
 		consumerClosureFunc = consumerClosure[0]
 	} else {
@@ -260,6 +261,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	}
 
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
+
 	client, err := sarama.NewConsumerGroup(brokersUrl, groupID, config)
 	if err != nil {
 		cancel()

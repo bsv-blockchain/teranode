@@ -12,6 +12,7 @@ var (
 	prometheusSubtreeValidationValidateSubtreeDuration         prometheus.Histogram
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
 	prometheusSubtreeValidationBlessMissingTransactionDuration prometheus.Histogram
+	prometheusSubtreeValidationSetTXMetaCacheKafka             prometheus.Histogram
 )
 
 var prometheusMetricsInitialised = false
@@ -23,7 +24,7 @@ func initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtree = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
 			Help:      "Number of subtrees validated",
 		},
@@ -31,7 +32,7 @@ func initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtreeDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree_duration_millis",
 			Help:      "Duration of validate subtree",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -40,7 +41,7 @@ func initPrometheusMetrics() {
 
 	prometheusSubtreeValidationBlessMissingTransaction = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "subtreevalidation",
 			Name:      "bless_missing_transaction",
 			Help:      "Number of missing transactions blessed",
 		},
@@ -48,10 +49,19 @@ func initPrometheusMetrics() {
 
 	prometheusSubtreeValidationBlessMissingTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "subtreevalidation",
 			Name:      "bless_missing_transaction_duration_millis",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationSetTXMetaCacheKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "subtreevalidation",
+			Name:      "set_tx_meta_cache_kafka_micros",
+			Help:      "Duration of setting tx meta cache from kafka",
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/url"
 	"os"
 	"path"
 	"runtime"
@@ -46,88 +45,6 @@ type missingTx struct {
 	idx int
 }
 
-// listen to kafka topic for subtree hashes
-// get subtree from asset server
-// validate the subtree
-func NewSubtreeValidation(logger ulogger.Logger, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface) *SubtreeValidation {
-
-	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
-	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
-
-	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
-	logger.Infof("optimisticMining = %s", optimisticMining)
-
-	bv := &SubtreeValidation{
-		logger:          logger,
-		subtreeStore:    subtreeStore,
-		subtreeTTL:      subtreeTTL,
-		txStore:         txStore,
-		txMetaStore:     txMetaStore,
-		validatorClient: validatorClient,
-		subtreeCount:    atomic.Int32{},
-	}
-
-	return bv
-}
-
-func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
-	return nil
-}
-
-func (u *SubtreeValidation) Start(ctx context.Context) error {
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
-	if err == nil && ok {
-		go u.startKafkaListener(ctx, subtreesKafkaURL)
-	}
-
-	return nil
-}
-
-func (u *SubtreeValidation) Stop(_ context.Context) error {
-	return nil
-}
-
-func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
-
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, "subtreevalidation", nil, 1, func(msg util.KafkaMessage) {
-		if msg.Message != nil {
-			if len(msg.Message.Value) < 32 {
-				u.logger.Errorf("Received subtree message of %d bytes", len(msg.Message.Value))
-				return
-			}
-
-			hash, err := chainhash.NewHash(msg.Message.Value[:32])
-			if err != nil {
-				u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
-				return
-			}
-
-			var baseUrl string
-			if len(msg.Message.Value) > 32 {
-				baseUrl = string(msg.Message.Value[32:])
-			}
-
-			u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
-
-			gotLock, err := u.tryLockIfNotExists(ctx, hash)
-			if err != nil {
-				u.logger.Infof("error getting lock for Subtree %s", hash.String())
-				return
-			}
-
-			if !gotLock {
-				u.logger.Infof("Subtree %s already exists", hash.String())
-				return
-			}
-		}
-
-	}); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener: %v", err)
-	}
-}
-
 func (u *SubtreeValidation) tryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	b, err := u.subtreeStore.Exists(ctx, hash[:])
 	if err != nil {
@@ -142,7 +59,7 @@ func (u *SubtreeValidation) tryLockIfNotExists(ctx context.Context, hash *chainh
 		return true, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
 	}
 
-	os.MkdirAll(quorumPath, 0755)
+	_ = os.MkdirAll(quorumPath, 0755)
 
 	lockPath := path.Join(quorumPath, hash.String(), ".lock")
 

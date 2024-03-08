@@ -247,9 +247,7 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 		return nil, err
 	}
 	bits := model.NewNBitFromSlice(resp.Bits)
-	if err != nil {
-		return nil, err
-	}
+
 	return &bits, nil
 }
 

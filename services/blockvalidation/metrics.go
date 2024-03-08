@@ -7,19 +7,15 @@ import (
 )
 
 var (
-	prometheusBlockValidationHealth                     prometheus.Counter
-	prometheusBlockValidationBlockFoundCh               prometheus.Gauge
-	prometheusBlockValidationBlockFound                 prometheus.Counter
-	prometheusBlockValidationBlockFoundDuration         prometheus.Histogram
-	prometheusBlockValidationCatchupCh                  prometheus.Gauge
-	prometheusBlockValidationCatchup                    prometheus.Counter
-	prometheusBlockValidationCatchupDuration            prometheus.Histogram
-	prometheusBlockValidationProcessBlockFoundDuration  prometheus.Histogram
-	prometheusBlockValidationSubtreeFound               prometheus.Counter
-	prometheusBlockValidationSubtreeFoundCh             prometheus.Gauge
-	prometheusBlockValidationSubtreeFoundChWaitDuration prometheus.Histogram
-	prometheusBlockValidationSubtreeFoundDuration       prometheus.Histogram
-	prometheusBlockValidationSetTxMetaQueueCh           prometheus.Gauge
+	prometheusBlockValidationHealth                    prometheus.Counter
+	prometheusBlockValidationBlockFoundCh              prometheus.Gauge
+	prometheusBlockValidationBlockFound                prometheus.Counter
+	prometheusBlockValidationBlockFoundDuration        prometheus.Histogram
+	prometheusBlockValidationCatchupCh                 prometheus.Gauge
+	prometheusBlockValidationCatchup                   prometheus.Counter
+	prometheusBlockValidationCatchupDuration           prometheus.Histogram
+	prometheusBlockValidationProcessBlockFoundDuration prometheus.Histogram
+	prometheusBlockValidationSetTxMetaQueueCh          prometheus.Gauge
 	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
 	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
 	prometheusBlockValidationValidateBlock                   prometheus.Counter
@@ -32,7 +28,6 @@ var (
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheKafka   prometheus.Histogram
 	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
 	prometheusBlockValidationSetMinedLocal         prometheus.Counter
@@ -116,40 +111,6 @@ func initPrometheusMetrics() {
 			Name:      "process_block_found_duration_seconds",
 			Help:      "Duration of process block found",
 			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockValidationSubtreeFound = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "subtree_found",
-			Help:      "Number of subtrees found",
-		},
-	)
-
-	prometheusBlockValidationSubtreeFoundCh = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "subtree_found_ch",
-			Help:      "Number of subtrees found buffered in the subtree found channel",
-		},
-	)
-
-	prometheusBlockValidationSubtreeFoundChWaitDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "subtree_found_ch_wait_duration_millis",
-			Help:      "Duration of subtree found channel wait",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockValidationSubtreeFoundDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "subtree_found_duration_millis",
-			Help:      "Duration of subtree found",
-			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -243,15 +204,6 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "set_tx_meta_cache_frpc",
 			Help:      "Number of tx meta cache sets with frpc",
-		},
-	)
-
-	prometheusBlockValidationSetTXMetaCacheKafka = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "set_tx_meta_cache_kafka_micros",
-			Help:      "Duration of setting tx meta cache from kafka",
-			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 

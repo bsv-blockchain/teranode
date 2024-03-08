@@ -13,20 +13,19 @@ import (
 func main() {
 	log.Println(gocore.Config().Stats())
 
-	if err := resetTopic("kafka_blocksConfig"); err != nil {
-		log.Fatal(err)
+	topics := []string{
+		"kafka_blocksConfig",
+		"kafka_blocksFinalConfig",
+		"kafka_subtreesConfig",
+		"kafka_subtreesFinalConfig",
+		"kafka_txsConfig",
+		"kafka_txmetaConfig",
 	}
 
-	if err := resetTopic("kafka_subtreesConfig"); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := resetTopic("kafka_txsConfig"); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := resetTopic("kafka_txmetaConfig"); err != nil {
-		log.Fatal(err)
+	for _, topic := range topics {
+		if err := resetTopic(topic); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 

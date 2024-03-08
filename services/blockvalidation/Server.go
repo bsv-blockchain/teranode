@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"runtime"
 	"time"
 
@@ -57,7 +56,6 @@ type Server struct {
 	catchupCh                    chan processBlockCatchup
 	blockValidation              *BlockValidation
 	subtreeAssemblyKafkaProducer util.KafkaProducerI
-	subtreeFoundQueue            *LockFreeQueue
 	SetTxMetaQ                   *util.LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
@@ -94,7 +92,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		blockFoundCh:         make(chan processBlockFound, blockFoundChBuffer),
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
-		subtreeFoundQueue:    NewLockFreeQueue(),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 	}
 
@@ -192,62 +189,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
-	subtreeFoundChConcurrency, _ := gocore.Config().GetInt("blockvalidation_subtreeFoundChConcurrency", 1)
-	g := errgroup.Group{}
-	g.SetLimit(subtreeFoundChConcurrency)
-
-	go func() {
-		u.logger.Infof("[Init] starting subtree found channel")
-		for {
-			select {
-			case <-ctx.Done():
-				u.logger.Infof("[Init] closing subtree found channel")
-				return
-			default:
-				subtreeFoundItem := u.subtreeFoundQueue.dequeue()
-				if subtreeFoundItem != nil {
-					if u.processSubtreeNotify.Get(subtreeFoundItem.hash) != nil {
-						u.logger.Warnf("[Init][%s] already processing subtree from %s", subtreeFoundItem.hash.String(), subtreeFoundItem.baseURL)
-						continue
-					}
-					// set the processing flag for 1 minute, so we don't process the same subtree multiple times
-					u.processSubtreeNotify.Set(subtreeFoundItem.hash, true, 1*time.Minute)
-
-					u.logger.Infof("[Init] processing subtree found [%s]", subtreeFoundItem.hash.String())
-
-					// this will block if the concurrency limit is reached
-					g.Go(func() error {
-						prometheusBlockValidationSubtreeFoundChWaitDuration.Observe(float64(time.Since(time.UnixMilli(subtreeFoundItem.time)).Microseconds()) / 1_000_000)
-
-						if err := u.subtreeFound(ctx, subtreeFoundItem.hash, subtreeFoundItem.baseURL); err != nil {
-							u.logger.Infof("[Init] process subtree failed [%s]: %v", subtreeFoundItem.hash.String(), err)
-						} else {
-							u.logger.Infof("[Init] process subtree complete [%s]", subtreeFoundItem.hash.String())
-						}
-
-						prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
-						return nil
-					})
-				} else {
-					// queue is empty, sleep for a bit otherwise we overload the CPU in this for loop
-					time.Sleep(100 * time.Millisecond)
-					prometheusBlockValidationSubtreeFoundCh.Set(float64(u.subtreeFoundQueue.length()))
-				}
-			}
-		}
-	}()
-
 	return nil
 }
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-	if err == nil && ok {
-		go u.startKafkaListener(ctx, txmetaKafkaURL)
-	}
-
 	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
 	if ok {
 		err := u.frpcServer(ctx, frpcAddress)
@@ -264,7 +210,7 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesFinalConfig")
 	if err == nil && ok {
 		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
 		if err != nil {
@@ -673,78 +619,19 @@ LOOP:
 }
 
 func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	subtreeHash, err := chainhash.NewHash(req.Hash)
-	if err != nil {
-		return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
-	}
+	// TODO - Delete or resurrect...
 
-	u.subtreeFoundQueue.enqueue(&queueItem{
-		hash:    *subtreeHash,
-		baseURL: req.GetBaseUrl(),
-	})
+	// subtreeHash, err := chainhash.NewHash(req.Hash)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
+	// }
+
+	// u.subtreeFoundQueue.enqueue(&queueItem{
+	// 	hash:    *subtreeHash,
+	// 	baseURL: req.GetBaseUrl(),
+	// })
 
 	return &blockvalidation_api.EmptyMessage{}, nil
-}
-
-func (u *Server) subtreeFound(ctx context.Context, subtreeHash chainhash.Hash, baseUrl string) error {
-	if !gocore.Config().GetBool("blockvalidation_subtreeFound_enabled", true) {
-		return nil
-	}
-
-	start, stat, ctx := util.NewStatFromContext(ctx, "SubtreeFound", stats)
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:SubtreeFound")
-	defer func() {
-		stat.AddTime(start)
-		span.Finish()
-		prometheusBlockValidationSubtreeFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
-	if baseUrl == "" {
-		return fmt.Errorf("[SubtreeFound][%s] base url is empty", subtreeHash.String())
-	}
-
-	prometheusBlockValidationSubtreeFound.Inc()
-	u.logger.Infof("[SubtreeFound][%s] processing subtree found from %s", subtreeHash.String(), baseUrl)
-
-	exists, err := u.blockValidation.GetSubtreeExists(spanCtx, &subtreeHash)
-	if err != nil {
-		return fmt.Errorf("[SubtreeFound][%s] failed to check if subtree exists [%w]", subtreeHash.String(), err)
-	}
-
-	if exists {
-		u.logger.Warnf("[SubtreeFound][%s] subtree found that already exists", subtreeHash.String())
-		return nil
-	}
-
-	spanCtx = util.ContextWithStat(spanCtx, stat)
-	goroutineStat := stat.NewStat("go routine")
-
-	// start a new span for the subtree validation
-	start = gocore.CurrentTime()
-	subtreeSpan, subtreeSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidationServer:SubtreeFound:validate")
-	defer func() {
-		goroutineStat.AddTime(start)
-		subtreeSpan.Finish()
-	}()
-
-	timeout, _ := gocore.Config().GetInt("blockvalidation_subtreeValidationTimeout", 60)
-	timeoutCtx, timeoutCancel := context.WithTimeout(subtreeSpanCtx, time.Duration(timeout)*time.Second)
-	defer func() {
-		timeoutCancel()
-	}()
-
-	subtreeSpan.LogKV("hash", subtreeHash.String())
-	v := ValidateSubtree{
-		SubtreeHash:   subtreeHash,
-		BaseUrl:       baseUrl,
-		SubtreeHashes: nil,
-		AllowFailFast: true,
-	}
-	if _, err := u.blockValidation.validateSubtree(timeoutCtx, v); err != nil {
-		u.logger.Warnf("[SubtreeFound][%s] invalid subtree found: %v", subtreeHash.String(), err)
-	}
-
-	return nil
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
@@ -843,38 +730,4 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	return &blockvalidation_api.SetMinedMultiResponse{
 		Ok: true,
 	}, nil
-}
-
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
-	if workers < 1 {
-		// no workers, nothing to do
-		return
-	}
-
-	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRatio", 8)
-	if partitionConsumerRatio < 1 {
-		partitionConsumerRatio = 1
-	}
-
-	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-
-	consumerCount := partitions / partitionConsumerRatio
-	u.logger.Infof("[BlockValidation] starting Kafka on address: %s, with %d consumers\n", kafkaURL.String(), consumerCount)
-
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, "blockvalidation", nil, consumerCount, func(msg util.KafkaMessage) {
-		startTime := time.Now()
-
-		if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
-			go func() {
-				if err := u.blockValidation.SetTxMetaCacheFromBytes(ctx, msg.Message.Value[:chainhash.HashSize], msg.Message.Value[chainhash.HashSize:]); err != nil {
-					u.logger.Errorf("failed to set tx meta data: %v", err)
-				}
-			}()
-		}
-
-		prometheusBlockValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-	}); err != nil {
-		u.logger.Errorf("[BlockValidation] Failed to start Kafka listener: %v", err)
-	}
 }
