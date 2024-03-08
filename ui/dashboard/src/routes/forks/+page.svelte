@@ -36,7 +36,7 @@
 
     onMount(() => {
         getStatsData();
-        window.addEventListener('resize', redraw);
+        //window.addEventListener('resize', redraw);
     })
 </script>
 

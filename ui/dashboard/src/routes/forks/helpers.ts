@@ -122,6 +122,7 @@ function treeBoxes(selector, jsonData)
         initDropShadow();
 
         update(root);
+        d3.select(root).call(click);
     }
 
     function update(source)
