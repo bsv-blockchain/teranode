@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"net/url"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,14 @@ func NewSubtreeValidation(
 		txMetaStore:     txMetaStore,
 		validatorClient: validatorClient,
 		subtreeCount:    atomic.Int32{},
+	}
+
+	// create a caching tx meta store
+	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
+		logger.Infof("Using cached version of tx meta store")
+		bv.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	} else {
+		bv.txMetaStore = txMetaStore
 	}
 
 	return bv
