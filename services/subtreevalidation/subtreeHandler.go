@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -9,6 +10,11 @@ import (
 
 func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 	if msg.Message != nil {
+		startTime := time.Now()
+		defer func() {
+			prometheusSubtreeValidationValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		}()
+
 		if len(msg.Message.Value) < 32 {
 			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Message.Value))
 			return
@@ -46,7 +52,7 @@ func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 		}
 
 		// Call the validateSubtreeInternal method
-		if err := u.validateSubtreeInternal(context.Background(), v); err != nil {
+		if err = u.validateSubtreeInternal(context.Background(), v); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 		}
 	}

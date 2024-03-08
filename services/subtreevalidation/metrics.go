@@ -9,6 +9,7 @@ import (
 //nolint:unused //TODO: enable these later
 var (
 	prometheusSubtreeValidationValidateSubtree                 prometheus.Counter
+	prometheusSubtreeValidationValidateSubtreeHandler          prometheus.Histogram
 	prometheusSubtreeValidationValidateSubtreeDuration         prometheus.Histogram
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
 	prometheusSubtreeValidationBlessMissingTransactionDuration prometheus.Histogram
@@ -27,6 +28,15 @@ func initPrometheusMetrics() {
 			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
 			Help:      "Number of subtrees validated",
+		},
+	)
+
+	prometheusSubtreeValidationValidateSubtreeHandler = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "subtreevalidation",
+			Name:      "validate_subtree_handler_millis",
+			Help:      "Duration of subtree handler",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
