@@ -230,7 +230,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
 
-	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < uint32(initialBlockCount) {
+	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height <= uint32(initialBlockCount) {
 
 		generateBlocks = true
 	} else {
