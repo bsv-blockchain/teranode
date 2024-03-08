@@ -56,6 +56,8 @@ func (u *SubtreeValidation) Start(ctx context.Context) error {
 		go u.startKafkaListener(ctx, txmetaKafkaURL, u.txmetaHandler)
 	}
 
+	<-ctx.Done()
+
 	return nil
 }
 
