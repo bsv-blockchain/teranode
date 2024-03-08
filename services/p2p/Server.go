@@ -46,38 +46,6 @@ type Server struct {
 	subtreeCh             chan []byte
 }
 
-type BestBlockMessage struct {
-	PeerId string
-}
-
-type MiningOnMessage struct {
-	Hash         string
-	PreviousHash string
-	DataHubUrl   string
-	PeerId       string
-	Height       uint32
-	Miner        string
-	SizeInBytes  uint64
-	TxCount      uint64
-}
-
-type BlockMessage struct {
-	Hash       string
-	Height     uint32
-	DataHubUrl string
-	PeerId     string
-}
-type SubtreeMessage struct {
-	Hash       string
-	DataHubUrl string
-	PeerId     string
-}
-type RejectedTxMessage struct {
-	TxId   string
-	Reason string
-	PeerId string
-}
-
 func NewServer(logger ulogger.Logger) *Server {
 	logger.Debugf("Creating P2P service")
 
@@ -265,7 +233,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
-	msgBytes, err := json.Marshal(BestBlockMessage{PeerId: s.P2PNode.HostID().String()})
+	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerId: s.P2PNode.HostID().String()})
 	if err != nil {
 		s.logger.Errorf("json marshal error: ", err)
 	}
@@ -284,9 +252,9 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 	// define vars here to prevent too many allocs
 	var notification *model.Notification
-	var blockMessage BlockMessage
-	var miningOnMessage MiningOnMessage
-	var subtreeMessage SubtreeMessage
+	var blockMessage p2p.BlockMessage
+	var miningOnMessage p2p.MiningOnMessage
+	var subtreeMessage p2p.SubtreeMessage
 	var header *model.BlockHeader
 	var meta *model.BlockHeaderMeta
 	var msgBytes []byte
@@ -304,9 +272,17 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, notification.Hash.String())
 
 			if notification.Type == model.NotificationType_Block {
-				// if it's a block notification send it on the block channel.
-				blockMessage = BlockMessage{
+				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, notification.Hash)
+				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
+				if err != nil {
+					s.logger.Errorf("error getting block header and meta for BlockMessage: ", err)
+					continue
+				}
+
+				blockMessage = p2p.BlockMessage{
 					Hash:       notification.Hash.String(),
+					Height:     meta.Height,
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
 				}
@@ -327,7 +303,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					continue
 				}
 
-				miningOnMessage = MiningOnMessage{
+				miningOnMessage = p2p.MiningOnMessage{
 					Hash:         header.Hash().String(),
 					PreviousHash: header.HashPrevBlock.String(),
 					DataHubUrl:   s.AssetHttpAddressURL,
@@ -349,7 +325,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 			} else if notification.Type == model.NotificationType_Subtree {
 				// if it's a subtree notification send it on the subtree channel.
-				subtreeMessage = SubtreeMessage{
+				subtreeMessage = p2p.SubtreeMessage{
 					Hash:       notification.Hash.String(),
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
@@ -377,7 +353,7 @@ func (s *Server) validatorSubscriptionListener(ctx context.Context) {
 	}
 	// define vars here to prevent too many allocs
 	var rejectedTxNotification *model.RejectedTxNotification
-	var rejectedTxMessage RejectedTxMessage
+	var rejectedTxMessage p2p.RejectedTxMessage
 	var msgBytes []byte
 
 	for {
@@ -393,7 +369,7 @@ func (s *Server) validatorSubscriptionListener(ctx context.Context) {
 			// received a message
 			s.logger.Debugf("P2P Received %s rejected tx notification: %s", rejectedTxNotification.TxId, rejectedTxNotification.Reason)
 
-			rejectedTxMessage = RejectedTxMessage{
+			rejectedTxMessage = p2p.RejectedTxMessage{
 				TxId:   rejectedTxNotification.TxId,
 				Reason: rejectedTxNotification.Reason,
 				PeerId: s.P2PNode.HostID().String(),
@@ -466,11 +442,11 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string) {
-	var bestBlockMessage BestBlockMessage
+	var bestBlockMessage p2p.BestBlockMessage
 	var pid peer.ID
 	var bh *model.BlockHeader
 	var bhMeta *model.BlockHeaderMeta
-	var blockMessage BlockMessage
+	var blockMessage p2p.BlockMessage
 	var msgBytes []byte
 
 	if from == s.P2PNode.HostID().String() {
@@ -478,7 +454,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	}
 
 	// decode request
-	bestBlockMessage = BestBlockMessage{}
+	bestBlockMessage = p2p.BestBlockMessage{}
 	err := json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
@@ -501,7 +477,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
-	blockMessage = BlockMessage{
+	blockMessage = p2p.BlockMessage{
 		Hash:       bh.Hash().String(),
 		Height:     bhMeta.Height,
 		DataHubUrl: s.AssetHttpAddressURL,
@@ -523,12 +499,12 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Debugf("handleBlockTopic")
 
-	var blockMessage BlockMessage
+	var blockMessage p2p.BlockMessage
 	var hash *chainhash.Hash
 	var err error
 
 	// decode request
-	blockMessage = BlockMessage{}
+	blockMessage = p2p.BlockMessage{}
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
@@ -539,6 +515,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      "block",
 		Hash:      blockMessage.Hash,
+		Height:    blockMessage.Height,
 		BaseURL:   blockMessage.DataHubUrl,
 		PeerId:    blockMessage.PeerId,
 	}
@@ -558,12 +535,12 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 }
 
 func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
-	var subtreeMessage SubtreeMessage
+	var subtreeMessage p2p.SubtreeMessage
 	var hash *chainhash.Hash
 	var err error
 
 	// decode request
-	subtreeMessage = SubtreeMessage{}
+	subtreeMessage = p2p.SubtreeMessage{}
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
@@ -603,11 +580,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 }
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {
-	var miningOnMessage MiningOnMessage
+	var miningOnMessage p2p.MiningOnMessage
 	var err error
 
 	// decode request
-	miningOnMessage = MiningOnMessage{}
+	miningOnMessage = p2p.MiningOnMessage{}
 	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {
 		s.logger.Errorf("json unmarshal error: ", err)
