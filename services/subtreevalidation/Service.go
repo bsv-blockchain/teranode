@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/url"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -60,17 +61,23 @@ func (u *SubtreeValidation) Init(ctx context.Context) (err error) {
 func (u *SubtreeValidation) Start(ctx context.Context) error {
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
+		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
+		consumerCount, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConsumerCount", util.Max(4, runtime.NumCPU()-16))
+
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", u.subtreeHandler)
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, u.subtreeHandler)
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
+		// Start a number of Kafka consumers
+		consumerCount, _ := gocore.Config().GetInt("subtreevalidation_kafkaTxMetaConsumerCount", 4)
+
 		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
 		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
 		groupID := "subtreevalidation-" + uuid.New().String()
 
-		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, u.txmetaHandler)
+		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
 	}
 
 	<-ctx.Done()
@@ -82,10 +89,10 @@ func (u *SubtreeValidation) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, fn func(msg util.KafkaMessage)) {
+func (u *SubtreeValidation) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage)) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, 1, fn); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }
