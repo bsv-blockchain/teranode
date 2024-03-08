@@ -454,6 +454,26 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 		return fmt.Errorf("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
 	}
 
+	//
+	// store subtree meta in store
+	//
+	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
+	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
+	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String()), err)
+	}
+
+	start = gocore.CurrentTime()
+	u.logger.Infof("[validateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
+	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
+	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
+	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String()), err)
+	}
+
+	//
+	// store subtree in store
+	//
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
@@ -461,16 +481,6 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 	}
 
 	start = gocore.CurrentTime()
-	// store subtree meta in store
-	u.logger.Infof("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
-	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
-	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
-	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String()), err)
-	}
-
-	start = gocore.CurrentTime()
-	// store subtree in store
 	u.logger.Infof("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
 	stat.NewStat("8. storeSubtree").AddTime(start)
