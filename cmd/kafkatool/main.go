@@ -64,11 +64,14 @@ func resetTopic(configName string) error {
 
 	partitions := util.GetQueryParamInt(url, "partitions", 1)
 	replication := util.GetQueryParamInt(url, "replication", 1)
+	retentionPeriod := util.GetQueryParam(url, "retention", "60000") // one minute
 
-	// Recreate Topic
 	topicDetail := &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replication),
+		ConfigEntries: map[string]*string{
+			"retention.ms": &retentionPeriod, // Set the retention period
+		},
 	}
 	err = admin.CreateTopic(topic, topicDetail, false)
 	if err != nil {
