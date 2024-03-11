@@ -31,6 +31,8 @@ var (
 	prometheusTxMetaSetMined       prometheus.Counter
 	prometheusTxMetaSetMinedBatch  prometheus.Counter
 	prometheusTxMetaSetMinedBatchN prometheus.Counter
+	prometheusTxMetaGetMulti       prometheus.Counter
+	prometheusTxMetaGetMultiN      prometheus.Counter
 	prometheusTxMetaDelete         prometheus.Counter
 )
 
@@ -63,6 +65,18 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "aerospike_txmeta_set_mined_batch_n",
 			Help: "Number of txmeta set_mined_batch txs done to aerospike",
+		},
+	)
+	prometheusTxMetaGetMulti = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi",
+			Help: "Number of txmeta get_multi calls done to aerospike",
+		},
+	)
+	prometheusTxMetaGetMultiN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi_n",
+			Help: "Number of txmeta get_multi txs done to aerospike",
 		},
 	)
 	prometheusTxMetaDelete = promauto.NewCounter(
@@ -222,8 +236,6 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 		return err
 	}
 
-	prometheusTxMetaSetMinedBatch.Inc()
-
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
@@ -275,6 +287,9 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 			}
 		}
 	}
+
+	prometheusTxMetaGetMulti.Inc()
+	prometheusTxMetaGetMultiN.Add(float64(len(batchRecords)))
 
 	return nil
 }

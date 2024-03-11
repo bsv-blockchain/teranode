@@ -498,6 +498,8 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash chainhash.Hash, id
 		return fmt.Errorf("[storeUtxo][%s:%d] error in aerospike store PutBins (time taken: %s) : %w", hash.String(), idx, time.Since(start).String(), err)
 	}
 
+	prometheusUtxoStore.Add(1)
+
 	return nil
 }
 
