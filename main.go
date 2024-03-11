@@ -294,7 +294,7 @@ func main() {
 			logger.Fatalf("could not create validator [%v]", err)
 		}
 
-		if err := sm.AddService("Subtree Validation", subtreevalidation.NewSubtreeValidation(
+		if err := sm.AddService("Subtree Validation", subtreevalidation.New(
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),

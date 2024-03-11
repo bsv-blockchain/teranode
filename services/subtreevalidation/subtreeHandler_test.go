@@ -24,11 +24,11 @@ func TestLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotLock, err := tryLockIfNotExists(ctx, exister, &hash)
+	gotLock, _, err := tryLockIfNotExists(ctx, exister, &hash)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
-	gotLock, err = tryLockIfNotExists(ctx, exister, &hash)
+	gotLock, _, err = tryLockIfNotExists(ctx, exister, &hash)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
 

@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+option go_package = "./;subtreevalidation_api";
+
+package subtreevalidation_api;
+
+service SubtreeValidationAPI {
+  // Health returns the health of the API.
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+  rpc CheckSubtree (CheckSubtreeRequest) returns (CheckSubtreeResponse) {}
+}
+
+// swagger:model EmptyMessage
+message EmptyMessage {}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  uint32 timestamp = 3;
+}
+
+// swagger:model CheckSubtreeRequest
+message CheckSubtreeRequest {
+  bytes hash = 1;
+  string base_url = 2;
+}
+
+// swagger:model CheckSubtreeResponse
+message CheckSubtreeResponse {
+  bool blessed = 1;
+}

@@ -9,17 +9,13 @@ import (
 	"math"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ubsverrors"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -28,27 +24,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type SubtreeValidation struct {
-	logger          ulogger.Logger
-	subtreeStore    blob.Store
-	subtreeTTL      time.Duration
-	txStore         blob.Store
-	txMetaStore     txmeta.Store
-	validatorClient validator.Interface
-	subtreeCount    atomic.Int32
-}
-
 type missingTx struct {
 	tx  *bt.Tx
 	idx int
 }
 
-func (u *SubtreeValidation) SetSubtreeExists(hash *chainhash.Hash) error {
+func (u *Server) SetSubtreeExists(hash *chainhash.Hash) error {
 	// TODO: implement for local storage
 	return nil
 }
 
-func (u *SubtreeValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	// TODO: implement for local storage
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetSubtreeExists")
 	defer func() {
@@ -58,7 +44,7 @@ func (u *SubtreeValidation) GetSubtreeExists(ctx context.Context, hash *chainhas
 	return false, nil
 }
 
-func (u *SubtreeValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
+func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCache")
 		defer func() {
@@ -71,7 +57,7 @@ func (u *SubtreeValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.
 	return nil
 }
 
-func (u *SubtreeValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
+func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
@@ -79,7 +65,7 @@ func (u *SubtreeValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMe
 	return nil
 }
 
-func (u *SubtreeValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (u *Server) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
 		defer func() {
@@ -92,7 +78,7 @@ func (u *SubtreeValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes
 	return nil
 }
 
-func (u *SubtreeValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
+func (u *Server) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMulti")
 		defer func() {
@@ -105,7 +91,7 @@ func (u *SubtreeValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]by
 	return nil
 }
 
-func (u *SubtreeValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
+func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCacheMulti")
 		defer func() {
@@ -120,7 +106,7 @@ func (u *SubtreeValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chain
 
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
-func (u *SubtreeValidation) getMissingTransactionsBatch(ctx context.Context, txHashes []txmeta.MissingTxHash, baseUrl string) ([]*bt.Tx, error) {
+func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []txmeta.MissingTxHash, baseUrl string) ([]*bt.Tx, error) {
 	txIDBytes := make([]byte, 32*len(txHashes))
 	for idx, txHash := range txHashes {
 		copy(txIDBytes[idx*32:(idx+1)*32], txHash.Hash[:])
@@ -153,7 +139,7 @@ func (u *SubtreeValidation) getMissingTransactionsBatch(ctx context.Context, txH
 	return missingTxs, nil
 }
 
-func (u *SubtreeValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
+func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	defer func() {
 		// there is a bug in go-bt, that does not check input and throws a runtime error in
 		// github.com/libsv/go-bt/v2@v2.2.2/input.go:76 +0x16b
@@ -178,7 +164,7 @@ func (u *SubtreeValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err
 	return tx, nil
 }
 
-// func (u *SubtreeValidation) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
+// func (u *Server) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
 // 	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
 // 	defer func() {
 // 		//stat.AddTime(startTotal)
@@ -227,7 +213,7 @@ func (u *SubtreeValidation) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err
 // 	return tx, nil
 // }
 
-func (u *SubtreeValidation) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
 	defer func() {
 		stat.AddTime(startTotal)
@@ -274,7 +260,7 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-func (u *SubtreeValidation) validateSubtree(ctx context.Context, v ValidateSubtree) (bool, error) {
+func (u *Server) validateSubtree(ctx context.Context, v ValidateSubtree) (bool, error) {
 	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
 	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
 	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
@@ -289,7 +275,7 @@ func (u *SubtreeValidation) validateSubtree(ctx context.Context, v ValidateSubtr
 	return false, nil
 }
 
-func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v ValidateSubtree) error {
+func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", v.SubtreeHash.String())
@@ -496,7 +482,7 @@ func (u *SubtreeValidation) validateSubtreeInternal(ctx context.Context, v Valid
 	return nil
 }
 
-func (u *SubtreeValidation) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
+func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
 	if baseUrl == "" {
 		return nil, fmt.Errorf("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
 	}
@@ -549,7 +535,7 @@ func (u *SubtreeValidation) getSubtreeTxHashes(spanCtx context.Context, stat *go
 	return txHashes, nil
 }
 
-func (u *SubtreeValidation) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
+func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
 	missingTxHashes []txmeta.MissingTxHash, baseUrl string, txMetaSlice []*txmeta.Data) error {
 
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
@@ -596,7 +582,7 @@ func (u *SubtreeValidation) processMissingTransactions(ctx context.Context, subt
 	return nil
 }
 
-func (u *SubtreeValidation) getMissingTransactions(ctx context.Context, missingTxHashes []txmeta.MissingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
+func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []txmeta.MissingTxHash, baseUrl string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}

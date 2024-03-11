@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *SubtreeValidation) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}

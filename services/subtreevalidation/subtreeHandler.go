@@ -19,7 +19,7 @@ var (
 	once sync.Once
 )
 
-func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
+func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -47,7 +47,7 @@ func (u *SubtreeValidation) subtreeHandler(msg util.KafkaMessage) {
 
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
 
-		gotLock, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
+		gotLock, _, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -76,20 +76,20 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Hash) (bool, error) {
+func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
 	b, err := exister.Exists(ctx, hash[:])
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if b {
-		return false, nil
+		return false, true, nil
 	}
 
 	quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
 	quorumTimeout, _, _ := gocore.Config().GetDuration("subtree_quorum_timeout", 30*time.Second)
 
 	if quorumPath == "" {
-		return true, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
+		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
 	}
 
 	once.Do(func() {
@@ -106,10 +106,10 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			// Failed to acquire lock (file already exists or other error)
-			return false, nil
+			return false, false, nil
 		}
 
-		return false, err
+		return false, false, err
 	}
 
 	// Close the file immediately after creating it
@@ -129,5 +129,5 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 		}
 	}()
 
-	return true, nil
+	return true, false, nil
 }
