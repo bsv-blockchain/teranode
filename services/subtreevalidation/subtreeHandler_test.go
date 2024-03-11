@@ -2,6 +2,8 @@ package subtreevalidation
 
 import (
 	"context"
+	"github.com/ordishs/gocore"
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -18,6 +20,13 @@ func (m MockExister) Exists(ctx context.Context, key []byte, opts ...options.Opt
 
 func TestLock(t *testing.T) {
 	exister := MockExister{}
+	defer func() {
+		// remove quorum path
+		quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
+		if quorumPath != "" {
+			_ = os.RemoveAll(quorumPath)
+		}
+	}()
 
 	hash := chainhash.HashH([]byte("test"))
 

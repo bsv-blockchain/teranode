@@ -93,8 +93,9 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	}
 
 	once.Do(func() {
+		log.Printf("creating subtree quorum path: %s", quorumPath)
 		if err := os.MkdirAll(quorumPath, 0755); err != nil {
-			log.Fatalf("Failed to create quorum path: %v", err)
+			log.Fatalf("Failed to create subtree quorum path: %v", err)
 		}
 	})
 
