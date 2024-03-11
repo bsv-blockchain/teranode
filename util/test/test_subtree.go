@@ -12,7 +12,7 @@ import (
 )
 
 func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*TestSubtrees, error) {
-	txMetastoreFile, err := os.Create(TxMetafileNameTemplate)
+	txMetastoreFile, err := os.Create(config.TxMetafileNameTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 	}()
 
 	var subtreeBytes []byte
-	subtree, err := util.NewTreeByLeafCount(SubtreeSize)
+	subtree, err := util.NewTreeByLeafCount(config.SubtreeSize)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 	subtreeCount := 0
 
 	// create the first files
-	subtreeFile, err = os.Create(fmt.Sprintf(FileNameTemplate, subtreeCount))
+	subtreeFile, err = os.Create(fmt.Sprintf(config.FileNameTemplate, subtreeCount))
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,8 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 			return nil, err
 		}
 	}
+
+	fmt.Println("subtree hashes: ", subtreeHashes)
 
 	return &TestSubtrees{totalFees: fees, subtreeHashes: subtreeHashes}, nil
 }
