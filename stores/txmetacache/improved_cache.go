@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
@@ -292,7 +293,8 @@ type bucketTrimmed struct {
 	chunks [][]byte
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
-	m map[uint64]uint64
+	// m map[uint64]uint64
+	m *util.SplitSwissMapKVUint64
 	// pass txId directly. How is memory?
 	// m map[[32]byte]uint64
 
@@ -315,7 +317,8 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
-	b.m = make(map[uint64]uint64)
+	//b.m = make(map[uint64]uint64)
+	b.m = util.NewSplitSwissMapKVUint64(1024)
 	b.Reset()
 }
 
@@ -326,7 +329,7 @@ func (b *bucketTrimmed) Reset() {
 		b.putChunk(chunks[i])
 		chunks[i] = nil
 	}
-	b.m = make(map[uint64]uint64)
+	b.m = util.NewSplitSwissMapKVUint64(1024) //make(map[uint64]uint64)
 	b.idx = 0
 	b.gen = 1
 	b.mu.Unlock()
@@ -339,24 +342,39 @@ func (b *bucketTrimmed) cleanLockedMap() {
 	bm := b.m
 	newItems := 0
 
-	for _, v := range bm {
-		gen := v >> bucketSizeBits
-		idx := v & ((1 << bucketSizeBits) - 1)
-		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-			newItems++
-		}
+	for _, maps := range bm.Map() {
+		maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
+			gen := v >> bucketSizeBits
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
+				newItems++
+			}
+
+			return false // Continue iteration over all elements
+		})
 	}
-	if newItems < len(bm) {
+	if newItems < bm.Length() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := make(map[uint64]uint64, newItems)
-		for k, v := range bm {
-			gen := v >> bucketSizeBits
-			idx := v & ((1 << bucketSizeBits) - 1)
-			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-				bmNew[k] = v
-			}
+		bmNew := util.NewSplitSwissMapKVUint64(1024)
+		// for k, v := range bm {
+		// 	gen := v >> bucketSizeBits
+		// 	idx := v & ((1 << bucketSizeBits) - 1)
+		// 	if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+		// 		bmNew[k] = v
+		// 	}
+		// }
+
+		for _, maps := range bm.Map() {
+			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
+				gen := v >> bucketSizeBits
+				idx := v & ((1 << bucketSizeBits) - 1)
+				if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+					bmNew.Put(k, v)
+				}
+				return false
+			})
 		}
 		b.m = bmNew
 	}
@@ -364,7 +382,7 @@ func (b *bucketTrimmed) cleanLockedMap() {
 
 func (b *bucketTrimmed) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(len(b.m))
+	s.EntriesCount += uint64(b.m.Length())
 	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
@@ -453,7 +471,8 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	chunk = append(chunk, k...)
 	chunk = append(chunk, v...)
 	chunks[chunkIdx] = chunk
-	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.m.Put(h, idx|(b.gen<<bucketSizeBits))
+	//b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
 		b.cleanLockedMap()
@@ -470,7 +489,11 @@ func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, ski
 		defer b.mu.RUnlock()
 	}
 
-	v := b.m[h]
+	v, found := b.m.Get(h)
+	if !found {
+		return found
+	}
+
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 	if v > 0 {
 		// shift the v to the right by 40 bits, to get the generation
@@ -559,12 +582,12 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 
 func (b *bucketTrimmed) Del(h uint64) {
 	b.mu.Lock()
-	delete(b.m, h)
+	delete(b.m.Map(), h)
 	b.mu.Unlock()
 }
 
 func (b *bucketTrimmed) getMapSize() uint64 {
-	return uint64(len(b.m))
+	return uint64(b.m.Length())
 }
 
 // bucketPreallocated is a bucket with preallocated memory for chunks.
