@@ -35,7 +35,7 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 8 // 8 * 1024
+const bucketsCount = 8 * 1024
 
 const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
 

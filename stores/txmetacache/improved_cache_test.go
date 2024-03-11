@@ -169,7 +169,7 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 
 func TestImprovedCache_SetMulti(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	//util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 	cache := NewImprovedCache(128*1024*1024, types.Trimmed)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -253,7 +253,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 3_000_000
+	numberOfKeys := 4_000_000
 
 	// cache size : 128 * 1024 * 1024 bytes -> 128 MB // 128 GB in the Scaling
 	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling

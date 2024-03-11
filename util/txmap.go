@@ -139,8 +139,8 @@ func (s *SwissMapUint64) Length() int {
 	return s.length
 }
 
+// Lock-free map for uint64 keys and values
 type SwissMapKVUint64 struct {
-	mu     sync.Mutex
 	m      *swiss.Map[uint64, uint64]
 	length int
 }
@@ -156,17 +156,11 @@ func (s *SwissMapKVUint64) Map() *swiss.Map[uint64, uint64] {
 }
 
 func (s *SwissMapKVUint64) Exists(hash uint64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	_, ok := s.m.Get(hash)
 	return ok
 }
 
 func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	exists := s.m.Has(hash)
 	if exists {
 		return fmt.Errorf("hash already exists in map")
@@ -179,9 +173,6 @@ func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
 }
 
 func (s *SwissMapKVUint64) Get(hash uint64) (uint64, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.length++
 
 	n, ok := s.m.Get(hash)
