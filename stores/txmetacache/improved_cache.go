@@ -371,7 +371,8 @@ func (b *bucketTrimmed) cleanLockedMap() {
 				gen := v >> bucketSizeBits
 				idx := v & ((1 << bucketSizeBits) - 1)
 				if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-					bmNew.Put(k, v)
+					// TODO: consider handling error
+					_ = bmNew.Put(k, v)
 				}
 				return false
 			})
@@ -471,7 +472,8 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	chunk = append(chunk, k...)
 	chunk = append(chunk, v...)
 	chunks[chunkIdx] = chunk
-	b.m.Put(h, idx|(b.gen<<bucketSizeBits))
+	// TODO: consider handling error
+	_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
 	//b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
