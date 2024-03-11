@@ -30,15 +30,19 @@ jobs:
       - uses: twingate/github-action@v1
         with:
           service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
-#  sonarqube:
-#    name: Sonarqube
-#    runs-on: ubsv-runner
-#    steps:
-#    - name: Checkout
-#      uses: actions/checkout@v3
-#
-#    - name: SonarQube Scan
-#      uses: sonarsource/sonarqube-scan-action@master
-#      env:
-#        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-#        SONAR_HOST_URL: https://sonarqube.ubsv.dev
+  sonarqube:
+    name: Sonarqube
+    runs-on: ubsv-runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - uses: twingate/github-action@v1
+      with:
+        service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
+
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarqube.ubsv.dev
