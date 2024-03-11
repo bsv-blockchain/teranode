@@ -3,12 +3,13 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"net/url"
 	"os"
 	"runtime/pprof"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -114,7 +115,18 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 // 	})
 // }
 
-func setup() (*memory.Memory, *validator.MockValidatorClient, *subtreevalidation.MockSubtreeValidationClient, blob.Store, blob.Store, func()) {
+type MockSubtreeValidationClient struct {
+}
+
+func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, error) {
+	return 0, "MockValidator", nil
+}
+
+func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string) error {
+	return nil
+}
+
+func setup() (*memory.Memory, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
@@ -135,7 +147,7 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, *subtreevalidation
 
 	validatorClient := &validator.MockValidatorClient{TxMetaStore: txMetaStore}
 
-	subtreeValidationClient := &subtreevalidation.MockSubtreeValidationClient{}
+	subtreeValidationClient := &MockSubtreeValidationClient{}
 
 	return txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, func() {
 		httpmock.DeactivateAndReset()

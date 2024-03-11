@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"net/http"
 	"runtime"
 	"time"
@@ -117,7 +116,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	// TODO add real implementation
-	subtreeValidationClient := &subtreevalidation.MockSubtreeValidationClient{}
+	subtreeValidationClient := &MockSubtreeValidationClient{}
 
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient)
 

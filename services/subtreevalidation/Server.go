@@ -200,21 +200,20 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 	u.logger.Infof("Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
-	gotLock, exists, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
-	if err != nil {
-		return nil, fmt.Errorf("error getting lock for Subtree %s: %w", hash.String(), err)
-	}
-
-	if exists {
-		// We didn't get the lock, and we also received a nil error, so we can assume that the subtree exists.
-		return &subtreevalidation_api.CheckSubtreeResponse{
-			Blessed: true,
-		}, nil
-	}
-
 	retryCount := 0
 
 	for {
+		gotLock, exists, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
+		if err != nil {
+			return nil, fmt.Errorf("error getting lock for Subtree %s: %w", hash.String(), err)
+		}
+
+		if exists {
+			return &subtreevalidation_api.CheckSubtreeResponse{
+				Blessed: true,
+			}, nil
+		}
+
 		if gotLock {
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
@@ -237,7 +236,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("Context cancelled")
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(500 * time.Millisecond):
 				retryCount++
 
 				if retryCount > 10 {

@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"io"
 	"math"
 	"runtime"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"github.com/ordishs/go-utils/expiringmap"
 
@@ -44,7 +45,7 @@ type BlockValidation struct {
 	txMetaStore             txmeta.Store
 	minedBlockStore         *txmetacache.ImprovedCache
 	validatorClient         validator.Interface
-	subtreeValidationClient *subtreevalidation.MockSubtreeValidationClient
+	subtreeValidationClient subtreevalidation.Interface
 	subtreeDeDuplicator     *deduplicator.DeDuplicator
 	optimisticMining        bool
 	localSetMined           bool
@@ -60,7 +61,7 @@ type missingTx struct {
 }
 
 func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient *subtreevalidation.MockSubtreeValidationClient) *BlockValidation {
+	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
@@ -609,7 +610,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			if !subtreeExists {
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
-				err = u.subtreeValidationClient.ProcessSubtree(spanCtx, *subtreeHash, baseUrl)
+				err = u.subtreeValidationClient.CheckSubtree(spanCtx, *subtreeHash, baseUrl)
 				if err != nil {
 					return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service: %v", subtreeHash.String(), err)
 				}
