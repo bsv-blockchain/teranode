@@ -32,7 +32,7 @@ jobs:
           service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
   sonarqube:
     name: Sonarqube
-    runs-on: legalist-default-runner-set
+    runs-on: ubsv-runner
     steps:
     - name: Checkout
       uses: actions/checkout@v3
