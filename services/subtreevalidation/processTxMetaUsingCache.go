@@ -48,6 +48,10 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+				// check whether the txMetaSlice has already been populated
+				if txMetaSlice[i+j] != nil {
+					continue
+				}
 
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal

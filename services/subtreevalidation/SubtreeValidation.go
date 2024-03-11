@@ -260,21 +260,6 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-func (u *Server) validateSubtree(ctx context.Context, v ValidateSubtree) (bool, error) {
-	// validateSubtreeInternal does the actual work, but it can be expensive.  We need to make sure that we only call it once
-	// for each subtreeHash, so we use a map to keep track of which ones we have already called it for
-	// and using a sync.Cond to broadcast the signal to all the other goroutines that are waiting for the result
-
-	// attempt write the file to shared storage
-	// if we can write the file we process it
-	// else log a warning
-
-	// return u.subtreeDeDuplicator.DeDuplicate(ctx, v.SubtreeHash, func() error {
-	// 	return u.validateSubtreeInternal(ctx, v)
-	// })
-	return false, nil
-}
-
 func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
@@ -321,23 +306,28 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)
 
-	failfast := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
+	failFastValidation := gocore.Config().GetBool("blockvalidation_fail_fast_validation", false)
 	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
 	retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
+		panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
 	}
+
+	// TODO document, what does this do?
 	subtreeWarmupCount, _ := gocore.Config().GetInt("blockvalidation_validation_warmup_count", 128)
 
-	txMetaSlice := make([]*txmeta.Data, len(txHashes))
-	subtreeCount := u.subtreeCount.Add(1)
-	failFast := v.AllowFailFast && failfast && subtreeCount > int32(subtreeWarmupCount)
+	// TODO document, what is the logic here?
+	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > int32(subtreeWarmupCount)
 
+	// txMetaSlice will be populated with the txMeta data for each txHash
+	// in the retry attempts, only the tx hashes that are missing will be retried, not the whole subtree
+	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
 
 		if attempt > maxRetries {
-			failFast = false
+			failFast = true
 			u.logger.Infof("[Init] [attempt #%d] final attempt to process subtree, this time with full checks enabled [%s]", attempt, v.SubtreeHash.String())
 		} else {
 			u.logger.Infof("[Init] [attempt #%d] (fail fast=%v) process %d txs from subtree begin [%s]", attempt, failFast, len(txHashes), v.SubtreeHash.String())

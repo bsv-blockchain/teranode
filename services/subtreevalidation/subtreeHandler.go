@@ -62,7 +62,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 			SubtreeHash:   *hash,
 			BaseUrl:       baseUrl,
 			SubtreeHashes: nil,
-			AllowFailFast: false,
+			AllowFailFast: true, // allow subtrees to fail fast, when getting from the network, will be retried if in a block
 		}
 
 		// Call the validateSubtreeInternal method

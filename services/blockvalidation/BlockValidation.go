@@ -907,12 +907,12 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		return err
 	}
 
-	failfast := gocore.Config().GetBool("blockvalidation_failfast_validation", false)
+	failfast := gocore.Config().GetBool("blockvalidation_fail_fast_validation", false)
 	//abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
 	//retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("invalid value for blockvalidation_failfast_validation_retry_sleep: %v", err))
+		panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
 	}
 	subtreeWarmupCount, _ := gocore.Config().GetInt("blockvalidation_validation_warmup_count", 128)
 

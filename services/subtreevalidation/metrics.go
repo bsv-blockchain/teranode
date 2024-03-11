@@ -10,6 +10,7 @@ import (
 //nolint:unused //TODO: enable these later
 var (
 	prometheusSubtreeValidationValidateSubtree                 prometheus.Counter
+	prometheusSubtreeValidationValidateSubtreeRetry            prometheus.Counter
 	prometheusSubtreeValidationValidateSubtreeHandler          prometheus.Histogram
 	prometheusSubtreeValidationValidateSubtreeDuration         prometheus.Histogram
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
@@ -32,6 +33,14 @@ func _initPrometheusMetrics() {
 			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
 			Help:      "Number of subtrees validated",
+		},
+	)
+
+	prometheusSubtreeValidationValidateSubtreeRetry = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "subtreevalidation",
+			Name:      "validate_subtree_retry",
+			Help:      "Number of retries when subtrees validated",
 		},
 	)
 
