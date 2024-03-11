@@ -3,6 +3,7 @@ package txmetacache
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -17,13 +18,15 @@ var (
 	prometheusBlockValidationTxMetaCacheMapSize    prometheus.Gauge
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	// prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
 	// 	prometheus.GaugeOpts{
 	// 		Namespace: "blockvalidation",
@@ -87,6 +90,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of total elements in the improved cache's bucket maps",
 		},
 	)
-
-	prometheusMetricsInitialised = true
 }

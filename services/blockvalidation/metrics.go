@@ -4,6 +4,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -40,13 +41,15 @@ var (
 	prometheusBlockValidationSubtreeExistsCache       prometheus.Gauge
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockValidationHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
@@ -270,6 +273,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of subtrees in the subtree exists cache",
 		},
 	)
-
-	prometheusMetricsInitialised = true
 }

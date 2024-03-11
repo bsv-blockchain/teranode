@@ -37,7 +37,19 @@ var (
 	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
 )
 
+var (
+	prometheusMetricsInitOnce sync.Once
+)
+
 func init() {
+	initPrometheusMetrics()
+}
+
+func initPrometheusMetrics() {
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
+
+func _initPrometheusMetrics() {
 	prometheusBlockFromBytes = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "block",

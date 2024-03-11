@@ -4,6 +4,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -11,13 +12,15 @@ var (
 	prometheusSubtreeAssemblySubtrees prometheus.Histogram
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusSubtreeAssemblyBlocks = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeassembly",
@@ -35,6 +38,4 @@ func initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

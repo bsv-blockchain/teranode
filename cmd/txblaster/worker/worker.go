@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -51,14 +52,15 @@ const (
 	ContextRetry
 )
 
-var prometheusMetricsInitialized = atomic.Bool{}
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized.Load() {
-		return
-	}
-	prometheusMetricsInitialized.Store(true)
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "tx_blaster_workers",

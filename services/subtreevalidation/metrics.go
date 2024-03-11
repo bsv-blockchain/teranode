@@ -4,6 +4,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 //nolint:unused //TODO: enable these later
@@ -14,15 +15,18 @@ var (
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
 	prometheusSubtreeValidationBlessMissingTransactionDuration prometheus.Histogram
 	prometheusSubtreeValidationSetTXMetaCacheKafka             prometheus.Histogram
+	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors       prometheus.Counter
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusSubtreeValidationValidateSubtree = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "subtreevalidation",
@@ -75,5 +79,11 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusMetricsInitialised = true
+	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "subtreevalidation",
+			Name:      "set_tx_meta_cache_kafka_errors",
+			Help:      "Number of errors setting tx meta cache from kafka",
+		},
+	)
 }
