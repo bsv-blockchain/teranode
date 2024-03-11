@@ -146,7 +146,7 @@ func (u *Server) Start(ctx context.Context) error {
 	}
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)
 	}); err != nil {
 		return err
