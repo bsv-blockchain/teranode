@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -108,10 +109,14 @@ func (u *Server) Start(ctx context.Context) error {
 		if consumerCount < 0 {
 			consumerCount = 1
 		}
+
+		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
+		subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
 		g := errgroup.Group{}
-		g.SetLimit(consumerCount)
+		g.SetLimit(subtreeConcurrency)
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
+		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
 		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) {
 			g.Go(func() error {
 				// TODO is there a way to return an error here and have Kafka mark the message as not done?
@@ -142,6 +147,7 @@ func (u *Server) Start(ctx context.Context) error {
 		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
 		groupID := "subtreevalidation-" + uuid.New().String()
 
+		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
 		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
 	}
 
