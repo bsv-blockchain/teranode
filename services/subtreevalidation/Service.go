@@ -2,11 +2,12 @@ package subtreevalidation
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
 	"net/url"
-	"runtime"
+	"strconv"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/google/uuid"
@@ -63,13 +64,28 @@ func (u *SubtreeValidation) Start(ctx context.Context) error {
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
+		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
+		// g.SetLimit(subtreeConcurrency)
+		var partitions int
+		if partitions, err = strconv.Atoi(subtreesKafkaURL.Query().Get("partitions")); err != nil {
+			u.logger.Fatalf("[Subtreevalidation] unable to parse Kafka partitions from %s: %s", subtreesKafkaURL, err)
+		}
+
+		consumerRatio := util.GetQueryParamInt(subtreesKafkaURL, "consumer_ratio", 4)
+		if consumerRatio < 1 {
+			consumerRatio = 1
+		}
+
+		consumerCount := partitions / consumerRatio
+		if consumerCount < 0 {
+			consumerCount = 1
+		}
 
 		g := errgroup.Group{}
-		g.SetLimit(subtreeConcurrency)
+		g.SetLimit(consumerCount)
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", 1, func(msg util.KafkaMessage) {
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) {
 			g.Go(func() error {
 				// TODO is there a way to return an error here and have Kafka mark the message as not done?
 				u.subtreeHandler(msg)
@@ -81,8 +97,20 @@ func (u *SubtreeValidation) Start(ctx context.Context) error {
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
 		// Start a number of Kafka consumers
-		consumerCount, _ := gocore.Config().GetInt("subtreevalidation_kafkaTxMetaConsumerCount", 4)
+		var partitions int
+		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {
+			u.logger.Fatalf("[Subtreevalidation] unable to parse Kafka partitions from %s: %s", txmetaKafkaURL, err)
+		}
 
+		consumerRatio := util.GetQueryParamInt(txmetaKafkaURL, "consumer_ratio", 8)
+		if consumerRatio < 1 {
+			consumerRatio = 1
+		}
+
+		consumerCount := partitions / consumerRatio
+		if consumerCount < 0 {
+			consumerCount = 1
+		}
 		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
 		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
 		groupID := "subtreevalidation-" + uuid.New().String()

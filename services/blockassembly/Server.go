@@ -365,14 +365,17 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 		return
 	}
 
-	partitionConsumerRatio, _ := gocore.Config().GetInt("kafkatest_partitionConsumerRatio", 8)
-	if partitionConsumerRatio < 1 {
-		partitionConsumerRatio = 1
+	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
+	if consumerRatio < 1 {
+		consumerRatio = 1
 	}
 
 	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
 
-	consumerCount := partitions / partitionConsumerRatio
+	consumerCount := partitions / consumerRatio
+	if consumerCount < 0 {
+		consumerCount = 1
+	}
 
 	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
 

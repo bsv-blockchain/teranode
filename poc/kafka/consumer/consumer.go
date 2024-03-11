@@ -32,6 +32,9 @@ func NewConsumer() {
 	partitions := util.GetQueryParamInt(kafkaUrl, "partitions", 1)
 
 	consumerCount := partitions / partitionConsumerRatio
+	if consumerCount < 0 {
+		consumerCount = 1
+	}
 
 	fmt.Printf("starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaUrl.String(), consumerCount, workers)
 

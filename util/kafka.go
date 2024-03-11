@@ -176,6 +176,9 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 	//}, nil
 }
 
+/*
+StartKafkaListener will start a single consumer
+*/
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
 	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 
@@ -235,6 +238,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 				logger.Fatalf("[%s] unable to create topic: %s", service, err)
 			}
 		}
+		logger.Infof("[Kafka] starting group listener for topic %s on address: %\n", topic, kafkaURL.String())
 
 		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
 		if err != nil {
