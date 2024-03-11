@@ -44,6 +44,7 @@ type Server struct {
 	e                     *echo.Echo
 	notificationCh        chan *notificationMsg
 	subtreeCh             chan []byte
+	blockCh               chan []byte
 }
 
 func NewServer(logger ulogger.Logger) *Server {
@@ -130,7 +131,24 @@ func NewServer(logger ulogger.Logger) *Server {
 		p2pServer.subtreeCh = make(chan []byte, 10)
 		go func() {
 			if err := util.StartAsyncProducer(logger, subtreesKafkaURL, p2pServer.subtreeCh); err != nil {
-				logger.Errorf("[P2P] error starting kafka producer: %v", err)
+				logger.Errorf("[P2P] error starting kafka subtree producer: %v", err)
+				return
+			}
+		}()
+
+		logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
+	}
+
+	blocksKafkaURL, err, found := gocore.Config().GetURL("kafka_blocksConfig")
+	if err != nil {
+		panic(fmt.Sprintf("[P2P] error getting kafka url: %v", err))
+	}
+
+	if found {
+		p2pServer.blockCh = make(chan []byte, 10)
+		go func() {
+			if err := util.StartAsyncProducer(logger, blocksKafkaURL, p2pServer.blockCh); err != nil {
+				logger.Errorf("[P2P] error starting kafka block producer: %v", err)
 				return
 			}
 		}()
@@ -235,10 +253,10 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
 	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerId: s.P2PNode.HostID().String()})
 	if err != nil {
-		s.logger.Errorf("json marshal error: ", err)
+		s.logger.Errorf("json marshal error: %v", err)
 	}
 	if err = s.P2PNode.Publish(ctx, bestBlockTopicName, msgBytes); err != nil {
-		s.logger.Errorf("publish error:", err)
+		s.logger.Errorf("publish error: %v", err)
 	}
 }
 
@@ -246,7 +264,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
 	if err != nil {
-		s.logger.Errorf("error subscribing to blockchain service: ", err)
+		s.logger.Errorf("error subscribing to blockchain service: %v", err)
 		return
 	}
 
@@ -276,7 +294,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
 				if err != nil {
-					s.logger.Errorf("error getting block header and meta for BlockMessage: ", err)
+					s.logger.Errorf("error getting block header and meta for BlockMessage: %v", err)
 					continue
 				}
 
@@ -289,17 +307,17 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(blockMessage)
 				if err != nil {
-					s.logger.Errorf("json mmarshal error: ", err)
+					s.logger.Errorf("json mmarshal error: %v", err)
 					continue
 				}
 				if err = s.P2PNode.Publish(ctx, blockTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error:", err)
+					s.logger.Errorf("publish error: %v", err)
 				}
 
 			} else if notification.Type == model.NotificationType_MiningOn {
 				header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
-					s.logger.Errorf("error getting block header for MiningOnMessage: ", err)
+					s.logger.Errorf("error getting block header for MiningOnMessage: %v", err)
 					continue
 				}
 
@@ -315,12 +333,12 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 				msgBytes, err = json.Marshal(miningOnMessage)
 				if err != nil {
-					s.logger.Errorf("json marshal error: ", err)
+					s.logger.Errorf("json marshal error: %v", err)
 					continue
 				}
 				s.logger.Debugf("P2P publishing miningOnMessage")
 				if err = s.P2PNode.Publish(ctx, miningOnTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error:", err)
+					s.logger.Errorf("publish error: %v", err)
 				}
 
 			} else if notification.Type == model.NotificationType_Subtree {
@@ -332,11 +350,11 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 				msgBytes, err = json.Marshal(subtreeMessage)
 				if err != nil {
-					s.logger.Errorf("json marshal error: ", err)
+					s.logger.Errorf("json marshal error: %v", err)
 					continue
 				}
 				if err = s.P2PNode.Publish(ctx, subtreeTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error:", err)
+					s.logger.Errorf("publish error: %v", err)
 				}
 			}
 		}
@@ -348,7 +366,7 @@ func (s *Server) validatorSubscriptionListener(ctx context.Context) {
 	// Subscribe to the validator service
 	validatorSubscription, err := s.validatorClient.Subscribe(ctx, "p2pServer")
 	if err != nil {
-		s.logger.Errorf("error subscribing to validator service: ", err)
+		s.logger.Errorf("error subscribing to validator service: %v", err)
 		return
 	}
 	// define vars here to prevent too many allocs
@@ -376,12 +394,12 @@ func (s *Server) validatorSubscriptionListener(ctx context.Context) {
 			}
 			msgBytes, err = json.Marshal(rejectedTxMessage)
 			if err != nil {
-				s.logger.Errorf("json marshal error: ", err)
+				s.logger.Errorf("json marshal error: %v", err)
 				continue
 			}
 			s.logger.Debugf("P2P publishing rejectedTxMessage")
 			if err = s.P2PNode.Publish(ctx, rejectedTxTopicName, msgBytes); err != nil {
-				s.logger.Errorf("publish error:", err)
+				s.logger.Errorf("publish error: %v", err)
 			}
 		}
 	}
@@ -457,23 +475,23 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	bestBlockMessage = p2p.BestBlockMessage{}
 	err := json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: ", err)
+		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
 	pid, err = peer.Decode(bestBlockMessage.PeerId)
 	if err != nil {
-		s.logger.Errorf("error decoding peerId: ", err)
+		s.logger.Errorf("error decoding peerId: %v", err)
 		return
 	}
 
 	// get best block from blockchain service
 	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		s.logger.Errorf("error getting best block header: ", err)
+		s.logger.Errorf("error getting best block header: %v", err)
 		return
 	}
 	if bh == nil {
-		s.logger.Errorf("error getting best block header: ", err)
+		s.logger.Errorf("error getting best block header: %v", err)
 		return
 	}
 
@@ -485,14 +503,14 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
-		s.logger.Errorf("json marshal error: ", err)
+		s.logger.Errorf("json marshal error: %v", err)
 		return
 	}
 
 	// send best block to the requester
 	err = s.P2PNode.SendToPeer(ctx, pid, msgBytes)
 	if err != nil {
-		s.logger.Errorf("error sending peer message: ", err)
+		s.logger.Errorf("error sending peer message: %v", err)
 	}
 }
 
@@ -507,7 +525,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	blockMessage = p2p.BlockMessage{}
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: ", err)
+		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
 
@@ -526,9 +544,18 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
 	if err != nil {
-		s.logger.Errorf("error getting chainhash from string %s", blockMessage.Hash, err)
+		s.logger.Errorf("error getting chainhash from string %s: %v", blockMessage.Hash, err)
 		return
 	}
+
+	// send block to kafka, if configured
+	if s.blockCh != nil {
+		b := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubUrl))
+		b = append(b, hash.CloneBytes()...)
+		b = append(b, []byte(blockMessage.DataHubUrl)...)
+		s.blockCh <- b
+	}
+
 	if err = s.blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl); err != nil {
 		s.logger.Errorf("[p2p] error validating block from %s: %s", blockMessage.DataHubUrl, err)
 	}
@@ -543,7 +570,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 	subtreeMessage = p2p.SubtreeMessage{}
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: ", err)
+		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
 
@@ -561,22 +588,20 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
 	if err != nil {
-		s.logger.Errorf("error getting chainhash from string %s", subtreeMessage.Hash, err)
+		s.logger.Errorf("error getting chainhash from string %s: %v", subtreeMessage.Hash, err)
 		return
 	}
 
 	if s.subtreeCh != nil {
-		b := make([]byte, 0, 128)
+		b := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
 		b = append(b, hash.CloneBytes()...)
 		b = append(b, []byte(subtreeMessage.DataHubUrl)...)
 		s.subtreeCh <- b
 	} else {
-
 		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
-			s.logger.Errorf("[p2p] error validating subtree from %s: %s", subtreeMessage.DataHubUrl, err)
+			s.logger.Errorf("[p2p] error validating subtree from %s: %v", subtreeMessage.DataHubUrl, err)
 		}
 	}
-
 }
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {
@@ -587,7 +612,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 	miningOnMessage = p2p.MiningOnMessage{}
 	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: ", err)
+		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
 
