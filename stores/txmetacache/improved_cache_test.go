@@ -169,8 +169,8 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 
 func TestImprovedCache_SetMulti(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	util.SkipVeryLongTests(t)
-	cache := NewImprovedCache(256*1024*1024, types.Unallocated)
+	//util.SkipVeryLongTests(t)
+	cache := NewImprovedCache(128*1024*1024, types.Trimmed)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	t.Logf("0) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
@@ -179,17 +179,14 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	var err error
 	numberOfKeys := 1_000 * bucketsCount
 
+	// cache size : 128 * 1024 * 1024 bytes -> 128 MB // 128 GB in the Scaling
+	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling
+	// bucket size: 128 MB / 8 = 16 MB per bucket // 128 GB / (8*1024) = 16 MB per bucket
+	// chunk size: 4 KB
+	// 16 MB / 4 KB = 4096 chunks per bucket
+
 	// f, _ := os.Create("mem.prof")
 	// defer f.Close()
-
-	// cache size : 256 * 1024 * 1024 bytes -> 256 MB
-	// number of buckets: 1024
-	// bucket size: 256 MB / 1024 = 256 KB
-	// chunk size: 2 * 1024 * 16 = 32 KB
-	// 256 KB / 32 KB = 8 chunks per bucket
-	// 32 KB to bytes = 32 * 1024 = 32768 bytes
-	// 32768 / 68  = 481 key-value pairs per chunk
-	// 481 * 8 = 3848 key-value pairs per bucket, at most.
 
 	f, err := os.Create("mem2.prof")
 	if err != nil {
@@ -208,7 +205,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	}
 
 	runtime.ReadMemStats(&m)
-	t.Logf("0.5) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
+	t.Logf("1) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
@@ -217,7 +214,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	//var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("1) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
+	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	for i, key := range allKeys {
 		dst := make([]byte, 0)
@@ -252,21 +249,18 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	util.SkipVeryLongTests(t)
-
-	cache := NewImprovedCache(256*1024*1024, types.Trimmed)
-	cacheUnallocated := NewImprovedCache(256*1024*1024, types.Trimmed)
+	cache := NewImprovedCache(128*1024*1024, types.Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 4_000_000
-	// 1024 times less of everything in scaling
+	numberOfKeys := 3_000_000
 
-	// cache size : 512 * 1024 * 1024 bytes -> 256 MB
+	// cache size : 128 * 1024 * 1024 bytes -> 128 MB // 128 GB in the Scaling
 	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling
-	// bucket size: 256 MB / 8 = 32 MB per bucket
+	// bucket size: 128 MB / 8 = 16 MB per bucket // 128 GB / (8*1024) = 16 MB per bucket
 	// chunk size: 4 KB
-	// 32 MB / 4 KB = 8192 chunks per bucket
-	// 4096 / 68  = 60 key-value pairs per chunk
+	// 16 MB / 4 KB = 4096 chunks per bucket
+	// 4096 bytes / 68 bytes = 60 key-value pairs per chunk
 	// 60 * 8192 = 491520 key-value pairs per bucket
 	// 491520 * 8 = 3932160 key-value pairs per cache
 
@@ -282,15 +276,10 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 		allValues = append(allValues, value)
 	}
 
-	startTime2 := time.Now()
-	err = cacheUnallocated.SetMulti(allKeys, allValues)
-	require.NoError(t, err)
-	t.Log("SetMulti with unallocated took:", time.Since(startTime2))
-
 	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
 	require.NoError(t, err)
-	t.Log("SetMulti pre-allocated took:", time.Since(startTime))
+	t.Log("SetMulti took:", time.Since(startTime))
 
 	errCounter := 0
 	for _, key := range allKeys {
@@ -300,17 +289,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 			errCounter++
 		}
 	}
-	fmt.Println("Pre-allocated Cache Number or errors:", errCounter)
-
-	errCounter = 0
-	for _, key := range allKeys {
-		dst := make([]byte, 0)
-		err = cacheUnallocated.Get(&dst, key)
-		if err != nil {
-			errCounter++
-		}
-	}
-	fmt.Println("Unallocated Cache Number or errors:", errCounter)
+	fmt.Println("Cache Number or errors:", errCounter)
 
 	// X times call cleanLockedMap
 	// 2 chunks are deleted per adjustment

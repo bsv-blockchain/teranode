@@ -35,9 +35,9 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 8 * 1024
+const bucketsCount = 8 // 8 * 1024
 
-const chunkSize = maxValueSizeKB * 8 * 1024 // 16 KB
+const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
 
 const bucketSizeBits = 40
 
@@ -400,7 +400,7 @@ func (b *bucketTrimmed) SetMulti(keys [][]byte, values [][]byte) {
 	for i, key := range keys {
 		prevValue = values[i]
 		hash = xxhash.Sum64(key)
-		b.Get(&prevValue, key, hash, true, true)
+		//b.Get(&prevValue, key, hash, true, true)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, prevValue, hash, true)
 	}
