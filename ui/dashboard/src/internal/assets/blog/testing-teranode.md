@@ -1,4 +1,4 @@
-## Testing Teranode
+## Testing Teranode - Test Details
 
 This site gives a live view of the Teranode test network's status.
 
