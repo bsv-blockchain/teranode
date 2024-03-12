@@ -368,8 +368,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 	}
 
 	for _, block := range moveUpBlocks {
-		// we skip the notifications for and do them all at the end
-		err := stp.moveUpBlock(ctx, block, false)
+		// we skip the notifications for now and do them all at the end
+		err := stp.moveUpBlock(ctx, block, true)
 		if err != nil {
 			return err
 		}
