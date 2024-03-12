@@ -36,6 +36,13 @@ type TxMetaCache struct {
 	logger      ulogger.Logger
 }
 
+type CacheStats struct {
+	EntriesCount       uint64
+	TrimCount          uint64
+	TotalMapSize       uint64
+	TotalElementsAdded uint64
+}
+
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
 	if _, ok := txMetaStore.(*TxMetaCache); ok {
 		// txMetaStore is a TxMetaCache, this is not allowed
@@ -69,14 +76,16 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				cacheStats := m.GetCacheStats()
 				if prometheusBlockValidationTxMetaCacheInsertions != nil {
-					//prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
+					prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
-					prometheusBlockValidationTxMetaCacheTrims.Set(float64(m.TrimCount()))
-					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(m.CacheMapSize()))
+					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
+					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
+					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
 				}
 			}
 		}
@@ -282,20 +291,14 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-// func (t *TxMetaCache) Length() int {
-// 	s := &Stats{}
-// 	t.cache.UpdateStats(s)
-// 	return int(s.EntriesCount)
-// }
-
-func (t *TxMetaCache) TrimCount() int {
+func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
-	return int(s.TrimCount)
-}
 
-func (t *TxMetaCache) CacheMapSize() int {
-	s := &Stats{}
-	t.cache.UpdateStats(s)
-	return int(s.TotalMapSize)
+	return &CacheStats{
+		EntriesCount:       s.EntriesCount,
+		TrimCount:          s.TrimCount,
+		TotalMapSize:       s.TotalMapSize,
+		TotalElementsAdded: s.TotalElementsAdded,
+	}
 }
