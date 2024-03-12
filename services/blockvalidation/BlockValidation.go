@@ -432,14 +432,9 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// must be set before AddBlock is called
 	u.lastValidatedBlocks.Set(*block.Hash(), block)
 
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
-	}
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-
 	// if valid, store the block
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
+
 	if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
 	}
@@ -449,6 +444,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
+
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+	if err = u.txStore.Set(spanCtx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
+	}
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	callerSpan := opentracing.SpanFromContext(spanCtx)
