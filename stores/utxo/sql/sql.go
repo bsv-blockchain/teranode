@@ -414,7 +414,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 			  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
 			  AND tx_id IS NULL
 		`
-		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight, time.Now().Unix())
+		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight.Load(), time.Now().Unix())
 		if err != nil {
 			return fmt.Errorf("[Spend][%s] error spending utxo: %s", spend.Hash.String(), err.Error())
 		}
