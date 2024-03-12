@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/dolthub/swiss"
 )
@@ -142,12 +143,13 @@ func (s *SwissMapUint64) Length() int {
 // Lock-free map for uint64 keys and values
 type SwissMapKVUint64 struct {
 	m      *swiss.Map[uint64, uint64]
-	length int
+	length atomic.Uint32
 }
 
 func NewSwissMapKVUint64(length int) *SwissMapKVUint64 {
 	return &SwissMapKVUint64{
-		m: swiss.NewMap[uint64, uint64](uint32(length)),
+		m:      swiss.NewMap[uint64, uint64](uint32(length)),
+		length: atomic.Uint32{},
 	}
 }
 
@@ -167,13 +169,13 @@ func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
 	}
 
 	s.m.Put(hash, n)
-	s.length++
+	s.length.Add(1)
 
 	return nil
 }
 
 func (s *SwissMapKVUint64) Get(hash uint64) (uint64, bool) {
-	s.length++
+	// s.length.Add(1)
 
 	n, ok := s.m.Get(hash)
 	if !ok {
@@ -184,7 +186,7 @@ func (s *SwissMapKVUint64) Get(hash uint64) (uint64, bool) {
 }
 
 func (s *SwissMapKVUint64) Length() int {
-	return s.length
+	return int(s.length.Load())
 }
 
 type SplitSwissMap struct {
@@ -313,7 +315,7 @@ func (g *SplitSwissMapKVUint64) Get(hash uint64) (uint64, bool) {
 func (g *SplitSwissMapKVUint64) Length() int {
 	length := 0
 	for i := uint64(0); i <= g.nrOfBuckets; i++ {
-		length += g.m[i].length
+		length += int(g.m[i].length.Load())
 	}
 
 	return length
