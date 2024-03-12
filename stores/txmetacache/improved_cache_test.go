@@ -311,7 +311,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 100
+	numberOfKeys := 300
 
 	// cache size : 4 KB
 	// 4 buckets
@@ -346,14 +346,14 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 		}
 	}
 	t.Log("Number or errors:", errCounter)
-
-	// X times call cleanLockedMap
-	// 2 chunks are deleted per adjustment
-	// there are 481 keys per chunk: 32768 bytes per chunk
-	// 1 adjustment = 481 * 2 = 962 keys are deleted.
 	require.NotZero(t, errCounter)
 
 	s := &Stats{}
 	cache.UpdateStats(s)
-	t.Log("Stats, total map size:", s.TotalMapSize)
+	require.Equal(t, s.TotalElementsAdded, uint64(len(allKeys)))
+	require.Equal(t, uint64(errCounter)+s.EntriesCount, uint64(len(allKeys)))
+
+	// t.Log("Stats, total map size:", s.TotalMapSize)
+	t.Log("Stats, current elements size: ", s.EntriesCount)
+	t.Log("Stats, total elements added: ", s.TotalElementsAdded)
 }
