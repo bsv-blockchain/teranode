@@ -224,6 +224,7 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		}
 		bucketIdx := bucketIdx
 		g.Go(func() error {
+			// fmt.Println("bucketIdx: ", bucketIdx, ", number of keys: ", len(batchedKeys[bucketIdx]))
 			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
 			return nil
 		})
@@ -491,8 +492,8 @@ func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, ski
 		defer b.mu.RUnlock()
 	}
 
-	v, found := b.m.Get(h)
-	if !found {
+	v, foundInMap := b.m.Get(h)
+	if !foundInMap {
 		return found
 	}
 
