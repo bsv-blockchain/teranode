@@ -86,7 +86,7 @@ func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
 }
 
 func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err error) {
-	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	// root len(st.rootHash[:]) bytes
 	// first 8 bytes, fees
@@ -453,7 +453,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 		}
 	}()
 
-	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	// read root hash
 	st.rootHash = new(chainhash.Hash)
