@@ -112,11 +112,16 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
+	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
+
 	topic := kafkaURL.Path[1:]
 
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
+		ConfigEntries: map[string]*string{
+			"retention.ms": &retentionPeriod, // Set the retention period
+		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
 			return nil, nil, err
@@ -171,6 +176,9 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 	//}, nil
 }
 
+/*
+StartKafkaListener will start a single consumer
+*/
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
 	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 
@@ -217,15 +225,20 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 		if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
 			logger.Fatalf("[%s] unable to parse Kafka replication factor: %s", service, err)
 		}
+		retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
 
 		if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 			NumPartitions:     int32(partitions),
 			ReplicationFactor: int16(replicationFactor),
+			ConfigEntries: map[string]*string{
+				"retention.ms": &retentionPeriod, // Set the retention period
+			},
 		}, false); err != nil {
 			if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
 				logger.Fatalf("[%s] unable to create topic: %s", service, err)
 			}
 		}
+		logger.Infof("[Kafka] starting group listener for topic %s on address: %\n", topic, kafkaURL.String())
 
 		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
 		if err != nil {
@@ -331,10 +344,14 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
+	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
 
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
+		ConfigEntries: map[string]*string{
+			"retention.ms": &retentionPeriod, // Set the retention period
+		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
 			return fmt.Errorf("unable to create topic: %w", err)

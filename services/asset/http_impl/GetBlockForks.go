@@ -1,7 +1,6 @@
 package http_impl
 
 import (
-	"fmt"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -32,12 +31,12 @@ type forks struct {
 	Tree forksTree `json:"tree"`
 }
 type forksTree struct {
-	NodeName string      `json:"nodeName"`
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	Code     string      `json:"code"`
-	Label    string      `json:"label"`
-	Version  string      `json:"version"`
+	ID       uint32      `json:"id"`
+	Hash     string      `json:"hash"`
+	Miner    string      `json:"miner"`
+	Height   uint32      `json:"height"`
+	TxCount  uint32      `json:"tx_count"`
+	Size     uint32      `json:"size"`
 	Link     forksLink   `json:"link"`
 	Children []forksTree `json:"children"`
 
@@ -77,7 +76,7 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	blockHeaders, heights, err := h.repository.GetBlockHeadersFromHeight(c.Request().Context(), meta.Height, uint32(limit))
+	blockHeaders, metas, err := h.repository.GetBlockHeadersFromHeight(c.Request().Context(), meta.Height, uint32(limit))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -85,22 +84,22 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 	// reorganize the block headers into a map of parent / child relationships
 	blockHeadersParentChild := make(map[chainhash.Hash][]*model.BlockHeader)
 	blockHeadersMap := make(map[chainhash.Hash]*model.BlockHeader)
-	heightsMap := make(map[chainhash.Hash]uint32)
+	metasMap := make(map[chainhash.Hash]*model.BlockHeaderMeta)
 	for idx, blockHeader := range blockHeaders {
 		blockHeadersParentChild[*blockHeader.HashPrevBlock] = append(blockHeadersParentChild[*blockHeader.HashPrevBlock], blockHeader)
 		blockHeadersMap[*blockHeader.Hash()] = blockHeader
-		heightsMap[*blockHeader.Hash()] = heights[idx]
+		metasMap[*blockHeader.Hash()] = metas[idx]
 	}
 
 	// add the root block to the forks
 	blockForks := forks{
 		Tree: forksTree{
-			NodeName: blockHash.String(),
-			Name:     blockHash.String(),
-			Type:     "block",
-			Code:     blockHash.String(),
-			Label:    blockHash.String(),
-			Version:  fmt.Sprintf("%d", heightsMap[*blockHash]),
+			Hash:    blockHash.String(),
+			ID:      metasMap[*blockHash].ID,
+			Miner:   metasMap[*blockHash].Miner,
+			Height:  metasMap[*blockHash].Height,
+			TxCount: uint32(metasMap[*blockHash].TxCount),
+			Size:    uint32(metasMap[*blockHash].SizeInBytes),
 			Link: forksLink{
 				Name:      "Link " + blockHash.String(),
 				NodeName:  blockHash.String(),
@@ -111,21 +110,23 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 	}
 
 	// recursively add the children to the forks
-	addChildrenToBlockForks(&blockForks.Tree, blockHeadersParentChild, blockHeadersMap, heightsMap)
+	addChildrenToBlockForks(&blockForks.Tree, blockHeadersParentChild, blockHeadersMap, metasMap)
 
 	return c.JSONPretty(200, blockForks, "  ")
 }
 
-func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainhash.Hash][]*model.BlockHeader, blockHeadersMap map[chainhash.Hash]*model.BlockHeader, heightsMap map[chainhash.Hash]uint32) {
+func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainhash.Hash][]*model.BlockHeader,
+	blockHeadersMap map[chainhash.Hash]*model.BlockHeader, metasMap map[chainhash.Hash]*model.BlockHeaderMeta) {
+
 	children := blockHeadersParentChild[tree.hash]
 	for _, child := range children {
 		childTree := forksTree{
-			NodeName: child.Hash().String(),
-			Name:     child.Hash().String(),
-			Type:     "block",
-			Code:     child.Hash().String(),
-			Label:    child.Hash().String(),
-			Version:  fmt.Sprintf("%d", heightsMap[*child.Hash()]),
+			Hash:    child.Hash().String(),
+			ID:      metasMap[*child.Hash()].ID,
+			Miner:   metasMap[*child.Hash()].Miner,
+			Height:  metasMap[*child.Hash()].Height,
+			TxCount: uint32(metasMap[*child.Hash()].TxCount),
+			Size:    uint32(metasMap[*child.Hash()].SizeInBytes),
 			Link: forksLink{
 				Name:      "Link " + child.Hash().String(),
 				NodeName:  child.Hash().String(),
@@ -134,7 +135,7 @@ func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainh
 			hash: *child.Hash(),
 		}
 
-		addChildrenToBlockForks(&childTree, blockHeadersParentChild, blockHeadersMap, heightsMap)
+		addChildrenToBlockForks(&childTree, blockHeadersParentChild, blockHeadersMap, metasMap)
 
 		tree.Children = append(tree.Children, childTree)
 	}

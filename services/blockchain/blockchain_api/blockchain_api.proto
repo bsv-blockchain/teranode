@@ -24,7 +24,7 @@ service BlockchainAPI {
   rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
-  rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
@@ -105,6 +105,12 @@ message GetBlockHeadersResponse {
 message GetBlockHeadersFromHeightRequest {
   uint32 startHeight = 1;
   uint32 limit = 2;
+}
+
+// swagger:model GetBlockHeadersFromHeightResponse
+message GetBlockHeadersFromHeightResponse {
+  repeated bytes blockHeaders = 1;
+  repeated bytes metas = 2;
 }
 
 // swagger:model GetBlockHeaderIDsResponse

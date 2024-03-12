@@ -79,7 +79,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		blockValidation := NewSubtreeValidation(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+		blockValidation := New(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
 
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
@@ -87,7 +87,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			SubtreeHashes: nil,
 			AllowFailFast: false,
 		}
-		_, err = blockValidation.validateSubtree(context.Background(), v)
+		err = blockValidation.validateSubtreeInternal(context.Background(), v)
 		require.NoError(t, err)
 	})
 }
@@ -142,7 +142,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	blockValidation := NewSubtreeValidation(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	blockValidation := New(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
 	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
@@ -186,7 +186,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		SubtreeHashes: nil,
 		AllowFailFast: false,
 	}
-	_, err = blockValidation.validateSubtree(context.Background(), v)
+	err = blockValidation.validateSubtreeInternal(context.Background(), v)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -215,7 +215,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	blockValidation := NewSubtreeValidation(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	subtreeValidation := New(ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
 
 	// Create a mock context
 	ctx := context.Background()
@@ -229,6 +229,6 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the validateSubtreeInternal method
-	err = blockValidation.validateSubtreeInternal(ctx, v)
+	err = subtreeValidation.validateSubtreeInternal(ctx, v)
 	require.NoError(t, err)
 }

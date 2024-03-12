@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *SubtreeValidation) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
@@ -48,6 +48,10 @@ func (u *SubtreeValidation) processTxMetaUsingCache(ctx context.Context, txHashe
 
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+				// check whether the txMetaSlice has already been populated
+				if txMetaSlice[i+j] != nil {
+					continue
+				}
 
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal

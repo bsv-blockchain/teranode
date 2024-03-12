@@ -106,6 +106,7 @@ function get(url, options: any = {}, done?, fail?) {
 // }
 
 let baseUrl = ''
+//const baseUrl = 'https://m1.scaling.ubsv.dev/api/v1'
 
 assetHTTPAddress.subscribe((value) => {
   baseUrl = value

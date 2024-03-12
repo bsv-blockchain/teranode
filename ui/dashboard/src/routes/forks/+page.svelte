@@ -36,7 +36,7 @@
 
     onMount(() => {
         getStatsData();
-        window.addEventListener('resize', redraw);
+        //window.addEventListener('resize', redraw);
     })
 </script>
 
@@ -62,8 +62,6 @@
         left: 0;
         width: 100%;
         overflow: scroll;
-
-        background-color: #aaa;
         padding: 20px;
     }
 
@@ -73,6 +71,7 @@
     }
 
     :global(.node) {
+        fill: #1878ff;
         cursor: pointer;
     }
 
@@ -122,7 +121,7 @@
     :global(.node-text) {
         font: 10px sans-serif;
         font-weight: normal;
-        color: white;
+        color: #ddd;
     }
 
     :global(.tooltip-text-container) {

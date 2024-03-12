@@ -9,14 +9,15 @@ I give docker 32GB RAM and 128GB disk and 10 CPU (not sure of the minimum requir
 If memory is too much then try reducing miner_waitSeconds value (docker default is 5 mins)
 
 ## build docker images
-`$ docker compose -f docker-compose-ci-ext-p2p.yml build`
+`$ docker compose build`
 
 ## run x3 teranodes with miners, coinbase, and tx-blasters
-`$ docker compose -f docker-compose-ci-ext-p2p.yml up -d`
+`$ docker compose up -d`
+It will mine the initial blocks, generate splitting coinbase txs and run 3 blasters.
 or
 ## run with a subset of services
-`$ docker compose -f docker-compose-ci-ext-p2p.yml up postgres ubsv-1 ubsv-2 ubsv-3 -d`
-It will mine the initial blocks, generate splitting coinbase txs and run 3 blasters.
+`$ docker compose up postgres ubsv-1 ubsv-2 ubsv-3 -d`
+
 
 ## To see whether they are in sync:
 
@@ -25,7 +26,7 @@ It will mine the initial blocks, generate splitting coinbase txs and run 3 blast
 Occasionally, ubsv-1, ubsv-2 or ubsv-3 fail to start because aerospike/postgres wasn’t ready at that moment. Just run the ‘up’ command again. (If anyone knows how to make ubsv containers wait for their dependent services to be ‘ready’…)
 
 ## To delete everything
-`$ docker compose -f docker-compose-ci-ext-p2p.yml down`
+`$ docker compose down`
 
 (This can take a minute or two to complete)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"net/http"
 	"runtime"
 	"time"
@@ -115,7 +116,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
 	}
 
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient)
+	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
+	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient)
 
 	go u.processSubtreeNotify.Start()
 

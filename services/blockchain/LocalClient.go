@@ -94,7 +94,7 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
-func (c LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []uint32, error) {
+func (c LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
 }
 

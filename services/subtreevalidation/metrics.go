@@ -4,29 +4,52 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 //nolint:unused //TODO: enable these later
 var (
 	prometheusSubtreeValidationValidateSubtree                 prometheus.Counter
+	prometheusSubtreeValidationValidateSubtreeRetry            prometheus.Counter
+	prometheusSubtreeValidationValidateSubtreeHandler          prometheus.Histogram
 	prometheusSubtreeValidationValidateSubtreeDuration         prometheus.Histogram
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
 	prometheusSubtreeValidationBlessMissingTransactionDuration prometheus.Histogram
 	prometheusSubtreeValidationSetTXMetaCacheKafka             prometheus.Histogram
+	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors       prometheus.Counter
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusSubtreeValidationValidateSubtree = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
 			Help:      "Number of subtrees validated",
+		},
+	)
+
+	prometheusSubtreeValidationValidateSubtreeRetry = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "subtreevalidation",
+			Name:      "validate_subtree_retry",
+			Help:      "Number of retries when subtrees validated",
+		},
+	)
+
+	prometheusSubtreeValidationValidateSubtreeHandler = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "subtreevalidation",
+			Name:      "validate_subtree_handler_millis",
+			Help:      "Duration of subtree handler",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
@@ -65,5 +88,11 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusMetricsInitialised = true
+	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "subtreevalidation",
+			Name:      "set_tx_meta_cache_kafka_errors",
+			Help:      "Number of errors setting tx meta cache from kafka",
+		},
+	)
 }

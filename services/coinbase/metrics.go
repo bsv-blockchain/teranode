@@ -3,6 +3,7 @@ package coinbase
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -11,13 +12,15 @@ var (
 	prometheusDistributeTransaction prometheus.Counter
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "coinbase",
@@ -41,6 +44,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of calls to the DistributeTransaction endpoint",
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

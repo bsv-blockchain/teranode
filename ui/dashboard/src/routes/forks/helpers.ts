@@ -1,5 +1,5 @@
 import * as d3 from 'd3';
-import type {HierarchyNode, TreeLayout} from "d3-hierarchy";
+import type {TreeLayout} from "d3-hierarchy";
 
 function treeBoxes(selector, jsonData)
 {
@@ -20,7 +20,7 @@ function treeBoxes(selector, jsonData)
     let width = 800 - margin.right - margin.left,
         height = 400 - margin.top - margin.bottom;
 
-    const rectNode = { width : 120, height : 45, textMargin : 5 },
+    const rectNode = { width : 120, height : 64, textMargin : 5 },
         tooltip = { width : 150, height : 40, textMargin : 5 },
         duration = 750;
     let i = 0;
@@ -32,7 +32,7 @@ function treeBoxes(selector, jsonData)
     //     isKeydownZoom = false;
 
     let tree: TreeLayout<any>;
-    let root: HierarchyNode<any>;
+    let root: any;
     let baseSvg,
         svgGroup,
         nodeGroup, // If nodes are not grouped together, after a click the svg node will be set after his corresponding tooltip and will hide it
@@ -122,12 +122,11 @@ function treeBoxes(selector, jsonData)
         initDropShadow();
 
         update(root);
+        d3.select(root).call(click);
     }
 
     function update(source)
     {
-        console.log({source})
-
         // Compute the new tree layout
         const nodes = root.descendants().reverse();
         const links = tree(root).links();
@@ -187,19 +186,21 @@ function treeBoxes(selector, jsonData)
                 return '<div style="width: '
                     + (rectNode.width - rectNode.textMargin * 2) + 'px; height: '
                     + (rectNode.height - rectNode.textMargin * 2) + 'px;" class="node-text wordwrap">'
-                    + '<b>Height: </b>' + d.data.version + '<br>'
-                    + '<b>' + d.data.name + '</b><br><br>'
+                    + '<b>Height: </b>' + d.data.height + '<br>'
+                    + '<b>Miner: </b>' + (d.data.miner || 'local') + '<br>'
+                    + '<b>' + d.data.hash + '</b><br><br>'
                     + '</div>';
             })
-            // .on('mouseover', function() {
-            //     // TODO fix this for Svelte
-            //     // $('#nodeInfoID' + d.id).css('visibility', 'visible');
-            //     // $('#nodeInfoTextID' + d.id).css('visibility', 'visible');
-            // })
-            // .on('mouseout', function() {
-            //     // $('#nodeInfoID' + d.id).css('visibility', 'hidden');
-            //     // $('#nodeInfoTextID' + d.id).css('visibility', 'hidden');
-            // });
+            .on('mouseover', function(d: any) {
+                const node = d3.select('#nodeInfoID' + d.id)
+                node.style('visibility', 'visible');
+                node.style('visibility', 'visible');
+            })
+            .on('mouseout', function(d: any) {
+                const node = d3.select('#nodeInfoID' + d.id)
+                node.style('visibility', 'hidden');
+                node.style('visibility', 'hidden');
+            });
 
         nodeEnterTooltip.append("rect")
             .attr('id', function(d) { return 'nodeInfoID' + d.id; })
@@ -298,51 +299,71 @@ function treeBoxes(selector, jsonData)
             .attr('id', function(d) { return 'linkID' + d.target.id; })
             .attr('d', function(d) { return diagonal(d); })
             .attr('marker-end', 'url(#end-arrow)')
-            .attr('marker-start', function(d) { return linkMarkerStart(d.target.data.link.direction, false); })
-            // .on('mouseover', function(d) {
-            //     //d3.select(this).moveToFront();
-            //
-            //     d3.select(this).attr('marker-end', 'url(#end-arrow-selected)');
-            //     d3.select(this).attr('marker-start', linkMarkerStart(d.target.data.link.direction, true));
-            //     d3.select(this).attr('class', 'linkselected');
-            //
-            //     // $('#tooltipLinkID' + d.target.id).attr('x', (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y);
-            //     // $('#tooltipLinkID' + d.target.id).attr('y', (d.target.x - d.source.x) / 2 + d.source.x);
-            //     // $('#tooltipLinkID' + d.target.id).css('visibility', 'visible');
-            //     // $('#tooltipLinkTextID' + d.target.id).css('visibility', 'visible');
-            // })
-            // .on('mouseout', function(d) {
-            //     d3.select(this).attr('marker-end', 'url(#end-arrow)');
-            //     d3.select(this).attr('marker-start', linkMarkerStart(d.target.data.link.direction, false));
-            //     d3.select(this).attr('class', 'link');
-            //     // $('#tooltipLinkID' + d.target.id).css('visibility', 'hidden');
-            //     // $('#tooltipLinkTextID' + d.target.id).css('visibility', 'hidden');
-            // });
+            .attr('marker-start', function(d: any) { return linkMarkerStart(d.target.data.link.direction, false); })
+            .on('mouseover', function(d: any) {
+                // @ts-expect-error ignore
+                const link = d3.select(this)
+                // @ts-expect-error ignore
+                link.moveToFront();
+
+                // why is this like this?
+                const source = d.target.__data__.source;
+                const target = d.target.__data__.target;
+
+                link.attr('marker-end', 'url(#end-arrow-selected)');
+                link.attr('marker-start', linkMarkerStart(target.data.link.direction, true));
+                link.attr('class', 'linkselected');
+
+                const tooltip = d3.select('#tooltipLinkID' + target.id)
+                tooltip.attr('x', (target.y + rectNode.width - source.y) / 2 + source.y);
+                tooltip.attr('y', (target.x - source.x) / 2 + source.x);
+                tooltip.style('visibility', 'visible');
+                tooltip.style('visibility', 'visible');
+            })
+            .on('mouseout', function(d: any) {
+                // @ts-expect-error ignore
+                const link = d3.select(this)
+
+                const target = d.target.__data__.target
+
+                link.attr('marker-end', 'url(#end-arrow)');
+                link.attr('marker-start', linkMarkerStart(target.data.link.direction, false));
+                link.attr('class', 'link');
+
+                const tooltip = d3.select('#tooltipLinkID' + target.id)
+                tooltip.style('visibility', 'hidden');
+                tooltip.style('visibility', 'hidden');
+            });
 
         linkTooltip.enter().append('rect')
-            .attr('id', function(d) { return 'tooltipLinkID' + d.target.id; })
+            .attr('id', function(d: any) { return 'tooltipLinkID' + d.target.id; })
             .attr('class', 'tooltip-box')
             .style('fill-opacity', 0.8)
-            .attr('x', function(d) { return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y; })
-            .attr('y', function(d) { return (d.target.x - d.source.x) / 2 + d.source.x; })
+            .attr('x', function(d: any) { return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y; })
+            .attr('y', function(d: any) { return (d.target.x - d.source.x) / 2 + d.source.x; })
             .attr('width', tooltip.width)
             .attr('height', tooltip.height)
-            .on('mouseover', function() {
-                // $('#tooltipLinkID' + d.target.id).css('visibility', 'visible');
-                // $('#tooltipLinkTextID' + d.target.id).css('visibility', 'visible');
-                // After selected a link, the cursor can be hover the tooltip, that's why we still need to highlight the link and the arrow
-                // $('#linkID' + d.target.id).attr('class', 'linkselected');
-                // $('#linkID' + d.target.id).attr('marker-end', 'url(#end-arrow-selected)');
-                // $('#linkID' + d.target.id).attr('marker-start', linkMarkerStart(d.target.link.direction, true));
+            .on('mouseover', function(d: any) {
+                const tooltip = d3.select('#tooltipLinkID' + d.target.id)
+                const target = d.target.__data__.target
 
+                tooltip.style('visibility', 'visible');
+                tooltip.style('visibility', 'visible');
+                // After selected a link, the cursor can be hover the tooltip, that's why we still need to highlight the link and the arrow
+                tooltip.attr('class', 'linkselected');
+                tooltip.attr('marker-end', 'url(#end-arrow-selected)');
+                tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, true));
                 removeMouseEvents();
             })
-            .on('mouseout', function() {
-                // $('#tooltipLinkID' + d.target.id).css('visibility', 'hidden');
-                // $('#tooltipLinkTextID' + d.target.id).css('visibility', 'hidden');
-                // $('#linkID' + d.target.id).attr('class', 'link');
-                // $('#linkID' + d.target.id).attr('marker-end', 'url(#end-arrow)');
-                // $('#linkID' + d.target.id).attr('marker-start', linkMarkerStart(d.target.link.direction, false));
+            .on('mouseout', function(d: any) {
+                const tooltip = d3.select('#tooltipLinkID' + d.target.id)
+                const target = d.target.__data__.target
+
+                tooltip.style('visibility', 'hidden');
+                tooltip.style('visibility', 'hidden');
+                tooltip.attr('class', 'link');
+                tooltip.attr('marker-end', 'url(#end-arrow)');
+                tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, false));
 
                 reactivateMouseEvents();
             });

@@ -3,6 +3,7 @@ package http_impl
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -16,13 +17,15 @@ var (
 	prometheusAssetHttpGetUTXO            *prometheus.CounterVec
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusAssetHttpGetTransaction = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "Asset",
@@ -118,6 +121,4 @@ func initPrometheusMetrics() {
 			"operation", // type of operation achieved
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

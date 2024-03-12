@@ -4,6 +4,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -11,13 +12,15 @@ var (
 	prometheusBlockMinedDuration prometheus.Histogram
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockMined = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "miner",
@@ -34,6 +37,4 @@ func initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

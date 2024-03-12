@@ -1,6 +1,13 @@
 {
   "posts": [
     {
+      "title": "Teranode - Introduction",
+      "summary": "Teranode is a new project by Bitcoin SV",
+      "slug": "testing-introduction",
+      "path": "testing-introduction.md",
+      "timestamp": "1708606953233"
+    },
+    {
       "title": "Testing Teranode",
       "summary": "Public Teranode testing website",
       "slug": "testing-teranode",

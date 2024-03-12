@@ -11,7 +11,12 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []uint32, error) {
+type getBlockHeadersFromHeightCache struct {
+	blockHeaders []*model.BlockHeader
+	metas        []*model.BlockHeaderMeta
+}
+
+func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
 	defer func() {
 		stat.AddTime(start)
@@ -21,9 +26,9 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%d-%d", height, limit)))
 	cached := cache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
-		if cacheData, ok := cached.Value().(*getBlockHeadersCache); ok && cacheData != nil {
+		if cacheData, ok := cached.Value().(*getBlockHeadersFromHeightCache); ok && cacheData != nil {
 			s.logger.Debugf("GetBlockHeadersFromHeight cache hit")
-			return cacheData.blockHeaders, cacheData.heights, nil
+			return cacheData.blockHeaders, cacheData.metas, nil
 		}
 	}
 
@@ -32,7 +37,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 
 	// we are getting all forks, so we need a bit more than the limit
 	blockHeaders := make([]*model.BlockHeader, 0, 2*limit)
-	heights := make([]uint32, 0, 2*limit)
+	metas := make([]*model.BlockHeaderMeta, 0, 2*limit)
 
 	q := `
 		SELECT
@@ -42,7 +47,11 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			,b.previous_hash
 			,b.merkle_root
 			,b.n_bits
+		    ,b.id
 			,b.height
+			,b.tx_count
+			,b.size_in_bytes
+			,b.peer_id
 		FROM blocks b
 		WHERE height >= $1 AND height < $2
 		ORDER BY height DESC
@@ -50,7 +59,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	rows, err := s.db.QueryContext(ctx, q, height, height+limit)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return blockHeaders, heights, nil
+			return blockHeaders, metas, nil
 		}
 		return nil, nil, fmt.Errorf("failed to get headers: %w", err)
 	}
@@ -61,6 +70,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	var nBits []byte
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}
+		blockHeaderMeta := &model.BlockHeaderMeta{}
 
 		if err = rows.Scan(
 			&blockHeader.Version,
@@ -69,7 +79,11 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			&hashPrevBlock,
 			&hashMerkleRoot,
 			&nBits,
-			&height,
+			&blockHeaderMeta.ID,
+			&blockHeaderMeta.Height,
+			&blockHeaderMeta.TxCount,
+			&blockHeaderMeta.SizeInBytes,
+			&blockHeaderMeta.Miner,
 		); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -86,13 +100,13 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 		}
 
 		blockHeaders = append(blockHeaders, blockHeader)
-		heights = append(heights, height)
+		metas = append(metas, blockHeaderMeta)
 	}
 
-	cache.Set(cacheId, &getBlockHeadersCache{
+	cache.Set(cacheId, &getBlockHeadersFromHeightCache{
 		blockHeaders: blockHeaders,
-		heights:      heights,
+		metas:        metas,
 	}, cacheTTL)
 
-	return blockHeaders, heights, nil
+	return blockHeaders, metas, nil
 }

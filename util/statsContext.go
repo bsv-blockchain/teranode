@@ -15,6 +15,12 @@ func ContextWithStat(ctx context.Context, stat *gocore.Stat) context.Context {
 	return context.WithValue(ctx, statsKey{}, stat)
 }
 
+func NewStatFromContextWithCancel(ctx context.Context, key string, defaultParent *gocore.Stat, options ...bool) (time.Time, *gocore.Stat, context.Context, context.CancelFunc) {
+	t, s, ctx := NewStatFromContext(ctx, key, defaultParent, options...)
+	ctx, cancel := context.WithCancel(ctx)
+	return t, s, ctx, cancel
+}
+
 func NewStatFromContext(ctx context.Context, key string, defaultParent *gocore.Stat, options ...bool) (time.Time, *gocore.Stat, context.Context) {
 	parentStat, ok := ctx.Value(statsKey{}).(*gocore.Stat)
 	if !ok {
