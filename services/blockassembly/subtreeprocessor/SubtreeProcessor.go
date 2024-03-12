@@ -227,6 +227,23 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 	return stp
 }
 
+// Reset resets the subtree processor, removing all subtrees and transactions
+// this will be called from the block assembler in a channel select, making sure no other operations are happening
+// the queue will still be ingesting transactions
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader) {
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
+
+	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	stp.txCount.Store(0)
+
+	stp.currentBlockHeader = blockHeader
+
+	// we do not remove the queued elements or the removeMap, these will always be valid
+	// stp.queue = NewLockFreeQueue()
+	// stp.removeMap = util.NewSwissMap(0)
+}
+
 func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	// TODO should this also be in the channel select ?
 	stp.currentBlockHeader = blockHeader

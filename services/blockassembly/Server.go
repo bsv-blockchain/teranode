@@ -931,3 +931,8 @@ func (ba *BlockAssembly) DeDuplicateBlockAssembly(_ context.Context, _ *blockass
 	ba.blockAssembler.DeDuplicate()
 	return &blockassembly_api.EmptyMessage{}, nil
 }
+
+func (ba *BlockAssembly) ResetBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	ba.blockAssembler.Reset()
+	return &blockassembly_api.EmptyMessage{}, nil
+}

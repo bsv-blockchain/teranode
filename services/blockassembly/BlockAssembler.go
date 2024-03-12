@@ -50,6 +50,7 @@ type BlockAssembler struct {
 	difficultyAdjustment       bool
 	currentDifficulty          *model.NBit
 	defaultMiningNBits         *model.NBit
+	resetCh                    chan struct{}
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
@@ -77,6 +78,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
 		difficultyAdjustment:       difficultyAdjustment,
 		defaultMiningNBits:         &defaultMiningBits,
+		resetCh:                    make(chan struct{}),
 	}
 
 	return b
@@ -126,6 +128,25 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
 				return
+
+			case <-b.resetCh:
+				// reset the block assembly
+				b.logger.Infof("[BlockAssembler] resetting block assembler")
+				bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error getting best block header: %v", err)
+					continue
+				}
+
+				b.logger.Infof("[BlockAssembler] resetting to new best block header: %d", meta.Height)
+				b.bestBlockHeader = bestBlockchainBlockHeader
+				b.bestBlockHeight = meta.Height
+				err = b.SetState(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error setting state: %v", err)
+				}
+
+				b.subtreeProcessor.Reset(b.bestBlockHeader)
 
 			case responseCh := <-b.miningCandidateCh:
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
@@ -327,6 +348,10 @@ func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 
 func (b *BlockAssembler) DeDuplicateTransactions() {
 	b.subtreeProcessor.DeDuplicateTransactions()
+}
+
+func (b *BlockAssembler) Reset() {
+	b.resetCh <- struct{}{}
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
