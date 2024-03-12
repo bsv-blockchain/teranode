@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"golang.org/x/term"
 
@@ -130,7 +130,7 @@ func main() {
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
-	startSubtreeAssembly := shouldStart("SubtreeAssembly")
+	startBlockPersister := shouldStart("BlockPersister")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -235,8 +235,8 @@ func main() {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
-	if startSubtreeAssembly {
-		if err = sm.AddService("SubtreeAssembly", subtreeassembly.New(
+	if startBlockPersister {
+		if err = sm.AddService("BlockPersister", blockpersister.New(
 			logger,
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
@@ -258,7 +258,7 @@ func main() {
 			if !ok {
 				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 				if !ok {
-					panic(err)
+					panic("asset_grpcAddress not found in config file")
 				}
 			}
 

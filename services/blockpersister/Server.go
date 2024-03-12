@@ -1,4 +1,4 @@
-package subtreeassembly
+package blockpersister
 
 import (
 	"context"
@@ -57,7 +57,7 @@ func (ps *Server) Start(ctx context.Context) (err error) {
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		if _, ps.subtreeKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL); err != nil {
-			return fmt.Errorf("[SubtreeAssembly] error connecting to kafka: %s", err)
+			return fmt.Errorf("[BlockPersister] error connecting to kafka: %s", err)
 		}
 		ps.startKafkaSubtreesListener(ctx, subtreesKafkaURL)
 	}
@@ -71,12 +71,12 @@ func (ps *Server) Stop(_ context.Context) (err error) {
 }
 
 func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash) error {
-	ps.logger.Infof("[SubtreeAssembly][%s] processing subtree data into subtree store", subtreeHash.String())
+	ps.logger.Infof("[BlockPersister][%s] processing subtree data into subtree store", subtreeHash.String())
 
 	// get the subtree from the subtree store
 	subtreeReader, err := ps.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
-		return fmt.Errorf("[SubtreeAssembly] error getting subtree from store: %s", err)
+		return fmt.Errorf("[BlockPersister] error getting subtree from store: %s", err)
 	}
 	defer func() {
 		_ = subtreeReader.Close()
@@ -85,7 +85,7 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 	subtree := util.Subtree{}
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
-		return fmt.Errorf("[SubtreeAssembly] error deserializing subtree: %s", err)
+		return fmt.Errorf("[BlockPersister] error deserializing subtree: %s", err)
 	}
 
 	subtreeBlob := make([]byte, 0, 250*1024*1024)
@@ -116,7 +116,7 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 			}
 
 			if err := ps.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
-				return fmt.Errorf("[SubtreeAssembly] error getting tx metas from store: %s", err)
+				return fmt.Errorf("[BlockPersister] error getting tx metas from store: %s", err)
 			}
 
 			for _, data := range missingTxHashesCompacted {
@@ -130,7 +130,7 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("[SubtreeAssembly] error getting tx metas from store: %s", err)
+		return fmt.Errorf("[BlockPersister] error getting tx metas from store: %s", err)
 	}
 
 	// get the tx bytes in order
@@ -141,7 +141,7 @@ func (ps *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash
 
 	// store the subtree blob to the blob store
 	if err = ps.subtreeStore.Set(ctx, subtreeHash.CloneBytes(), subtreeBlob, options.WithFileExtension("data")); err != nil {
-		return fmt.Errorf("[SubtreeAssembly] error storing subtree to store: %s", err)
+		return fmt.Errorf("[BlockPersister] error storing subtree to store: %s", err)
 	}
 
 	return nil
@@ -155,28 +155,28 @@ func (ps *Server) startKafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 		return
 	}
 
-	ps.logger.Infof("[SubtreeAssembly] Starting block Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
+	ps.logger.Infof("[BlockPersister] Starting block Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
 
-	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "BlockPersister", "blockpersister", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
-			prometheusSubtreeAssemblyBlocks.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+			prometheusBlockPersisterBlocks.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		}()
 
 		keyStr := utils.ReverseAndHexEncodeSlice(key)
 
 		block, err := model.NewBlockFromBytes(dataBytes)
 		if err != nil {
-			return fmt.Errorf("[SubtreeAssembly][%s] error deserializing block: %s", keyStr, err)
+			return fmt.Errorf("[BlockPersister][%s] error deserializing block: %s", keyStr, err)
 		}
 
-		ps.logger.Warnf("[SubtreeAssembly][%s] sending block subtrees to kafka: %s:%d", keyStr, block.String(), len(block.Subtrees))
+		ps.logger.Warnf("[BlockPersister][%s] sending block subtrees to kafka: %s:%d", keyStr, block.String(), len(block.Subtrees))
 
 		// store all the subtree hashes of the block in the subtrees topic
 		for _, subtreeHash := range block.Subtrees {
-			ps.logger.Warnf("[SubtreeAssembly][%s] sending subtree to kafka: %s", keyStr, subtreeHash.String())
+			ps.logger.Warnf("[BlockPersister][%s] sending subtree to kafka: %s", keyStr, subtreeHash.String())
 			if err = ps.subtreeKafkaProducer.Send(subtreeHash.CloneBytes(), subtreeHash.CloneBytes()); err != nil {
-				return fmt.Errorf("[SubtreeAssembly][%s] error sending subtree to kafka: %s", keyStr, err)
+				return fmt.Errorf("[BlockPersister][%s] error sending subtree to kafka: %s", keyStr, err)
 			}
 		}
 
@@ -192,20 +192,20 @@ func (ps *Server) startKafkaSubtreesListener(ctx context.Context, kafkaURL *url.
 		return
 	}
 
-	ps.logger.Infof("[SubtreeAssembly] Starting subtree Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
+	ps.logger.Infof("[BlockPersister] Starting subtree Kafka on address: %s, with %d workers", kafkaURL.String(), workers)
 
-	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "SubtreeAssembly", "subtreeassembly", func(ctx context.Context, key []byte, dataBytes []byte) error {
+	util.StartKafkaListener(ctx, ps.logger, kafkaURL, workers, "BlockPersister", "blockpersister", func(ctx context.Context, key []byte, dataBytes []byte) error {
 		startTime := time.Now()
 		defer func() {
-			prometheusSubtreeAssemblySubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+			prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		}()
 
 		keyStr := utils.ReverseAndHexEncodeSlice(key)
 
-		ps.logger.Warnf("[SubtreeAssembly][%s] propcessing subtree data", keyStr)
+		ps.logger.Warnf("[BlockPersister][%s] propcessing subtree data", keyStr)
 
 		if err := ps.ProcessSubtree(ctx, chainhash.Hash(dataBytes)); err != nil {
-			return fmt.Errorf("[SubtreeAssembly][%s] error processing subtree: %s", keyStr, err)
+			return fmt.Errorf("[BlockPersister][%s] error processing subtree: %s", keyStr, err)
 		}
 
 		return nil

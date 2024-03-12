@@ -213,7 +213,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
-	b.logger.Warnf("[SubtreeAssembly] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	b.logger.Warnf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
 		// TODO add a retry mechanism
 		go func(block *model.Block) {
@@ -221,7 +221,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 			if err != nil {
 				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
 			} else {
-				b.logger.Warnf("[SubtreeAssembly] sending block to kafka: %s", block.String())
+				b.logger.Warnf("[BlockPersister] sending block to kafka: %s", block.String())
 				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
 					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
 				}

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"net/http"
 	"runtime"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"golang.org/x/sync/errgroup"
 
@@ -46,18 +47,18 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger                       ulogger.Logger
-	blockchainClient             blockchain.ClientI
-	utxoStore                    utxostore.Interface
-	subtreeStore                 blob.Store
-	txStore                      blob.Store
-	txMetaStore                  txmeta_store.Store
-	validatorClient              validator.Interface
-	blockFoundCh                 chan processBlockFound
-	catchupCh                    chan processBlockCatchup
-	blockValidation              *BlockValidation
-	subtreeAssemblyKafkaProducer util.KafkaProducerI
-	SetTxMetaQ                   *util.LockFreeQ[[][]byte]
+	logger                      ulogger.Logger
+	blockchainClient            blockchain.ClientI
+	utxoStore                   utxostore.Interface
+	subtreeStore                blob.Store
+	txStore                     blob.Store
+	txMetaStore                 txmeta_store.Store
+	validatorClient             validator.Interface
+	blockFoundCh                chan processBlockFound
+	catchupCh                   chan processBlockCatchup
+	blockValidation             *BlockValidation
+	blockPersisterKafkaProducer util.KafkaProducerI
+	SetTxMetaQ                  *util.LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -214,13 +215,13 @@ func (u *Server) Start(ctx context.Context) error {
 
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesFinalConfig")
 	if err == nil && ok {
-		_, u.subtreeAssemblyKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
+		_, u.blockPersisterKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
 		if err != nil {
 			u.logger.Errorf("[BlockValidation] unable to connect to kafka for subtree assembly: %v", err)
 		} else {
 			// start the blockchain subscriber
 			go func() {
-				subscription, err := u.blockchainClient.Subscribe(ctx, "subtreeassembly")
+				subscription, err := u.blockchainClient.Subscribe(ctx, "blockpersister")
 				if err != nil {
 					u.logger.Errorf("[BlockValidation] failed starting subtree assembly subscription")
 				}
@@ -238,13 +239,13 @@ func (u *Server) Start(ctx context.Context) error {
 								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service")
 							}
 
-							u.logger.Infof("[BlockValidation][%s] processing block into subtreeassembly kafka producer", block.Hash().String())
+							u.logger.Infof("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
 
 							for _, subtreeHash := range block.Subtrees {
 								subtreeBytes := subtreeHash.CloneBytes()
-								u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into subtreeassembly kafka producer", block.Hash().String(), subtreeHash.String())
-								if err := u.subtreeAssemblyKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
-									u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into subtreeassembly kafka producer", block.Hash().String(), subtreeHash.String())
+								u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+								if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
+									u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
 								}
 							}
 						}
