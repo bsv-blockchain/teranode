@@ -944,7 +944,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
 
 		if attempt > maxRetries {
-			failFast = false
+			failFast = true
 			u.logger.Infof("[Init] [attempt #%d] final attempt to process subtree, this time with full checks enabled [%s]", attempt, v.SubtreeHash.String())
 		} else {
 			u.logger.Infof("[Init] [attempt #%d] (fail fast=%v) process %d txs from subtree begin [%s]", attempt, failFast, len(txHashes), v.SubtreeHash.String())

@@ -619,6 +619,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		}
 		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock DONE in %s", block.String(), time.Since(dequeueStartTime).String())
 	} else {
+		// TODO find a way to this in parallel
+
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
 		removeMapLength := stp.removeMap.Length()
@@ -808,6 +810,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	removeMapLength := stp.removeMap.Length()
 
+	// TODO find a way to this in parallel
 	// add all found tx hashes to the final list, in order
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
