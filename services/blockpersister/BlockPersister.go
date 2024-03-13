@@ -20,6 +20,7 @@ import (
 	"github.com/libsv/go-p2p/wire"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var stats = gocore.NewStat("blockpersister")
@@ -60,8 +61,13 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return fmt.Errorf("[BlockPersister] error creating block from bytes: %w", err)
 	}
 
+	bp.l.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
+	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
+
+	dir, _ := gocore.Config().Get("blockPersister_tmp_folder", os.TempDir())
+
 	// Open file
-	filename := path.Join(os.TempDir(), block.Header.Hash().String()+".dat")
+	filename := path.Join(dir, block.Header.Hash().String()+".dat")
 	tmpFilename := filename + ".tmp"
 
 	f, err := os.Create(tmpFilename)
@@ -105,6 +111,8 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return fmt.Errorf("[BlockPersister] error renaming file: %w", err)
 	}
 
+	bp.l.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
+
 	// Write the file to a store (e.g. S3)
 	if bp.store != nil {
 		r, err := os.Open(filename)
@@ -120,9 +128,12 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		if err := bp.store.SetFromReader(ctx, []byte(key), r, options.WithFileName(hash.String()), options.WithSubDirectory("blocks")); err != nil {
 			return fmt.Errorf("[BlockPersister] error writing file to store: %w", err)
 		}
+
+		bp.l.Infof("[BlockPersister] Wrote block %s to store", block.Header.Hash().String())
+
 	}
 
-	bp.l.Warnf("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
+	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
 	return nil
 }
@@ -134,7 +145,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
-	// get the subtree from the subtree store
+	// 1. get the subtree from the subtree store
 	subtreeReader, err := bp.r.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
 		return nil, fmt.Errorf("[BlockPersister] error getting subtree %s from store: %w", subtreeHash.String(), err)
@@ -149,42 +160,64 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		return nil, fmt.Errorf("[BlockPersister] error deserializing subtree: %w", err)
 	}
 
+	// 2. create a slice of MissingTxHashes for all the txs in the subtree
+	txHashes := make([]*txmeta.MissingTxHash, len(subtree.Nodes))
+
+	for i := 0; i < len(subtree.Nodes); i++ {
+		txHashes[i] = &txmeta.MissingTxHash{
+			Hash: &subtree.Nodes[i].Hash,
+			Idx:  i,
+		}
+	}
+
+	// 3. get the txs in parallel from the txmeta store in batches of 1024
+	batchSize := 1024
+
+	g, ctx := errgroup.WithContext(ctx)
+	limit, _ := gocore.Config().GetInt("blockPersister_groupLimit", 4)
+	g.SetLimit(limit)
+
+	for i := 0; i < len(txHashes); i += batchSize {
+		i := i // capture the value of i
+
+		g.Go(func() error {
+			startTime := gocore.CurrentTime()
+			defer func() {
+				stats.NewStat("MetaBatchDecorate").AddTime(startTime)
+				prometheusBlockPersisterSubtreeBatch.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+			}()
+
+			end := util.Min(i+batchSize, len(txHashes))
+
+			if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
+				return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
+	}
+
 	// Create a new byte buffer to write the txs to
 	var buf bytes.Buffer
 
-	batchSize := 1024
-
-	for i := 0; i < len(subtree.Nodes); i += batchSize {
-		end := util.Min(i+batchSize, len(subtree.Nodes))
-
-		missingTxHashesCompacted := make([]*txmeta.MissingTxHash, 0, end-i)
-
-		for j := 0; j < util.Min(batchSize, len(subtree.Nodes)-i); j++ {
-			missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
-				Hash: &subtree.Nodes[i+j].Hash,
-				Idx:  i + j,
-			})
-		}
-
-		if err := bp.d.MetaBatchDecorate(ctx, missingTxHashesCompacted, "tx"); err != nil {
-			return nil, fmt.Errorf("[BlockPersister] error getting tx metas from store: %w", err)
-		}
-
-		for k, data := range missingTxHashesCompacted {
-			if data.Data == nil {
-				if data.Hash.IsEqual(model.CoinbasePlaceholderHash) {
-					if i+k != 0 {
-						return nil, errors.New("[BlockPersister] coinbase tx is not first in subtree")
-					}
-					// The coinbase tx is not in the txmeta store and has been added to the block already
-					continue
+	for i, data := range txHashes {
+		if data.Data == nil {
+			if model.CoinbasePlaceholderHash.IsEqual(data.Hash) {
+				if i != 0 {
+					return nil, errors.New("[BlockPersister] coinbase tx is not first in subtree")
 				}
-				return nil, fmt.Errorf("[BlockPersister] error getting tx meta from store: %s", data.Hash.String())
+				// The coinbase tx is not in the txmeta store and has been added to the block already
+				continue
 			}
+			return nil, fmt.Errorf("[BlockPersister] error getting tx meta from store: %s", data.Hash.String())
+		}
 
-			if _, err := buf.Write(data.Data.Tx.Bytes()); err != nil {
-				return nil, fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
-			}
+		if _, err := buf.Write(data.Data.Tx.Bytes()); err != nil {
+			return nil, fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
 	}
 

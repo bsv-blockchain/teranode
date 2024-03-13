@@ -6,7 +6,6 @@ replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
 
 require (
 	github.com/IBM/sarama v1.42.2
-	github.com/Shopify/sarama v1.38.1
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go/v6 v6.14.1
 	github.com/archdx/zerolog-sentry v1.8.2

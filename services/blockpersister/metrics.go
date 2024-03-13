@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	prometheusBlockPersisterBlocks   prometheus.Histogram
-	prometheusBlockPersisterSubtrees prometheus.Histogram
+	prometheusBlockPersisterBlocks       prometheus.Histogram
+	prometheusBlockPersisterSubtrees     prometheus.Histogram
+	prometheusBlockPersisterSubtreeBatch prometheus.Histogram
 )
 
 var (
@@ -36,6 +37,15 @@ func _initPrometheusMetrics() {
 			Namespace: "blockpersister",
 			Name:      "subtrees_duration_millis",
 			Help:      "Duration of subtree processing by the block persister service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockPersisterSubtreeBatch = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockpersister",
+			Name:      "subtree_batch_duration_millis",
+			Help:      "Duration of a subtree batch processing by the block persister service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
