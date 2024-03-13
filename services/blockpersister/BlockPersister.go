@@ -189,6 +189,8 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 			end := util.Min(i+batchSize, len(txHashes))
 
+			bp.l.Infof("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
+
 			if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
 				return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
 			}
