@@ -59,7 +59,7 @@ require (
 	golang.org/x/term v0.17.0
 	golang.org/x/time v0.5.0
 	google.golang.org/grpc v1.59.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.33.0
 	k8s.io/api v0.28.2
 	k8s.io/apimachinery v0.29.2
 	k8s.io/client-go v0.28.2
