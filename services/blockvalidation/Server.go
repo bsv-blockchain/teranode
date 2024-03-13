@@ -163,13 +163,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// process blocks found from channel
 	go func() {
 		for {
+			_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", stats, false)
 			select {
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
 				return
 			case c := <-u.catchupCh:
 				{
-					_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", stats, false)
+
 					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)

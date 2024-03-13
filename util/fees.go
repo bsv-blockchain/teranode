@@ -10,7 +10,7 @@ func GetFees(btTx *bt.Tx) (uint64, error) {
 	fees := uint64(0)
 
 	if btTx.IsCoinbase() {
-		fmt.Printf("coinbase tx: %s\n", btTx.String())
+		// fmt.Printf("coinbase tx: %s\n", btTx.String())
 
 		for _, output := range btTx.Outputs {
 			if output.Satoshis > 0 {

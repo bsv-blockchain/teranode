@@ -26,7 +26,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
 			Name:      "blocks_duration_millis",
-			Help:      "Duration of block processing by the subtree assembly service",
+			Help:      "Duration of block processing by the block persister service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -35,7 +35,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
 			Name:      "subtrees_duration_millis",
-			Help:      "Duration of subtree processing by the subtree assembly service",
+			Help:      "Duration of subtree processing by the block persister service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
