@@ -18,12 +18,19 @@ import (
 )
 
 func TestNewTree(t *testing.T) {
-	st, err := NewTree(20)
-	require.NoError(t, err)
+	t.Run("invalid size", func(t *testing.T) {
+		_, err := NewTreeByLeafCount(123)
+		require.Error(t, err)
+	})
 
-	if st.Size() != 1048576 {
-		t.Errorf("expected size to be 1048576, got %d", st.Size())
-	}
+	t.Run("valid size", func(t *testing.T) {
+		st, err := NewTree(20)
+		require.NoError(t, err)
+
+		if st.Size() != 1048576 {
+			t.Errorf("expected size to be 1048576, got %d", st.Size())
+		}
+	})
 }
 
 func TestRootHash(t *testing.T) {
@@ -198,25 +205,31 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, hash4.String(), txHashes[3].String())
 	})
 
-	t.Run("Deserialize with reader", func(t *testing.T) {
-		st, err := NewTree(2)
-		require.NoError(t, err)
+	t.Run("New subtree from bytes", func(t *testing.T) {
+		st, serializedBytes := getSubtreeBytes(t)
 
-		if st.Size() != 4 {
-			t.Errorf("expected size to be 4, got %d", st.Size())
+		newSubtree, err := NewSubtreeFromBytes(serializedBytes)
+		require.NoError(t, err)
+		for i := 0; i < newSubtree.Size(); i += chainhash.HashSize {
+			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), newSubtree.Nodes[i/chainhash.HashSize].Hash.String())
 		}
+	})
 
-		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
-		hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-		hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
-		hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
-		_ = st.AddNode(*hash1, 111, 0)
-		_ = st.AddNode(*hash2, 111, 0)
-		_ = st.AddNode(*hash3, 111, 0)
-		_ = st.AddNode(*hash4, 111, 0)
+	t.Run("DeserializeNodes with reader", func(t *testing.T) {
+		st, serializedBytes := getSubtreeBytes(t)
 
-		serializedBytes, err := st.Serialize()
+		subtreeBytes, err := DeserializeNodesFromReader(bytes.NewReader(serializedBytes))
 		require.NoError(t, err)
+
+		require.Equal(t, chainhash.HashSize*4, len(subtreeBytes))
+		for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+			txHash := chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
+			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), txHash.String())
+		}
+	})
+
+	t.Run("Deserialize with reader", func(t *testing.T) {
+		st, serializedBytes := getSubtreeBytes(t)
 
 		newSubtree, err := NewTree(2)
 		require.NoError(t, err)
@@ -280,6 +293,29 @@ func Test_Serialize(t *testing.T) {
 			assert.Equal(t, st.ConflictingNodes[i].String(), newSubtree.ConflictingNodes[i].String())
 		}
 	})
+}
+
+func getSubtreeBytes(t *testing.T) (*Subtree, []byte) {
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
+	if st.Size() != 4 {
+		t.Errorf("expected size to be 4, got %d", st.Size())
+	}
+
+	hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+	_ = st.AddNode(*hash1, 111, 0)
+	_ = st.AddNode(*hash2, 111, 0)
+	_ = st.AddNode(*hash3, 111, 0)
+	_ = st.AddNode(*hash4, 111, 0)
+
+	serializedBytes, err := st.Serialize()
+	require.NoError(t, err)
+
+	return st, serializedBytes
 }
 
 func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
@@ -469,7 +505,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 //}
 
 func Test_Deserialize(t *testing.T) {
-	//SkipLongTests(t)
+	SkipLongTests(t)
 	runtime.SetCPUProfileRate(1000)
 
 	size := 1024 * 1024
@@ -493,7 +529,7 @@ func Test_Deserialize(t *testing.T) {
 }
 
 func Test_DeserializeFromReader(t *testing.T) {
-	//SkipLongTests(t)
+	SkipLongTests(t)
 	runtime.SetCPUProfileRate(1000)
 
 	size := 1024 * 1024

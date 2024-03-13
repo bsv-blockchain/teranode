@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -21,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -31,6 +31,8 @@ var (
 	prometheusTxMetaSetMined       prometheus.Counter
 	prometheusTxMetaSetMinedBatch  prometheus.Counter
 	prometheusTxMetaSetMinedBatchN prometheus.Counter
+	prometheusTxMetaGetMulti       prometheus.Counter
+	prometheusTxMetaGetMultiN      prometheus.Counter
 	prometheusTxMetaDelete         prometheus.Counter
 )
 
@@ -65,12 +67,29 @@ func init() {
 			Help: "Number of txmeta set_mined_batch txs done to aerospike",
 		},
 	)
+	prometheusTxMetaGetMulti = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi",
+			Help: "Number of txmeta get_multi calls done to aerospike",
+		},
+	)
+	prometheusTxMetaGetMultiN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi_n",
+			Help: "Number of txmeta get_multi txs done to aerospike",
+		},
+	)
 	prometheusTxMetaDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_txmeta_delete",
 			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type Store struct {
@@ -80,14 +99,7 @@ type Store struct {
 	logger     ulogger.Logger
 }
 
-var initMu sync.Mutex
-
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	// this is weird, but if we are starting 2 connections (utxo, txmeta) at the same time, this fails
-	initMu.Lock()
-	asl.Logger.SetLevel(asl.DEBUG)
-	initMu.Unlock()
-
 	logger = logger.New("aero_store")
 
 	namespace := u.Path[1:]
@@ -138,7 +150,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.NewErrTxmetaNotFound(hash)
 		}
 		return nil, fmt.Errorf("aerospike get error (time taken: %s) : %w", time.Since(start).String(), aeroErr)
 	}
@@ -171,7 +183,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	}
 
 	if value.Bins["blockIDs"] != nil {
-		status.BlockIDs = value.Bins["blockIDs"].([]uint32)
+		temp := value.Bins["blockIDs"].([]interface{})
+		var blockIDs []uint32
+		for _, val := range temp {
+			blockIDs = append(blockIDs, uint32(val.(int)))
+		}
+		status.BlockIDs = blockIDs
 	}
 
 	// transform the aerospike interface{} into the correct types
@@ -189,6 +206,92 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	}
 
 	return status, nil
+}
+
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
+	batchPolicy := util.GetAerospikeBatchPolicy()
+
+	//policy := util.GetAerospikeBatchReadPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
+
+	for idx, item := range items {
+		key, err := aerospike.NewKey(s.namespace, "txmeta", item.Hash[:])
+		if err != nil {
+			return err
+		}
+
+		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+		if len(fields) > 0 {
+			bins = fields
+		}
+
+		record := aerospike.NewBatchRead(key, bins)
+		// Add to batch
+		batchRecords[idx] = record
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return err
+	}
+
+	for idx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+		if err != nil {
+			items[idx].Data = nil
+			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
+		} else {
+			bins := batchRecord.BatchRec().Record.Bins
+
+			items[idx].Data = &txmeta.Data{}
+
+			for key, value := range bins {
+				switch key {
+				case "tx":
+					txBytes, ok := value.([]byte)
+					if ok {
+						tx, err := bt.NewTxFromBytes(txBytes)
+						if err != nil {
+							return fmt.Errorf("could not convert tx bytes to bt.Tx: %w", err)
+						}
+						items[idx].Data.Tx = tx
+					}
+				case "fee":
+					fee, ok := value.(int)
+					if ok {
+						items[idx].Data.Fee = uint64(fee)
+					}
+				case "sizeInBytes":
+					sizeInBytes, ok := value.(int)
+					if ok {
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
+					}
+				case "parentTxHashes":
+					parentTxHashesInterface, ok := value.([]byte)
+					if ok {
+						parentTxHashes := make([]chainhash.Hash, 0, len(parentTxHashesInterface)/32)
+						for i := 0; i < len(parentTxHashesInterface); i += 32 {
+							parentTxHashes = append(parentTxHashes, chainhash.Hash(parentTxHashesInterface[i:i+32]))
+						}
+						items[idx].Data.ParentTxHashes = parentTxHashes
+					}
+				case "blockIDs":
+					temp := value.([]interface{})
+					var blockIDs []uint32
+					for _, val := range temp {
+						blockIDs = append(blockIDs, uint32(val.(int)))
+					}
+					items[idx].Data.BlockIDs = blockIDs
+				}
+			}
+		}
+	}
+
+	prometheusTxMetaGetMulti.Inc()
+	prometheusTxMetaGetMultiN.Add(float64(len(batchRecords)))
+
+	return nil
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -227,6 +330,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
+	// s.expiration - expiration is set in SetMined and SetMinedMulti
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
@@ -248,7 +352,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		}
 
 		if aeroErr.ResultCode == types.KEY_EXISTS_ERROR {
-			return txMeta, txmeta.ErrAlreadyExists
+			return txMeta, txmeta.NewErrTxmetaAlreadyExists(hash)
 		}
 		switch aeroErr.ResultCode {
 		case types.NETWORK_ERROR, types.TIMEOUT, types.MAX_ERROR_RATE, types.COMMAND_REJECTED, types.INVALID_NODE_ERROR, types.MAX_RETRIES_EXCEEDED, types.SERVER_ERROR, types.SERVER_NOT_AVAILABLE, types.LOST_CONFLICT:

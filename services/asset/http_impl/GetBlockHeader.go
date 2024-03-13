@@ -2,10 +2,11 @@ package http_impl
 
 import (
 	"encoding/hex"
+	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -34,7 +35,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 
 		header, meta, err = h.repository.GetBlockHeader(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

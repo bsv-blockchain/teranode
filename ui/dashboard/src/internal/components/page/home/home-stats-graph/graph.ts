@@ -1,9 +1,59 @@
-import * as echarts from 'echarts'
-
-import { formatDate, addNumCommas } from '$lib/utils/format'
+import { formatDate, formatLargeNumberStr } from '$lib/utils/format'
 import { timeSeriesTooltipFormatter } from '$internal/utils/graph'
 
-export const getGraphObj = (t, data, smooth = true) => {
+// See:
+// - https://apache.github.io/echarts-handbook/en/basics/import/
+// - https://echarts.apache.org/handbook/en/basics/release-note/v5-upgrade-guide/
+// import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  DatasetComponent,
+  TransformComponent,
+  LegendComponent,
+} from 'echarts/components'
+import { LabelLayout, UniversalTransition } from 'echarts/features'
+import { CanvasRenderer } from 'echarts/renderers'
+
+import type {
+  // The series option types are defined with the SeriesOption suffix
+  LineSeriesOption,
+} from 'echarts/charts'
+import type {
+  // The component option types are defined with the ComponentOption suffix
+  TitleComponentOption,
+  TooltipComponentOption,
+  GridComponentOption,
+  DatasetComponentOption,
+} from 'echarts/components'
+import type { ComposeOption } from 'echarts/core'
+
+// Create an Option type with only the required components and charts via ComposeOption
+export type ECOption = ComposeOption<
+  | LineSeriesOption
+  | TitleComponentOption
+  | TooltipComponentOption
+  | GridComponentOption
+  | DatasetComponentOption
+>
+
+echarts.use([
+  LineChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  DatasetComponent,
+  TransformComponent,
+  LegendComponent,
+  LabelLayout,
+  UniversalTransition,
+  CanvasRenderer,
+])
+
+export const getGraphObj = (t, data, period, smooth = false) => {
   // graph data
   const graphData: any[] = []
   if (data) {
@@ -39,30 +89,56 @@ export const getGraphObj = (t, data, smooth = true) => {
       },
     },
   ]
+
+  let startDate = new Date().getTime()
+  switch (period) {
+    case '2h':
+      startDate -= 2 * 60 * 60 * 1000
+      break
+    case '6h':
+      startDate -= 6 * 60 * 60 * 1000
+      break
+    case '12h':
+      startDate -= 12 * 60 * 60 * 1000
+      break
+    case '24h':
+      startDate -= 24 * 60 * 60 * 1000
+      break
+    case '1w':
+      startDate -= 7 * 24 * 60 * 60 * 1000
+      break
+    case '1m':
+      startDate -= 30 * 24 * 60 * 60 * 1000
+      break
+    case '3m':
+      startDate -= 90 * 24 * 60 * 60 * 1000
+      break
+  }
+
   // graph options
-  let graphOptions: any = null
+  let graphOptions: ECOption | null = null
   if (graphData?.length) {
     const seriesNames = [t('graph.series.tx_count')]
     graphOptions = {
-      grid: { top: 44, right: 30, bottom: 60, left: 80 },
+      grid: { top: 44, right: 25, bottom: 60, left: 62 },
       dataset: {
         source: graphData,
         dimensions: [t('graph.series.date')].concat(seriesNames),
       },
-      xAxis: {
-        type: 'time',
-        boundaryGap: false,
-        axisLine: { onZero: true },
-        axisLabel: {
-          formatter: (value) => ' ' + formatDate(parseInt(value), false, false),
-          padding: [0, 5, 0, 5],
-          hideOverlap: true,
+      xAxis: [
+        {
+          type: 'time',
+          axisLine: { onZero: true },
+          axisLabel: {
+            formatter: (value) => ' ' + formatDate(parseInt(value.toString()), false, false),
+            padding: [0, 5, 0, 5],
+            hideOverlap: true,
+          },
+          alignTicks: true,
+          min: startDate,
+          max: new Date().getTime(),
         },
-        alignTicks: true,
-        axisTick: {
-          //   interval: 1,
-        },
-      },
+      ],
       yAxis: [
         {
           type: 'value',
@@ -70,7 +146,7 @@ export const getGraphObj = (t, data, smooth = true) => {
           min: 0,
           max: 'dataMax',
           axisLabel: {
-            formatter: (value) => addNumCommas(value),
+            formatter: (value) => formatLargeNumberStr(value, 2, false),
           },
           splitLine: {
             show: false,
@@ -84,8 +160,8 @@ export const getGraphObj = (t, data, smooth = true) => {
           name: seriesName,
           type: 'line',
           smooth,
-          symbol: 'circle',    // Add this line to set the symbol shape
-          symbolSize: 10,       // And this line to set the symbol size
+          symbol: 'circle', // Add this line to set the symbol shape
+          symbolSize: 10, // And this line to set the symbol size
           yAxisIndex: mapper?.yAxisIndex ? mapper.yAxisIndex : 0,
           itemStyle: mapper?.itemStyle ? mapper.itemStyle : null,
           areaStyle: mapper?.areaStyle ? mapper.areaStyle : null,
@@ -96,20 +172,21 @@ export const getGraphObj = (t, data, smooth = true) => {
         }
       }),
       textStyle: {
-        // fontFamily: 'Satoshi',
         fontWeight: 400,
         fontSize: 14,
         lineHeight: 24,
         color: '#8F8D94',
       },
-      tooltip: {
-        trigger: 'axis',
-        formatter: timeSeriesTooltipFormatter.bind(null, graphMappers),
-        textStyle: {
-          fontWeight: 500,
-          color: '#282933',
+      tooltip: [
+        {
+          trigger: 'axis',
+          formatter: timeSeriesTooltipFormatter.bind(null, graphMappers) as any,
+          textStyle: {
+            fontWeight: 500,
+            color: '#282933',
+          },
         },
-      },
+      ],
       legend: {
         data: seriesNames,
         bottom: 0,
@@ -118,17 +195,6 @@ export const getGraphObj = (t, data, smooth = true) => {
           color: 'rgba(255, 255, 255, 0.66)',
         },
       },
-      // toolbox: {
-      //   feature: {
-      //     dataZoom: {
-      //       yAxisIndex: 'none',
-      //       filterMode: 'none',
-      //       xAxisIndex: [0],
-      //     },
-      //     restore: { show: false },
-      //     saveAsImage: {},
-      //   },
-      // },
     }
   }
   return {

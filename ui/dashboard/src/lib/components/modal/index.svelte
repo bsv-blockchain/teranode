@@ -37,6 +37,7 @@
     bottom: 0;
     left: 0;
     background: var(--cover-col-local);
+    z-index: 999;
   }
 
   .tui-modal {

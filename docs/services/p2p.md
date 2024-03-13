@@ -3,7 +3,7 @@
 ## Index
 
 1. [Description](#1-description)
-2. [Functionality ](#2-functionality-)
+2. [Functionality ](#2-functionality)
 - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
 - [2.1.1. Creating a new P2P Server](#211-creating-a-new-p2p-server)
    - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
@@ -26,6 +26,8 @@
 The `p2p` package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication.
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
+
+The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology. To read more about the p2p bootstrap service, please refer to the [p2p-bootstrap](p2pBootstrap.md) documentation.
 
 1. **Initialization and Configuration**:
   - The `Server` struct holds essential information for the P2P server, such as hosts, topics, subscriptions, clients for blockchain and validation, and logger for logging activities.
@@ -78,86 +80,91 @@ In more detail:
 
 ![p2p_create_init_start.svg](img/plantuml/p2p/p2p_create_init_start.svg)
 
-### 2.1.1. Creating a new P2P Server
-Upon node startup, the `main.go` will invoke the  `p2p.NewServer` (see `services/p2p/Server.go`) function in the P2P package. This function is responsible for instantiating a new P2P server.
+#Based on the updated code and the provided description, the revised and adjusted documentation for the P2P server sections would be as follows:
+
+### 2.1.1. Creating a New P2P Server
+The startup process of the node involves the `main.go` file calling the `p2p.NewServer` function from the P2P package (`services/p2p/Server.go`). This function is tasked with creating a new P2P server instance.
 
 1. **Private Key Management**:
-    - The server attempts to read an existing private key from storage using the `readPrivateKey()` function.
-    - If this fails (i.e., no key exists), it generates a new private key using `generatePrivateKey()`.
+   - The server tries to read an existing private key from storage through the `readPrivateKey()` function.
+   - If no existing key is found, it generates a new one using the `generatePrivateKey()` function.
 
-3. **Configuration Retrieval and Topic Registration**: The function retrieves necessary configuration settings:
-    - `p2p_ip`: The IP address on which the P2P service will listen.
-    - `p2p_port`: The port number for the P2P service.
-    - `p2p_topic_prefix`: A prefix for naming P2P communication topics.
-    - Specific topic names for different P2P communication topics like `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
+2. **Configuration Retrieval and Topic Registration**:
+   - Retrieves required configuration settings like `p2p_ip`, `p2p_port`, and `p2p_topic_prefix`.
+   - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
 
-4. **P2P Host Initialization**: The server initializes a new libp2p host with the given IP, port, and private key. The libp2p host handles connections and communications between the different nodes.
+3. **P2P Node Initialization**:
+   - Initializes a libp2p node (host) using the specified IP, port, and private key, which manages node communications and connections.
 
-#### 2.1.2. Initializing the P2P Server
+### 2.1.2. Initializing the P2P Server
 
-The `Init` function of the P2P server in the `p2p` package is responsible for initializing the server:
+The P2P server's `Init` function is in charge of server setup:
 
-1. **Blockchain Client Initialization**: The server creates a new blockchain client using `blockchain.NewClient(ctx, s.logger)`.
+1. **Blockchain Client Initialization**:
+   - Creates a new blockchain client with `blockchain.NewClient(ctx, s.logger)`.
 
-3. **Asset HTTP Address Configuration**: The function retrieves the Asset HTTP Address URL configuration using `gocore.Config().GetURL("asset_httpAddress")`.
+2. **Asset HTTP Address Configuration**:
+   - Retrieves the Asset HTTP Address URL from the configuration using `gocore.Config().GetURL("asset_httpAddress")`.
 
-4. **Block Validation Client Initialization**: The server initializes a block validation client using `blockvalidation.NewClient(ctx)`.
+3. **Block Validation Client Initialization**:
+   - Sets up a block validation client with `blockvalidation.NewClient(ctx)`.
 
-5. **Validator Client Initialization**: The server initializes a new Tx validator client using `validator.NewClient(ctx, s.logger)`.
+4. **Validator Client Initialization**:
+   - Initializes a transaction validator client with `validator.NewClient(ctx, s.logger)`.
 
-#### 2.1.3. Starting the P2P Server
+### 2.1.3. Starting the P2P Server
 
-The `Start` function in the P2P server of the `p2p` package is responsible for starting the P2P service:
+The `Start` function is responsible for commencing the P2P service:
 
-1. **HTTP Server Setup**: Initializes an HTTP server using the Echo framework.
+1. **HTTP Server Setup**:
+   - Utilizes the Echo framework to set up an HTTP server.
 
 2. **HTTP Endpoints**:
-    - Registers an endpoint for health checks (`/health`) that simply responds with "OK" to indicate the service is up and running.
-    - Registers a WebSocket endpoint (`/ws`) for real-time communication, handled by `s.HandleWebSocket`.
+   - Sets up a health check endpoint (`/health`) that responds with "OK".
+   - Adds a WebSocket endpoint (`/ws`) for real-time communication via `s.HandleWebSocket`.
 
-3. **Start HTTP Server**: Launches a goroutine to start the HTTP server in a non-blocking manner, calling `s.StartHttp`.
+3. **Start HTTP Server**:
+   - Initiates the HTTP server using a goroutine, which is executed via `s.StartHttp`.
 
 4. **PubSub Topics Setup**:
-    - Initializes the GossipSub system for pub-sub messaging.
-    - Creates and subscribes to various topics: `bestBlockTopicName`, `blockTopicName`, `subtreeTopicName`, `miningOnTopicName`, and `rejectedTxTopicName`.
+   - Initializes the GossipSub system for pub-sub messaging.
+   - Subscribes to various topics defined in the configuration.
 
 5. **Peer-to-Peer Host Configuration**:
-    - Sets a libp2p stream handler for the P2P host to handle incoming blockchain messages.
+   - Assigns a stream handler to the P2P host to handle blockchain-related messages.
 
 6. **Topic Handlers**:
-    - Launches goroutines to handle messages for different topics (`bestBlockTopic`, `blockTopic`, `subtreeTopic`, `miningOnTopic`).
+   - Initiates goroutines for message handling on designated topics.
 
-8. **Subscription Listeners**:
-    - Starts listeners for blockchain and validator subscriptions to process incoming notifications related to blocks and transactions.
+7. **Subscription Listeners**:
+   - Begins subscription listeners for blockchain and validator services to manage incoming notifications about blocks and transactions.
 
-9. **Best Block Message Broadcast**: Sends out a best block message request to the network as a part of the initialization process. Peers receiving this message will respond providing the best block hash.
+8. **Best Block Message Broadcast**:
+   - Sends a best block message to the network to solicit the current best block hash from peers.
 
-At this point, the server is initialised and ready to accept connections and messages from peers, as well as listen to activity in the network.
+Once these steps are completed, the server is ready to accept peer connections, handle messages, and monitor network activity.
 
 ### 2.2. Peer Discovery and Connection
 
-The P2P service uses a DHT initialized by `p2p.InitDHT()` to discover and connect to peers in the libp2p network based on shared interests (topics). This process enables the node to form a network with other peers, facilitating decentralized communication and resource sharing.
+In the previous section, the P2P Service created a `P2PNode as part of the initialization phase. This P2PNode is responsible for joining the network. The P2PNode utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the node to become part of a decentralized network, facilitating communication and resource sharing among peers.
 
 ![p2p_peer_discovery.svg](img%2Fplantuml%2Fp2p%2Fp2p_peer_discovery.svg)
 
-
-1. **Initialization of DHT**:
-   - The `discoverPeers` (Server.go) function begins by calling `InitDHT(ctx, s.host)`. The `InitDHT` function initializes a Distributed Hash Table (DHT) for the given host (`s.host`), which is part of the libp2p network. The DHT is a key component in P2P networks used for efficient peer discovery and content routing.
-   - The DHT is bootstrapped with default peers to integrate the node into the existing P2P network.
+1. **Initialization of DHT and libp2p Host**:
+   - The `P2PNode` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the node into the existing network.
 
 2. **Setting Up Routing Discovery**:
-   - After initializing the DHT, `discoverPeers` sets up a `routingDiscovery` using the newly created DHT instance. `routingDiscovery` is used to discover peers in the network and to advertise the node's presence to others.
+   - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
 
 3. **Advertising and Searching for Peers**:
-   - The function iterates over a list of topic names (`tn`). For each topic, it uses `dutil.Advertise` to advertise the node's presence under that topic in the network. This step makes the node discoverable to others who are interested in the same topics.
-   - The function then enters a loop where it searches for peers who have announced themselves under these topics. This is done using `routingDiscovery.FindPeers`, which returns a channel of peer addresses (`peerChan`).
+   - The node then advertises itself for the configured topics and looks for peers associated with these topics. This is conducted through the `discoverPeers` method, which iterates over the topic names and uses the routing discovery to advertise and find peers interested in the same topics.
 
-4. **Connecting to Discovered Peers**:
-   - The function iterates over the `peerChan` to connect to each discovered peer. It checks to ensure that it does not attempt to connect to itself. If a connection to a peer is successful, it marks `anyConnected` as `true`.
-   - If no peers are found initially, the search continues. Once peers are found and connected, the loop breaks, indicating that peer discovery is complete.
+4. **Connecting to Discovered and Static Peers**:
+   - The `discoverPeers` method also contains logic to connect to new peers discovered in the network. Simultaneously, the `connectToStaticPeers` method attempts to form connections with a predefined list of peers (static peers), enhancing the robustness of the network connectivity.
 
 5. **Integration with P2P Network**:
-   - By using DHT for discovery and routing, along with topic-based advertising, the node becomes an integrated part of the P2P network. It can discover peers interested in similar topics and establish connections with them.
+   - The capabilities of the DHT for discovery and topic-based advertising enables the node to seamlessly integrate into the Teranode P2P network.
+
 
 ### 2.3. Best Block Messages
 
@@ -213,25 +220,7 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
 
 Nodes will broadcast rejected transaction notifications to the network. This is done by publishing a message to the relevant topic. The message is then received by all peers subscribed to that topic.
 
-```plantuml
-@startuml
-
-participant "Node 1" as Node1
-participant "PubSub System" as PubSub
-participant "Node 2" as Node2
-
-Node1 -> Node1: validatorSubscriptionListener(ctx)
-activate Node1
-Node1 -> PubSub: s.topics[rejectedTxTopicName].Publish(ctx, rejectedTxMessageBytes)
-deactivate Node1
-
-PubSub -> Node2: s.subscriptions[rejectedTxTopicName]
-activate Node2
-Node2 -> Node2: Handle rejected transaction notification
-deactivate Node2
-
-@enduml
-```
+![p2p_tx_validator_messages.svg](img%2Fplantuml%2Fp2p%2Fp2p_tx_validator_messages.svg)
 
  - The Node 1 listens for validator subscription events.
  - When a new rejected transaction notification is detected, the Node 1 publishes this message to the PubSub System using the topic name `rejectedTxTopicName`, forwarding it to any subscribers of the `rejectedTxTopicName` topic.
@@ -311,7 +300,7 @@ As a sequence:
 
 ## 4. Data Model
 
-Please refer to the [Architecture Overview](../architecture/architecture.md) document for a detailed description of the Block and Subtree data model.
+Please refer to the [Architecture Overview](../architecture/teranode-architecture.md) document for a detailed description of the Block and Subtree data model.
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
@@ -383,22 +372,19 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The following settings can be configured for the p2p service:
 
-```
-
-startP2P.${YOUR_USERNAME}=true      ## Whether to start the P2P service
-
-p2p_ip=0.0.0.0                      ## The IP address to listen for incoming connections
-p2p_port=9905                       ## The port to listen for incoming connections
-
-p2p_topic_prefix.${YOUR_USERNAME}=dev.github.com/bitcoin-sv/ubsv
-
-p2p_block_topic=block               ## The P2P topic to publish block messages
-p2p_subtree_topic=subtree           ## The P2P topic to publish subtree messages
-p2p_bestblock_topic=bestblock       ## The P2P topic to publish best block messages
-p2p_mining_on_topic=miningon        ## The P2P topic to publish mining on messages
-p2p_rejected_tx_topic=rejected_tx   ## The P2P topic to publish rejected transaction messages
-
-p2p_httpListenAddress=:${P2P_HTTP_PORT}
-p2p_httpListenAddress.dev=localhost:${P2P_HTTP_PORT}
-
-```
+- **`p2p_ip`**: Specifies the IP address for the P2P service to bind to.
+- **`p2p_port`**: Defines the port number on which the P2P service listens.
+- **`p2p_topic_prefix`**: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
+- **`p2p_block_topic`**: The topic name used for block-related messages in the P2P network.
+- **`p2p_subtree_topic`**: Specifies the topic for subtree-related messages within the P2P network.
+- **`p2p_bestblock_topic`**: Defines the topic for broadcasting the best block information among peers.
+- **`p2p_mining_on_topic`**: The topic used for messages related to the start of mining a new block.
+- **`p2p_rejected_tx_topic`**: Specifies the topic for broadcasting information about rejected transactions.
+- **`p2p_shared_key`**: A shared key for securing P2P communications, required for private network configurations.
+- **`p2p_dht_use_private`**: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
+- **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
+- **`p2p_static_peers`**: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
+- **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network.
+- **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
+- **`securityLevelHTTP`**: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
+- **`server_certFile`** and **`server_keyFile`**: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.

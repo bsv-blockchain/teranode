@@ -3,6 +3,8 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
@@ -16,10 +18,12 @@ import (
 )
 
 type Client struct {
-	apiClient   blockvalidation_api.BlockValidationAPIClient
-	frpcClient  *blockvalidation_api.Client
-	httpAddress string
-	logger      ulogger.Logger
+	apiClient           blockvalidation_api.BlockValidationAPIClient
+	frpcClient          atomic.Pointer[blockvalidation_api.Client]
+	frpcClientConnected bool
+	frpcClientMux       sync.Mutex
+	httpAddress         string
+	logger              ulogger.Logger
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -37,79 +41,96 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	}
 
 	client := &Client{
-		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
-		logger:    logger,
+		apiClient:           blockvalidation_api.NewBlockValidationAPIClient(baConn),
+		frpcClientConnected: false,
+		frpcClientMux:       sync.Mutex{},
+		logger:              logger,
 	}
+
+	client.NewFRPCClient()
 
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
 	if ok {
 		client.httpAddress = httpAddress
 	}
 
-	go client.connectFRPC(ctx)
-
 	return client
 }
 
-func (s *Client) connectFRPC(ctx context.Context) {
-	func() {
-		err := recover()
+func (s *Client) getFRPCClient(ctx context.Context) *blockvalidation_api.Client {
+	s.frpcClientMux.Lock()
+	defer s.frpcClientMux.Unlock()
+
+	frpcClient := s.frpcClient.Load()
+	if frpcClient != nil {
+		s.connectFRPC(ctx, frpcClient)
+	}
+	return frpcClient
+}
+
+func (s *Client) NewFRPCClient() {
+	_, ok := gocore.Config().Get("blockvalidation_frpcAddress")
+	if !ok {
+		return
+	}
+	frpcClient, err := blockvalidation_api.NewClient(nil, nil)
+	if err != nil {
+		s.logger.Fatalf("Error creating new fRPC client in blockvalidation: %s", err)
+	}
+	s.logger.Infof("fRPC blockvalidation client created")
+	s.frpcClientConnected = false
+	s.frpcClient.Store(frpcClient)
+}
+
+func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_api.Client) {
+	if frpcClient.Closed() {
+		s.logger.Errorf("fRPC connection to blockvalidation, closed, will attempt to connect")
+	}
+
+	if s.frpcClientConnected {
+		return
+	}
+
+	blockValidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
+	if !ok {
+		return
+	}
+
+	connected := false
+	maxRetries := 5
+	retryInterval := 5 * time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		s.logger.Infof("attempting to create fRPC connection to blockvalidation, attempt %d", i+1)
+
+		err := frpcClient.Connect(blockValidationFRPCAddress)
 		if err != nil {
-			s.logger.Errorf("Error connecting to blockvalidation fRPC: %s", err)
-		}
-	}()
-
-	// we cannot start the frpc client connection immediately, since it relies on the blockvalidation server being up
-	// in the meantime, everything will be sent over grpc, which should be fine
-	time.Sleep(10 * time.Second)
-
-	blockvalidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
-	if ok {
-		maxRetries := 5
-		retryInterval := 5 * time.Second
-
-		for i := 0; i < maxRetries; i++ {
-			s.logger.Infof("attempting to create fRPC connection to blockvalidation, attempt %d", i+1)
-
-			client, err := blockvalidation_api.NewClient(nil, nil)
-			if err != nil {
-				s.logger.Fatalf("error creating new fRPC client in blockvalidation: %s", err)
-			}
-
-			err = client.Connect(blockvalidationFRPCAddress)
-			if err != nil {
-				s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
-				if i+1 == maxRetries {
-					break
-				}
-				time.Sleep(retryInterval)
-				retryInterval *= 2
-			} else {
-				s.logger.Infof("connected to blockvalidation fRPC server")
-				s.frpcClient = client
+			s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
+			if i+1 == maxRetries {
 				break
 			}
-		}
-
-		if s.frpcClient == nil {
-			s.logger.Fatalf("failed to connect to blockvalidation fRPC server after %d attempts", maxRetries)
+			time.Sleep(retryInterval)
+			retryInterval *= 2
 		} else {
-			/* listen for close channel and reconnect */
-			s.logger.Infof("Listening for close channel on fRPC client")
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						s.logger.Infof("fRPC client context done, closing channel")
-						return
-					case <-s.frpcClient.CloseChannel():
-						s.logger.Infof("fRPC client close channel received, reconnecting...")
-						s.connectFRPC(ctx)
-					}
-				}
-			}()
+			s.logger.Infof("connected to blockvalidation fRPC server")
+			connected = true
+			break
 		}
 	}
+
+	s.frpcClientConnected = connected
+
+	if !connected {
+		s.logger.Fatalf("failed to connect to blockvalidation fRPC server after %d attempts", maxRetries)
+	}
+
+	/* listen for close channel and reconnect */
+	s.logger.Infof("Listening for close channel on fRPC client")
+	go func() {
+		<-frpcClient.CloseChannel()
+		s.logger.Infof("fRPC blockvalidation client closed, reconnecting...")
+		s.NewFRPCClient()
+	}()
 }
 
 func (s *Client) Health(ctx context.Context) (bool, error) {
@@ -172,6 +193,19 @@ func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	return response.Subtree, nil
 }
 
+func (s *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
+	req := &blockvalidation_api.ExistsSubtreeRequest{
+		Hash: subtreeHash,
+	}
+
+	response, err := s.apiClient.Exists(ctx, req)
+	if err != nil {
+		return false, err
+	}
+
+	return response.Exists, nil
+}
+
 func (s *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	return fmt.Errorf("not implemented")
 }
@@ -181,6 +215,14 @@ func (s *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 }
 
 func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data) error {
+	func() {
+		// frpc throws a segmentation violation when the blockvalidation service is not available :-(
+		err := recover()
+		if err != nil {
+			s.logger.Errorf("Recovered from panic: %v", err)
+		}
+	}()
+
 	txMetaDataSlice := make([][]byte, 0, len(txMetaData))
 
 	for _, data := range txMetaData {
@@ -188,14 +230,17 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 
 		b := hash.CloneBytes()
 
-		data.Tx = nil
+		temp := data.Tx
+		data.Tx = nil // clear the tx from the data so we don't send it over the wire
 		b = append(b, data.MetaBytes()...)
+		data.Tx = temp // restore the tx, incase we need to try again
 
 		txMetaDataSlice = append(txMetaDataSlice, b)
 	}
 
-	if s.frpcClient != nil {
-		_, err := s.frpcClient.BlockValidationAPI.SetTxMeta(ctx, &blockvalidation_api.BlockvalidationApiSetTxMetaRequest{
+	frpcClient := s.getFRPCClient(ctx)
+	if frpcClient != nil {
+		_, err := frpcClient.BlockValidationAPI.SetTxMeta(ctx, &blockvalidation_api.BlockvalidationApiSetTxMetaRequest{
 			Data: txMetaDataSlice,
 		})
 		if err != nil {
@@ -215,8 +260,9 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data)
 }
 
 func (s *Client) DelTxMeta(ctx context.Context, hash *chainhash.Hash) error {
-	if s.frpcClient != nil {
-		_, err := s.frpcClient.BlockValidationAPI.DelTxMeta(ctx, &blockvalidation_api.BlockvalidationApiDelTxMetaRequest{
+	frpcClient := s.getFRPCClient(ctx)
+	if frpcClient != nil {
+		_, err := frpcClient.BlockValidationAPI.DelTxMeta(ctx, &blockvalidation_api.BlockvalidationApiDelTxMetaRequest{
 			Hash: hash.CloneBytes(),
 		})
 		if err != nil {
@@ -245,8 +291,9 @@ func (s *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, bl
 		req.Hashes = append(req.Hashes, hash.CloneBytes())
 	}
 
-	if s.frpcClient != nil {
-		_, err = s.frpcClient.BlockValidationAPI.SetMinedMulti(ctx, &blockvalidation_api.BlockvalidationApiSetMinedMultiRequest{
+	frpcClient := s.getFRPCClient(ctx)
+	if frpcClient != nil {
+		_, err = frpcClient.BlockValidationAPI.SetMinedMulti(ctx, &blockvalidation_api.BlockvalidationApiSetMinedMultiRequest{
 			Hashes:  req.Hashes,
 			BlockId: blockID,
 		})

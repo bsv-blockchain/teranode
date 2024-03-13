@@ -1,26 +1,34 @@
 package txmetacache
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var (
 	// tx meta cache stats
-	prometheusBlockValidationTxMetaCacheSize       prometheus.Gauge
-	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
-	prometheusBlockValidationTxMetaCacheHits       prometheus.Gauge
-	prometheusBlockValidationTxMetaCacheMisses     prometheus.Gauge
-	prometheusBlockValidationTxMetaCacheEvictions  prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheSize               prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheInsertions         prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheHits               prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheMisses             prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheGetOrigin          prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheEvictions          prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheTrims              prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheMapSize            prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "blockvalidation",
@@ -53,6 +61,14 @@ func initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockValidationTxMetaCacheGetOrigin = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "tx_meta_cache_get_origin",
+			Help:      "Number of get origins in the tx meta cache",
+		},
+	)
+
 	prometheusBlockValidationTxMetaCacheEvictions = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "blockvalidation",
@@ -61,5 +77,27 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusMetricsInitialised = true
+	prometheusBlockValidationTxMetaCacheTrims = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "tx_meta_cache_trims",
+			Help:      "Number of trim operations in the tx meta cache",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheMapSize = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "tx_meta_cache_cache_map_size",
+			Help:      "Number of total elements in the improved cache's bucket maps",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheTotalElementsAdded = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "tx_meta_cache_cache_total_elements_added",
+			Help:      "Number of total number of elements added to the txmetacache",
+		},
+	)
 }

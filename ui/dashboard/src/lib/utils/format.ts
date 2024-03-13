@@ -19,9 +19,6 @@ export const addNumCommas = (value, round = -1, defaultValue = '') => {
     value = value.toFixed(round)
   }
   return new Intl.NumberFormat().format(value)
-  // const parts = value.toString().split('.')
-  // parts[0] = parseInt(parts[0]).toLocaleString('en', { useGrouping: true })
-  // return parts.join('.')
 }
 
 export const formatNum = (value, defaultValue = '') => {
@@ -30,24 +27,6 @@ export const formatNum = (value, defaultValue = '') => {
 
 export const formatSatoshi = (value, defaultValue = '') => {
   return valueSet(value) ? addNumCommas(value / 1e8, 8) : defaultValue
-}
-
-export const getTransactionHashUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/tx/${value}` : defaultValue
-}
-
-export const formatFilename = (value, limit = 20, defaultValue = '') => {
-  let ext = ''
-  if (value?.length > 0 && value.includes('.')) {
-    ext = value.split('.').pop()
-  }
-  return valueSet(value)
-    ? value.length > limit
-      ? ext
-        ? value.substring(0, limit - 3 - ext.length) + '...' + ext
-        : value.substring(0, limit - 3) + '...'
-      : value
-    : defaultValue
 }
 
 export const formatTransactionHash = (value, defaultValue = '') => {
@@ -60,14 +39,6 @@ export const shortHash = (value, defaultValue = '') => {
   return valueSet(value)
     ? `${value.substring(0, 4)}...${value.substring(value.length - 8)}`
     : defaultValue
-}
-
-export const getWalletUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/address/${value}` : defaultValue
-}
-
-export const getBlockUrl = (value, defaultValue = '') => {
-  return valueSet(value) ? `https://whatsonchain.com/block/${value}` : defaultValue
 }
 
 export const humanHash = (val) => {
@@ -184,4 +155,87 @@ export const link = (
   return `<a href='${prefix + href}'${
     external ? " target='_blank' rel='noopener noreferrer'" : ''
   }${className ? ` class='${className}'` : ''}>${text || href}</a>`
+}
+
+const getSuperStr = (input: string) => {
+  const superChars = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+  return [...input].map((char) => superChars[char.charCodeAt(0) - 48]).join('')
+}
+
+export const formatNumberExp = (val: number, html = true) => {
+  let exp = ''
+
+  if (val >= 1e15) {
+    val = val / 1e15
+    exp = html ? ' × 10<sup>15</sup>' : ' × 10¹⁵'
+  } else if (val >= 1e12) {
+    val = val / 1e12
+    exp = html ? ' × 10<sup>12</sup>' : ' × 10¹²'
+  } else if (val >= 1e9) {
+    val = val / 1e9
+    exp = html ? ' × 10<sup>9</sup>' : ' × 10⁹'
+  } else if (val >= 1e6) {
+    val = val / 1e6
+    exp = html ? ' × 10<sup>6</sup>' : ' × 10⁶'
+  } else if (val >= 1e3) {
+    val = val / 1e3
+    exp = html ? ' × 10<sup>3</sup>' : ' × 10³'
+  } else if (val > 0 && val <= 1 / 1e3) {
+    const str = val.toExponential().toString()
+    const index = str.indexOf('e')
+    if (index !== -1) {
+      val = parseFloat(str.substring(0, index))
+      exp = html
+        ? ` × 10<sup>${'-' + str.substring(index + 2, str.length)}</sup>`
+        : ` × 10${'⁻' + getSuperStr(str.substring(index + 2, str.length))}`
+    }
+  }
+
+  return {
+    value: Math.round(val * 1000) / 1000,
+    exp,
+  }
+}
+
+export const formatNumberExpStr = (val: number, html = true) => {
+  const parts = formatNumberExp(val, html)
+  return addNumCommas(parts.value) + parts.exp
+}
+
+export const formatLargeNumber = (val: number) => {
+  let unit = ''
+
+  if (val >= 1e15) {
+    val = val / 1e15
+    unit = 'P'
+  } else if (val >= 1e12) {
+    val = val / 1e12
+    unit = 'T'
+  } else if (val >= 1e9) {
+    val = val / 1e9
+    unit = 'G'
+  } else if (val >= 1e6) {
+    val = val / 1e6
+    unit = 'M'
+  } else if (val >= 1e3) {
+    val = val / 1e3
+    unit = 'K'
+  }
+
+  return {
+    value: Math.round(val * 1000) / 1000,
+    unit,
+  }
+}
+
+export const formatLargeNumberStr = (val: number, decimals = -1, fixed = false) => {
+  const parts = formatLargeNumber(val)
+  if (decimals !== -1) {
+    const fmtVal = fixed
+      ? parts.value.toFixed(decimals)
+      : Math.round(parts.value * Math.pow(10, decimals)) / Math.pow(10, decimals)
+    return `${addNumCommas(fmtVal)}${parts.unit ? ' ' + parts.unit : ''}`
+  } else {
+    return `${addNumCommas(parts.value)}${parts.unit ? ' ' + parts.unit : ''}`
+  }
 }

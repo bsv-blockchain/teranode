@@ -1,0 +1,45 @@
+
+@startuml
+participant "Client" as Client
+participant "Blockchain Service" as Service
+database "Block Store" as Store
+queue "Notifications" as Notify
+
+Client -> Service: AddBlock(ctx, request)
+activate Service
+
+Service -> Service: Parse Block Header
+alt If Error Parsing Header
+    Service --> Client: Return Error
+    deactivate Service
+else If Successful
+    Service -> Service: Parse Coinbase Transaction
+    alt If Error Parsing Coinbase Tx
+        Service --> Client: Return Error
+        deactivate Service
+    else If Successful
+        Service -> Service: Parse Subtree Hashes
+        alt If Error Parsing Subtree Hashes
+            Service --> Client: Return Error
+            deactivate Service
+        else If Successful
+            Service -> Store: StoreBlock(ctx, block, peerId)
+            alt If Error Storing Block
+                Store --> Service: Return Error
+                Service --> Client: Return Error
+                deactivate Service
+            else If Successful
+                Store --> Service
+                loop For each notification type
+                    Service -> Notify: SendNotification(ctx, notification)
+                end
+                Service --> Client: Success
+            end
+        end
+    end
+end
+deactivate Service
+
+left footer Last Modified On: 23-Jan-2024
+
+@enduml

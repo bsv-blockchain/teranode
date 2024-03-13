@@ -1,21 +1,28 @@
 <script lang="ts">
+  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import TxDetailsCard from './tx-details-card/index.svelte'
   import TxIoCard from './tx-io-card/index.svelte'
 
   import NoData from '../no-data-card/index.svelte'
-  import { DetailTab, setQueryParam } from '$internal/utils/urls'
+  import { DetailTab, DetailType, setQueryParam } from '$internal/utils/urls'
   import { spinCount } from '$internal/stores/nav'
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
-  const type = 'tx'
+  let ready = false
+  beforeUpdate(() => {
+    ready = true
+  })
+
+  const type = DetailType.tx
+
   export let hash = ''
 
   let display: DetailTab
 
-  $: tab = new URLSearchParams($page.url.search).get('tab') || ''
+  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
   $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
 
   let result: any = null
@@ -69,7 +76,7 @@
 
 {#if result}
   <TxDetailsCard data={result} {display} on:display={onDisplay} />
-  {#if display === 'overview'}
+  {#if display === DetailTab.overview}
     <div style="height: 20px" />
     <TxIoCard data={result} />
   {/if}

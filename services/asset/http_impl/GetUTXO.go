@@ -1,10 +1,12 @@
 package http_impl
 
 import (
+	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -24,16 +26,16 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		utxo, err := h.repository.GetUtxo(c.Request().Context(), hash)
+		utxoResponse, err := h.repository.GetUtxo(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
 
-		if utxo == nil || utxo.Status == int(utxostore_api.Status_NOT_FOUND) {
+		if utxoResponse == nil || utxoResponse.Status == int(utxo.Status_NOT_FOUND) {
 			return echo.NewHTTPError(http.StatusNotFound, "UTXO not found")
 		}
 
@@ -41,11 +43,11 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 
 		switch mode {
 		case BINARY_STREAM:
-			return c.Blob(200, echo.MIMEOctetStream, utxo.SpendingTxID.CloneBytes())
+			return c.Blob(200, echo.MIMEOctetStream, utxoResponse.SpendingTxID.CloneBytes())
 		case HEX:
-			return c.String(200, utxo.SpendingTxID.String())
+			return c.String(200, utxoResponse.SpendingTxID.String())
 		case JSON:
-			return c.JSONPretty(200, utxo, "  ")
+			return c.JSONPretty(200, utxoResponse, "  ")
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "Bad read mode")
 		}

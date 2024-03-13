@@ -1,0 +1,26 @@
+
+@startuml
+participant "Client Code" as Client
+participant "Blockchain Service" as Service
+database "Store" as Store
+
+Client -> Service: GetBestBlockHeader(ctx, empty)
+activate Service
+
+Service -> Store: GetBestBlockHeader(ctx1)
+activate Store
+Store --> Service: chainTip, meta / Error
+deactivate Store
+
+alt If Error in GetBestBlockHeader
+    Service --> Client: Return Error
+    deactivate Service
+else If Successful
+    Service --> Client: Create & Return GetBlockHeaderResponse
+end
+
+deactivate Service
+
+left footer Last Modified On: 23-Jan-2024
+
+@enduml

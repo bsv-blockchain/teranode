@@ -5,7 +5,6 @@
   import ConnectedNodesCard from '$internal/components/page/network/connected-nodes-card/index.svelte'
 
   import { miningNodes, sock } from '$internal/stores/p2pStore'
-  import { humanTime } from '$internal/utils/humanTime'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -15,14 +14,22 @@
   let nodes: any[] = []
 
   function updateData() {
-    const tmp: any[] = []
-    $miningNodes.forEach((node) => {
-      tmp.push({
-        ...node,
-        receivedAt: humanTime(node.receivedAt),
-      })
+    const mNodes: any[] = []
+    // console.log($miningNodes)
+    Object.values($miningNodes).forEach((node) => {
+      mNodes.push(node)
     })
-    nodes = tmp
+    const sorted = mNodes.sort((a: any, b: any) => {
+      if (a.base_url < b.base_url) {
+        return -1
+      } else if (a.base_url > b.base_url) {
+        return 1
+      } else {
+        return 0
+      }
+    })
+
+    nodes = sorted
   }
 
   onMount(() => {

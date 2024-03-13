@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -91,7 +91,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 
 	s := &Store{
 		logger:    logger,
-		db:        &usql.DB{DB: db},
+		db:        db,
 		engine:    storeUrl.Scheme,
 		dbTimeout: time.Duration(dbTimeout) * time.Millisecond,
 	}
@@ -128,7 +128,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&txBytes, &fee, &sizeInBytes, &parents, &blocks, &lockTime)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.NewErrTxmetaNotFound(hash)
 		}
 		return nil, fmt.Errorf("failed to get txmeta: %+v", err)
 	}
@@ -160,6 +160,24 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	}, nil
 }
 
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
+	// TODO make this into a batch call
+	for _, item := range items {
+		data, err := s.Get(ctx, item.Hash)
+		if err != nil {
+			if uerr, ok := err.(*ubsverrors.Error); ok {
+				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+					continue
+				}
+			}
+			return err
+		}
+		item.Data = data
+	}
+
+	return nil
+}
+
 func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
 	defer cancelTimeout()
@@ -186,9 +204,9 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		postgresErr := "duplicate key value violates unique constraint"
 		sqLiteErr := "UNIQUE constraint failed"
 		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
-			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.ErrAlreadyExists)
+			return data, fmt.Errorf("failed to insert tx meta: %w", txmeta.NewErrTxmetaAlreadyExists(hash))
 		}
-		return data, errors.Join(errors.New("failed to insert tx meta"), err)
+		return data, fmt.Errorf("failed to insert tx meta: %w", err)
 	}
 
 	prometheusTxMetaSet.Inc()
@@ -253,7 +271,7 @@ func (s *Store) Delete(cntxt context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func createPostgresSchema(db *sql.DB) error {
+func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
     CREATE TABLE IF NOT EXISTS txmeta (
 	   id            BIGSERIAL PRIMARY KEY
@@ -279,7 +297,7 @@ func createPostgresSchema(db *sql.DB) error {
 	return nil
 }
 
-func createSqliteSchema(db *sql.DB) error {
+func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS txmeta (
 		id             INTEGER PRIMARY KEY AUTOINCREMENT

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -131,13 +132,13 @@ func (r *Redis) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 
 	if res.Err() != nil {
 		if res.Err() == redis.Nil {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.NewErrTxmetaNotFound(hash)
 		}
 		return nil, res.Err()
 	}
 
 	if res.Val() == string(redis.Nil) {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.NewErrTxmetaNotFound(hash)
 	}
 
 	d, err := txmeta.NewDataFromBytes([]byte(res.Val()))
@@ -153,21 +154,38 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 
 	if res.Err() != nil {
 		if res.Err() == redis.Nil {
-			return nil, txmeta.ErrNotFound
+			return nil, txmeta.NewErrTxmetaNotFound(hash)
 		}
 		return nil, res.Err()
 	}
 
 	if res.Val() == string(redis.Nil) {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.NewErrTxmetaNotFound(hash)
 	}
 
-	d, err := txmeta.NewMetaDataFromBytes([]byte(res.Val()))
-	if err != nil {
-		return nil, err
+	resBytes := []byte(res.Val())
+	data := &txmeta.Data{}
+	txmeta.NewMetaDataFromBytes(&resBytes, data)
+
+	return data, nil
+}
+
+func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
+	// TODO make this into a batch call
+	for _, item := range items {
+		data, err := r.Get(ctx, item.Hash)
+		if err != nil {
+			if uerr, ok := err.(*ubsverrors.Error); ok {
+				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+					continue
+				}
+			}
+			return err
+		}
+		item.Data = data
 	}
 
-	return d, nil
+	return nil
 }
 
 func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -181,7 +199,7 @@ func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return nil, res.Err()
 	}
 	if !res.Val() {
-		return data, txmeta.ErrAlreadyExists
+		return data, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())
 	}
 
 	return data, nil

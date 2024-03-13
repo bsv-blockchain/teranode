@@ -28,21 +28,44 @@ type Miner struct {
 	MineBlocksNImmediatelyChan       chan int
 	MineBlocksNImmediatelyCancelChan chan bool
 	isMiningImmediately              bool
+	candidateRequestInterval         time.Duration
+	difficultyAdjustment             bool
+	initialBlockFinalWaitDuration    time.Duration
+	maxSubtreeCount                  int
 }
 
 const (
-	// The number of seconds to wait before requesting a new mining candidate
-	candidateRequestInterval = 10
 
 	// The number of seconds to wait before submitting a mining solution
 	blockFoundInterval = 100
 )
 
+var generateBlocks = false
+
 func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	initPrometheusMetrics()
+
+	// The number of seconds to wait before requesting a new mining candidate
+	candidateRequestInterval, _ := gocore.Config().GetInt("mine_candidate_request_interval", 10)
+	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
+
+	// How long to wait between mining the last few blocks
+	initialBlockFinalWaitDuration, err, _ := gocore.Config().GetDuration("mine_initial_blocks_final_wait", 5*time.Second)
+	if err != nil {
+		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_final_wait: %v", err)
+	}
+
+	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
+	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - rand.Intn(maxSubtreeCountVariance*2)
+
 	return &Miner{
-		logger:              logger,
-		blockAssemblyClient: blockassembly.NewClient(ctx, logger),
+		logger:                        logger,
+		blockAssemblyClient:           blockassembly.NewClient(ctx, logger),
+		candidateRequestInterval:      time.Duration(candidateRequestInterval),
+		difficultyAdjustment:          difficultyAdjustment,
+		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
+		maxSubtreeCount:               maxSubtreeCount,
 	}
 }
 
@@ -63,7 +86,7 @@ func (m *Miner) Start(ctx context.Context) error {
 		m.logger.Fatalf("[Miner] No miner_httpListenAddress specified")
 	}
 	go func() {
-		http.HandleFunc("/", m.handler)
+		http.HandleFunc("/mine", m.handler)
 		err := http.ListenAndServe(listenAddress, nil)
 		if err != nil {
 			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
@@ -76,11 +99,12 @@ func (m *Miner) Start(ctx context.Context) error {
 	// wait is simulating a high difficulty
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
-	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", candidateRequestInterval, blockFoundInterval)
+	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc
 
+	var previousCandidate *model.MiningCandidate
 	for {
 		select {
 
@@ -100,7 +124,7 @@ func (m *Miner) Start(ctx context.Context) error {
 			m.logger.Infof("[Miner] Mining %d blocks immediately - DONE", blocks)
 
 		case <-m.candidateTimer.C:
-			m.candidateTimer.Reset(candidateRequestInterval * time.Second)
+			m.candidateTimer.Reset(m.candidateRequestInterval * time.Second)
 
 			// cancel the previous mining context and start a new one
 			if cancel != nil {
@@ -109,14 +133,51 @@ func (m *Miner) Start(ctx context.Context) error {
 			miningCtx, cancel = context.WithCancel(context.Background())
 			defer cancel() // Ensure cancel is called at the end of each iteration
 
+			// Define retry delays
+			retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+			var candidate *model.MiningCandidate
+			var err error
+
+			for i := 0; i < len(retryDelays); i++ {
+				candidate, err = m.blockAssemblyClient.GetMiningCandidate(ctx)
+				if err == nil {
+					break // Success, exit the loop
+				}
+
+				if i < len(retryDelays)-1 {
+					// Wait for the specified period before retrying, except for the last attempt
+					time.Sleep(retryDelays[i])
+				}
+			}
+
+			if err != nil {
+				// After all retries, if there's still an error, wrap and return it using %w
+				// to wrap the error, so the caller can use errors.Is() to check for this specific error
+				return fmt.Errorf("error getting mining candidate after %d retries: %w", len(retryDelays), err)
+			}
+
+			if previousCandidate != nil && bytes.Equal(candidate.Id, previousCandidate.Id) {
+				m.logger.Infof("[Miner] Got same candidate as previous, skipping %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
+				m.candidateTimer.Reset(0)
+				continue
+			}
+			previousCandidate = candidate
+
+			waitSeconds := m.waitSeconds
+			if candidate.SubtreeCount > uint32(m.maxSubtreeCount) {
+				// mine without waiting
+				m.logger.Infof("candidate subtree count (%d) exceeds max subtree count (%d), mining immediately", candidate.SubtreeCount, m.maxSubtreeCount)
+				waitSeconds = 1
+			}
 			// start mining in a new goroutine, so we can cancel it if we need to
 			go func(ctx context.Context) {
-				err := m.mine(ctx, m.waitSeconds)
+				err := m.mine(ctx, candidate, waitSeconds)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
 					} else {
-						m.logger.Errorf("[Miner] %v", err)
+						m.logger.Warnf("[Miner] %v", err)
 					}
 				} else {
 					// start the timer now, so we don't have to wait for the next tick
@@ -137,29 +198,23 @@ func (m *Miner) Stop(ctx context.Context) error {
 
 func (m *Miner) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		if r.URL.Path[1:] == "mine" {
-			if r.URL.Query().Get("blocks") != "" {
-				if !m.isMiningImmediately {
-					blocks, _ := strconv.Atoi(r.URL.Query().Get("blocks"))
-					m.MineBlocksNImmediatelyChan <- blocks
-				}
-			} else if r.URL.Query().Get("cancel") != "" {
-				if m.isMiningImmediately {
-					m.MineBlocksNImmediatelyCancelChan <- true
-				}
+		if r.URL.Query().Get("blocks") != "" {
+			if !m.isMiningImmediately {
+				blocks, _ := strconv.Atoi(r.URL.Query().Get("blocks"))
+				m.MineBlocksNImmediatelyChan <- blocks
+			}
+		} else if r.URL.Query().Get("cancel") != "" {
+			if m.isMiningImmediately {
+				m.MineBlocksNImmediatelyCancelChan <- true
 			}
 		}
+
 	}
 }
 
-func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
+func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, waitSeconds int) error {
 	timeStart := time.Now()
 
-	candidate, err := m.blockAssemblyClient.GetMiningCandidate(ctx)
-	if err != nil {
-		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error getting mining candidate: %w", err)
-	}
 	m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
 	candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
@@ -176,15 +231,18 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
 
-	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height < uint32(initialBlockCount) {
-		waitSeconds = 0
+	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height <= uint32(initialBlockCount) {
+
+		generateBlocks = true
+	} else {
+		generateBlocks = false
 	}
 
-	if waitSeconds > 0 { // SAO - Mine the first <initialBlockCount> blocks without delay
+	blockHash, _ := chainhash.NewHash(solution.BlockHash)
+
+	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
-
-		blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
 		m.logger.Infof("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
 
@@ -202,22 +260,46 @@ func (m *Miner) mine(ctx context.Context, waitSeconds int) error {
 			}
 		}
 	} else {
-		blockHash, _ := chainhash.NewHash(solution.BlockHash)
-
 		m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
+
+		if candidate.Height > uint32(initialBlockCount-5) {
+			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining last few initial blocks", m.initialBlockFinalWaitDuration)
+			time.Sleep(m.initialBlockFinalWaitDuration)
+		}
+
 	}
 
-	m.logger.Infof("[Miner] submitting mining solution: %s", candidateId)
-	m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
+	// Define retry delays
+	retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
-	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+	for i := 0; i < len(retryDelays); i++ {
+		m.logger.Infof("[Miner] submitting mining solution for job (attempt %d): %s [%s]", i+1, candidateId, blockHash.String())
+		m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
+
+		err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+		if err == nil {
+			break // Success, exit the loop
+		}
+
+		if i < len(retryDelays)-1 {
+			// Wait for the specified period before retrying, except for the last attempt
+			time.Sleep(retryDelays[i])
+		}
+	}
+
 	if err != nil {
-		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error submitting mining solution for job %s: %w", candidateId, err)
+		// After all retries, if there's still an error, wrap and return it using %w
+		// to wrap the error, so the caller can use errors.Is() to check for this specific error
+		return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", len(retryDelays), candidateId, err)
 	}
+
+	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
+	// after mining a block, set it again to a new value -> vary the max subtree count by 10% to avoid all miners mining at the same time
+	m.maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - rand.Intn(maxSubtreeCountVariance*2)
 
 	prometheusBlockMined.Inc()
-	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
 }
@@ -251,9 +333,25 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 			return fmt.Errorf("no solution found for %s", candidateId)
 		}
 
-		err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+		// Define retry delays
+		retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+		for i := 0; i < len(retryDelays); i++ {
+			err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+			if err == nil {
+				break // Success, exit the loop
+			}
+
+			if i < len(retryDelays)-1 {
+				// Wait for the specified period before retrying, except for the last attempt
+				time.Sleep(retryDelays[i])
+			}
+		}
+
 		if err != nil {
-			return fmt.Errorf("error submitting mining solution for job %s: %v", candidateId, err)
+			// After all retries, if there's still an error, wrap and return it using %w
+			// to wrap the error, so the caller can use errors.Is() to check for this specific error
+			return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", len(retryDelays), candidateId, err)
 		}
 	}
 	return nil
@@ -268,7 +366,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 	maxBackoff := 10 * time.Second
 	currentBackoff := minBackoff
 
-	maxRetries := 5
+	maxRetries := 10
 	retryCount := 0
 
 	for {
@@ -286,13 +384,31 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 
 		default:
 
-			candidate, err = m.blockAssemblyClient.GetMiningCandidate(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("[Miner] error getting mining candidate: %v", err)
+			// Define retry delays
+			retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+			for i := 0; i < len(retryDelays); i++ {
+				candidate, err = m.blockAssemblyClient.GetMiningCandidate(ctx)
+				if err == nil {
+					break // Success, exit the loop
+				}
+
+				if i < len(retryDelays)-1 {
+					// Wait for the specified period before retrying, except for the last attempt
+					time.Sleep(retryDelays[i])
+				}
 			}
+
+			if err != nil {
+				// After all retries, if there's still an error, wrap and return it using %w
+				// to wrap the error, so the caller can use errors.Is() to check for this specific error
+				return nil, fmt.Errorf("error getting mining candidate after %d retries: %w", len(retryDelays), err)
+			}
+
 			if candidate == nil {
 				return nil, fmt.Errorf("[Miner] no mining candidate found")
 			}
+
 			if previousHash == nil || !bytes.Equal(previousHash[:], candidate.PreviousHash) {
 				return candidate, nil
 			}

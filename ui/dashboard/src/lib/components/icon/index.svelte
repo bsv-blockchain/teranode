@@ -1,7 +1,6 @@
 <script lang="ts">
-  import icons from './svg'
-  import { injectedIcons } from '$lib/stores/media'
   import { toUnit } from '$lib/styles/utils/css'
+  import { iconNameOverrides, useLibIcons } from '$lib/stores/media'
 
   export let testId: string | undefined | null = null
 
@@ -15,6 +14,46 @@
   export let opacity = 1
   export let color = 'currentColor'
   export let iconSvg = null
+
+  let finalName = name
+  $: {
+    finalName = name
+
+    if (name && $iconNameOverrides[name]) {
+      finalName = $iconNameOverrides[name]
+    }
+  }
+
+  let SvgIcon
+
+  async function loadSvgComp(name) {
+    SvgIcon = null
+
+    let result
+    try {
+      result = await import(`../../../internal/assets/icons/${name}.svg?component`)
+    } catch (e) {
+      result = null
+    }
+
+    if ($useLibIcons && !result) {
+      try {
+        result = await import(`../../../lib/assets/icons/${name}.svg?component`)
+      } catch (e) {
+        result = null
+      }
+    }
+
+    if (result) {
+      SvgIcon = result.default
+    }
+  }
+
+  $: {
+    if (finalName) {
+      loadSvgComp(finalName)
+    }
+  }
 
   let cssVars: string[] = []
   $: {
@@ -35,12 +74,12 @@
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
   on:click
 >
-  {#if iconSvg}
+  {#if finalName && SvgIcon}
+    {#key finalName}
+      <SvgIcon />
+    {/key}
+  {:else if iconSvg}
     {@html iconSvg}
-  {:else if $injectedIcons[name]}
-    {@html $injectedIcons[name]}
-  {:else if icons[name]}
-    {@html icons[name]}
   {/if}
 </div>
 

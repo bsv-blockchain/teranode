@@ -1,16 +1,16 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
-  import { addNumCommas } from '$lib/utils/format'
-  import { getDetailsUrl, DetailType, DetailTab, reverseHashParam } from '$internal/utils/urls'
+  import { addNumCommas, dataSize } from '$lib/utils/format'
+  import { DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
   import { Button, Icon } from '$lib/components'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -35,22 +35,24 @@
   function onReverseHash(hash) {
     reverseHashParam(hash)
   }
-
-  function navToTx(hash) {
-    if (hash) {
-      goto(getDetailsUrl(DetailType.tx, hash))
-    }
-  }
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: d?.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{d?.txid}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={d?.txid}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.tx, d?.txid)}
         size={15}
       />
     </div>
@@ -62,22 +64,6 @@
       <Icon name="icon-reeverse-line" size={15} />
     </div>
   </div>
-  <!-- <div class="btns" slot="header-tools">
-    <Button
-      size="small"
-      icon="icon-chevron-left-line"
-      ico={true}
-      disabled={!d?.previousblockhash}
-      on:click={() => navToTx(d.previousblockhash)}
-    />
-    <Button
-      size="small"
-      icon="icon-chevron-right-line"
-      ico={true}
-      disabled={!d?.nextblockhash}
-      on:click={() => navToTx(d.nextblockhash)}
-    />
-  </div> -->
   <div class="content">
     <div class="tabs">
       <Button
@@ -99,20 +85,11 @@
       <div class="fields" class:collapse>
         <div>
           <!-- <div class="entry">
-            <div class="label">{t(`${fieldKey}.txid`)}</div>
-            <div class="value copy-link">
-              <a href={`/viewer/tx/${d?.txid}/`}>{d?.txid}</a>
-              <div class="icon" on:click={() => onCopyHash(d?.txid)}>
-                <Icon name="icon-duplicate-line" size={18} />
-              </div>
-            </div>
-          </div> -->
-          <div class="entry">
             <div class="label">{t(`${fieldKey}.block`)} FIX</div>
             <div class="value copy-link">
               {#if d?.blockHashes && d?.blockHashes.length > 0}
                 <a href={`/viewer/block/${d?.blockHashes[0]}/`}>{d?.blockHashes[0]}</a>
-                <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+                <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
                   <ActionStatusIcon
                     icon="icon-duplicate-line"
                     action={copyTextToClipboardVanilla}
@@ -126,10 +103,16 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.timestamp`)}</div>
             <div class="value">TBD</div>
+          </div> -->
+          <div class="entry">
+            <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
+            <div class="value">
+              {dataSize(d?.sizeInBytes)}
+            </div>
           </div>
         </div>
         <div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
             <div class="value">TBD</div>
           </div>
@@ -144,7 +127,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.fee_paid`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
       </div>
     {:else if isJson}
@@ -156,10 +139,6 @@
 </Card>
 
 <style>
-  .btns {
-    display: flex;
-  }
-
   .content {
     display: flex;
     flex-direction: column;

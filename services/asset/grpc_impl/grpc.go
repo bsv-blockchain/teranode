@@ -55,6 +55,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, getPeers func() []s
 	}
 
 	if !found {
+		// TODO is this block of code correct?
 		remoteAddress, err := utils.GetPublicIPAddress()
 		if err != nil {
 			logger.Fatalf("Failed to get public IP address: %v", err)
@@ -394,6 +395,27 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 
 	return &asset_api.GetSubtreeResponse{
 		Subtree: subtreeBytes,
+	}, nil
+}
+
+func (g *GRPC) Exists(ctx context.Context, request *asset_api.ExistsSubtreeRequest) (*asset_api.ExistsSubtreeResponse, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("Exists").AddTime(start)
+	}()
+
+	hash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := g.repository.SubtreeStore.Exists(ctx, hash[:])
+	if err != nil {
+		return nil, err
+	}
+
+	return &asset_api.ExistsSubtreeResponse{
+		Exists: exists,
 	}, nil
 }
 

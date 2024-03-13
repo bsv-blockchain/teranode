@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "github.com/bitcoin-sv/ubsv/ubsverrors";
+
+package ubsverrors;
+
+message UBSVError {
+  ErrorConstants code = 1;
+  string message = 2;
+} 
+
+enum ErrorConstants {
+  UNKNOWN = 0;
+  INVALID_ARGUMENT = 1;
+  NOT_FOUND = 2;
+  BLOCK_NOT_FOUND=3;
+  THRESHOLD_EXCEEDED=4;
+}

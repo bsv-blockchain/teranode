@@ -43,6 +43,15 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
+func (c LocalClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	block, err := c.store.GetBlockByHeight(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	return block, nil
+}
+
 func (c LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
@@ -53,6 +62,15 @@ func (c LocalClient) GetBlockGraphData(ctx context.Context, periodMillis uint64)
 
 func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	return c.store.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
+}
+func (c LocalClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	return c.store.GetSuitableBlock(ctx, blockHash)
+}
+func (c LocalClient) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, num int) (*chainhash.Hash, error) {
+	return c.store.GetHashOfAncestorBlock(ctx, blockHash, num)
+}
+func (c LocalClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
+	return nil, nil
 }
 
 func (c LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
@@ -76,8 +94,16 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
+func (c LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
+}
+
 func (c LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	return c.store.InvalidateBlock(ctx, blockHash)
+}
+
+func (c LocalClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.RevalidateBlock(ctx, blockHash)
 }
 
 func (c LocalClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {

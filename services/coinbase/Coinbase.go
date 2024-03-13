@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
@@ -15,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bk/bec"
@@ -51,6 +56,10 @@ type Coinbase struct {
 	logger       ulogger.Logger
 	address      string
 	dbTimeout    time.Duration
+	peerSync     *p2p.PeerHeight
+	waitForPeers bool
+	g            *errgroup.Group
+	gCtx         context.Context
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -76,16 +85,41 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		return nil, fmt.Errorf("can't create coinbase address: %v", err)
 	}
 
-	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
+	backoffDuration, err, _ := gocore.Config().GetDuration("distributor_backoff_duration", 1*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse distributor_backoff_duration: %v", err)
+	}
+
+	maxRetries, _ := gocore.Config().GetInt("distributor_max_retries", 3)
+
+	failureTolerance, _ := gocore.Config().GetInt("distributor_failure_tolerance", 0)
+
+	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
 	if err != nil {
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("blockchain_store_dbTimeoutMillis", 5000)
 
+	addresses, ok := gocore.Config().Get("propagation_grpcAddresses")
+	if !ok {
+		panic("[PeerStatus] propagation_grpcAddresses not found")
+	}
+	numberOfExpectedPeers := 1 + strings.Count(addresses, "|") // each | is a ip:port separator
+
+	peerStatusTimeout, err, _ := gocore.Config().GetDuration("peerStatus_timeout", 30*time.Second)
+	if err != nil {
+		panic(fmt.Sprintf("[PeerStatus] failed to parse peerStatus_timeout: %s", err))
+	}
+
+	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
+
+	g, gCtx := errgroup.WithContext(context.Background())
+	g.SetLimit(runtime.NumCPU())
+
 	c := &Coinbase{
 		store:        store,
-		db:           &usql.DB{DB: store.GetDB()},
+		db:           store.GetDB(),
 		engine:       engine,
 		blockFoundCh: make(chan processBlockFound, 100),
 		catchupCh:    make(chan processBlockCatchup),
@@ -94,10 +128,16 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		privateKey:   privateKey.PrivKey,
 		address:      coinbaseAddr.AddressString,
 		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
+		peerSync:     p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		waitForPeers: waitForPeers,
+		g:            g,
+		gCtx:         gCtx,
 	}
 
-	threshold, _ := gocore.Config().GetInt("coinbase_notification_threshold", 100_000)
-	go c.monitorSpendableUTXOs(uint64(threshold))
+	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
+	if found {
+		go c.monitorSpendableUTXOs(uint64(threshold))
+	}
 
 	return c, nil
 }
@@ -149,6 +189,8 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		c.running = false
 	}()
 
+	ready := atomic.Bool{}
+
 	go func() {
 		ch, err := c.AssetClient.Subscribe(ctx, "")
 		if err != nil {
@@ -161,6 +203,9 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 			case <-ctx.Done():
 				return
 			case notification := <-ch:
+				if !ready.Load() {
+					break
+				}
 				if notification.Type == model.NotificationType_Block {
 					c.blockFoundCh <- processBlockFound{
 						hash:    notification.Hash,
@@ -173,24 +218,10 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 
 	// get the best block header on startup and process
 	go func() {
-		//Wait until min_height is reached
-		coinbase_should_wait := gocore.Config().GetBool("coinbase_should_wait", false)
-		coinbase_wait_until_block, _ := gocore.Config().GetInt("coinbase_wait_until_block", 0)
-		if coinbase_should_wait {
-			c.logger.Infof("Waiting until block %d to start coinbase", coinbase_wait_until_block)
-			for {
-				_, bestBlockHeader, err := c.AssetClient.GetBestBlockHeader(ctx)
-				if err != nil {
-					c.logger.Errorf("could not get best block header from blob server [%v]", err)
-					return
-				}
-				if bestBlockHeader >= uint32(coinbase_wait_until_block) {
-					break
-				}
-				c.logger.Infof("Waiting until block %d to start coinbase, currently at %d", coinbase_wait_until_block, bestBlockHeader)
-				time.Sleep(1 * time.Second)
-			}
-		}
+		c.waitTillInitialBlocksMined(ctx)
+
+		ready.Store(true) // block notifications will now be processed
+
 		blockHeader, _, err := c.AssetClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			c.logger.Errorf("could not get best block header from blob server [%v]", err)
@@ -200,9 +231,33 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 			hash:    blockHeader.Hash(),
 			baseURL: "",
 		}
+
 	}()
 
 	return nil
+}
+
+func (c *Coinbase) waitTillInitialBlocksMined(ctx context.Context) {
+	//Wait until min_height is reached
+	coinbase_should_wait := gocore.Config().GetBool("coinbase_should_wait", false)
+	coinbase_wait_until_block, _ := gocore.Config().GetInt("coinbase_wait_until_block", 0)
+
+	if coinbase_should_wait {
+		c.logger.Infof("[coinbase] waiting to start. Need to reach block %d", coinbase_wait_until_block)
+		for {
+			_, height, err := c.AssetClient.GetBestBlockHeader(ctx)
+			if err != nil {
+				c.logger.Errorf("could not get best block header from blob server [%v]", err)
+				return
+			}
+			if height >= uint32(coinbase_wait_until_block) {
+				break
+			}
+			c.logger.Infof("[coinbase] waiting to start. Currently at block %d/%d", height, coinbase_wait_until_block)
+			time.Sleep(1 * time.Second)
+		}
+		c.logger.Infof("[coinbase] ready to start. Reached block %d", coinbase_wait_until_block)
+	}
 }
 
 func (c *Coinbase) createTables(ctx context.Context) error {
@@ -249,17 +304,17 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := c.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_processed_at index - [%+v]", err)
 	}
 
-	if _, err := c.db.Exec(`CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_spendable_utxos_inserted_at index - [%+v]", err)
 	}
@@ -344,6 +399,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 		return nil, fmt.Errorf("could not check whether block exists %+v", err)
 	}
 	if exists {
+		c.logger.Debugf("skipping block that already exists: %s", blockHash.String())
 		return nil, nil
 	}
 
@@ -393,6 +449,16 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	// first check whether we are in sync with the blob server, otherwise we wait for the next block
 	_, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
 	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
+
+	if c.waitForPeers {
+		/* Wait until all nodes are at least on same block height as this coinbase block */
+		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
+		err = c.peerSync.WaitForAllPeers(ctx, blobBestBlockHeight, true)
+		if err != nil {
+			return fmt.Errorf("peers are not in sync: %s", err)
+		}
+	}
+
 	if blobBestBlockHeight >= coinbaseBestBlockMeta.Height {
 		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
 		if err != nil {
@@ -460,12 +526,15 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 	}
 
 	_, _, ctx = util.NewStatFromContext(context.Background(), "go routine", stat, false)
-	go c.createSpendingUtxos(ctx, timestamp)
+
+	if err := c.createSpendingUtxos(ctx, timestamp); err != nil {
+		return fmt.Errorf("could not create spending utxos: %w", err)
+	}
 
 	return nil
 }
 
-func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) {
+func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) error {
 	start, stat, ctx := util.StartStatFromContext(ctx, "createSpendingUtxos")
 	defer func() {
 		stat.AddTime(start)
@@ -486,12 +555,12 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 	rows, err := c.db.QueryContext(ctx, q, timestamp)
 	if err != nil {
-		c.logger.Errorf("could not get coinbase utxos: %+v", err)
-		return
+		return fmt.Errorf("could not get coinbase utxos: %w", err)
 	}
 
 	defer rows.Close()
 
+	utxos := make([]*bt.UTXO, 0)
 	for rows.Next() {
 		var txid []byte
 		var vout uint32
@@ -499,29 +568,41 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		var satoshis uint64
 
 		if err := rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
-			c.logger.Errorf("could not scan coinbase utxo: %+v", err)
-			return
+			return fmt.Errorf("could not scan coinbase utxo: %w", err)
 		}
 
 		hash, err := chainhash.NewHash(txid)
 		if err != nil {
-			c.logger.Errorf("could not create hash from txid: %+v", err)
-			continue
+			return fmt.Errorf("could not create hash from txid: %w", err)
 		}
 
-		utxo := &bt.UTXO{
+		utxos = append(utxos, &bt.UTXO{
 			TxIDHash:      hash,
 			Vout:          vout,
 			LockingScript: &lockingScript,
 			Satoshis:      satoshis,
-		}
-
-		c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", hash, vout)
-
-		if err := c.splitUtxo(ctx, utxo); err != nil {
-			c.logger.Errorf("could not split utxo: %+v", err)
-		}
+		})
 	}
+
+	for _, utxo := range utxos {
+		utxo := utxo
+		// create the utxos in the background
+		// we don't have a method to revert anything that goes wrong anyway
+		c.g.Go(func() error {
+			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
+			delay, err, _ := gocore.Config().GetDuration("coinbase_store_createSpendingUtxos_delay", 0*time.Second)
+			if err != nil {
+				panic(fmt.Sprintf("could not parse coinbase_store_createSpendingUtxos_delay: %v", err))
+			}
+			time.Sleep(delay)
+			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
+				return fmt.Errorf("could not split utxo: %w", err)
+			}
+			return nil
+		})
+	}
+
+	return nil
 }
 
 func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
@@ -849,6 +930,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		defer func() {
+			// Silently ignore rollback errors
 			_ = txn.Rollback()
 		}()
 
@@ -896,7 +978,7 @@ func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResp
 	if err := c.db.QueryRowContext(ctx, `
 		SELECT
 		 COUNT(*)
-		,SUM(satoshis)
+		,COALESCE(SUM(satoshis), 0)
 		FROM spendable_utxos;
 	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
 		return nil, err
@@ -928,7 +1010,9 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 			if availableUtxos < threshold && !alreadyNotified {
 				c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
 				if channel != "" {
-					_ = postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)))
+					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))); err != nil {
+						c.logger.Warnf("could not post to slack: %v", err)
+					}
 				}
 				alreadyNotified = true
 			} else if availableUtxos >= threshold && alreadyNotified {

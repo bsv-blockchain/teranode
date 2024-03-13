@@ -1,38 +1,41 @@
 export const msgbox = {
+  bg: {
+    color: '#151a20',
+  },
+  label: {
+    color: '#898c90',
+  },
+  value: {
+    color: '#cacaca',
+  },
   block: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(239, 243, 253, 0.20) 0%, rgba(239, 243, 253, 0.20) 100%), #1778FF',
+    border: {
+      color: '#1778FF',
     },
   },
   mining_on: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(239, 243, 253, 0.00) 0%, rgba(239, 243, 253, 0.00) 100%), #4ECDBE',
+    border: {
+      color: '#4ECDBE',
     },
   },
   subtree: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.32) 100%), #6148C4',
+    border: {
+      color: '#6148C4',
     },
   },
   ping: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(255, 255, 255, 0.50) 0%, rgba(255, 255, 255, 0.50) 100%), #1778FF',
+    border: {
+      color: '#444',
     },
   },
   getminingcandidate: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(255, 255, 255, 0.50) 0%, rgba(255, 255, 255, 0.50) 100%), #2778FF',
+    border: {
+      color: '#2778FF',
     },
   },
   default: {
-    bg: {
-      color:
-        'linear-gradient(0deg, rgba(255, 255, 255, 0.50) 0%, rgba(255, 255, 255, 0.50) 100%), orange',
+    border: {
+      color: 'orange',
     },
   },
 }

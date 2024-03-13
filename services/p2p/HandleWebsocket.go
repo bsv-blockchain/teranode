@@ -35,10 +35,10 @@ var (
 	}
 )
 
-func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c echo.Context) error {
+func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl string) func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
-	newClientCh := make(chan chan []byte, 10)
-	deadClientCh := make(chan chan []byte, 10)
+	newClientCh := make(chan chan []byte, 1_000)
+	deadClientCh := make(chan chan []byte, 1_000)
 
 	pingTimer := time.NewTicker(10 * time.Second)
 
@@ -59,14 +59,20 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 				data, err := json.MarshalIndent(&notificationMsg{
 					Timestamp: time.Now().UTC().Format(isoFormat),
 					Type:      asset_api.Type_PING.String(),
+					BaseURL:   baseUrl,
 				}, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %w", err)
+					s.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 
 				for clientCh := range clientChannels {
-					clientCh <- data
+					select {
+					case clientCh <- data:
+						// Data sent successfully
+					case <-time.After(time.Second): // Adjust timeout duration as needed
+						s.logger.Errorf("Timeout sending data to client")
+					}
 				}
 
 			case notification := <-notificationCh:
@@ -76,12 +82,17 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 
 				data, err := json.MarshalIndent(notification, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %w", err)
+					s.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 
 				for clientCh := range clientChannels {
-					clientCh <- data
+					select {
+					case clientCh <- data:
+						// Data sent successfully
+					case <-time.After(time.Second): // Adjust timeout duration as needed
+						s.logger.Errorf("Timeout sending data to client")
+					}
 				}
 			}
 		}

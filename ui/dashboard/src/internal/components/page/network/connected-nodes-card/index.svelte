@@ -39,7 +39,7 @@
   $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
   $: showTableFooter = showPagerSize
 
-  let variant = $tableVariant
+  let variant = 'dynamic'
   function onToggle(e) {
     const value = e.detail.value
     variant = $tableVariant = value
@@ -48,7 +48,6 @@
 
 <Card contentPadding="0" showFooter={showTableFooter}>
   <div class="title" slot="title">
-    <Icon name="icon-status-light-glow-solid" size={14} color={connected ? '#15B241' : '#CE1722'} />
     <Typo variant="title" size="h4" value={t(`${pageKey}.title`)} />
   </div>
   <svelte:fragment slot="header-tools">
@@ -68,11 +67,17 @@
       on:total={onTotal}
     />
     <TableToggle value={variant} on:change={onToggle} />
+    <div class="live">
+      <div class="live-icon" class:connected>
+        <Icon name="icon-status-light-glow-solid" size={14} />
+      </div>
+      <div class="live-label">{t(`page.network.live`)}</div>
+    </div>
   </svelte:fragment>
   <Table
     name="nodes"
     {variant}
-    idField="height"
+    idField="base_url"
     {colDefs}
     {data}
     pagination={{
@@ -106,6 +111,32 @@
 </Card>
 
 <style>
+  .live {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+
+    color: rgba(255, 255, 255, 0.66);
+
+    font-family: Satoshi;
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 700;
+    line-height: 18px;
+    letter-spacing: 0.26px;
+
+    text-transform: uppercase;
+  }
+  .live-icon {
+    color: #ce1722;
+  }
+  .live-icon.connected {
+    color: #15b241;
+  }
+  .live-label {
+    color: rgba(255, 255, 255, 0.66);
+  }
+
   .title {
     display: flex;
     align-items: center;

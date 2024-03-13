@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -42,10 +43,28 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, err
 	m.mu.Unlock()
 
 	if !ok {
-		return nil, txmeta.ErrNotFound
+		return nil, txmeta.NewErrTxmetaNotFound(hash)
 	}
 
 	return &status, nil
+}
+
+func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
+	// TODO make this into a batch call
+	for _, item := range items {
+		data, err := m.Get(ctx, item.Hash)
+		if err != nil {
+			if uerr, ok := err.(*ubsverrors.Error); ok {
+				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+					continue
+				}
+			}
+			return err
+		}
+		item.Data = data
+	}
+
+	return nil
 }
 
 func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -60,7 +79,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 
 	_, ok := m.txStatus[*tx.TxIDChainHash()]
 	if ok {
-		return s, txmeta.ErrAlreadyExists
+		return s, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())
 	}
 
 	m.txStatus[*tx.TxIDChainHash()] = *s

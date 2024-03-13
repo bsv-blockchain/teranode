@@ -90,7 +90,7 @@ func (s *Server) HandleWebSocket() func(c echo.Context) error {
 
 				data, err := json.MarshalIndent(dm, "", "  ")
 				if err != nil {
-					s.logger.Errorf("Error marshaling notification: %w", err)
+					s.logger.Errorf("Error marshaling notification: %v", err)
 					continue
 				}
 

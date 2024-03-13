@@ -26,6 +26,19 @@ func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, err
 	return &status, nil
 }
 
+func (m *NullStore) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
+	// TODO make this into a batch call
+	for _, item := range items {
+		data, err := m.Get(ctx, item.Hash)
+		if err != nil {
+			return err
+		}
+		item.Data = data
+	}
+
+	return nil
+}
+
 func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {

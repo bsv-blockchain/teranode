@@ -1,0 +1,19 @@
+@startuml
+
+participant "Node 1" as Node1
+participant "PubSub System" as PubSub
+participant "Node 2" as Node2
+
+Node1 -> Node1: validatorSubscriptionListener(ctx)
+activate Node1
+Node1 -> PubSub: s.topics[rejectedTxTopicName].Publish(ctx, rejectedTxMessageBytes)
+deactivate Node1
+
+PubSub -> Node2: s.subscriptions[rejectedTxTopicName]
+activate Node2
+Node2 -> Node2: Handle rejected transaction notification
+deactivate Node2
+
+left footer Last Modified On: 17-Jan-2024
+
+@enduml

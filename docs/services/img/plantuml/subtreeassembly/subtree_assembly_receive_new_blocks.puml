@@ -1,0 +1,17 @@
+@startuml
+participant "Blockchain Service" as Blockchain
+participant "Kafka Service" as Kafka
+participant "SubtreeAssembly Service" as SubtreeAssembly
+
+Blockchain -> Kafka: Emit Kafka Block Notification
+Kafka -> SubtreeAssembly: Notify Block Received
+SubtreeAssembly -> SubtreeAssembly: Split Block into Subtrees
+loop for each Subtree
+    SubtreeAssembly -> Kafka: Send Notification for Subtree
+    Kafka -> SubtreeAssembly: Call ProcessSubtree(Subtree)
+    SubtreeAssembly -> SubtreeAssembly: Process Subtree(Subtree)
+end
+
+left footer Last Modified On: 4-March-2024
+
+@enduml

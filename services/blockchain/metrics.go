@@ -3,31 +3,36 @@ package blockchain
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
-	prometheusBlockchainHealth             prometheus.Counter
-	prometheusBlockchainAddBlock           prometheus.Counter
-	prometheusBlockchainGetBlock           prometheus.Counter
-	prometheusBlockchainGetLastNBlocks     prometheus.Counter
-	prometheusBlockchainGetSuitableBlock   prometheus.Counter
-	prometheusBlockchainGetBlockExists     prometheus.Counter
-	prometheusBlockchainGetBestBlockHeader prometheus.Counter
-	prometheusBlockchainGetBlockHeader     prometheus.Counter
-	prometheusBlockchainGetBlockHeaders    prometheus.Counter
-	prometheusBlockchainSubscribe          prometheus.Counter
-	prometheusBlockchainGetState           prometheus.Counter
-	prometheusBlockchainSetState           prometheus.Counter
-	prometheusBlockchainSendNotification   prometheus.Counter
+	prometheusBlockchainHealth                 prometheus.Counter
+	prometheusBlockchainAddBlock               prometheus.Counter
+	prometheusBlockchainGetBlock               prometheus.Counter
+	prometheusBlockchainGetLastNBlocks         prometheus.Counter
+	prometheusBlockchainGetSuitableBlock       prometheus.Counter
+	prometheusBlockchainGetHashOfAncestorBlock prometheus.Counter
+	prometheusBlockchainGetNextWorkRequired    prometheus.Counter
+	prometheusBlockchainGetBlockExists         prometheus.Counter
+	prometheusBlockchainGetBestBlockHeader     prometheus.Counter
+	prometheusBlockchainGetBlockHeader         prometheus.Counter
+	prometheusBlockchainGetBlockHeaders        prometheus.Counter
+	prometheusBlockchainSubscribe              prometheus.Counter
+	prometheusBlockchainGetState               prometheus.Counter
+	prometheusBlockchainSetState               prometheus.Counter
+	prometheusBlockchainSendNotification       prometheus.Counter
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockchainHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockchain",
@@ -65,6 +70,20 @@ func initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "get_suitable_block",
 			Help:      "Number of GetSuitableBlock calls to the blockchain service",
+		},
+	)
+	prometheusBlockchainGetHashOfAncestorBlock = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockchain",
+			Name:      "get_hash_of_ancestor_block",
+			Help:      "Number of GetHashOfAncestorBlock calls to the blockchain service",
+		},
+	)
+	prometheusBlockchainGetNextWorkRequired = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockchain",
+			Name:      "get_next_work_required",
+			Help:      "Number of GetNextWorkRequired calls to the blockchain service",
 		},
 	)
 
@@ -131,6 +150,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of SendNotification calls to the blockchain service",
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

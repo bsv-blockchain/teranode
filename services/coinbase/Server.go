@@ -46,6 +46,7 @@ func Enabled() bool {
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger) *Server {
 	initPrometheusMetrics()
+
 	return &Server{
 		logger: logger,
 	}
@@ -85,6 +86,10 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.coinbase.peerSync.Start(ctx); err != nil {
+		return err
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, s.logger, "coinbase", func(server *grpc.Server) {
 		coinbase_api.RegisterCoinbaseAPIServer(server, s)
@@ -95,8 +100,9 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop(_ context.Context) error {
-	return nil
+func (s *Server) Stop(ctx context.Context) error {
+	err := s.coinbase.peerSync.Stop(ctx)
+	return err
 }
 
 func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {

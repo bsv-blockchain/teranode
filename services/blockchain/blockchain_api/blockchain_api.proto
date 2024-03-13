@@ -15,16 +15,21 @@ service BlockchainAPI {
   // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
   rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
+  rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
+  rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc InvalidateBlock(InvalidateBlockRequest) returns (google.protobuf.Empty) {}
+  rpc RevalidateBlock(RevalidateBlockRequest) returns (google.protobuf.Empty) {}
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
   rpc GetState(GetStateRequest) returns (StateResponse) {}
@@ -52,6 +57,11 @@ message AddBlockRequest {
 // swagger:model GetBlockRequest
 message GetBlockRequest {
   bytes hash = 1;
+}
+
+// swagger:model GetBlockByHeightRequest
+message GetBlockByHeightRequest {
+  uint32 height = 1;
 }
 
 // swagger:model GetBlockResponse
@@ -91,6 +101,18 @@ message GetBlockHeadersResponse {
   repeated uint32 heights = 2;
 }
 
+// swagger:model GetBlockHeadersFromHeightRequest
+message GetBlockHeadersFromHeightRequest {
+  uint32 startHeight = 1;
+  uint32 limit = 2;
+}
+
+// swagger:model GetBlockHeadersFromHeightResponse
+message GetBlockHeadersFromHeightResponse {
+  repeated bytes blockHeaders = 1;
+  repeated bytes metas = 2;
+}
+
 // swagger:model GetBlockHeaderIDsResponse
 message GetBlockHeaderIDsResponse {
   repeated uint32 ids = 1;
@@ -111,12 +133,20 @@ message InvalidateBlockRequest {
   bytes blockHash = 1;
 }
 
+// swagger:model RevalidateBlockRequest
+message RevalidateBlockRequest {
+  bytes blockHash = 1;
+}
+
+// swagger:model GetBlockHeaderResponse
 message GetBlockHeaderResponse {
   bytes blockHeader = 1;
   uint32 height = 2;
   uint64 tx_count = 3;
   uint64 size_in_bytes = 4;
   string miner = 5;
+  uint32 block_time = 6;
+  uint32 timestamp = 7;
 }
 
 // swagger:model SubscribeRequest
@@ -167,4 +197,25 @@ message GetSuitableBlockRequest {
 // swagger:model GetSuitableBlockResponse
 message GetSuitableBlockResponse {
   model.SuitableBlock block = 1;
+}
+
+// swagger:model GetHashOfAncestorBlockRequest
+message GetHashOfAncestorBlockRequest {
+  bytes hash = 1;
+  uint32 depth =2;
+}
+
+// swagger:model GetHashOfAncestorBlockResponse
+message GetHashOfAncestorBlockResponse {
+  bytes hash = 1;
+}
+
+// swagger:model GGetNextWorkRequiredRequest
+message GetNextWorkRequiredRequest {
+  bytes blockHash = 1;
+}
+
+// swagger:model GGetNextWorkRequiredResponse
+message GetNextWorkRequiredResponse {
+  bytes bits = 1;
 }

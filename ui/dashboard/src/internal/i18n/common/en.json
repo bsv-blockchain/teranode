@@ -1,7 +1,11 @@
 {
   "comp": {
     "footer": {
-      "copyright": "© {{ year }} Teranode"
+      "copyright": "© {{ year }} BSV Blockchain Org.",
+      "privacy": "Privacy",
+      "privacy_url": "https://www.bsvblockchain.org/privacy",
+      "terms": "Terms of Use",
+      "terms_url": "https://www.bsvblockchain.org/terms"
     },
     "pager": {
       "prev": "Prev",
@@ -23,6 +27,18 @@
       }
     },
     "range-toggle": {
+      "2h": {
+        "label": "2H",
+        "tooltip": "2 Hours"
+      },
+      "6h": {
+        "label": "6H",
+        "tooltip": "6 Hours"
+      },
+      "12h": {
+        "label": "12H",
+        "tooltip": "12 Hours"
+      },
       "24h": {
         "label": "24H",
         "tooltip": "24 Hours"
@@ -79,13 +95,14 @@
         "title": "Ping",
         "fields": {
           "age": "Age",
+          "base_url": "From",
           "receivedAt": "Received at"
         }
       }
     },
     "toolbar": {
       "reverse": "Reverse",
-      "placeholder": "Block Hash / Subtree Hash / TxID / UTXO Hash"
+      "placeholder": "Block Height / Hash, Subtree, TxID, UTXO Hash"
     },
     "breadcrumbs": {
       "page": {
@@ -103,6 +120,9 @@
             },
             "tx": {
               "title": "Transaction Details"
+            },
+            "utxo": {
+              "title": "UTXO Details"
             }
           }
         },
@@ -143,15 +163,16 @@
       "menu-label": "Dashboard",
       "stats": {
         "title": "24h Stats",
+        "alternateTitle": "Stats since last restart",
         "live": "Live",
         "fields": {
           "loading": "Loading...",
           "block_count": "Total Blocks",
-          "tx_count": "Mined Transactions",
+          "tx_count": "Mined Tx",
           "max_height": "Latest Block Height",
           "avg_block_size": "Average Block Size",
           "avg_tx_count_per_block": "Average Tx / Block",
-          "txns_per_second": "Txns / Second"
+          "txns_per_second": "Tx / Second"
         }
       },
       "txs": {
@@ -172,7 +193,7 @@
         "coinbaseValue": "Block Reward",
         "transactionCount": "Tx",
         "tps": "TPS",
-        "size": "Size (Bytes)"
+        "size": "Size"
       }
     },
     "viewer-block": {
@@ -203,9 +224,9 @@
         "subtitle": "{{ count }} subtrees found",
         "subtitle_singular": "{{ count }} subtree found",
         "col-defs-label": {
-          "height": "Height",
+          "index": "Index",
           "hash": "Subtree Hash",
-          "transactionCount": "Transactions",
+          "txCount": "Transactions",
           "fee": "Fees",
           "size": "Size"
         }
@@ -242,7 +263,7 @@
           "txid": "Transaction ID",
           "inputsCount": "Inputs",
           "outputsCount": "Outputs",
-          "kbFee": "Fee Per KB",
+          "fee": "Fee",
           "size": "Size",
           "timestamp": "Timestamp"
         }
@@ -278,6 +299,11 @@
         "load-more": "Load 10 More"
       }
     },
+    "viewer-utxo": {
+      "details": {
+        "title": "UTXO Details"
+      }
+    },
     "metrics": {
       "menu-label": "Metrics"
     },
@@ -289,8 +315,12 @@
       "live": "Live",
       "paused": "Paused"
     },
+    "forks": {
+      "menu-label": "Forks"
+    },
     "network": {
       "menu-label": "Network",
+      "live": "Live",
       "nodes": {
         "title": "Connected Nodes",
         "fields": {
@@ -303,15 +333,11 @@
           "previousblockhash": "Previous hash",
           "receivedAt": "Last seen"
         }
-      },
-      "chaintip": {}
+      }
     },
-    "status": {
-      "menu-label": "Status",
-      "title": "Status",
-      "filter": "Filter",
-      "live": "Live",
-      "paused": "Paused"
+    "updates": {
+      "menu-label": "Updates",
+      "title": "Updates"
     }
   },
   "notifications": {
@@ -332,15 +358,27 @@
     "not-available": "N/A"
   },
   "tooltip": {
-    "copy-to-clipboard": "Copy to clipboard",
+    "copy-hash-to-clipboard": "Copy hash",
+    "copy-url-to-clipboard": "Copy URL",
+    "copy-json-to-clipboard": "Copy JSON",
     "reverse-hash": "Reverse hash",
     "previous-block": "Previous block",
-    "next-block": "Next block"
+    "next-block": "Next block",
+    "refresh": "Refresh",
+    "expand-all": "Expand all",
+    "collapse-all": "Collapse all",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "to-posts": "To posts"
   },
   "graph": {
     "series": {
       "date": "Date",
       "tx_count": "Tx Count"
     }
+  },
+  "global": {
+    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets.",
+    "warning_2": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
   }
 }

@@ -1,0 +1,23 @@
+
+@startuml
+participant "Main" as Client
+participant "Blockchain Service" as Service
+
+Client -> Service: New(logger)
+activate Service
+Service -> Service: Initialize Service\n- Set up blockchain store\n- Initialize channels\n- Prepare context and subscriptions
+Service --> Client: Return Blockchain instance
+deactivate Service
+
+Client -> Service: Start(ctx)
+activate Service
+Service -> Service: Start server operations\n- Channel listeners\n- GRPC Server
+loop Notifications and Subscriptions handling
+  Service -> Service: Handle notifications and subscriptions
+end
+Service --> Client: Server started
+deactivate Service
+
+left footer Last Modified On: 24-Jan-2024
+
+@enduml

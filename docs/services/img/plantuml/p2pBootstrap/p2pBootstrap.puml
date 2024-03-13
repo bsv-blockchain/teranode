@@ -1,0 +1,42 @@
+@startuml
+participant "Main Function" as Main
+participant "GoCore Config" as Config
+participant "LibP2P Host" as LibP2P
+participant "Kademlia DHT" as Kademlia
+participant "Private Network (PSK)" as PrivateNet
+
+Main -> Config: Get configuration settings\n(p2p_dht_protocol_id, p2p_shared_key, p2p_bootstrap_privkey, etc.)
+activate Config
+Config --> Main: Return configuration values
+deactivate Config
+
+Main -> LibP2P: Create new libp2p host\nusing configuration values
+activate LibP2P
+LibP2P --> Main: Host instance
+deactivate LibP2P
+
+Main -> Kademlia: Setup Kademlia DHT\nwith DHT protocol ID
+activate Kademlia
+Kademlia --> Main: Kademlia instance
+deactivate Kademlia
+
+Main -> PrivateNet: Secure network with PSK
+activate PrivateNet
+PrivateNet --> Main: Secured network
+deactivate PrivateNet
+
+Main -> LibP2P: Start host with secure connections
+activate LibP2P
+LibP2P --> Main: Host running
+deactivate LibP2P
+
+Main -> Kademlia: Integrate DHT with Host for peer discovery
+activate Kademlia
+Kademlia --> Main: DHT integrated
+deactivate Kademlia
+
+note right of Main: Host now running and waiting for connections
+
+left footer Last Modified On: 26-Jan-2024
+
+@enduml

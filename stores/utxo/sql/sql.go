@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -106,7 +107,7 @@ type Store struct {
 	logger      ulogger.Logger
 	db          *usql.DB
 	engine      string
-	blockHeight uint32
+	blockHeight atomic.Uint32
 	dbTimeout   time.Duration
 }
 
@@ -136,22 +137,23 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
-		logger:    logger,
-		db:        &usql.DB{DB: db},
-		engine:    storeUrl.Scheme,
-		dbTimeout: time.Duration(dbTimeoutMillis) * time.Millisecond,
+		logger:      logger,
+		db:          db,
+		engine:      storeUrl.Scheme,
+		blockHeight: atomic.Uint32{},
+		dbTimeout:   time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
 	return s, nil
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	s.blockHeight = blockHeight
+	s.blockHeight.Store(blockHeight)
 	return nil
 }
 
 func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight, nil
+	return s.blockHeight.Load(), nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -191,7 +193,7 @@ func (s *Store) Get(cntxt context.Context, spend *utxostore.Spend) (*utxostore.R
 	}
 
 	return &utxostore.Response{
-		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)),
+		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight.Load())),
 		LockTime:     lockTime,
 		SpendingTxID: txHash,
 	}, nil
@@ -233,6 +235,7 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 
 		for _, hash := range utxoHashes {
 			if _, err := stmt.ExecContext(ctx, storeLockTime, hash[:]); err != nil {
+				s.logger.Errorf("error storing utxo: %s", err.Error())
 				return err
 			}
 		}
@@ -299,6 +302,98 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 	return nil
 }
 
+// StoreFromHashes stores the utxos of the tx in aerospike
+// TODO not tested for SQL
+func (s *Store) StoreFromHashes(cntxt context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
+	defer cancelTimeout()
+
+	switch s.engine {
+	case "postgres":
+
+		// Prepare the copy operation
+		txn, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			_ = txn.Rollback()
+		}()
+
+		stmt, err := txn.Prepare(pq.CopyIn("utxos", "lock_time", "hash"))
+		if err != nil {
+			return err
+		}
+
+		for _, hash := range hashes {
+			if _, err := stmt.ExecContext(ctx, lockTime, hash[:]); err != nil {
+				s.logger.Errorf("error storing utxo: %s", err.Error())
+				return err
+			}
+		}
+
+		// Execute the batch transaction
+		_, err = stmt.ExecContext(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := stmt.Close(); err != nil {
+			return err
+		}
+		if err := txn.Commit(); err != nil {
+			return err
+		}
+
+	case "sqlite", "sqlitememory":
+		// Prepare the copy operation
+		const batchSize = 500
+
+		qBase := `
+			INSERT INTO utxos
+				(lock_time, hash)
+			VALUES
+		`
+		qRow := fmt.Sprintf("(%d, ?)", lockTime)
+
+		for i := 0; i < len(hashes); i += batchSize {
+			var valuesStrings []string
+			var valuesArgs []interface{}
+
+			end := i + batchSize
+			if end > len(hashes) {
+				end = len(hashes)
+			}
+
+			for j := i; j < end; j++ {
+				valuesStrings = append(valuesStrings, qRow)
+				valuesArgs = append(valuesArgs, hashes[j][:])
+			}
+
+			q := qBase + strings.Join(valuesStrings, ",")
+
+			select {
+			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return fmt.Errorf("[sql.go.StoreFromHashes] context timeout, managed to get through %d of %d", i, len(hashes))
+				}
+				return fmt.Errorf("[sql.go.StoreFromHashes] context cancelled, managed to get through %d of %d", i, len(hashes))
+			default:
+				_, err := s.db.ExecContext(ctx, q, valuesArgs...)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("unknown database engine: %s", s.engine)
+	}
+
+	prometheusUtxoStore.Add(float64(len(hashes)))
+	return nil
+}
+
 func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
@@ -319,7 +414,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 			  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
 			  AND tx_id IS NULL
 		`
-		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight, time.Now().Unix())
+		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight.Load(), time.Now().Unix())
 		if err != nil {
 			return fmt.Errorf("[Spend][%s] error spending utxo: %s", spend.Hash.String(), err.Error())
 		}
@@ -340,8 +435,8 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				} else {
 					return utxostore.NewErrSpent(utxo.SpendingTxID)
 				}
-			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
-				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight)
+			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight.Load()) {
+				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight.Load())
 			}
 		}
 
@@ -422,7 +517,7 @@ func (s *Store) delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func createPostgresSchema(db *sql.DB) error {
+func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS utxos (
 	    id            BIGSERIAL PRIMARY KEY
@@ -444,7 +539,7 @@ func createPostgresSchema(db *sql.DB) error {
 	return nil
 }
 
-func createSqliteSchema(db *sql.DB) error {
+func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS utxos (
 		 id           INTEGER PRIMARY KEY AUTOINCREMENT

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -21,7 +22,7 @@ import (
 type Client struct {
 	client  asset_api.AssetAPIClient
 	logger  ulogger.Logger
-	running bool
+	running *atomic.Bool
 	conn    *grpc.ClientConn
 }
 
@@ -33,7 +34,7 @@ type BestBlockHeader struct {
 func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Client, error) {
 	var err error
 	var blobConn *grpc.ClientConn
-	var blobClient asset_api.AssetAPIClient
+	var assetClient asset_api.AssetAPIClient
 
 	// retry a few times to connect to the blob service
 	maxRetries, _ := gocore.Config().GetInt("asset_maxRetries", 3)
@@ -50,32 +51,35 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
 		}
 
-		blobClient = asset_api.NewAssetAPIClient(blobConn)
+		assetClient = asset_api.NewAssetAPIClient(blobConn)
 
-		_, err = blobClient.HealthGRPC(ctx, &emptypb.Empty{})
+		_, err = assetClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
 			if retries < maxRetries {
 				retries++
-				logger.Warnf("failed to connect to blob service, retrying %d: %v", retries, err)
+				logger.Warnf("failed to connect to asset service, retrying %d: %v", retries, err)
 				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
 				continue
 			}
 
-			logger.Errorf("failed to connect to blob service, retried %d times: %v", maxRetries, err)
+			logger.Errorf("failed to connect to asset service, retried %d times: %v", maxRetries, err)
 			return nil, err
 		}
 		break
 	}
 
+	running := atomic.Bool{}
+	running.Store(true)
+
 	return &Client{
-		client:  blobClient,
+		client:  assetClient,
 		logger:  logger,
-		running: true,
+		running: &running,
 		conn:    blobConn,
 	}, nil
 }
 
-func (c Client) Health(ctx context.Context) (bool, error) {
+func (c *Client) Health(ctx context.Context) (bool, error) {
 	response, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
 	if err != nil {
 		return false, err
@@ -84,7 +88,7 @@ func (c Client) Health(ctx context.Context) (bool, error) {
 	return response.Ok, nil
 }
 
-func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
 	resp, err := c.client.GetBlock(ctx, &asset_api.GetBlockRequest{
 		Hash: blockHash[:],
 	})
@@ -114,7 +118,7 @@ func (c Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
 }
 
-func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
+func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, 0, err
@@ -128,7 +132,7 @@ func (c Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uin
 	return header, resp.Height, nil
 }
 
-func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
+func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, uint32, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &asset_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
@@ -144,7 +148,7 @@ func (c Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (
 	return header, resp.Height, nil
 }
 
-func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &asset_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
@@ -165,13 +169,13 @@ func (c Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, 
 	return headers, resp.Heights, nil
 }
 
-func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
 	ch := make(chan *model.Notification)
 
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
-		c.running = false
+		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[Asset] failed to close connection", err)
@@ -181,7 +185,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	go func() {
 		defer close(ch)
 
-		for c.running {
+		for c.running.Load() {
 			stream, err := c.client.Subscribe(ctx, &asset_api.SubscribeRequest{
 				Source: source,
 			})
@@ -190,7 +194,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 				continue
 			}
 
-			for c.running {
+			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
@@ -219,7 +223,7 @@ func (c Client) Subscribe(ctx context.Context, source string) (chan *model.Notif
 	return ch, nil
 }
 
-func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
+func (c *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	response, err := c.client.Get(ctx, &asset_api.GetSubtreeRequest{
 		Hash: subtreeHash,
 	})
@@ -230,11 +234,22 @@ func (c Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	return response.Subtree, nil
 }
 
-func (c Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
+func (c *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
+	response, err := c.client.Exists(ctx, &asset_api.ExistsSubtreeRequest{
+		Hash: subtreeHash,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return response.Exists, nil
+}
+
+func (c *Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (c Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	blobOptions := options.NewSetOptions(opts...)
 
 	_, err := c.client.Set(ctx, &asset_api.SetSubtreeRequest{
@@ -249,7 +264,7 @@ func (c Client) Set(ctx context.Context, key []byte, value []byte, opts ...optio
 	return nil
 }
 
-func (c Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (c *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
 	_, err := c.client.SetTTL(ctx, &asset_api.SetSubtreeTTLRequest{
 		Hash: key[:],
 		Ttl:  uint32(int64(ttl.Seconds())),
@@ -260,7 +275,7 @@ func (c Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 
 	return nil
 }
-func (c Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (c *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	//TODO implement me
 	panic("implement me")
 }

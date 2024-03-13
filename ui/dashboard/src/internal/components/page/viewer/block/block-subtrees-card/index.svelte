@@ -6,11 +6,14 @@
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
   import { getColDefs, getRenderCells } from './data'
+  import * as api from '$internal/api'
+  import { failure } from '$lib/utils/notifications'
 
   const baseKey = 'page.viewer-block.subtrees'
 
   export let block: any
-  export let data: any[] = []
+
+  let data: any[] = []
 
   $: t = $i18n.t
   $: i18nLocal = { t, baseKey: 'comp.pager' }
@@ -22,6 +25,7 @@
 
   let page = 1
   let pageSize = 10
+  let totalItems = 0
 
   function onPage(e) {
     const data = e.detail
@@ -39,10 +43,31 @@
   $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
   $: showTableFooter = showPagerSize
 
-  let variant = $tableVariant
+  let variant = 'dynamic'
   function onToggle(e) {
     const value = e.detail.value
     variant = $tableVariant = value
+  }
+
+  async function fetchData(hash, page, pageSize) {
+    const blockSubtrees: any = await api.getBlockSubtrees({
+      hash,
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    })
+    if (blockSubtrees.ok) {
+      data = blockSubtrees.data.data
+      const pagination = blockSubtrees.data.pagination
+      pageSize = pagination.limit
+      page = Math.floor(pagination.offset / pageSize) + 1
+      totalItems = pagination.totalRecords
+    } else {
+      failure(blockSubtrees.error.message)
+    }
+  }
+
+  $: if (block) {
+    fetchData(block.expandedHeader.hash, page, pageSize)
   }
 </script>
 
@@ -60,7 +85,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={false}
       showQuickNav={false}
       showNav={showPagerNav}
@@ -77,7 +102,7 @@
   <Table
     name="subtrees"
     {variant}
-    idField="height"
+    idField="hash"
     {colDefs}
     {data}
     pagination={{
@@ -87,6 +112,8 @@
     i18n={i18nLocal}
     expandUp={true}
     pager={false}
+    useServerPagination={true}
+    sortEnabled={false}
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
@@ -96,7 +123,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      {totalItems}
       showPageSize={showPagerSize}
       showQuickNav={showPagerNav}
       showNav={showPagerNav}

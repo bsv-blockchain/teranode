@@ -3,15 +3,17 @@
   import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
-  import { formatSatoshi } from '$lib/utils/format'
   import { getDetailsUrl, DetailType, DetailTab, reverseHashParam } from '$internal/utils/urls'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
 
   import { Button, Icon } from '$lib/components'
+  import { getDifficultyFromBits } from '$lib/utils/difficulty'
+  import { addNumCommas, dataSize, formatDate, formatNumberExpStr } from '$lib/utils/format'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -42,16 +44,26 @@
       goto(getDetailsUrl(DetailType.block, hash))
     }
   }
+
+  $: difficultyDisplay = formatNumberExpStr(getDifficultyFromBits(expandedHeader.bits))
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedHeader.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{expandedHeader.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={expandedHeader.hash}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.block, expandedHeader.hash)}
         size={15}
       />
     </div>
@@ -76,9 +88,9 @@
       size="small"
       icon="icon-chevron-right-line"
       ico={true}
-      disabled={!expandedHeader.nextblockhash}
-      tooltip={expandedHeader.nextblockhash ? t('tooltip.next-block') : ''}
-      on:click={() => navToBlock(expandedHeader.nextblockhash)}
+      disabled={!data?.nextblock}
+      tooltip={data?.nextblock ? t('tooltip.next-block') : ''}
+      on:click={() => navToBlock(data?.nextblock)}
     />
   </div>
   <div class="content">
@@ -103,31 +115,35 @@
         <div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.timestamp`)}</div>
-            <div class="value">{expandedHeader.time}</div>
+            <div class="value">{formatDate(expandedHeader.time * 1000)}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
-            <div class="value">{expandedHeader.txCount}</div>
+            <div class="value">{addNumCommas(expandedHeader.txCount)}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
             <div class="value">TBD</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.avgFee`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{expandedHeader.sizeInBytes / 1000} KB</div>
+            <div class="value">
+              {dataSize(expandedHeader.sizeInBytes)}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.difficulty`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">
+              {@html difficultyDisplay}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
-            <div class="value">{formatSatoshi(expandedHeader.nonce)} BSV</div>
+            <div class="value">{expandedHeader.nonce}</div>
           </div>
         </div>
         <div>
@@ -137,16 +153,18 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.confirmations`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">
+              {addNumCommas(data.latestBlockData.height - expandedHeader.height)}
+            </div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.merkleroot`)}</div>
             <div class="value">{expandedHeader.merkleroot}</div>
           </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.chainwork`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
           <div class="entry">
             <div class="label">{t(`${fieldKey}.miner`)}</div>
             <div class="value">{expandedHeader.miner}</div>
@@ -164,6 +182,7 @@
 <style>
   .btns {
     display: flex;
+    gap: 4px;
   }
 
   .content {

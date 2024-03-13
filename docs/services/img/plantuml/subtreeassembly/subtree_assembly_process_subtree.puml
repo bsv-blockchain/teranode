@@ -1,0 +1,30 @@
+@startuml
+participant "SubtreeAssembly" as SubtreeAssembly
+database "TxMetaStore" as TMS
+database "Substree Store" as SubtreeStore
+
+SubtreeAssembly -> SubtreeAssembly: ProcessSubtree(Subtree)
+
+activate SubtreeAssembly
+
+SubtreeAssembly -> SubtreeStore: Get Subtree Data
+SubtreeStore --> SubtreeAssembly: Subtree
+
+SubtreeAssembly -> SubtreeAssembly: Validate Subtree
+
+SubtreeAssembly -> SubtreeAssembly : Iterates over Subtree Txs
+loop for each Tx in Subtree
+    SubtreeAssembly -> SubtreeAssembly : Checks if Tx is not Coinbase Tx
+    SubtreeAssembly -> TMS : MetaBatchDecorate Tx
+    TMS --> SubtreeAssembly
+end
+
+
+SubtreeAssembly -> SubtreeStore: Store Processed Subtree Data
+SubtreeStore --> SubtreeAssembly: Acknowledgment
+
+deactivate SubtreeAssembly
+
+left footer Last Modified On: 4-March-2024
+
+@enduml

@@ -382,6 +382,122 @@ func (x *BlockvalidationApiGetSubtreeResponse) decode(d *polyglot.Decoder) error
 	return nil
 }
 
+type BlockvalidationApiExistsSubtreeRequest struct {
+	error error
+	flags uint8
+
+	Hash []byte
+}
+
+func NewBlockvalidationApiExistsSubtreeRequest() *BlockvalidationApiExistsSubtreeRequest {
+	return &BlockvalidationApiExistsSubtreeRequest{}
+}
+
+func (x *BlockvalidationApiExistsSubtreeRequest) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiExistsSubtreeRequest) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bytes(x.Hash)
+	}
+}
+
+func (x *BlockvalidationApiExistsSubtreeRequest) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiExistsSubtreeRequest) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Hash, err = d.Bytes(nil)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type BlockvalidationApiExistsSubtreeResponse struct {
+	error error
+	flags uint8
+
+	Exists bool
+}
+
+func NewBlockvalidationApiExistsSubtreeResponse() *BlockvalidationApiExistsSubtreeResponse {
+	return &BlockvalidationApiExistsSubtreeResponse{}
+}
+
+func (x *BlockvalidationApiExistsSubtreeResponse) Error(b *polyglot.Buffer, err error) {
+	polyglot.Encoder(b).Error(err)
+}
+
+func (x *BlockvalidationApiExistsSubtreeResponse) Encode(b *polyglot.Buffer) {
+	if x == nil {
+		polyglot.Encoder(b).Nil()
+	} else {
+		if x.error != nil {
+			polyglot.Encoder(b).Error(x.error)
+			return
+		}
+		polyglot.Encoder(b).Uint8(x.flags)
+		polyglot.Encoder(b).Bool(x.Exists)
+	}
+}
+
+func (x *BlockvalidationApiExistsSubtreeResponse) Decode(b []byte) error {
+	if x == nil {
+		return ErrNilDecode
+	}
+	d := polyglot.GetDecoder(b)
+	defer d.Return()
+	return x.decode(d)
+}
+
+func (x *BlockvalidationApiExistsSubtreeResponse) decode(d *polyglot.Decoder) error {
+	if d.Nil() {
+		return nil
+	}
+
+	var err error
+	x.error, err = d.Error()
+	if err == nil {
+		return nil
+	}
+	x.flags, err = d.Uint8()
+	if err != nil {
+		return err
+	}
+	x.Exists, err = d.Bool()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type BlockvalidationApiSetTxMetaRequest struct {
 	error error
 	flags uint8
@@ -768,6 +884,7 @@ type BlockValidationAPI interface {
 	BlockFound(context.Context, *BlockvalidationApiBlockFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	SubtreeFound(context.Context, *BlockvalidationApiSubtreeFoundRequest) (*BlockvalidationApiEmptyMessage, error)
 	Get(context.Context, *BlockvalidationApiGetSubtreeRequest) (*BlockvalidationApiGetSubtreeResponse, error)
+	Exists(context.Context, *BlockvalidationApiExistsSubtreeRequest) (*BlockvalidationApiExistsSubtreeResponse, error)
 	SetTxMeta(context.Context, *BlockvalidationApiSetTxMetaRequest) (*BlockvalidationApiSetTxMetaResponse, error)
 	DelTxMeta(context.Context, *BlockvalidationApiDelTxMetaRequest) (*BlockvalidationApiDelTxMetaResponse, error)
 	SetMinedMulti(context.Context, *BlockvalidationApiSetMinedMultiRequest) (*BlockvalidationApiSetMinedMultiResponse, error)
@@ -874,6 +991,26 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 		return
 	}
 	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		req := NewBlockvalidationApiExistsSubtreeRequest()
+		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+		if err == nil {
+			var res *BlockvalidationApiExistsSubtreeResponse
+			outgoing = incoming
+			outgoing.Content.Reset()
+			res, err = blockValidationAPI.Exists(ctx, req)
+			if err != nil {
+				if _, ok := err.(CloseError); ok {
+					action = frisbee.CLOSE
+				}
+				res.Error(outgoing.Content, err)
+			} else {
+				res.Encode(outgoing.Content)
+			}
+			outgoing.Metadata.ContentLength = uint32(len(*outgoing.Content))
+		}
+		return
+	}
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockvalidationApiSetTxMetaRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -893,7 +1030,7 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 		}
 		return
 	}
-	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockvalidationApiDelTxMetaRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -913,7 +1050,7 @@ func NewServer(blockValidationAPI BlockValidationAPI, tlsConfig *tls.Config, log
 		}
 		return
 	}
-	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[17] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		req := NewBlockvalidationApiSetMinedMultiRequest()
 		err := req.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
 		if err == nil {
@@ -988,6 +1125,10 @@ type subBlockValidationAPIClient struct {
 	nextGetMu               sync.RWMutex
 	inflightGet             map[uint16]chan *BlockvalidationApiGetSubtreeResponse
 	inflightGetMu           sync.RWMutex
+	nextExists              uint16
+	nextExistsMu            sync.RWMutex
+	inflightExists          map[uint16]chan *BlockvalidationApiExistsSubtreeResponse
+	inflightExistsMu        sync.RWMutex
 	nextSetTxMeta           uint16
 	nextSetTxMetaMu         sync.RWMutex
 	inflightSetTxMeta       map[uint16]chan *BlockvalidationApiSetTxMetaResponse
@@ -1061,6 +1202,18 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		return
 	}
 	table[14] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+		c.BlockValidationAPI.inflightExistsMu.RLock()
+		if ch, ok := c.BlockValidationAPI.inflightExists[incoming.Metadata.Id]; ok {
+			c.BlockValidationAPI.inflightExistsMu.RUnlock()
+			res := NewBlockvalidationApiExistsSubtreeResponse()
+			res.Decode((*incoming.Content)[:incoming.Metadata.ContentLength])
+			ch <- res
+		} else {
+			c.BlockValidationAPI.inflightExistsMu.RUnlock()
+		}
+		return
+	}
+	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockValidationAPI.inflightSetTxMetaMu.RLock()
 		if ch, ok := c.BlockValidationAPI.inflightSetTxMeta[incoming.Metadata.Id]; ok {
 			c.BlockValidationAPI.inflightSetTxMetaMu.RUnlock()
@@ -1072,7 +1225,7 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
-	table[15] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockValidationAPI.inflightDelTxMetaMu.RLock()
 		if ch, ok := c.BlockValidationAPI.inflightDelTxMeta[incoming.Metadata.Id]; ok {
 			c.BlockValidationAPI.inflightDelTxMetaMu.RUnlock()
@@ -1084,7 +1237,7 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 		}
 		return
 	}
-	table[16] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
+	table[17] = func(ctx context.Context, incoming *packet.Packet) (outgoing *packet.Packet, action frisbee.Action) {
 		c.BlockValidationAPI.inflightSetMinedMultiMu.RLock()
 		if ch, ok := c.BlockValidationAPI.inflightSetMinedMulti[incoming.Metadata.Id]; ok {
 			c.BlockValidationAPI.inflightSetMinedMultiMu.RUnlock()
@@ -1127,6 +1280,10 @@ func NewClient(tlsConfig *tls.Config, logger *zerolog.Logger) (*Client, error) {
 	c.BlockValidationAPI.nextGet = 0
 	c.BlockValidationAPI.nextGetMu.Unlock()
 	c.BlockValidationAPI.inflightGet = make(map[uint16]chan *BlockvalidationApiGetSubtreeResponse)
+	c.BlockValidationAPI.nextExistsMu.Lock()
+	c.BlockValidationAPI.nextExists = 0
+	c.BlockValidationAPI.nextExistsMu.Unlock()
+	c.BlockValidationAPI.inflightExists = make(map[uint16]chan *BlockvalidationApiExistsSubtreeResponse)
 	c.BlockValidationAPI.nextSetTxMetaMu.Lock()
 	c.BlockValidationAPI.nextSetTxMeta = 0
 	c.BlockValidationAPI.nextSetTxMetaMu.Unlock()
@@ -1286,10 +1443,44 @@ func (c *subBlockValidationAPIClient) Get(ctx context.Context, req *Blockvalidat
 	return
 }
 
+func (c *subBlockValidationAPIClient) Exists(ctx context.Context, req *BlockvalidationApiExistsSubtreeRequest) (res *BlockvalidationApiExistsSubtreeResponse, err error) {
+	ch := make(chan *BlockvalidationApiExistsSubtreeResponse, 1)
+	p := packet.Get()
+	p.Metadata.Operation = 14
+
+	c.nextExistsMu.Lock()
+	c.nextExists += 1
+	id := c.nextExists
+	c.nextExistsMu.Unlock()
+	p.Metadata.Id = id
+
+	req.Encode(p.Content)
+	p.Metadata.ContentLength = uint32(len(*p.Content))
+	c.inflightExistsMu.Lock()
+	c.inflightExists[id] = ch
+	c.inflightExistsMu.Unlock()
+	err = c.client.WritePacket(p)
+	if err != nil {
+		packet.Put(p)
+		return
+	}
+	select {
+	case res = <-ch:
+		err = res.error
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.inflightExistsMu.Lock()
+	delete(c.inflightExists, id)
+	c.inflightExistsMu.Unlock()
+	packet.Put(p)
+	return
+}
+
 func (c *subBlockValidationAPIClient) SetTxMeta(ctx context.Context, req *BlockvalidationApiSetTxMetaRequest) (res *BlockvalidationApiSetTxMetaResponse, err error) {
 	ch := make(chan *BlockvalidationApiSetTxMetaResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 14
+	p.Metadata.Operation = 15
 
 	c.nextSetTxMetaMu.Lock()
 	c.nextSetTxMeta += 1
@@ -1323,7 +1514,7 @@ func (c *subBlockValidationAPIClient) SetTxMeta(ctx context.Context, req *Blockv
 func (c *subBlockValidationAPIClient) DelTxMeta(ctx context.Context, req *BlockvalidationApiDelTxMetaRequest) (res *BlockvalidationApiDelTxMetaResponse, err error) {
 	ch := make(chan *BlockvalidationApiDelTxMetaResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 15
+	p.Metadata.Operation = 16
 
 	c.nextDelTxMetaMu.Lock()
 	c.nextDelTxMeta += 1
@@ -1357,7 +1548,7 @@ func (c *subBlockValidationAPIClient) DelTxMeta(ctx context.Context, req *Blockv
 func (c *subBlockValidationAPIClient) SetMinedMulti(ctx context.Context, req *BlockvalidationApiSetMinedMultiRequest) (res *BlockvalidationApiSetMinedMultiResponse, err error) {
 	ch := make(chan *BlockvalidationApiSetMinedMultiResponse, 1)
 	p := packet.Get()
-	p.Metadata.Operation = 16
+	p.Metadata.Operation = 17
 
 	c.nextSetMinedMultiMu.Lock()
 	c.nextSetMinedMulti += 1

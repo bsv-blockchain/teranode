@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
-	"net/url"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
@@ -32,11 +36,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
-	"github.com/bitcoin-sv/ubsv/services/seeder"
-	"github.com/bitcoin-sv/ubsv/services/txmeta"
-	"github.com/bitcoin-sv/ubsv/services/utxo"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -111,20 +111,26 @@ func main() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
+	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
+	if shouldStart("wait_for_postgres") {
+		if err := waitForPostgresToStart(logger); err != nil {
+			logger.Fatalf("error waiting for postgres: %v", err)
+		}
+	}
+
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
+	startSubtreeValidation := shouldStart("SubtreeValidation")
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
-	startUtxoStore := shouldStart("UtxoStore")
-	startTxMetaStore := shouldStart("TxMetaStore")
 	startPropagation := shouldStart("Propagation")
-	startSeeder := shouldStart("Seeder")
 	startMiner := shouldStart("Miner")
+	startP2P := shouldStart("P2P")
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
-	startP2P := shouldStart("P2P")
+	startBlockPersister := shouldStart("BlockPersister")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -137,16 +143,13 @@ func main() {
 		var ok bool
 		profilerAddr, ok = gocore.Config().Get("profilerAddr")
 		if ok {
-			logger.Infof("Starting profile on http://%s/debug/pprof", profilerAddr)
-			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
-		}
-	}()
+			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
-	go func() {
-		statisticsServerAddr, found := gocore.Config().Get("gocore_stats_addr")
-		if found {
-			servicemanager.AddListenerInfo(fmt.Sprintf("StatsServer HTTP listening on %s", statisticsServerAddr))
-			gocore.StartStatsServer(statisticsServerAddr)
+			gocore.RegisterStatsHandlers()
+			prefix, _ := gocore.Config().Get("stats_prefix")
+			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
 		}
 	}()
 
@@ -205,21 +208,10 @@ func main() {
 
 	var err error
 
-	// txmeta store
-	if startTxMetaStore {
-		txMetaStoreURL, _, found := gocore.Config().GetURL("txmeta_store")
-		if !found {
-			panic("no txmeta_store setting found")
-		}
-
-		if txMetaStoreURL.Scheme != "memory" {
-			logger.Warnf("txmeta grpc server only supports memory store, changing to memory store")
-			txMetaStoreURL, _ = url.ParseRequestURI("memory:///")
-		}
-
-		if err := sm.AddService("TxMetaStore", txmeta.New(
-			logger.New("txsts"),
-			txMetaStoreURL,
+	// p2p server
+	if startP2P {
+		if err = sm.AddService("P2P", p2p.NewServer(
+			logger.New("P2P"),
 		)); err != nil {
 			panic(err)
 		}
@@ -243,6 +235,16 @@ func main() {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
+	if startBlockPersister {
+		if err = sm.AddService("BlockPersister", blockpersister.New(
+			logger,
+			getSubtreeStore(logger),
+			getTxMetaStore(logger),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
@@ -256,7 +258,7 @@ func main() {
 			if !ok {
 				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 				if !ok {
-					panic(err)
+					panic("asset_grpcAddress not found in config file")
 				}
 			}
 
@@ -273,10 +275,33 @@ func main() {
 				getSubtreeStore(logger),
 				blockchainClient,
 				assetClient,
-				blockValidationClient,
+				blockValidationClient, // TODO replace with getSubtreeStore(logger) when running block assembly and block validation on the same node
 			)); err != nil {
 				panic(err)
 			}
+		}
+	}
+
+	// subtreeValidation
+	if startSubtreeValidation {
+		validatorClient, err := validator.New(ctx,
+			logger,
+			getUtxoStore(ctx, logger),
+			getTxMetaStore(logger),
+			nil,
+		)
+		if err != nil {
+			logger.Fatalf("could not create validator [%v]", err)
+		}
+
+		if err := sm.AddService("Subtree Validation", subtreevalidation.New(
+			logger.New("stval"),
+			getSubtreeStore(logger),
+			getTxStore(logger),
+			getTxMetaStore(logger),
+			validatorClient,
+		)); err != nil {
+			panic(err)
 		}
 	}
 
@@ -293,11 +318,6 @@ func main() {
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
 			}
-
-			// statusClient, err := status.NewClient(ctx, logger)
-			// if err != nil {
-			// 	logger.Fatalf("could not create status client [%v]", err)
-			// }
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
@@ -323,47 +343,6 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
-		}
-	}
-
-	// utxo store server
-	if startUtxoStore {
-		utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
-		if err != nil {
-			panic(err)
-		}
-		var store utxostore.Interface
-		if utxoStoreURL.Scheme != "memory" {
-			store = getUtxoStore(ctx, logger)
-		} else {
-			store = getUtxoMemoryStore()
-		}
-		if err = sm.AddService("UTXOStoreServer", utxo.New(
-			logger.New("utxo"),
-			store,
-		)); err != nil {
-			panic(err)
-		}
-	}
-
-	// seeder
-	if startSeeder {
-		_, found := gocore.Config().Get("seeder_grpcListenAddress")
-		if found {
-			if err = sm.AddService("Seeder", seeder.NewServer(
-				logger.New("seed"),
-			)); err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	// p2p server
-	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(
-			logger.New("P2P"),
-		)); err != nil {
-			panic(err)
 		}
 	}
 
@@ -469,6 +448,13 @@ func initLogger(serviceName string) ulogger.Logger {
 		ulogger.WithLevel(logLevel),
 	}
 
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	output := zerolog.ConsoleWriter{
+		Out:     os.Stdout,
+		NoColor: !isTerminal, // Disable color if output is not a terminal
+	}
+
 	// sentry
 	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
@@ -487,8 +473,10 @@ func initLogger(serviceName string) ulogger.Logger {
 			panic("sentry.Init: " + err.Error())
 		}
 
-		multi := zerolog.MultiLevelWriter(os.Stdout, w)
+		multi := zerolog.MultiLevelWriter(output, w)
 		logOptions = append(logOptions, ulogger.WithWriter(multi))
+	} else {
+		logOptions = append(logOptions, ulogger.WithWriter(output))
 	}
 
 	useLogger, ok := gocore.Config().Get("logger")
@@ -516,6 +504,14 @@ func shouldStart(app string) bool {
 	cmdArg = fmt.Sprintf("-%s=0", strings.ToLower(app))
 	for _, cmd := range os.Args[1:] {
 		if cmd == cmdArg {
+			return false
+		}
+	}
+
+	// Add option to stop all services from running if -all=0 is passed
+	// except for the services that are explicitly enabled above
+	for _, cmd := range os.Args[1:] {
+		if cmd == "-all=0" {
 			return false
 		}
 	}
@@ -577,4 +573,31 @@ func printUsage() {
 	fmt.Println("    -tracer=<1|0>")
 	fmt.Println("          whether to start the Jaeger tracer (default=false)")
 	fmt.Println("")
+}
+
+func waitForPostgresToStart(logger ulogger.Logger) error {
+	address, _ := gocore.Config().Get("postgres_check_address", "localhost:5432")
+
+	timeout := time.Minute // 1 minutes timeout
+
+	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		conn, err := net.DialTimeout("tcp", address, time.Second)
+		if err != nil {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out waiting for PostgreSQL to start: %w", err)
+			}
+
+			logger.Infof("PostgreSQL is not up yet - waiting")
+			time.Sleep(time.Second)
+			continue
+		}
+
+		_ = conn.Close()
+		logger.Infof("PostgreSQL is up - ready to go!")
+		return nil
+	}
 }

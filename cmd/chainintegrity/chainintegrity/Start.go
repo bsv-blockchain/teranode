@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -182,7 +181,7 @@ func Start() {
 				if utxo == nil {
 					logger.Errorf("utxo %s does not exist in utxo store", utxoHash)
 				} else {
-					logger.Debugf("coinbase vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", vout, utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+					logger.Debugf("coinbase vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 				}
 			}
 
@@ -276,7 +275,7 @@ func Start() {
 									} else if !utxo.SpendingTxID.IsEqual(btTx.TxIDChainHash()) {
 										logger.Errorf("parent utxo %s is not marked as spent by transaction %s", utxoHash, btTx.TxIDChainHash())
 									} else {
-										logger.Debugf("transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+										logger.Debugf("transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 									}
 								}
 							}
@@ -302,7 +301,7 @@ func Start() {
 							if utxo == nil {
 								logger.Errorf("utxo %s does not exist in utxo store", utxoHash)
 							} else {
-								logger.Debugf("transaction %s vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), vout, utxoHash, utxostore_api.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+								logger.Debugf("transaction %s vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 							}
 						}
 

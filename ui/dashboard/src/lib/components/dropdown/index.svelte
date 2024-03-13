@@ -173,7 +173,16 @@
   }
 </script>
 
-<LabelContainer {size} {disabled} {label} {labelAlignment} {labelPlacement} {required} {stretch}>
+<LabelContainer
+  {name}
+  {size}
+  {disabled}
+  {label}
+  {labelAlignment}
+  {labelPlacement}
+  {required}
+  {stretch}
+>
   <FootnoteContainer {footnote} {error} {disabled}>
     <div
       data-test-id={testId}
@@ -205,6 +214,7 @@
             on:focus={() => onFocusAction('focus')}
             on:blur={() => onFocusAction('blur')}
             on:keydown={onKeyDown}
+            aria-labelledby={`${name}_label`}
           >
             {#each items as item (item.value)}
               <option value={item.value}>
@@ -261,7 +271,7 @@
   .icon {
     width: var(--icon-size);
     height: var(--icon-size);
-    transition: transform 0.2s linear;
+    transition: transform var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
   .tui-dropdown .icon {
     transform: rotate(0deg);
@@ -305,7 +315,7 @@
   .list-item {
     display: flex;
     align-items: center;
-    width: calc(100% -2px);
+    width: calc(100% - 2px);
     height: var(--height);
     padding: var(--list-item-padding);
 

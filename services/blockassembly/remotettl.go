@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -20,6 +22,7 @@ import (
 
 type WrapperInterface interface {
 	Get(ctx context.Context, key []byte) ([]byte, error)
+	Exists(ctx context.Context, key []byte) (bool, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
@@ -64,16 +67,26 @@ func (r Wrapper) Health(ctx context.Context) (int, string, error) {
 	return r.store.Health(ctx)
 }
 
-func (r Wrapper) Exists(ctx context.Context, key []byte) (bool, error) {
-	return r.store.Exists(ctx, key)
+func (r Wrapper) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+	ok, err := r.store.Exists(ctx, key)
+	if err != nil {
+		r.logger.Errorf("failed to check if key %s exists in store: %v", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	okAsset, err := r.AssetClient.Exists(ctx, key)
+	if err != nil {
+		r.logger.Errorf("failed to check if key %s exists in asset client: %v", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	return ok && okAsset, nil
 }
 
-func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (r Wrapper) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	// first get from local ttl cache
 	if r.localTTLCache != nil {
 		subtreeReader, err := r.localTTLCache.GetIoReader(ctx, key)
 		if err != nil {
-			if !errors.Is(err, options.ErrNotFound) {
+			if !errors.Is(err, ubsverrors.ErrNotFound) {
 				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
 			}
 		}
@@ -120,12 +133,25 @@ func (r Wrapper) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewReader(subtreeBytes)), err
 }
 
-func (r Wrapper) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (r Wrapper) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+	b, err := r.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if nrOfBytes > len(b) {
+		return b, nil
+	}
+
+	return b[:nrOfBytes], nil
+}
+
+func (r Wrapper) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	// first get from local ttl cache
 	if r.localTTLCache != nil {
 		subtreeBytes, err := r.localTTLCache.Get(ctx, key)
 		if err != nil {
-			if !errors.Is(err, options.ErrNotFound) {
+			if !errors.Is(err, ubsverrors.ErrNotFound) {
 				r.logger.Warnf("using local ttl cache in block assembly for subtree %x error: %v", utils.ReverseAndHexEncodeSlice(key), err)
 			}
 		}
@@ -185,11 +211,11 @@ func (r Wrapper) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	return r.AssetClient.Set(ctx, key, value, opts...)
 }
 
-func (r Wrapper) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (r Wrapper) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
 	return r.AssetClient.SetTTL(ctx, key, ttl)
 }
 
-func (r Wrapper) Del(_ context.Context, key []byte) error {
+func (r Wrapper) Del(_ context.Context, key []byte, opts ...options.Options) error {
 	return fmt.Errorf("not implemented")
 }
 

@@ -1,34 +1,34 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import TextInput from '$lib/components/textinput/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
-  import { success, failure } from '$lib/utils/notifications'
+  import { failure } from '$lib/utils/notifications'
   import { getDetailsUrl } from '$internal/utils/urls'
 
   import i18n from '$internal/i18n'
   import * as api from '$internal/api'
 
+  $: t = $i18n.t
+
   export let style = ''
+  export let showTools = true
+  export let showWarning = true
 
   let searchValue = ''
   let lastSearchCalled = ''
 
-  // TODO(api integration)
   async function onSearchKeyDown(e) {
     if (!e) e = window.event
     const keyCode = e.detail.code || e.detail.key
 
     if (keyCode === 'Enter') {
-      // console.log('call api: search = ', searchValue)
       lastSearchCalled = searchValue
+
       const result: any = await api.searchItem({ q: searchValue })
       if (result.ok) {
-        // success(JSON.stringify(result.data, null, 2))
         const { type, hash } = result.data
-        // console.log('Redirecting in 2 seconds..')
-        // setTimeout(() => {
         goto(getDetailsUrl(type, hash))
-        // }, 2000)
       } else {
         failure(result.error.message)
       }
@@ -38,27 +38,41 @@
       return false
     }
   }
+
+  let w
+
+  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
 </script>
 
-<div class="toolbar" {style}>
-  <div class="left">
-    <BreadCrumbs />
+<svelte:window bind:innerWidth={w} />
+
+{#if showTools}
+  <div class="toolbar" {style}>
+    <div class="left">
+      <BreadCrumbs />
+    </div>
+    <div class="right">
+      <TextInput
+        name="one"
+        size="medium"
+        style="--input-size-md-border-radius:8px"
+        autocomplete="off"
+        bind:value={searchValue}
+        width={330}
+        {focusWidth}
+        icon={searchValue === lastSearchCalled || !searchValue
+          ? 'icon-search-line'
+          : 'icon-search-solid'}
+        placeholder={$i18n.t('comp.toolbar.placeholder')}
+        on:keydown={onSearchKeyDown}
+      />
+    </div>
   </div>
-  <div class="right">
-    <TextInput
-      name="one"
-      size="medium"
-      style="--input-size-md-border-radius:8px"
-      autocomplete="off"
-      bind:value={searchValue}
-      width={273}
-      focusWidth={570}
-      icon={searchValue === lastSearchCalled ? 'icon-search-line' : 'icon-search-solid'}
-      placeholder={$i18n.t('comp.toolbar.placeholder')}
-      on:keydown={onSearchKeyDown}
-    />
-  </div>
-</div>
+{/if}
+
+{#if showWarning}
+  <div class="warning" {style}>{t('global.warning_2')}</div>
+{/if}
 
 <style>
   .toolbar {
@@ -66,6 +80,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 5px;
+    flex-wrap: wrap;
   }
 
   .toolbar .left {
@@ -77,5 +93,16 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+  }
+
+  .warning {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    background-color: var(--color-warning);
+    color: var(--color-white);
+    font-size: 14px;
   }
 </style>

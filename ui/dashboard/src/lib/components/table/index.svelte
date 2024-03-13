@@ -1,11 +1,10 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import DivTable from './variant/div-table/index.svelte'
-  import StandardTable from './variant/standard-table/index.svelte'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import { SortOrder } from './utils'
   import { filterData, sortData, paginateData } from './hooks'
   import type { I18n } from '$lib/types'
-  import type { ColDef } from './types'
+  import { TableVariant, type ColDef, type TableVariantType } from './types'
 
   const dispatch = createEventDispatcher()
 
@@ -20,7 +19,7 @@
   //
 
   // core
-  export let variant = 'standard'
+  export let variant: string = TableVariant.dynamic
   export let name
   export let colDefs: ColDef[] = []
   export let data: any[] = []
@@ -147,15 +146,25 @@
     dispatch('paginate', { name, ...paginationState })
   }
 
-  // render
-  let tableVariants = {
-    standard: StandardTable,
-    div: DivTable,
-  }
-  let renderComp = null
+  let renderComp: any = null
 
+  async function setRenderComp(variant: string) {
+    try {
+      if (variant === TableVariant.div) {
+        renderComp = (await import('./variant/div-table/index.svelte')).default
+      } else {
+        renderComp = (await import('./variant/standard-table/index.svelte')).default
+      }
+    } catch (e) {
+      console.error('Error loading table variant:', e)
+    }
+  }
   $: {
-    renderComp = tableVariants[variant]
+    let useVariant = variant
+    if (variant === TableVariant.dynamic) {
+      useVariant = $mediaSize <= MediaSize.sm ? TableVariant.div : TableVariant.standard
+    }
+    setRenderComp(useVariant)
   }
 
   let renderProps = {}

@@ -1,24 +1,19 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  import { goto } from '$app/navigation'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
 
   import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
-  import {
-    getDetailsUrl,
-    DetailType,
-    DetailTab,
-    reverseHashParam,
-    getHashLinkProps,
-  } from '$internal/utils/urls'
+  import { DetailType, DetailTab, reverseHashParam, getHashLinkProps } from '$internal/utils/urls'
 
+  import { addNumCommas, dataSize } from '$lib/utils/format'
   import { Button, Icon } from '$lib/components'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import i18n from '$internal/i18n'
+  import { getItemApiUrl, ItemType } from '$internal/api'
 
   const dispatch = createEventDispatcher()
 
@@ -31,6 +26,7 @@
 
   export let data: any = {}
   export let display: DetailTab = DetailTab.overview
+  export let blockHash = ''
 
   $: expandedData = data?.expandedData
   $: isOverview = display === DetailTab.overview
@@ -43,22 +39,24 @@
   function onReverseHash(hash) {
     reverseHashParam(hash)
   }
-
-  function navToSubtree(hash) {
-    if (hash) {
-      goto(getDetailsUrl(DetailType.subtree, hash))
-    }
-  }
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
   <div class="copy-link" slot="subtitle">
     <div class="hash">{expandedData.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-to-clipboard') }}>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
         icon="icon-duplicate-line"
         action={copyTextToClipboardVanilla}
         actionData={expandedData.hash}
+        size={15}
+      />
+    </div>
+    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+      <ActionStatusIcon
+        icon="icon-bracket-line"
+        action={copyTextToClipboardVanilla}
+        actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
         size={15}
       />
     </div>
@@ -70,22 +68,6 @@
       <Icon name="icon-reeverse-line" size={15} />
     </div>
   </div>
-  <!-- <div class="btns" slot="header-tools">
-    <Button
-      size="small"
-      icon="icon-chevron-left-line"
-      ico={true}
-      disabled={true}
-      on:click={() => navToSubtree(null)}
-    />
-    <Button
-      size="small"
-      icon="icon-chevron-right-line"
-      ico={true}
-      disabled={true}
-      on:click={() => navToSubtree(null)}
-    />
-  </div> -->
   <div class="content">
     <div class="tabs">
       <Button
@@ -109,10 +91,8 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.block`)}</div>
             <div class="value">
-              {#if data?.expandedBlockData}
-                <LinkHashCopy
-                  {...getHashLinkProps(DetailType.block, data?.expandedBlockData.hash, t)}
-                />
+              {#if blockHash}
+                <LinkHashCopy {...getHashLinkProps(DetailType.block, blockHash, t)} />
               {:else}
                 {t('data.not_available')}
               {/if}
@@ -120,27 +100,31 @@
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.txCount`)}</div>
-            <div class="value">{expandedData.transactionCount}</div>
+            <div class="value">{addNumCommas(expandedData.transactionCount)}</div>
           </div>
           <div class="entry">
             <div class="label">{t(`${fieldKey}.totalFee`)}</div>
-            <div class="value">TBD</div>
+            <div class="value">{addNumCommas(expandedData.fee)}</div>
           </div>
-          <div class="entry">
-            <div class="label">{t(`${fieldKey}.avgFee`)}</div>
-            <div class="value">TBD</div>
-          </div>
-          <div class="entry">
-            <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
-            <div class="value">{expandedData.size / 1000} KB</div>
-          </div>
-          <div class="entry">
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.nonce`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
         <div>
           <div class="entry">
+            <div class="label">{t(`${fieldKey}.avgFee`)}</div>
+            <div class="value">
+              {addNumCommas(expandedData.fee / expandedData.transactionCount)}
+            </div>
+          </div>
+          <div class="entry">
+            <div class="label">{t(`${fieldKey}.sizeInBytes`)}</div>
+            <div class="value">
+              {dataSize(expandedData.size)}
+            </div>
+          </div>
+          <!-- <div class="entry">
             <div class="label">{t(`${fieldKey}.bits`)}</div>
             <div class="value">TBD</div>
           </div>
@@ -159,7 +143,7 @@
           <div class="entry">
             <div class="label">{t(`${fieldKey}.miner`)}</div>
             <div class="value">TBD</div>
-          </div>
+          </div> -->
         </div>
       </div>
     {:else if isJson}
@@ -171,10 +155,6 @@
 </Card>
 
 <style>
-  .btns {
-    display: flex;
-  }
-
   .content {
     display: flex;
     flex-direction: column;

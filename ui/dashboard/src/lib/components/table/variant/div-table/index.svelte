@@ -153,9 +153,13 @@
             {#if selectable}
               <div class="th" />
             {/if}
-            {#each colDefs as colDef (colDef.id)}
+            {#each colDefs as colDef, i (colDef.id)}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
-              <div class="th" on:click={() => onHeaderClick(colDef.id)}>
+              <div
+                class="th"
+                on:click={() => onHeaderClick(colDef.id)}
+                class:right={i > 0 && colDef?.type === 'number'}
+              >
                 <div class="table-cell-row">
                   {colDef.name}
                   {#if sortEnabled && sortState.sortColumn === colDef.id}
@@ -193,8 +197,8 @@
               </div>
             {/if}
             {#if $mediaSize > MediaSize.sm}
-              {#each colDefs as colDef (colDef.id)}
-                <div class="td">
+              {#each colDefs as colDef, i (colDef.id)}
+                <div class="td" class:left={i === 0}>
                   {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
                     <svelte:component
                       this={getDisplay(renderCells, renderTypes, colDef, idField, item).component}
@@ -530,7 +534,6 @@
     text-align: left;
     white-space: nowrap;
 
-    font-weight: var(--table-th-font-weight, 600);
     font-size: var(--table-th-font-size, 13px);
     line-height: var(--table-th-line-height, 16px);
     letter-spacing: var(--table-th-letter-spacing, 0.02em);
@@ -540,7 +543,8 @@
     align-items: center;
 
     text-transform: var(--table-th-text-transform, uppercase);
-    color: var(--table-th-color, #232d7c);
+    color: var(--table-th-small-color);
+    font-weight: var(--table-th-small-font-weight);
 
     cursor: auto;
   }
@@ -597,5 +601,21 @@
 
     background: #ffffff;
     border-radius: 0px 0px 4px 4px;
+  }
+  :global(.table .th.right .table-cell-row) {
+    text-align: right;
+    justify-content: flex-end;
+    width: 100%;
+  }
+  :global(.table .td .num) {
+    text-align: right;
+    display: block;
+    width: 100%;
+  }
+  :global(.table.small .num),
+  :global(.table .td.left .num) {
+    text-align: left;
+    display: inline;
+    width: auto;
   }
 </style>

@@ -74,6 +74,11 @@ The Block Assembly service also subscribes to the Blockchain service, and receiv
 
 ![Block_Assembly_Service_Component_Diagram.png](img%2FBlock_Assembly_Service_Component_Diagram.png)
 
+Finally, note that the Block Assembly benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
+Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
+
+![lustre_fs.svg](..%2Flustre_fs.svg)
 
 
 ## 2. Functionality
@@ -154,11 +159,13 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 - The job item details are retrieved from the JobStore, and a new block is created with the miner's proof of work.
 
 
-- The block is validated, and if valid, the coinbase transaction is persisted in the Tx Store, while all Txs within the block subtrees are marked as mined in the Transaction Meta Store.
-
+- The block is validated, and if valid, the coinbase transaction is persisted in the Tx Store.
+- Depending on the node's settings, the Block Assembly might be performing Subtree and Tx maintenance next.
+  - Teranode has a `blockvalidation_localSetMined` setting. This setting signals whether the Block Validation service exclusively validates and processes other node's mined blocks (`blockvalidation_localSetMined=false`, default behaviour), or both locally and remotely mined blocks.
+    - In the default `localSetMined = false` mode, Block Assembly marks all Subtrees' Txs as mined through the TX Meta Store, and sets the Subtrees TTL to 0 (so they are evicted from the Subtree store).
+    - In the alternative `localSetMined = true` mode, the Block Assembly does not mark the Txs as mined, nor expires the Subtrees. This logic is left for the Block Validation service to handle.
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
-
 
 - Subtree TTLs are removed, effectively setting the subtrees for removal from the Subtree Store.
 
@@ -212,6 +219,7 @@ In this case, the services need to "move up" the block. By this, we mean the pro
 ### 3.5.3. The block received is a new block, but it represents a fork.
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
+It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.
 The process typically involves reverting transactions in the current chain's blocks (starting from the fork point) and then processing the transactions from the newly discovered blocks.
 In this context, `BlockAssembler` is tasked with ensuring that the local version of the blockchain reflects the most widely accepted version of the chain within the network.
 
@@ -355,25 +363,25 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
-1. **gRPC and fRPC Server Settings**:
-    - `blockassembly_grpcListenAddress`: The address on which the gRPC server for block assembly listens.
-    - `blockassembly_frpcListenAddress`: The address for the fRPC (possibly a variant of RPC) server.
+### gRPC and fRPC Server Settings:
+- **`blockassembly_grpcListenAddress`**: Specifies the listening address for the gRPC server dedicated to block assembly operations.
+- **`blockassembly_frpcListenAddress`**: Defines the listening address for the fRPC server, a custom fast RPC mechanism utilized for block assembly processes.
 
-2. **Subtree and Cache Settings**:
-    - `blockassembly_subtreeTTL`: The time-to-live value for subtrees in the cache.
-    - `blockassembly_newSubtreeChanBuffer`: Buffer size for the channel used in new subtree processing.
-    - `blockassembly_subtreeRetryChanBuffer`: Buffer size for the channel handling subtree retries.
-    - `blockassembly_remoteTTLStores`: A boolean flag indicating whether to use remote stores for TTL data.
-    - `blockassembly_auxiliarySubtreeStore`: Directory path for the auxiliary subtree store.
+### Subtree and Cache Settings:
+- **`blockassembly_subtreeTTL`**: Time-to-live (in minutes) for subtrees stored in the cache, affecting how long they are retained before expiration.
+- **`blockassembly_newSubtreeChanBuffer`**: The buffer size for the channel that handles new subtree processing, influencing concurrency and throughput.
+- **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the channel dedicated to retrying subtree storage operations, impacting resilience and retry logic.
+- **`blockassembly_remoteTTLStores`**: A boolean flag indicating the use of remote stores for managing TTL data of subtrees, enhancing storage scalability.
+- **`blockassembly_auxiliarySubtreeStore`**: Path to an auxiliary store for subtrees, providing additional storage options and redundancy.
 
-3. **Kafka Integration**:
-    - `blockassembly_kafkaBrokers`: URL for the Kafka brokers.
-    - `blockassembly_kafkaWorkers`: Number of workers for the Kafka consumer.
+### Kafka Integration:
+- **`blockassembly_kafkaBrokers`**: URL or connection string for Kafka brokers, enabling integration with Kafka for transaction ingestion.
+- **`blockassembly_kafkaWorkers`**: Number of workers allocated for processing Kafka messages, affecting parallel processing capabilities.
 
-4. **Blockchain and Mining Settings**:
-    - `blockassembly_maxBlockReorgRollback`: Max number of blocks to roll back in case of a blockchain reorganization.
-    - `blockassembly_maxBlockReorgCatchup`: Max number of blocks to catch up during a blockchain reorganization.
-    - `mining_n_bits`: The "nBits" value used in mining, related to the difficulty of the proof-of-work algorithm.
+### Blockchain and Mining Settings:
+- **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization, ensuring integrity and continuity.
+- **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization, critical for maintaining current state with the blockchain.
+- **`mining_n_bits`**: Configures the "nBits" value for mining, dictating the difficulty level of the proof-of-work algorithm for new blocks.
 
-5. **General Operational Settings**:
-    - `blockassembly_disabled`: A boolean flag to enable or disable the block assembly functionality.
+### General Operational Settings:
+- **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether, allowing for dynamic control of service operation.

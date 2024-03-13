@@ -14,13 +14,13 @@
   src: url('/fonts/JetBrainsMono-2.304/JetBrainsMono-Thin.woff2') format('woff2');
 } */
 
-@font-face {
+/* @font-face {
   font-family: 'JetBrains Mono';
   font-style: italic;
   font-weight: 200;
   font-display: swap;
   src: url('/fonts/JetBrainsMono-2.304/JetBrainsMono-ExtraLightItalic.woff2') format('woff2');
-}
+} */
 
 @font-face {
   font-family: 'JetBrains Mono';

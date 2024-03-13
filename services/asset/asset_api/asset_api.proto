@@ -19,6 +19,7 @@ service AssetAPI {
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
   rpc GetNodes(google.protobuf.Empty) returns (GetNodesResponse) {}
   rpc Get(GetSubtreeRequest) returns (GetSubtreeResponse) {} // this is for block assembly to get a subtree, needs to adhere to the interface name
+  rpc Exists(ExistsSubtreeRequest) returns (ExistsSubtreeResponse) {} // this is for block assembly to get a subtree, needs to adhere to the interface name
   rpc Set(SetSubtreeRequest) returns (google.protobuf.Empty) {} // this is for block assembly to get a subtree, needs to adhere to the interface name
   rpc SetTTL(SetSubtreeTTLRequest) returns (google.protobuf.Empty) {} // this is for block assembly to get a subtree, needs to adhere to the interface name
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
@@ -99,6 +100,16 @@ message GetSubtreeRequest {
 // swagger:model GetSubtreeResponse
 message GetSubtreeResponse {
   bytes subtree = 1;
+}
+
+// swagger:model ExistsSubtreeRequest
+message ExistsSubtreeRequest {
+  bytes hash = 1;
+}
+
+// swagger:model ExistsSubtreeResponse
+message ExistsSubtreeResponse {
+  bool exists = 1;
 }
 
 // swagger:model SetSubtreeRequest

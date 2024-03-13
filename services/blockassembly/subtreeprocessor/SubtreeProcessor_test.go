@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
@@ -58,12 +60,13 @@ var (
 func TestRotate(t *testing.T) {
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	endTestChan := make(chan bool)
 
 	go func() {
 		for {
-			subtree := <-newSubtreeChan
+			subtreeRequest := <-newSubtreeChan
+			subtree := subtreeRequest.Subtree
 			assert.Equal(t, 4, subtree.Length())
 			assert.Equal(t, uint64(3), subtree.Fees)
 
@@ -129,7 +132,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 	}
 
 	t.Run("merkle proof for coinbase", func(t *testing.T) {
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		var wg sync.WaitGroup
 		wg.Add(2) // we are expecting 2 subtrees
 		go func() {
@@ -157,7 +160,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 	})
 
 	t.Run("merkle proof for coinbase with 4 subtrees", func(t *testing.T) {
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		var wg sync.WaitGroup
 		wg.Add(4) // we are expecting 4 subtrees
 		go func() {
@@ -219,7 +222,7 @@ func TestMoveUpBlock(t *testing.T) {
 	}
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	var wg sync.WaitGroup
 	wg.Add(4) // we are expecting 4 subtrees
 	go func() {
@@ -296,7 +299,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	}
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	var wg sync.WaitGroup
 	wg.Add(4) // we are expecting 4 subtrees
 	go func() {
@@ -372,7 +375,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	}
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	var wg sync.WaitGroup
 	wg.Add(4) // we are expecting 4 subtrees
 	go func() {
@@ -446,7 +449,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	}
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "262144")
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	var wg sync.WaitGroup
 	wg.Add(4) // we are expecting 4 subtrees
 	go func() {
@@ -488,6 +491,9 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	wg.Add(8) // we are expecting 4 subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
+
+	timeStart := time.Now()
+
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
 	// new items per file is 65536 so there should be 8 subtrees in the chain
@@ -500,6 +506,8 @@ func TestMoveUpBlockLarge(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	})
 	wg.Wait()
+	fmt.Printf("moveUpBlock took %s\n", time.Since(timeStart))
+
 	time.Sleep(1 * time.Second)
 
 	require.NoError(t, err)
@@ -528,7 +536,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	go func() {
 		// just read and discard
 		for {
@@ -637,7 +645,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
 		}
 
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		go func() {
 			// just read and discard
 			for {
@@ -735,7 +743,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	_ = os.Setenv("initial_merkle_items_per_subtree", "1024")
 
-	newSubtreeChan := make(chan *util.Subtree)
+	newSubtreeChan := make(chan NewSubtreeRequest)
 	go func() {
 		for {
 			<-newSubtreeChan
@@ -798,7 +806,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 			//fmt.Printf("created txHash: %s\n", txHash.String())
 		}
 
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		var wg sync.WaitGroup
 		wg.Add(4) // we are expecting 4 subtrees
 		go func() {
@@ -899,7 +907,7 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 
 func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 	t.Run("small", func(t *testing.T) {
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(true)
 		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
@@ -945,7 +953,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 	t.Run("large", func(t *testing.T) {
 		util.SkipVeryLongTests(t)
 
-		newSubtreeChan := make(chan *util.Subtree)
+		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(true)
 		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
@@ -1008,4 +1016,81 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		wg.Wait()
 		t.Logf("Time taken to read: %s\n", time.Since(start))
 	})
+}
+
+func Test_AddNode_Benchmark(t *testing.T) {
+	util.SkipVeryLongTests(t)
+
+	g, stp, txHashes := initTestAddNodeBenchmark(t)
+
+	startTime := time.Now()
+
+	for i, txHash := range txHashes {
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+	}
+
+	err := g.Wait()
+	require.NoError(t, err)
+
+	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+}
+
+func Test_AddNodeWithMap_Benchmark(t *testing.T) {
+	util.SkipVeryLongTests(t)
+
+	g, stp, txHashes := initTestAddNodeBenchmark(t)
+
+	_ = stp.Remove(txHashes[1000])
+	_ = stp.Remove(txHashes[2000])
+	_ = stp.Remove(txHashes[3000])
+	_ = stp.Remove(txHashes[4000])
+
+	for i := 0; i < 4; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		txHashes = append(txHashes, txHash)
+	}
+
+	startTime := time.Now()
+
+	for i, txHash := range txHashes {
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+	}
+
+	err := g.Wait()
+	require.NoError(t, err)
+
+	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+}
+
+func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+	_ = os.Setenv("initial_merkle_items_per_subtree", "1048576")
+	_ = os.Setenv("double_spend_window_millis", "0")
+
+	newSubtreeChan := make(chan NewSubtreeRequest)
+	g := errgroup.Group{}
+	nrSubtreesExpected := 10
+	n := 0
+	g.Go(func() error {
+		for {
+			<-newSubtreeChan
+			n++
+
+			if n == nrSubtreesExpected {
+				return nil
+			}
+		}
+	})
+
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
+
+	nrTxs := 1_048_576
+	txHashes := make([]chainhash.Hash, 10*nrTxs)
+	for i := 0; i < (10*nrTxs)-1; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		txHashes[i] = txHash
+	}
+
+	return &g, stp, txHashes
 }

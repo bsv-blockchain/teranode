@@ -2,12 +2,17 @@ package validator_test
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"testing"
+
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
@@ -27,31 +32,29 @@ func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
 }
 
 func (ns *NullStore) DeleteSpends(deleteSpends bool) {
-	// No nothing
 }
 
 func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
-	// fmt.Printf("Get(%s)\n", hash.String())
 	return nil, nil
 }
 
 func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	// fmt.Printf("Store(%s)\n", hash.String())
+	return nil
+}
+
+func (ns *NullStore) StoreFromHashes(ctx context.Context, txID chainhash.Hash, utxoHashes []chainhash.Hash, lockTime uint32) error {
 	return nil
 }
 
 func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend) error {
-	// fmt.Printf("Spend(%s, %s)\n", hash.String(), txID.String())
 	return nil
 }
 
 func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
-	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
 	return nil
 }
 
 func (ns *NullStore) Delete(ctx context.Context, tx *bt.Tx) error {
-	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
 	return nil
 }
 
@@ -73,6 +76,40 @@ func BenchmarkValidator(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if err := v.Validate(context.Background(), tx); err != nil {
 			log.Printf("ERROR: %v\n", err)
+		} else {
+			fmt.Println("asd")
 		}
 	}
+}
+
+func TestValidate_CoinbaseTransaction(t *testing.T) {
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	// need to add spendable utxo to utxo store
+
+	// delete spends set to false
+	utxoStore := utxoMemorystore.New(false)
+	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, txMetaStore, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	err = v.Validate(context.Background(), coinbase)
+	require.Error(t, err)
+}
+
+func TestValidate_ValidTransaction(t *testing.T) {
+}
+
+func TestValidate_InValidDoubleSpendTx(t *testing.T) {
+}
+
+func TestValidate_TxMetaStoreError(t *testing.T) {
+}
+
+func TestValidate_BlockAssemblyError(t *testing.T) {
 }

@@ -147,23 +147,27 @@
   {/if}
   {#if showQuickNav}
     <div class="quick-nav">
-      <Typo variant="text" size="sm" value={t(`${baseKey}.page`)} wrap={false} />
-      <TextInput
-        type="number"
-        min={1}
-        max={hasBoundaryRight ? totalPages : page + (isLastPage ? 0 : 1)}
-        name="page"
-        size="small"
-        value={pageInput}
-        valid={!quickNavDisabled || onCurrentPage}
-        on:change={onInputChange}
-        on:keydown={onQuickNavKeyDown}
-      />
+      <Typo variant="text" size="sm" value={t(`${baseKey}.page`)} wrap={false} overflow={true} />
+      <div class="quick-input">
+        <TextInput
+          type="number"
+          min={1}
+          max={hasBoundaryRight ? totalPages : page + (isLastPage ? 0 : 1)}
+          name="page"
+          size="small"
+          stretch={true}
+          value={pageInput}
+          valid={!quickNavDisabled || onCurrentPage}
+          on:change={onInputChange}
+          on:keydown={onQuickNavKeyDown}
+        />
+      </div>
       <Typo
         variant="text"
         size="sm"
         value={t(`${baseKey}.of_total`, { total: totalPages })}
         wrap={false}
+        overflow={true}
       />
     </div>
   {/if}
@@ -228,8 +232,10 @@
     align-items: center;
     justify-content: stretch;
     gap: 4px;
-
-    width: 150px;
+  }
+  .quick-input {
+    min-width: 80px;
+    max-width: 130px;
   }
 
   .page-size {

@@ -1,6 +1,11 @@
 import { writable } from 'svelte/store'
+import { browser } from '$app/environment'
 
 const setLocalValue = (key: string, value: any) => {
+  if (!browser) {
+    return null
+  }
+
   let useValue = value
 
   if (typeof value === 'object') {
@@ -12,6 +17,10 @@ const setLocalValue = (key: string, value: any) => {
 }
 
 const getLocalValue = (key: string) => {
+  if (!browser) {
+    return null
+  }
+
   const value = localStorage.getItem(key)
 
   if (!value) {

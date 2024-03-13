@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
@@ -28,18 +29,20 @@ type peerWithContext struct {
 
 // Server type carries the logger within it
 type Server struct {
-	logger         ulogger.Logger
-	utxoStore      utxo.Interface
-	txStore        blob.Store
-	subtreeStore   blob.Store
-	txMetaStore    txmeta.Store
-	grpcAddr       string
-	httpAddr       string
-	grpcServer     *grpc_impl.GRPC
-	httpServer     *http_impl.HTTP
-	peers          map[string]peerWithContext
-	notificationCh chan *asset_api.Notification
-	useP2P         bool
+	logger           ulogger.Logger
+	utxoStore        utxo.Interface
+	txStore          blob.Store
+	subtreeStore     blob.Store
+	txMetaStore      txmeta.Store
+	grpcAddr         string
+	httpAddr         string
+	grpcServer       *grpc_impl.GRPC
+	httpServer       *http_impl.HTTP
+	peers            map[string]peerWithContext
+	notificationCh   chan *asset_api.Notification
+	useP2P           bool
+	centrifugeAddr   string
+	centrifugeServer *centrifuge_impl.Centrifuge
 }
 
 func Enabled() bool {
@@ -68,7 +71,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
-	var grpcOk, httpOk bool
+	var grpcOk, httpOk, centrifugeOk bool
 	v.grpcAddr, grpcOk = gocore.Config().Get("asset_grpcListenAddress")
 	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
@@ -85,6 +88,8 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}
+
+	v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
 
 	if grpcOk {
 		v.grpcServer, err = grpc_impl.New(v.logger, repo, func() []string {
@@ -116,6 +121,18 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
+	if centrifugeOk && v.httpServer != nil {
+		v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
+		if err != nil {
+			return fmt.Errorf("error creating centrifuge server: %s", err)
+		}
+
+		err = v.centrifugeServer.Init(ctx)
+		if err != nil {
+			return fmt.Errorf("error initializing centrifuge server: %s", err)
+		}
+	}
+
 	if gocore.Config().GetBool("feature_libP2P", false) {
 		v.useP2P = true
 	}
@@ -131,7 +148,7 @@ func (v *Server) Start(ctx context.Context) error {
 		g.Go(func() error {
 			err := v.grpcServer.Start(ctx, v.grpcAddr)
 			if err != nil {
-				v.logger.Errorf("[Asset] error in grpc server: %w", err)
+				v.logger.Errorf("[Asset] error in grpc server: %v", err)
 			}
 			return err
 		})
@@ -227,11 +244,17 @@ func (v *Server) Start(ctx context.Context) error {
 		g.Go(func() error {
 			err := v.httpServer.Start(ctx, v.httpAddr)
 			if err != nil {
-				v.logger.Errorf("[Asset] error in http server: %w", err)
+				v.logger.Errorf("[Asset] error in http server: %v", err)
 			}
 			return err
 		})
 
+	}
+
+	if v.centrifugeServer != nil {
+		g.Go(func() error {
+			return v.centrifugeServer.Start(ctx, v.centrifugeAddr)
+		})
 	}
 
 	if err := g.Wait(); err != nil {

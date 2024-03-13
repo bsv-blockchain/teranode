@@ -34,6 +34,7 @@ export interface SubtreeMessage extends P2PMessageBase {
 
 export interface PingMessage {
   type: MessageType.ping
+  base_url: string
   receivedAt: Date
 }
 

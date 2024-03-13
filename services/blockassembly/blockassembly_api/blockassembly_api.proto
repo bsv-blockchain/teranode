@@ -27,6 +27,12 @@ service BlockAssemblyAPI {
 
   // Submits a mining solution to the blockchain.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
+
+  // De-duplicate transaction in block assembly subtree processor.
+  rpc DeDuplicateBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
+
+  // Reset transaction in block assembly subtree processor.
+  rpc ResetBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -52,6 +58,7 @@ message AddTxRequest {
   uint64 size = 4; // the size of the transaction in bytes
   uint32 locktime = 2; // the earliest time a transaction can be mined into a block
   repeated bytes utxos = 5; // the UTXOs consumed by this transaction
+  repeated bytes parents = 6; // the parent transactions of this transaction
 }
 
 // Request for adding a batch of transactions to the mining candidate block.

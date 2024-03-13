@@ -30,7 +30,7 @@ type baTestItems struct {
 	txMetaStore      *txmetastore.Memory
 	txStore          *memory.Memory
 	blobStore        *memory.Memory
-	newSubtreeChan   chan *util.Subtree
+	newSubtreeChan   chan subtreeprocessor.NewSubtreeRequest
 	blockAssembler   *BlockAssembler
 	blockchainClient blockchain.ClientI
 }
@@ -86,7 +86,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
-			subtree := <-testItems.newSubtreeChan
+			subtreeRequest := <-testItems.newSubtreeChan
+			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
 			assert.Equal(t, *model.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
@@ -96,28 +97,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, err := testItems.txMetaStore.Create(ctx, tx1)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx2)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx3)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx4)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
 
 		_, err = testItems.txMetaStore.Create(ctx, tx5)
 		require.NoError(t, err)
-		err = testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
-		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 
 		wg.Wait()
 		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)
@@ -304,7 +300,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items.txStore = memory.New()                              // tx memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-	items.newSubtreeChan = make(chan *util.Subtree)
+	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)

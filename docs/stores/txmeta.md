@@ -1,4 +1,4 @@
-# 📒 TXMeta Service / Store
+# 📒 TXMeta Store
 
 ## Index
 
@@ -34,7 +34,7 @@
 
 ### 1.1 Purpose
 
-The TX Meta Service / Store provides a persistent storage mechanism for transaction metadata (TX Meta) in the UBSV node. The main reason to maintain this datastore is to provide fast lookup of relevant transaction metadata for tx / block validation and assembly processes.
+The TX Meta Store provides a persistent storage mechanism for transaction metadata (TX Meta) in the Teranode node. The main reason to maintain this datastore is to provide fast lookup of relevant transaction metadata for tx / block validation and assembly processes.
 
 The TX Meta (Transaction Metadata) is essentially additional information stored about each transaction that goes beyond the extended transaction data typically stored in the blockchain.
 
@@ -55,7 +55,7 @@ The TX Meta store offers the following functions:
 
 ## 2. Architecture
 
-The TX Meta Service / Store is a microservice that is used by other microservices to retrieve or store / modify TX Meta data.
+The TX Meta Store is a microservice that is used by other microservices to retrieve or store / modify TX Meta data.
 
 ![TX_Meta_Store_Container_Context_Diagram.png](..%2Fservices%2Fimg%2FTX_Meta_Store_Container_Context_Diagram.png)
 
@@ -76,7 +76,7 @@ The TX Meta Service / Store uses a number of different datastores, either in-mem
 6. **SQL**
    * **Postgres**
 
-The TX Meta configuration implementation (datastore type) is consistent within a UBSV node (every service connects to the same specific implementation), and it is defined via settings (`txmeta_store`), as it can be seen in `main_stores.go` (`getTxMetaStore()` method).
+The TX Meta configuration implementation (datastore type) is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`txmeta_store`), as it can be seen in `main_stores.go` (`getTxMetaStore()` method).
 
 Notice how some of the databases are in-memory, while others are persistent (and shared with other services).
 
@@ -287,22 +287,6 @@ Stored TX Meta data is automatically purged a certain TTL (Time To Live) period 
 
 
 ```
-services/txmeta/            # Directory for the txmeta service
-│
-├── Client.go               # Client-side implementation for the txmeta service
-├── README.md               # Documentation for the txmeta service
-├── Server.go               # Server-side implementation for the txmeta service
-├── flow.puml               # PlantUML diagram file depicting service architecture
-├── metrics.go              # Code for handling metrics within the txmeta service
-│
-├── store                   # Directory for storage backends mappings
-│
-└── txmeta_api              # API definitions and implementations for txmeta service
-    ├── txmeta_api.pb.go    # Compiled Go file from the protobuf definition
-    ├── txmeta_api.proto    # Protobuf file defining the txmeta API
-    └── txmeta_api_grpc.pb.go # Compiled gRPC file from the protobuf definition
-
-
 stores/txmeta/              # Directory for the txmeta store
 │
 ├── Interface.go            # Interface definition for txmeta store
@@ -343,7 +327,7 @@ stores/txmeta/              # Directory for the txmeta store
 
 ###  7.1. How to run
 
-To run the TX Meta Service locally, you can execute the following command:
+To run the TX Meta Store locally, you can execute the following command:
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -TxMetaStore=1

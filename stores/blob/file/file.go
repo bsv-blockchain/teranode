@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -90,7 +91,7 @@ func (s *File) loadTTLs() error {
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
 			if err != nil {
-				s.logger.Warnf("failed to parse ttl from %s: %w", fileName, err)
+				s.logger.Warnf("failed to parse ttl from %s: %v", fileName, err)
 				continue
 			}
 
@@ -111,8 +112,8 @@ func (s *File) ttlCleaner(ctx context.Context) {
 		default:
 			s.logger.Debugf("Cleaning file TTLs")
 
-			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			s.fileTTLsMu.Lock()
+			filesToRemove := make([]string, 0, len(s.fileTTLs))
 			for fileName, ttl := range s.fileTTLs {
 				if ttl.Before(time.Now()) {
 					filesToRemove = append(filesToRemove, fileName)
@@ -171,7 +172,7 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 }
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
+	// s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
@@ -186,6 +187,17 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	return nil
 }
 
+func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, error) {
+	fileName := s.filename(hash)
+
+	fileOptions := options.NewSetOptions(opts...)
+
+	if fileOptions.Extension != "" {
+		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
+	}
+
+	return fileName, nil
+}
 func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
@@ -209,19 +221,23 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 	return fileName, nil
 }
 
-func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
-	s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
+func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
+	// s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
 	// not supported on files yet
 	return nil
 }
 
-func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error) {
-	fileName := s.filename(hash)
+func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Options) (io.ReadCloser, error) {
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	file, err := os.Open(fileName)
 	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, options.ErrNotFound
+			return nil, ubsverrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 	}
@@ -229,14 +245,17 @@ func (s *File) GetIoReader(_ context.Context, hash []byte) (io.ReadCloser, error
 	return file, nil
 }
 
-func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
+func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, options.ErrNotFound
+			return nil, ubsverrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}
@@ -244,11 +263,38 @@ func (s *File) Get(_ context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
-func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
-	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return nil, err
+	}
 
-	_, err := os.Stat(fileName)
+	file, err := os.Open(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ubsverrors.ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	bytes := make([]byte, nrOfBytes)
+	nRead, err := file.Read(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data from file: %w", err)
+	}
+
+	return bytes[:nRead], err
+}
+
+func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -259,9 +305,12 @@ func (s *File) Exists(_ context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *File) Del(_ context.Context, hash []byte) error {
+func (s *File) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return err
+	}
 
 	// remove ttl file, if exists
 	_ = os.Remove(fileName + ".ttl")

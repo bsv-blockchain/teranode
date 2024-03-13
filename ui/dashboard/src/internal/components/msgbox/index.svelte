@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { humanTime } from '$internal/utils/humanTime'
+  import { humanTime } from '$internal/utils/format'
   import { getMessageFields } from './utils'
   import { MessageType } from './types'
   import type { Message, P2PMessage, StatusMessage, MessageSource, MsgDisplayField } from './types'
@@ -51,9 +51,9 @@
 
 <div
   class="msgbox"
-  style:--bg-color={`var(--msgbox-${
+  style:--border-color={`var(--msgbox-${
     MessageType[message.type.toLowerCase()] ? message.type.toLowerCase() : 'default'
-  }-bg-color)`}
+  }-border-color)`}
   style:--title-min-width={titleMinW}
   class:collapse
 >
@@ -74,6 +74,7 @@
 
 <style>
   .msgbox {
+    font-family: var(--font-family);
     box-sizing: var(--box-sizing);
 
     display: flex;
@@ -84,8 +85,8 @@
     padding: 12px 16px;
 
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.11);
-    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    background: var(--msgbox-bg-color);
   }
   .msgbox.collapse {
     flex-direction: column;
@@ -99,9 +100,8 @@
     min-width: var(--title-min-width);
     word-wrap: break-word;
 
-    color: rgba(10, 17, 24, 0.88);
+    color: var(--border-color);
 
-    font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
     font-weight: 700;
@@ -123,9 +123,6 @@
     display: flex;
     align-items: flex-start;
 
-    color: rgba(10, 17, 24, 0.88);
-
-    font-family: Satoshi;
     font-size: 13px;
     font-style: normal;
     font-weight: 400;
@@ -138,13 +135,16 @@
 
   .label {
     min-width: 135px;
-    transition: min-width 0.2s linear;
+    transition: min-width var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
     word-break: break-all;
+
+    color: var(--msgbox-label-color);
   }
   .msgbox.collapse .label {
     min-width: 135px;
   }
   .value {
     word-break: break-all;
+    color: var(--msgbox-value-color);
   }
 </style>

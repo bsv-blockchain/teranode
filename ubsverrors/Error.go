@@ -3,108 +3,97 @@ package ubsverrors
 import (
 	"errors"
 	"fmt"
-	"reflect"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// Error struct defines a custom error type with two components.
 type Error struct {
-	Sentinel               error // Base error
-	ImplementationSpecific error // Additional error providing more context
+	Code       ErrorConstants
+	Message    string
+	WrappedErr error
 }
 
-// Error method formats and returns the error message.
-// If ImplementationSpecific is nil, it returns the Sentinel error message.
-// Otherwise, it combines both Sentinel and ImplementationSpecific messages.
+var (
+	ErrUnknown           = New(ErrorConstants_UNKNOWN, "unknown error")
+	ErrInvalidArgument   = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
+	ErrNotFound          = New(ErrorConstants_NOT_FOUND, "not found")
+	ErrBlockNotFound     = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrThresholdExceeded = New(ErrorConstants_THRESHOLD_EXCEEDED, "threshold exceeded")
+)
+
 func (e *Error) Error() string {
-	if e.ImplementationSpecific == nil {
-		return e.Sentinel.Error()
+	if e.WrappedErr == nil {
+		return fmt.Sprintf("%d: %v", e.Code, e.Message)
 	}
-	return fmt.Sprintf("%s: %s", e.Sentinel, e.ImplementationSpecific)
+
+	return fmt.Sprintf("%d: %v: %v", e.Code, e.Message, e.WrappedErr)
 }
 
-// As method checks if the custom error can be assigned to the target interface.
-// It returns true if either Sentinel or ImplementationSpecific errors can be
-// assigned to the target.
-func (e *Error) As(target interface{}) bool {
-	if target == nil {
-		return false
-	}
-
-	if e.Sentinel != nil {
-		if errors.As(e.Sentinel, target) {
-			return true
-		}
-	}
-
-	if e.ImplementationSpecific != nil {
-		return errors.As(e.ImplementationSpecific, target)
-	}
-
-	return false
-}
-
-// Is method determines if the custom error is equivalent to the target error.
-// It compares types and, in some cases, the error messages to check equivalence.
 func (e *Error) Is(target error) bool {
-	if target == nil {
-		return e.Sentinel == nil
+	if ue, ok := target.(*Error); ok {
+		return e.Code == ue.Code
 	}
 
-	err := e.Sentinel
-	doTestString := false
-
-	if t, ok := err.(*Error); ok {
-		err = t.Sentinel
-	} else if t, ok := err.(errString); ok {
-		err = t
-		doTestString = true
-	}
-
-	targetType := reflect.TypeOf(target)
-	sentinelType := reflect.TypeOf(err)
-
-	if sentinelType == targetType {
-		if doTestString {
-			return err.Error() == target.Error()
-		}
-		return true
-	}
-
-	if e.ImplementationSpecific != nil {
-		return errors.Is(e.ImplementationSpecific, target)
-	}
 	return false
 }
 
-// Unwrap method returns the ImplementationSpecific error.
-// This allows compatibility with Go's error unwrapping functionality.
 func (e *Error) Unwrap() error {
-	return e.ImplementationSpecific
+	return e.WrappedErr
 }
 
-// Wrap function creates a new Error instance with a sentinel error
-// and an optional implementation-specific error.
-func Wrap(sentinel error, implementationSpecific ...error) *Error {
-	var wrappedErr error
-	if len(implementationSpecific) > 0 {
-		wrappedErr = implementationSpecific[0]
+func New(code ErrorConstants, message string, wrappedError ...error) error {
+	// Check the code exists in the ErrorConstants enum
+	if _, ok := ErrorConstants_name[int32(code)]; !ok {
+		return fmt.Errorf("invalid error code: %d for error %q", code, message)
+	}
+
+	var wErr error
+	if len(wrappedError) > 0 {
+		wErr = wrappedError[0]
 	}
 
 	return &Error{
-		Sentinel:               sentinel,
-		ImplementationSpecific: wrappedErr,
+		Code:       code,
+		Message:    message,
+		WrappedErr: wErr,
 	}
 }
 
-// errString type defines a custom error type as a string.
-type errString string
+func WrapGRPC(err error) error {
+	var uErr *Error
 
-// Error method for errString returns the string itself as the error message.
-func (e errString) Error() string {
-	return string(e)
+	if errors.As(err, &uErr) {
+		st := status.New(codes.Internal, err.Error())
+
+		details := &UBSVError{
+			Code:    uErr.Code,
+			Message: uErr.Message,
+		}
+
+		st, _ = st.WithDetails(details)
+
+		return st.Err()
+	}
+
+	return err
 }
 
-// New function creates a new errString error with the given text.
-func New(text string) error {
-	return errString(text)
+func UnwrapGRPC(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if st, ok := status.FromError(err); ok {
+		for _, detail := range st.Details() {
+			if t, ok := detail.(*UBSVError); ok {
+				return &Error{
+					Code:    t.Code,
+					Message: t.Message,
+				}
+			}
+		}
+	}
+
+	return err
 }

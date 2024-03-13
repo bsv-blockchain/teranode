@@ -6,6 +6,7 @@ export enum DetailType {
   block = 'block',
   subtree = 'subtree',
   tx = 'tx',
+  utxo = 'utxo',
 }
 
 export enum DetailTab {
@@ -55,6 +56,6 @@ export const getHashLinkProps = (type: string, hash: string, t, short = true) =>
     iconValue: hash,
     iconSize: 13,
     iconPadding: '6px 0 0 2px',
-    tooltip: t('tooltip.copy-to-clipboard'),
+    tooltip: t('tooltip.copy-hash-to-clipboard'),
   }
 }

@@ -1,0 +1,40 @@
+@startuml
+participant "Client" as ClientMain
+participant "Blockchain Client" as Client
+participant "Blockchain Server" as Server
+database "Subscription Store" as Store
+
+ClientMain -> Client: Subscribe(source)
+Client -> Server: Subscribe(source)
+activate Server
+
+Server -> Store: add
+activate Store
+Store --> Server: Acknowledge
+deactivate Store
+
+loop
+    Server -> Server: Wait for Client disconnection or Subscription end
+    alt Client Context Done
+        Server -> Server: Log "Client disconnected"
+        break
+    else Subscription End
+        break
+    end
+end
+
+deactivate Server
+Server --> Client: Subscription Established or Ended
+
+Client -> Client: Manage Subscription
+activate Client
+Client -> Server: Stream Recv (Notifications)
+Server --> Client: Send Notifications
+Client --> Client: Process Notifications
+Client --> ClientMain: Send Notifications
+
+deactivate Client
+
+left footer Last Modified On: 24-Jan-2024
+
+@enduml

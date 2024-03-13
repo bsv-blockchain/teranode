@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -33,6 +32,7 @@ type Redis struct {
 }
 
 func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
+	logger.Infof("RedisClient using host: %v", u.Host)
 	o := &redis.Options{
 		Addr:        u.Host,
 		PoolTimeout: time.Duration(10) * time.Second,
@@ -65,6 +65,7 @@ func NewRedisClient(logger ulogger.Logger, u *url.URL, password ...string) (*Red
 
 func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
+	logger.Infof("RedisCluster using hosts: %v", hosts)
 
 	addrs := make([]string, 0)
 	addrs = append(addrs, hosts...)
@@ -101,6 +102,7 @@ func NewRedisCluster(logger ulogger.Logger, u *url.URL, password ...string) (*Re
 
 func NewRedisRing(logger ulogger.Logger, u *url.URL, password ...string) (*Redis, error) {
 	hosts := strings.Split(u.Host, ",")
+	logger.Infof("RedisRing using hosts: %v", hosts)
 
 	addrs := make(map[string]string)
 	for i, host := range hosts {
@@ -168,19 +170,19 @@ func (r *Redis) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Res
 
 	if res.Val() == string(redis.Nil) || res.Err() == redis.Nil {
 		return &utxostore.Response{
-			Status: int(utxostore_api.Status_NOT_FOUND),
+			Status: int(utxostore.Status_NOT_FOUND),
 		}, nil
 	}
 
 	v := NewValueFromString(res.Val())
 
-	status := utxostore_api.Status_OK
+	status := utxostore.Status_OK
 	if v.SpendingTxID != nil {
-		status = utxostore_api.Status_SPENT
+		status = utxostore.Status_SPENT
 	} else if v.LockTime > 500000000 && int64(v.LockTime) > time.Now().UTC().Unix() {
-		status = utxostore_api.Status_LOCKED
+		status = utxostore.Status_LOCKED
 	} else if v.LockTime > 0 && v.LockTime < r.getBlockHeight() {
-		status = utxostore_api.Status_LOCKED
+		status = utxostore.Status_LOCKED
 	}
 
 	return &utxostore.Response{
@@ -237,6 +239,42 @@ func (r *Redis) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 	if err := g.Wait(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("timeout storing %d of %d utxos", nrStored.Load(), len(tx.Outputs))
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// StoreFromHashes stores the utxos of the tx in aerospike
+// TODO not tested for Redis
+func (r *Redis) StoreFromHashes(ctx context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
+	v := &Value{
+		LockTime: lockTime,
+	}
+	value := v.String()
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(16) // TODO what is a safe number here?
+
+	var nrStored = atomic.Uint64{}
+	for _, hash := range hashes {
+		hash := hash
+		g.Go(func() error {
+			if err := r.storeUtxo(gCtx, &hash, value); err != nil {
+				return err
+			}
+
+			nrStored.Add(1)
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("timeout storing %d of %d utxos", nrStored.Load(), len(hashes))
 		}
 
 		return err

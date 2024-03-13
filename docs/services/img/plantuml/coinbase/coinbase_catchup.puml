@@ -1,0 +1,27 @@
+@startuml
+participant "Coinbase Server" as Co
+participant "Blockchain Store" as St
+participant "AssetClient" as AC
+
+loop
+    Co -> AC: GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+
+    loop over blockHeaders
+        Co -> St: GetBlockExists(ctx, blockHeader.Hash())
+        St -> Co: true / false
+        alt not exists
+            Co -> Co: append catchupBlockHeaders
+        end
+    end
+end
+
+
+loop reverse over catchupBlockHeaders
+    Co -> AC: GetBlock(ctx, blockHeader.Hash())
+    AC --> Co: block
+    Co -> Co: storeBlock(ctx, block)
+end
+
+left footer Last Modified On: 9-Feb-2024
+
+@enduml

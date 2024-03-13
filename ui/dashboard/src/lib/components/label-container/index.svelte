@@ -16,10 +16,11 @@
 
   export let style = ''
 
+  export let name = ''
   export let disabled = false
   export let required = false
   export let label: any = ''
-  export let variant: TypoVariantType = 'heading'
+  // export let variant: TypoVariantType = 'heading'
   export let interactive = false
   export let margin = '0'
   export let stretch = true
@@ -129,10 +130,10 @@
         ? `--color:var(--comp-label-disabled-color);--margin:${margin}`
         : `--margin:${margin}`}
     /> -->
-    <div class="label">
+    <label class="label" aria-label={label} id={`${name}_label`}>
       {label}
       {required ? ' *' : ''}
-    </div>
+    </label>
   {/if}
   <div class="content">
     <slot />

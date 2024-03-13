@@ -1,0 +1,25 @@
+@startuml
+participant "Client" as Client
+participant "Blockchain Service" as Service
+database "Store" as Store
+
+Client -> Service: GetBlockExists(ctx, request)
+activate Service
+
+Service -> Store: GetBlockExists(ctx1, blockHash)
+activate Store
+Store --> Service: exists / Error
+deactivate Store
+
+alt If Error in GetBlockExists
+    Service --> Client: Return Error
+    deactivate Service
+else If Successful
+    Service --> Client: Create & Return GetBlockExistsResponse
+end
+
+deactivate Service
+
+left footer Last Modified On: 23-Jan-2024
+
+@enduml

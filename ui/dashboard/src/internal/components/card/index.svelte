@@ -5,6 +5,7 @@
   export let footerPadding = $$slots.footer ? '20px 24px' : '0 24px 20px 24px'
   export let stretch = true
   export let showFooter = true
+  export let wrapHeader = false
 </script>
 
 <div
@@ -14,7 +15,7 @@
   style:--content-padding={contentPadding}
   style:--footer-padding={footerPadding}
 >
-  <div class="header">
+  <div class="header" class:wrapHeader>
     <div class="title-container">
       <div class="title">
         {#if $$slots.title}
@@ -58,6 +59,10 @@
     align-items: flex-start;
     justify-content: space-between;
   }
+  .tui-card .header.wrapHeader {
+    gap: 5px;
+    flex-wrap: wrap;
+  }
 
   .tui-card .header .title-container {
     display: flex;
@@ -93,7 +98,7 @@
     align-items: center;
     justify-content: flex-end;
     flex-wrap: wrap;
-    gap: 20px;
+    gap: 8px;
     flex: 1 0;
   }
 

@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/url"
 	"time"
@@ -58,7 +57,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	}
 
 	s := &SQL{
-		db:     &usql.DB{DB: db},
+		db:     db,
 		engine: util.SQLEngine(storeUrl.Scheme),
 		logger: logger,
 	}
@@ -71,8 +70,8 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	return s, nil
 }
 
-func (s *SQL) GetDB() *sql.DB {
-	return s.db.DB
+func (s *SQL) GetDB() *usql.DB {
+	return s.db
 }
 
 func (s *SQL) GetDBEngine() util.SQLEngine {
@@ -83,7 +82,7 @@ func (s *SQL) Close() error {
 	return s.db.Close()
 }
 
-func createPostgresSchema(db *sql.DB) error {
+func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
@@ -135,12 +134,12 @@ func createPostgresSchema(db *sql.DB) error {
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+		return fmt.Errorf("could not create idx_chain_work_id index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+		return fmt.Errorf("could not create idx_chain_work_peer_id index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`
@@ -174,7 +173,7 @@ func createPostgresSchema(db *sql.DB) error {
 	return nil
 }
 
-func createSqliteSchema(db *sql.DB) error {
+func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS state (
 		 key            VARCHAR(32) PRIMARY KEY
@@ -226,12 +225,12 @@ func createSqliteSchema(db *sql.DB) error {
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+		return fmt.Errorf("could not create idx_chain_work_id index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_tx_id_vout index - [%+v]", err)
+		return fmt.Errorf("could not create idx_chain_work_peer_id index - [%+v]", err)
 	}
 
 	return nil

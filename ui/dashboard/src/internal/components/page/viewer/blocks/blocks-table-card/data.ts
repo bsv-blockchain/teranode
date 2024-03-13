@@ -1,7 +1,11 @@
 import { formatNum } from '$lib/utils/format'
+import { valueSet } from '$lib/utils/types'
 import { getDetailsUrl, DetailType, getHashLinkProps } from '$internal/utils/urls'
+import { getTpsStrFromValue } from '$internal/utils/txs'
+import { getHumanReadableTime } from '$internal/utils/format'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
 
 const pageKey = 'page.viewer'
@@ -21,7 +25,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.hash`),
       type: 'string',
       props: {
-        width: '17%',
+        width: '16%',
       },
     },
     {
@@ -29,13 +33,13 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.timestamp`),
       type: 'dateStr',
       props: {
-        width: '13%',
+        width: '14%',
       },
     },
     {
       id: 'age',
       name: t(`${pageKey}.col-defs-label.age`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '8%',
       },
@@ -43,7 +47,7 @@ export const getColDefs = (t) => {
     {
       id: 'deltaTime',
       name: t(`${pageKey}.col-defs-label.deltaTime`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '7%',
       },
@@ -61,7 +65,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.coinbaseValue`),
       type: 'number',
       props: {
-        width: '15%',
+        width: '7%',
       },
     },
     {
@@ -69,23 +73,24 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.transactionCount`),
       type: 'number',
       props: {
-        width: '6%',
+        width: '10%',
       },
     },
     {
       id: 'tps',
       name: t(`${pageKey}.col-defs-label.tps`),
-      type: 'string',
+      type: 'number',
       props: {
-        width: '7%',
+        width: '10%',
       },
     },
     {
       id: 'size',
       name: t(`${pageKey}.col-defs-label.size`),
       type: 'number',
+      format: 'dataSize',
       props: {
-        width: '9%',
+        width: '10%',
       },
     },
   ]
@@ -97,7 +102,7 @@ export const getRenderCells = (t) => {
   return {
     height: (idField, item, colId) => {
       return {
-        component: item[colId] ? RenderLink : null,
+        component: valueSet(item[colId]) ? RenderLink : null,
         props: {
           href: getDetailsUrl(DetailType.block, item.hash),
           external: false,
@@ -111,6 +116,46 @@ export const getRenderCells = (t) => {
       return {
         component: item[colId] ? LinkHashCopy : null,
         props: getHashLinkProps(DetailType.block, item.hash, t),
+        value: '',
+      }
+    },
+    age: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getHumanReadableTime(item[colId]),
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    deltaTime: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getHumanReadableTime(item[colId]),
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    coinbaseValue: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: (item[colId] / 1e8).toFixed(2),
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    tps: (idField, item, colId) => {
+      return {
+        component: valueSet(item[colId]) ? RenderSpan : null,
+        props: {
+          value: getTpsStrFromValue(item[colId]),
+          className: 'num',
+        },
         value: '',
       }
     },

@@ -7,15 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -91,88 +87,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-
-	kafkaBrokers, ok := gocore.Config().Get("validator_kafkaBrokers")
-	if ok {
-		v.logger.Infof("[Validator] Starting Kafka validator on address: %s", kafkaBrokers)
-		kafkaURL, err := url.Parse(kafkaBrokers)
-		if err != nil {
-			v.logger.Errorf("[Validator] Kafka validator failed to start: %s", err)
-		} else {
-			workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-			v.logger.Infof("[Validator] Kafka consumer started with %d workers", workers)
-
-			var clusterAdmin sarama.ClusterAdmin
-
-			n := atomic.Uint64{}
-			workerCh := make(chan []byte)
-			for i := 0; i < workers; i++ {
-				go func() {
-					var response *validator_api.ValidateTransactionResponse
-					for txBytes := range workerCh {
-						response, err = v.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-							TransactionData: txBytes,
-						})
-						if err != nil {
-							v.logger.Errorf("[Validator] Error validating transaction: %s", err)
-
-						}
-						if !response.Valid {
-							tx, err := bt.NewTxFromBytes(txBytes)
-							if err == nil {
-								v.sendInvalidTxNotification(tx.TxID(), response.Reason)
-							}
-
-							v.logger.Errorf("[Validator] Invalid transaction: %s", response.Reason)
-						}
-						processedN := n.Add(1)
-						if processedN%1000 == 0 {
-							v.logger.Debugf("[Validator] Processed %d transactions", processedN)
-						}
-					}
-				}()
-			}
-
-			go func() {
-				clusterAdmin, _, err = util.ConnectToKafka(kafkaURL)
-				if err != nil {
-					log.Fatal("[Validator] unable to connect to kafka: ", err)
-				}
-				defer func() { _ = clusterAdmin.Close() }()
-
-				topic := kafkaURL.Path[1:]
-
-				var partitions int
-				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
-					log.Fatal("[Validator] unable to parse Kafka partitions: ", err)
-				}
-
-				var replicationFactor int
-				if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
-					log.Fatal("[Validator] unable to parse Kafka replication factor: ", err)
-				}
-
-				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-					NumPartitions:     int32(partitions),
-					ReplicationFactor: int16(replicationFactor),
-				}, false)
-
-				err = util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "validators", workerCh)
-				if err != nil {
-					v.logger.Errorf("[Validator] Kafka listener failed to start: %s", err)
-				}
-			}()
-		}
-	}
-
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("validator_frpcListenAddress")
-	if ok {
-		err := v.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
 
 	go func() {
 		for {
@@ -297,10 +211,10 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransaction", stats)
 	defer func() {
 		stat.AddTime(start)
+		prometheusProcessedTransactions.Inc()
+		prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
-	prometheusProcessedTransactions.Inc()
-	timeStart := time.Now()
 	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
 	defer traceSpan.Finish()
 
@@ -325,7 +239,6 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
-	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,
@@ -336,6 +249,7 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransactionBatch", stats)
 	defer func() {
 		stat.AddTime(start)
+		prometheusTransactionValidateBatch.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
@@ -366,43 +280,6 @@ func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage
 	return &validator_api.GetBlockHeightResponse{
 		Height: blockHeight,
 	}, nil
-}
-
-func (v *Server) frpcServer(ctx context.Context, frpcAddress string) error {
-	v.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	frpcValidator := &fRPC_Validator{
-		v: v,
-	}
-
-	s, err := validator_api.NewServer(frpcValidator, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("validator_frpcConcurrency")
-	if ok {
-		v.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err = s.Start(frpcAddress)
-		if err != nil {
-			v.logger.Errorf("failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err = s.Shutdown()
-		if err != nil {
-			v.logger.Errorf("failed to shutdown frpc server: %v", err)
-		}
-	}()
-
-	return nil
 }
 
 func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {

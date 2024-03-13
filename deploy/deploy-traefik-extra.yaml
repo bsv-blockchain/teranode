@@ -1,0 +1,85 @@
+
+ports:
+  ast-grpc:
+    expose: true
+    port: 8091
+    protocol: TCP
+  ast-http:
+    expose: true
+    port: 8090
+    protocol: TCP
+  bootstrap-grpc:
+    expose: true
+    port: 8089
+    protocol: TCP
+  bootstrap-http:
+    expose: true
+    port: 8099
+    protocol: TCP
+  coin-grpc:
+    expose: true
+    port: 8093
+    protocol: TCP
+  fauct:
+    expose: true
+    port: 8097
+    protocol: TCP
+  p2p:
+    expose: true
+    port: 9905
+    protocol: TCP
+  p2p-grpc:
+    expose: true
+    port: 9907
+    protocol: TCP
+  kafka:
+    expose: true
+    port: 9092
+    protocol: TCP
+  kafka-external:
+    expose: true
+    port: 9094
+    protocol: TCP
+  p2p-ws:
+    expose: true
+    port: 9906
+    protocol: TCP
+  p2p-wss:
+    expose: true
+    port: 9904
+    protocol: TCP
+    appProtocol: wss
+    tls:
+      enabled: true
+  prof:
+    expose: true
+    port: 9091
+    protocol: TCP
+  prop-drpc:
+    expose: true
+    port: 8184
+    protocol: TCP
+  prop-frpc:
+    expose: true
+    port: 8284
+    protocol: TCP
+  prop-grpc:
+    expose: true
+    port: 8084
+    protocol: TCP
+  quic:
+    expose: true
+    port: 8384
+    protocol: UDP
+  redis:
+    expose: true
+    port: 6379
+    protocol: TCP
+  status:
+    expose: true
+    port: 9908
+    protocol: TCP
+  status-grpc:
+    expose: true
+    port: 9909
+    protocol: TCP

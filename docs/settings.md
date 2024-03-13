@@ -48,8 +48,6 @@ For Bob, the resolution would be:
 
 Thus, with this approach, you have the flexibility to have a default setting, an optional general override, and further context-specific overrides. It's a hierarchical system that allows fine-grained control over configurations based on context.
 
-Certainly! Here's a documentation for the provided methods in markdown format:
-
 ---
 
 ### Accessing the Setttings from Go

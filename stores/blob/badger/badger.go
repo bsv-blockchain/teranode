@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
@@ -117,11 +118,18 @@ func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 		return fmt.Errorf("failed to read data from reader: %w", err)
 	}
 
-	return s.Set(ctx, key, b, opts...)
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := key
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
+	return s.Set(ctx, storeKey, b, opts...)
 }
 
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	//s.logger.Debugf("[Badger] Set: %s", utils.ReverseAndHexEncodeSlice(key))
+	// s.logger.Debugf("[Badger] Set: %s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack())
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("Set").AddTime(start)
@@ -132,8 +140,13 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 
 	setOptions := options.NewSetOptions(opts...)
 
+	storeKey := key
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
 	if err := s.store.Update(func(tx *badger.Txn) error {
-		entry := badger.NewEntry(key, value)
+		entry := badger.NewEntry(storeKey, value)
 		if setOptions.TTL > 0 {
 			entry = entry.WithTTL(setOptions.TTL)
 		}
@@ -143,13 +156,13 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 		return fmt.Errorf("failed to set data: %w", err)
 	}
 
-	cache.Set(utils.ReverseAndHexEncodeSlice(key), value)
+	cache.Set(utils.ReverseAndHexEncodeSlice(storeKey), value)
 
 	return nil
 }
 
-func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	//s.logger.Debugf("[Badger] SetTTL: %s", utils.ReverseAndHexEncodeSlice(key))
+func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
+	// s.logger.Debugf("[Badger] SetTTL: %s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack())
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_badger_blob", true).NewStat("SetTTL").AddTime(start)
@@ -158,18 +171,32 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	traceSpan := tracing.Start(ctx, "Badger:SetTTL")
 	defer traceSpan.Finish()
 
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := key
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
 	// badger does not allow updating the TTL, so we just have to set a new object
-	objectBytes, err := s.Get(ctx, key)
+	objectBytes, err := s.Get(ctx, storeKey)
 	if err != nil {
 		traceSpan.RecordError(err)
 		return fmt.Errorf("failed to get data: %w", err)
 	}
 
-	return s.Set(ctx, key, objectBytes, options.WithTTL(ttl))
+	return s.Set(ctx, storeKey, objectBytes, options.WithTTL(ttl))
 }
 
-func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
-	b, err := s.Get(ctx, key)
+func (s *Badger) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := key
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
+	b, err := s.Get(ctx, storeKey)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +204,7 @@ func (s *Badger) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
-func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
+func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	//s.logger.Debugf("[Badger] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {
@@ -187,18 +214,25 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	traceSpan := tracing.Start(ctx, "Badger:Get")
 	defer traceSpan.Finish()
 
-	cached, ok := cache.Get(utils.ReverseAndHexEncodeSlice(hash))
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
+	cached, ok := cache.Get(utils.ReverseAndHexEncodeSlice(storeKey))
 	if ok {
-		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(hash))
+		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(storeKey))
 		return cached, nil
 	}
 
 	var result []byte
 	err := s.store.View(func(tx *badger.Txn) error {
-		data, err := tx.Get(hash)
+		data, err := tx.Get(storeKey)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return fmt.Errorf("key not found: %w", err)
+				return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
 			}
 			traceSpan.RecordError(err)
 			return err
@@ -218,7 +252,20 @@ func (s *Badger) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return result, err
 }
 
-func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
+func (s *Badger) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+	b, err := s.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(b) < nrOfBytes {
+		return b, nil
+	}
+
+	return b[:nrOfBytes], nil
+}
+
+func (s *Badger) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	//s.logger.Debugf("[Badger] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {
@@ -227,14 +274,21 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	traceSpan := tracing.Start(ctx, "Badger:Exists")
 	defer traceSpan.Finish()
 
-	_, ok := cache.Get(utils.ReverseAndHexEncodeSlice(hash))
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
+	_, ok := cache.Get(utils.ReverseAndHexEncodeSlice(storeKey))
 	if ok {
-		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(hash))
+		s.logger.Debugf("Cache hit for: %s", utils.ReverseAndHexEncodeSlice(storeKey))
 		return true, nil
 	}
 
 	err := s.store.View(func(tx *badger.Txn) error {
-		_, err := tx.Get(hash)
+		_, err := tx.Get(storeKey)
 		if err != nil {
 			traceSpan.RecordError(err)
 			return err
@@ -252,7 +306,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *Badger) Del(ctx context.Context, hash []byte) error {
+func (s *Badger) Del(ctx context.Context, hash []byte, opts ...options.Options) error {
 	//s.logger.Debugf("[Badger] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	start := gocore.CurrentTime()
 	defer func() {
@@ -262,15 +316,22 @@ func (s *Badger) Del(ctx context.Context, hash []byte) error {
 	traceSpan := tracing.Start(ctx, "Badger:Del")
 	defer traceSpan.Finish()
 
+	setOptions := options.NewSetOptions(opts...)
+
+	storeKey := hash
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
 	err := s.store.Update(func(tx *badger.Txn) error {
-		return tx.Delete(hash)
+		return tx.Delete(storeKey)
 	})
 
 	if err != nil {
 		traceSpan.RecordError(err)
 	}
 
-	cache.Delete(utils.ReverseAndHexEncodeSlice(hash))
+	cache.Delete(utils.ReverseAndHexEncodeSlice(storeKey))
 
 	return err
 }

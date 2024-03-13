@@ -9,8 +9,14 @@ import { toast } from './toast'
 import { msgbox } from './msgbox'
 import { switchh } from './switch'
 import { tab } from './tab'
+import { footer } from './footer'
+// import { banner } from './banner'
 
 export const dark = {
+  easing: {
+    function: 'ease-in-out',
+    duration: '0.2s',
+  },
   focus: {
     rect: {
       color: '#ffffff', //palette.primary[500],
@@ -47,6 +53,8 @@ export const dark = {
     },
   },
   comp: { ...comp },
+  // banner: { ...banner },
+  footer: { ...footer },
   input: { ...input },
   dropdown: { ...dropdown },
   table: { ...table },

@@ -4,13 +4,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
 
 	// in Server
 	prometheusBlockAssemblyHealth                       prometheus.Counter
-	prometheusBlockAssemblyAddTx                        prometheus.Counter
 	prometheusBlockAssemblyAddTxDuration                prometheus.Histogram
 	prometheusBlockAssemblyRemoveTx                     prometheus.Counter
 	prometheusBlockAssemblyRemoveTxDuration             prometheus.Histogram
@@ -36,15 +36,18 @@ var (
 	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
 	prometheusBlockAssemblerReorg         prometheus.Counter
 	prometheusBlockAssemblerReorgDuration prometheus.Histogram
+	prometheusBlockAssemblerSetFromKafka  prometheus.Histogram
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockAssemblyHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockassembly",
@@ -53,20 +56,12 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblyAddTx = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "add_tx",
-			Help:      "Number of txs added to the blockassembly service",
-		},
-	)
-
 	prometheusBlockAssemblyAddTxDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "add_tx_duration_v2",
+			Name:      "add_tx_duration_seconds",
 			Help:      "Duration of AddTx in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 
@@ -81,9 +76,9 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblyRemoveTxDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "remove_tx_duration",
+			Name:      "remove_tx_duration_millis",
 			Help:      "Duration of RemoveTx in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -98,9 +93,9 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblyGetMiningCandidateDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "get_mining_candidate_duration_v2",
+			Name:      "get_mining_candidate_duration_millis",
 			Help:      "Duration of GetMiningCandidate in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -123,18 +118,18 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblySubmitMiningSolutionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "submit_mining_solution_duration_v2",
+			Name:      "submit_mining_solution_duration_seconds",
 			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
 	prometheusBlockAssemblyUpdateSubtreesTTL = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "update_subtrees_ttl_duration",
+			Name:      "update_subtrees_ttl_duration_seconds",
 			Help:      "Duration of updating subtrees TTL in the blockassembly service",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -206,9 +201,9 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "tx_meta_get_duration_v2",
+			Name:      "tx_meta_get_duration_micros",
 			Help:      "Duration of reading tx meta data from txmeta store in block assembler",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 
@@ -231,11 +226,18 @@ func initPrometheusMetrics() {
 	prometheusBlockAssemblerReorgDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "reorg_duration_v2",
+			Name:      "reorg_duration_seconds",
 			Help:      "Duration of reorg in block assembler",
-			Buckets:   util.MetricsBuckets,
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
-	prometheusMetricsInitialized = true
+	prometheusBlockAssemblerSetFromKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockassembly",
+			Name:      "set_from_kafka_duration_micros",
+			Help:      "Duration of setting from kafka in block assembler",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
 }

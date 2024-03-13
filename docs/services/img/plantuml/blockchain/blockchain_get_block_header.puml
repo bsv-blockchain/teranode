@@ -1,0 +1,38 @@
+@startuml
+participant "Client" as Client
+participant "Blockchain Service" as Blockchain
+database "Store" as Store
+
+== GetBlockHeader ==
+Client -> Blockchain: GetBlockHeader(request)
+activate Blockchain
+Blockchain -> Store: GetBlockHeader(hash)
+activate Store
+Store --> Blockchain: blockHeader, meta
+deactivate Store
+Blockchain --> Client: GetBlockHeaderResponse
+deactivate Blockchain
+
+== GetBlockHeaders ==
+Client -> Blockchain: GetBlockHeaders(request)
+activate Blockchain
+Blockchain -> Store: GetBlockHeaders(startHash, numberOfHeaders)
+activate Store
+Store --> Blockchain: blockHeaders, heights
+deactivate Store
+Blockchain --> Client: GetBlockHeadersResponse
+deactivate Blockchain
+
+== GetBlockHeaderIDs ==
+Client -> Blockchain: GetBlockHeaderIDs(request)
+activate Blockchain
+Blockchain -> Store: GetBlockHeaderIDs(startHash, numberOfHeaders)
+activate Store
+Store --> Blockchain: ids
+deactivate Store
+Blockchain --> Client: GetBlockHeaderIDsResponse
+deactivate Blockchain
+
+left footer Last Modified On: 24-Jan-2024
+
+@enduml

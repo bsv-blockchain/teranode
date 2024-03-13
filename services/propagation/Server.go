@@ -43,6 +43,9 @@ var (
 	// ipv6 multicast constants
 	maxDatagramSize = 512 //100 * 1024 * 1024
 	ipv6Port        = 9999
+
+	ErrBadRequest = errors.New("PROPAGATION_BAD_REQUEST")
+	ErrInternal   = errors.New("PROPAGATION_INTERNAL")
 )
 
 // PropagationServer type carries the logger within it
@@ -387,17 +390,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %s", err.Error())
+		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	if !btTx.IsExtended() {
-		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -405,14 +408,28 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
 	g, gCtx := errgroup.WithContext(setCtx)
+
+	// make a clone to pass to the go func to avoid race condition where Validate does potentially modify the tx!!!!!
+	cloneTx, err := bt.NewTxFromBytes(req.Tx)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+	}
+
 	g.Go(func() error {
-		if err := ps.storeTransaction(gCtx, btTx); err != nil {
-			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v", btTx.TxIDChainHash(), err)
+		if err := ps.storeTransaction(gCtx, cloneTx); err != nil {
+			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", cloneTx.TxIDChainHash(), err, ErrInternal)
 		}
 		return nil
 	})
 
 	if err := ps.validator.Validate(ctx, btTx); err != nil {
+		if errors.Is(err, validator.ErrInternal) {
+			err = fmt.Errorf("%v: %w", err, ErrInternal)
+		} else if errors.Is(err, validator.ErrBadRequest) {
+			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
+		}
+
 		// TODO send REJECT message to peers if invalid tx
 		ps.logger.Errorf("[ProcessTransaction][%s] received invalid transaction: %s", btTx.TxID(), err.Error())
 		prometheusInvalidTransactions.Inc()
@@ -423,10 +440,11 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 		// TODO: we failed storing the tx in the store, what should we do now?
 		//       maybe store in a local badger or a kafka stream and have a process that retries?
 		ps.logger.Errorf("[ProcessTransaction][%s] failed to store transaction: %s", btTx.TxID(), err.Error())
+		return nil, err
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
-	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()))
+	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return &propagation_api.EmptyMessage{}, nil
 }

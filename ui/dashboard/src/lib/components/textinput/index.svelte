@@ -178,6 +178,7 @@
   {testId}
   class={`tui-textinput${clazz ? ' ' + clazz : ''}`}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
+  {name}
   {size}
   {disabled}
   {label}
@@ -216,6 +217,7 @@
           on:focus={() => onFocusAction('focus')}
           on:blur={() => onFocusAction('blur')}
           on:keydown={onKeyDown}
+          aria-labelledby={`${name}_label`}
         />
         {#if iconAfter}
           <Icon name={iconAfter} style="--icon-size:${inputSizeStr}-icon-size)" />
@@ -283,7 +285,7 @@
     background-color: var(--enabled-bg-color);
     border-color: var(--enabled-border-color);
 
-    transition: width 0.2s ease-in-out;
+    transition: width var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
   .input.width {
     width: var(--width);

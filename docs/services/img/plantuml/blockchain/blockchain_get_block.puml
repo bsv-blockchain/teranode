@@ -1,0 +1,41 @@
+
+@startuml
+participant "Client Code" as Client
+participant "Blockchain Service" as Service
+database "Block Store" as Store
+entity "Model" as Model
+
+Client -> Service: GetBlock(ctx, request)
+activate Service
+
+Service -> Model: NewHash(request.Hash)
+activate Model
+Model --> Service: blockHash / Error
+deactivate Model
+
+alt If Error in NewHash
+    Service --> Client: Return Error
+    deactivate Service
+else If Successful Hash Creation
+    Service -> Store: GetBlock(ctx1, blockHash)
+    activate Store
+    Store --> Service: block, height / Error
+    deactivate Store
+
+    alt If Error in GetBlock
+        Service --> Client: Return Error
+        deactivate Service
+    else If Successful GetBlock
+        loop For Each Subtree Hash in block
+            Service -> Model: Convert SubtreeHash to Bytes
+        end
+
+        Service --> Client: Create & Return GetBlockResponse
+    end
+end
+
+deactivate Service
+
+left footer Last Modified On: 23-Jan-2024
+
+@enduml

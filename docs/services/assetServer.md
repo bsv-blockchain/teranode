@@ -2,9 +2,10 @@
 
 ## Index
 
+
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
-3. [Data Model ](#3-data-model-)
+3. [Data Model](#3-data-model)
 - [3.1. Blocks](#31-blocks)
 - [3.2. Block Headers](#32-block-headers)
 - [3.3. Subtrees](#33-subtrees)
@@ -13,23 +14,24 @@
 - [3.6. TX Meta](#36-tx-meta)
 4. [Use Cases](#4-use-cases)
 - [4.1. gRPC](#41-grpc)
-- [4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders() ](#411-getblock-getbestblockheader-getblockheaders-)
+- [4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders()](#411-getblock-getbestblockheader-getblockheaders)
 - [4.1.2. Subtree Get()](#412-subtree-get)
 - [4.1.3. Subtree Set() and SetTTL()](#413-subtree-set-and-setttl)
-- [4.1.5. Subscribe to notifications ](#415-subscribe-to-notifications-)
-- [4.2. HTTP and Websockets    ](#42-http-and-websockets----)
+- [4.1.5. Subscribe to notifications](#415-subscribe-to-notifications)
+- [4.2. HTTP and Websockets](#42-http-and-websockets)
 - [4.2.1. getTransaction() and getTransactions()](#421-gettransaction-and-gettransactions)
-- [4.2.2. GetTransactionMeta() ](#422-gettransactionmeta-)
-- [4.2.3. GetSubtree() ](#423-getsubtree-)
+- [4.2.2. GetTransactionMeta()](#422-gettransactionmeta)
+- [4.2.3. GetSubtree()](#423-getsubtree)
 - [4.2.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#424-getblockheaders-getblockheader-and-getbestblockheader)
 - [4.2.5. GetBlock() and GetLastNBlocks()](#425-getblock-and-getlastnblocks)
 - [4.2.6. GetUTXO() and GetUTXOsByTXID()](#426-getutxo-and-getutxosbytxid)
 - [4.2.7. Websocket Subscriptions](#427-websocket-subscriptions)
-5. [Technology ](#5-technology-)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [How to run](#7-how-to-run)
-- [7.1. How to run](#71-how-to-run)
-- [7.2  Configuration options (settings flags)](#72--configuration-options-settings-flags)
+5. [gRPC Protobuf Definitions](#5-grpc-protobuf-definitions)
+6. [Technology](#6-technology)
+7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
+8. [How to run](#8-how-to-run)
+- [8.1. How to run](#81-how-to-run)
+- [8.2  Configuration options (settings flags)](#82--configuration-options-settings-flags)
 
 ## 1. Description
 
@@ -55,7 +57,7 @@ The server uses both HTTP and gRPC as communication protocols:
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
 
 
-- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the UBSV distributed network.
+- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the Teranode distributed network.
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
@@ -67,7 +69,7 @@ Finally, the Asset Service also offers a WebSocket interface, allowing clients t
 
 ![Asset_Server_System_Context_Diagram.png](img%2FAsset_Server_System_Context_Diagram.png)
 
-The Asset Server provides data to other Teranode components over gRPC. It also provides data to external clients over HTTP / Websockets, such as the UBSV UI Dashboard.
+The Asset Server provides data to other Teranode components over gRPC. It also provides data to external clients over HTTP / Websockets, such as the Teranode UI Dashboard.
 
 All data is retrieved from other Teranode services / stores.
 
@@ -85,6 +87,13 @@ The Asset Server is composed of the following components:
 * **TX Meta Store**: Provides TX Meta data to the Asset Server.
 * **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
 * **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
+
+
+Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
+Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
+
+![lustre_fs.svg](..%2Flustre_fs.svg)
 
 
 ## 3. Data Model
@@ -279,7 +288,11 @@ The `HandleWebSocket(c)` (`services/asset/http_impl/HandleWebsocket.go`) functio
 
 Notice that the notifications are the same notifications sent by the gRPC subscriber (see [Subscribe to notifications](#415-subscribe-to-notifications-)) - i.e. `Subtree`, `Block`, `MiningOn`.
 
-## 5. Technology
+## 5. gRPC Protobuf Definitions
+
+The Asset Service uses gRPC for communication between nodes. The  protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/assetProto.md).
+
+## 6. Technology
 
 Key technologies involved:
 
@@ -315,7 +328,7 @@ Key technologies involved:
     - Used for structuring data sent to and from clients, especially in contexts where WebSocket or HTTP is used.
 
 
-## 6. Directory Structure and Main Files
+## 7. Directory Structure and Main Files
 
 ```
 ./services/asset
@@ -348,9 +361,9 @@ Key technologies involved:
 ```
 
 
-## 7. How to run
+## 8. How to run
 
-### 7.1. How to run
+### 8.1. How to run
 
 To run the Asset Server locally, you can execute the following command:
 
@@ -361,42 +374,44 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Asset Server locally.
 
 
-### 7.2  Configuration options (settings flags)
+### 8.2  Configuration options (settings flags)
 
-1. **General Port Configuration**
-  - `ASSET_GRPC_PORT`: Defines the port for gRPC communication.
-    - Example: `ASSET_GRPC_PORT=8091`
-  - `ASSET_HTTP_PORT`: Specifies the port for HTTP communication.
-    - Example: `ASSET_HTTP_PORT=8090`
+1. **General Configuration**
+    - `asset_maxRetries`: The maximum number of retry attempts for connecting to the Asset Service.
+        - Example: `asset_maxRetries=3`
+    - `asset_retrySleep`: The sleep duration (in milliseconds) between retry attempts for connecting to the Asset Service.
+        - Example: `asset_retrySleep=1000`
+    - `use_open_tracing`: Enables or disables OpenTracing for the service.
+        - Example: `use_open_tracing=true`
+    - `use_prometheus_grpc_metrics`: Enables or disables Prometheus metrics for gRPC calls.
+        - Example: `use_prometheus_grpc_metrics=true`
 
-2. **gRPC Configuration**
-  - `asset_grpcListenAddress.${YOUR_USERNAME}`: Address for the Asset Service to listen for gRPC requests.
-    - Example: `asset_grpcListenAddress.johndoe=:8091` (Listens on port 8091 for user "johndoe")
+2. **gRPC and HTTP Server Configuration**
+    - `asset_grpcListenAddress`: Address for the Asset Service to listen for gRPC requests.
+        - Example: `asset_grpcListenAddress=:8091`
+    - `asset_httpListenAddress`: Address for the Asset Service to listen for HTTP requests.
+        - Example: `asset_httpListenAddress=:8090`
+    - `securityLevelHTTP`: Determines the security level for HTTP communication. `0` for HTTP, `1` for HTTPS.
+        - Example: `securityLevelHTTP=1`
+    - `server_certFile`: Path to the SSL certificate file for HTTPS.
+        - Example: `server_certFile=/path/to/cert.pem`
+    - `server_keyFile`: Path to the SSL key file for HTTPS.
+        - Example: `server_keyFile=/path/to/key.pem`
 
-3. **TX Meta Store Configuration**
-  - `txmeta_store_asset-service.${YOUR_USERNAME}`: Connection string for the TX Meta Store used by the Asset Service.
-    - Example: `txmeta_store_asset-service.johndoe=aerospike://ubsv-store-eu-0.eu.eu-west-1.ubsv.internal:3000/ubsv-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false&MinConnectionsPerNode=5&expiration=7200`
+3. **Service Discovery and Peer Configuration**
+    - `feature_libP2P`: Enables or disables the libP2P feature for peer-to-peer network communication.
+        - Example: `feature_libP2P=false`
+    - `feature_bootstrap`: Enables or disables the bootstrap feature for discovering peers.
+        - Example: `feature_bootstrap=true`
+    - `asset_clientName`: Specifies the client name for identification purposes.
+        - Example: `asset_clientName=AssetClient`
 
-4. **Asset Service Startup Configuration**
-  - `startAsset.${YOUR_USERNAME}`: Flag to start the Asset Service.
-    - Example: `startAsset.johndoe=true`
+4. **Repository and Storage Configuration**
+    - `txmeta_store_asset-service`: Connection string or configuration for the transaction metadata storage used by the Asset Service.
+        - Example: `txmeta_store_asset-service=aerospike://localhost:3000`
 
-5. **Asset Service Network Configuration**
-  - `asset_grpcListenAddress.${YOUR_USERNAME}`: Configures the listening address for the Asset Service's gRPC server.
-    - Example: `asset_grpcListenAddress.johndoe=localhost:8091`
-  - `asset_grpcAddress.${YOUR_USERNAME}`: Address for accessing the Asset Service via gRPC.
-    - Example: `asset_grpcAddress.johndoe=localhost:8091`
-  - `asset_httpListenAddress.${YOUR_USERNAME}`: Configures the listening address for the Asset Service's HTTP server.
-    - Example: `asset_httpListenAddress.johndoe=localhost:8090`
-  - `asset_http_port.${YOUR_USERNAME}`: Standard HTTP port for the Asset Service.
-    - Example: `asset_http_port.johndoe=80`
-  - `asset_https_port.${YOUR_USERNAME}`: Standard HTTPS port for the Asset Service.
-    - Example: `asset_https_port.johndoe=443`
-  - `asset_httpAddress.${YOUR_USERNAME}`: Full HTTP address to access the Asset Service.
-    - Example: `asset_httpAddress.johndoe=http://localhost:8090`
-
-6. **Miscellaneous Settings**
-  - `asset_clientName.${YOUR_USERNAME}`: Name of the client using the Asset Service.
-    - Example: `asset_clientName.johndoe=Not specified`
-  - `coinbase_assetGrpcAddress.${YOUR_USERNAME}`: gRPC address for the Coinbase service to connect to the Asset Service.
-    - Example: `coinbase_assetGrpcAddress.johndoe=localhost:8091`
+5. **Miscellaneous Settings**
+    - `asset_apiPrefix`: Specifies the API prefix for HTTP routes.
+        - Example: `asset_apiPrefix=/api/v1`
+    - `asset_centrifugeListenAddress`: Specifies the listen address for the Centrifuge service integration.
+        - Example: `asset_centrifugeListenAddress=:8101`

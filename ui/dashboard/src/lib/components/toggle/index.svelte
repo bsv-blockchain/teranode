@@ -79,6 +79,15 @@
 
   let arrowFocusIndex = -1
 
+  $: {
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].value === value) {
+        arrowFocusIndex = i
+        break
+      }
+    }
+  }
+
   function onSelect(val, index) {
     value = val
     arrowFocusIndex = index
@@ -103,6 +112,7 @@
 
         return false
       case 'Enter':
+      case 'Space':
         e.preventDefault()
         if (arrowFocusIndex !== -1) {
           ;(toggleRef.querySelectorAll('.tab')[arrowFocusIndex] as any).click()
@@ -122,11 +132,13 @@
     data-test-id={testId}
     class={`tui-toggle${clazz ? ' ' + clazz : ''}`}
     style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
-    tabindex={tabindex === -99 ? 0 : tabindex}
     bind:this={toggleRef}
     on:focus={() => onFocusAction('focus')}
     on:blur={() => onFocusAction('blur')}
     on:keydown={onKeyDown}
+    role="listbox"
+    tabindex={tabindex === -99 ? 0 : tabindex}
+    aria-label={name}
   >
     {#each items as item, i (item.value)}
       <div
@@ -134,11 +146,17 @@
         class:selected={item.value === value}
         class:arrowFocused={arrowFocusIndex === i}
         on:click={() => onSelect(item.value, i)}
+        on:keydown={() => {}}
         use:$tippy={{ content: item.tooltip }}
+        role="option"
+        aria-selected={item.value === value}
+        aria-label={item.label}
+        tabindex={-1}
       >
         <!-- <Icon name={item.icon} style="--icon-size:var(--toggle-icon-size, 16px)" /> -->
         {#if item.label}
           <Button
+            tabindex={-1}
             icon={item.icon}
             size={buttonComponentSize}
             {variant}
@@ -148,6 +166,7 @@
           >
         {:else}
           <Button
+            tabindex={-1}
             icon={item.icon}
             size={buttonComponentSize}
             {variant}
@@ -176,6 +195,10 @@
     height: var(--height);
 
     background: #33373c;
+    outline: none;
+  }
+
+  .tui-toggle .tab {
     outline: none;
   }
 </style>

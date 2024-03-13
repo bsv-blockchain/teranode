@@ -32,7 +32,7 @@ func New(expiryDuration time.Duration) *DeDuplicator {
 
 // DeDuplicate will execute the function fn if the key is not in the cache. If the key is in the cache, it will wait
 // for the function to be executed and return the result.
-func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn func() error) error {
+func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn func() error) (bool, error) {
 	start := gocore.CurrentTime()
 	stat := gocore.NewStat("DeDuplicator.DeDuplicate")
 
@@ -50,7 +50,7 @@ func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn f
 
 		stat.NewStat("2a. Received broadcast").AddTime(start)
 
-		return deDupEntry.err
+		return true, deDupEntry.err
 	}
 
 	// Create a new cache entry
@@ -78,5 +78,5 @@ func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, fn f
 
 	stat.NewStat("2b. Sent broadcast").AddTime(start)
 
-	return err
+	return false, err
 }

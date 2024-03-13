@@ -9,7 +9,6 @@
   import { MessageType } from '$internal/components/msgbox/types'
 
   import { messages, sock } from '$internal/stores/p2pStore'
-  // import { mockData } from './data'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -55,7 +54,6 @@
 
   $: usingLiveData = dataSnapshot === null
 
-  // $: data = dataSnapshot ? dataSnapshot : mockData
   $: data = dataSnapshot ? dataSnapshot : $messages
 
   $: {
@@ -88,20 +86,10 @@
       })
 
       groupedMessages = newGroupedMessages
-
-      // let dataHack = {}
-      // Object.keys(groupedMessages).forEach((key) => {
-      //   dataHack[key] = groupedMessages[key]
-      //   dataHack[key + '_01'] = groupedMessages[key]
-      //   dataHack[key + '_02'] = groupedMessages[key]
-      //   // dataHack[key + '_03'] = groupedMessages[key]
-      //   // dataHack[key + '_04'] = groupedMessages[key]
-      // })
-
-      // groupedMessages = dataHack
     }
 
     peers = Object.keys(groupedMessages).length > 0 ? Object.keys(groupedMessages) : []
+    peers = peers.sort()
 
     const msgboxW = byPeer ? (innerWidth - $contentLeft) / peers.length : innerWidth - $contentLeft
     collapseMsgContent = msgboxW < 500
@@ -180,8 +168,6 @@
 
 <style>
   .tools-container {
-    flex: 1;
-
     width: 100%;
     min-height: 50px;
     padding: 24px;

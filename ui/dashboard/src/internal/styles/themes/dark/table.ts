@@ -25,6 +25,12 @@ export const table = {
       color: '#1F2328',
     },
     color: '#B3B4B7',
+    small: {
+      color: '#898C90',
+      font: {
+        weight: 400,
+      },
+    },
     text: {
       transform: 'none',
     },
@@ -49,7 +55,7 @@ export const table = {
       },
     },
     font: {
-      size: '13px',
+      size: '12px',
       weight: 700,
     },
     line: {
@@ -67,7 +73,7 @@ export const table = {
       bottom: '1px solid rgba(255, 255, 255, 0.08)',
     },
     font: {
-      size: '15px',
+      size: '14px',
       weight: 400,
     },
     line: {

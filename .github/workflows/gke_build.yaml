@@ -22,12 +22,12 @@ on:
 jobs:
   build-docker:
     name: Build Docker image
-    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "self-hosted", "Linux", "ARM64" ]') || 'ubsv-runner' }}
+    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "self-hosted", "Linux", "ARM64" ]') || fromJSON('[ "self-hosted", "Linux", "X64" ]') }}
 
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Setup Docker Buildx
       - name: Set up Docker Buildx
@@ -65,15 +65,17 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
           file: ./Dockerfile
           push: true
           build-args: |
             GITHUB_SHA=${{github.sha}}
             DEBUG=true
+            RACE=true
             GITHUB_REF=${{github.ref_name}}
             BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-build-${{ steps.base.outputs.id }}
             RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-${{ inputs.arch }}

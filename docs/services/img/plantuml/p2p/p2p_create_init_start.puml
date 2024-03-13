@@ -1,35 +1,47 @@
 @startuml
-actor "Caller" as caller
-participant "NewServer(logger)" as NewServer
-participant "Init(ctx)" as Init
-participant "Start(ctx)" as Start
-queue "LibP2P Host" as LibP2P
+participant "P2P Server" as P2PServer
+participant "P2PNode" as P2PNode
 database "Blockchain Client" as BlockchainClient
 database "Block Validation Client" as BlockValidationClient
 database "Validator Client" as ValidatorClient
-database "HTTP Server" as HTTPServer
+participant "Echo (HTTP Server)" as HTTPServer
 queue "PubSub System" as PubSub
+queue "Connect to Static Peers" as StaticPeers
+queue "Set Topic Handlers" as TopicHandlers
 
-caller -> NewServer: Calls NewServer
-activate NewServer
-NewServer -> LibP2P: Create Host
-NewServer -> NewServer: Set Topics & Notification Channel
-deactivate NewServer
+P2PServer -> P2PServer: NewServer
+activate P2PServer
 
-caller -> Init: Calls Init
-activate Init
-Init -> BlockchainClient: Create Client
-Init -> BlockValidationClient: Create Client
-Init -> ValidatorClient: Create Client
-Init -> Init: Set HTTP Address
-deactivate Init
+P2PServer -> P2PNode: Creates P2PNode
+P2PNode --> P2PServer
 
-caller -> Start: Calls Start
-activate Start
-Start -> HTTPServer: Setup Echo Server
-Start -> PubSub: Initialize PubSub
-Start -> PubSub: Join & Subscribe to Topics
-Start -> LibP2P: Set Stream Handler
-Start -> Start: Start Goroutines
-deactivate Start
+
+P2PServer -> P2PServer: Sets up topics & notification channel
+
+P2PServer -> P2PServer: Calls Init
+activate P2PServer
+P2PServer -> BlockchainClient: Create Blockchain Client
+BlockchainClient --> P2PServer
+P2PServer -> BlockValidationClient: Create BlockValidation Client
+BlockValidationClient --> P2PServer
+P2PServer -> ValidatorClient: Create Validator Client
+ValidatorClient --> P2PServer
+
+P2PServer -> P2PServer: Sets HTTP Address from config
+deactivate P2PServer
+
+P2PServer -> P2PServer: Calls Start
+activate P2PServer
+P2PServer -> HTTPServer: Setup Echo Server (Middleware, Routes)
+HTTPServer --> P2PServer
+P2PServer -> P2PServer: Start P2PNode (Join PubSub Topics)
+P2PServer -> StaticPeers: Connect to Static Peers
+StaticPeers --> P2PServer
+P2PServer -> TopicHandlers: Set Topic Handlers (Subscribe)
+TopicHandlers --> P2PServer
+P2PServer -> P2PServer: Start blockchain and validator listeners \n (Goroutines)
+P2PServer -> P2PServer: Starts HTTP server \n (Goroutine)
+deactivate P2PServer
+
+left footer Last Modified On: 6-Mar-2024
 @enduml

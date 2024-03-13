@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"math"
+	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -35,35 +37,51 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh        chan chan *miningCandidateResponse
-	bestBlockHeader          *model.BlockHeader
-	bestBlockHeight          uint32
-	currentChain             []*model.BlockHeader
-	currentChainMap          map[chainhash.Hash]uint32
-	currentChainMapIDs       map[uint32]struct{}
-	currentChainMapMu        sync.RWMutex
-	blockchainSubscriptionCh chan *model.Notification
-	maxBlockReorgRollback    int
-	maxBlockReorgCatchup     int
+	miningCandidateCh          chan chan *miningCandidateResponse
+	bestBlockHeader            *model.BlockHeader
+	bestBlockHeight            uint32
+	currentChain               []*model.BlockHeader
+	currentChainMap            map[chainhash.Hash]uint32
+	currentChainMapIDs         map[uint32]struct{}
+	currentChainMapMu          sync.RWMutex
+	blockchainSubscriptionCh   chan *model.Notification
+	maxBlockReorgRollback      int
+	maxBlockReorgCatchup       int
+	difficultyAdjustmentWindow int
+	difficultyAdjustment       bool
+	currentDifficulty          *model.NBit
+	defaultMiningNBits         *model.NBit
+	resetCh                    chan struct{}
+	resetWaitCount             atomic.Int32
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan *util.Subtree) *BlockAssembler {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
 	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)
 
+	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
+	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
+
+	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
+	defaultMiningBits := model.NewNBitFromString(nBitsString)
 	b := &BlockAssembler{
-		logger:                logger,
-		utxoStore:             utxoStore,
-		subtreeStore:          subtreeStore,
-		blockchainClient:      blockchainClient,
-		subtreeProcessor:      subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
-		miningCandidateCh:     make(chan chan *miningCandidateResponse),
-		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
-		currentChainMapIDs:    make(map[uint32]struct{}, maxBlockReorgCatchup),
-		maxBlockReorgRollback: maxBlockReorgRollback,
-		maxBlockReorgCatchup:  maxBlockReorgCatchup,
+		logger:                     logger,
+		utxoStore:                  utxoStore,
+		subtreeStore:               subtreeStore,
+		blockchainClient:           blockchainClient,
+		subtreeProcessor:           subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
+		miningCandidateCh:          make(chan chan *miningCandidateResponse),
+		currentChainMap:            make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
+		currentChainMapIDs:         make(map[uint32]struct{}, maxBlockReorgCatchup),
+		maxBlockReorgRollback:      maxBlockReorgRollback,
+		maxBlockReorgCatchup:       maxBlockReorgCatchup,
+		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
+		difficultyAdjustment:       difficultyAdjustment,
+		defaultMiningNBits:         &defaultMiningBits,
+		resetCh:                    make(chan struct{}),
+		resetWaitCount:             atomic.Int32{},
 	}
 
 	return b
@@ -114,13 +132,39 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				close(b.blockchainSubscriptionCh)
 				return
 
+			case <-b.resetCh:
+				// reset the block assembly
+				b.logger.Infof("[BlockAssembler] resetting block assembler")
+				bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error getting best block header: %v", err)
+					continue
+				}
+
+				b.logger.Infof("[BlockAssembler] resetting to new best block header: %d", meta.Height)
+				b.bestBlockHeader = bestBlockchainBlockHeader
+				b.bestBlockHeight = meta.Height
+				err = b.SetState(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error setting state: %v", err)
+				}
+
+				b.subtreeProcessor.Reset(b.bestBlockHeader)
+				b.resetWaitCount.Add(2) // wait 2 blocks before starting to mine again
+
 			case responseCh := <-b.miningCandidateCh:
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
-				miningCandidate, subtrees, err := b.getMiningCandidate()
-				responseCh <- &miningCandidateResponse{
-					miningCandidate: miningCandidate,
-					subtrees:        subtrees,
-					err:             err,
+				if b.resetWaitCount.Load() > 0 {
+					responseCh <- &miningCandidateResponse{
+						err: fmt.Errorf("waiting for reset to complete"),
+					}
+				} else {
+					miningCandidate, subtrees, err := b.getMiningCandidate()
+					responseCh <- &miningCandidateResponse{
+						miningCandidate: miningCandidate,
+						subtrees:        subtrees,
+						err:             err,
+					}
 				}
 				// stat.AddTime(start)
 
@@ -135,18 +179,18 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
 
+					// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
 						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
-						// we already have this block, nothing to do
 						continue
-					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) {
+					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
 						b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
 						}
-					} else {
+					} else { // if the bestBlockchainBlockHeader's previous block is the same as the current best block header, move up
 						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
 						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
@@ -162,9 +206,18 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					b.bestBlockHeader = bestBlockchainBlockHeader
 					b.bestBlockHeight = meta.Height
 
+					if b.resetWaitCount.Load() > 0 {
+						// decrement the reset wait count, we just found and processed a block
+						b.resetWaitCount.Add(-1)
+					}
+
 					err = b.SetState(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
+					}
+					b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
 					}
 
 					err = b.setCurrentChain(ctx)
@@ -205,6 +258,11 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			b.bestBlockHeight = meta.Height
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader)
 		}
+	}
+
+	b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Hash())
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error getting next work required: %v", err)
 	}
 
 	if err = b.SetState(ctx); err != nil {
@@ -295,13 +353,20 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader, b.bestBlockHeight
 }
 
-func (b *BlockAssembler) AddTx(node util.SubtreeNode) error {
+func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
 	b.subtreeProcessor.Add(node)
-	return nil
 }
 
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 	return b.subtreeProcessor.Remove(hash)
+}
+
+func (b *BlockAssembler) DeDuplicateTransactions() {
+	b.subtreeProcessor.DeDuplicateTransactions()
+}
+
+func (b *BlockAssembler) Reset() {
+	b.resetCh <- struct{}{}
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
@@ -335,8 +400,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
 	if len(subtrees) > 0 {
-		height := int(math.Ceil(math.Log2(float64(len(subtrees)))))
-		topTree, err := util.NewTree(height)
+		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, fmt.Errorf("error creating top tree: %w", err)
 		}
@@ -346,12 +410,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		id = topTree.RootHash()
 	}
 
-	// TODO this will need to be calculated but for now we will keep the same difficulty for all blocks
-	// nBits := bestBlockHeader.Bits
-	// TEMP for testing only - moved from blockchain sql store
-
-	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros
-	nBits := model.NewNBitFromString(nBitsString)
+	nBits, err := b.getNextNbits()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var coinbaseMerkleProofBytes [][]byte
 	if len(subtrees) > 0 {
@@ -382,6 +444,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Height:        b.bestBlockHeight + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
+		SubtreeCount:  uint32(len(subtrees)),
 	}
 
 	return miningCandidate, subtrees, nil
@@ -396,12 +459,19 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error getting reorg blocks: %w", err)
 	}
 
+	if len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5 {
+		// large reorg, log it and Reset the block assembler
+		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
+		b.Reset()
+		return nil
+	}
+
 	// now do the reorg in the subtree processor
 	if err = b.subtreeProcessor.Reorg(moveDownBlocks, moveUpBlocks); err != nil {
 		return fmt.Errorf("error doing reorg: %w", err)
 	}
 
-	prometheusBlockAssemblerReorgDuration.Observe(time.Since(startTime).Seconds())
+	prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
 }
@@ -493,4 +563,39 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 	}
 
 	return moveDownBlockHeaders, moveUpBlockHeaders, nil
+}
+
+func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
+
+	now := time.Now()
+	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+
+	thresholdSeconds := 2 * uint32(targetTimePerBlock)
+	randomOffset := rand.Int31n(21) - 10
+
+	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Timestamp
+
+	b.logger.Debugf("timeDifference: %d", timeDifference)
+	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Hash().String())
+
+	if !b.difficultyAdjustment || (b.bestBlockHeight < uint32(b.difficultyAdjustmentWindow)+3) {
+		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
+		return b.defaultMiningNBits, nil
+	} else if timeDifference > thresholdSeconds+uint32(randomOffset) {
+		// If the new block's timestamp is more than 2* 10 minutes then allow mining of a min-difficulty block.
+		b.logger.Debugf("applying special difficulty rule")
+		// set to start difficulty
+		return b.defaultMiningNBits, nil
+	} else if b.currentDifficulty != nil {
+		b.logger.Debugf("setting difficulty to current difficulty")
+		return b.currentDifficulty, nil
+	} else {
+		b.logger.Debugf("setting difficulty to default mining bits")
+		return b.defaultMiningNBits, nil
+	}
+}
+
+func (b *BlockAssembler) DeDuplicate() {
+	// this wall add a call to de-duplicate on the channel, which will run after all other tasks are done
+	b.subtreeProcessor.DeDuplicateTransactions()
 }

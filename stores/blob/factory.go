@@ -3,6 +3,7 @@ package blob
 import (
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,15 +11,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
-	"github.com/bitcoin-sv/ubsv/stores/blob/gcs"
 	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/blob/minio"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
-	"github.com/bitcoin-sv/ubsv/stores/blob/seaweedfs"
-	"github.com/bitcoin-sv/ubsv/stores/blob/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
@@ -43,32 +40,19 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		if err != nil {
 			return nil, fmt.Errorf("error creating badger blob store: %v", err)
 		}
-	case "postgres", "sqlite", "sqlitememory":
-		store, err = sql.New(logger, storeUrl)
-		if err != nil {
-			return nil, fmt.Errorf("error creating sql blob store: %v", err)
-		}
-	case "gcs":
-		store, err = gcs.New(logger, strings.Replace(storeUrl.Path, "/", "", 1))
-		if err != nil {
-			return nil, fmt.Errorf("error creating gcs blob store: %v", err)
-		}
-	case "minio":
-		fallthrough
-	case "minios":
-		store, err = minio.New(logger, storeUrl)
-		if err != nil {
-			return nil, fmt.Errorf("error creating minio blob store: %v", err)
-		}
 	case "s3":
 		store, err = s3.New(logger, storeUrl, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
 		}
-	case "seaweedfs":
-		store, err = seaweedfs.New(logger, storeUrl)
+	case "lustre":
+		// storeUrl is an s3 url
+		// lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3
+		dir := storeUrl.Query().Get("localDir")
+		persistDir := storeUrl.Query().Get("localPersist")
+		store, err = lustre.New(logger, storeUrl, dir, persistDir)
 		if err != nil {
-			return nil, fmt.Errorf("error creating seaweedfs blob store: %v", err)
+			return nil, fmt.Errorf("error creating lustre blob store: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)

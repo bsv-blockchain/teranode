@@ -1,9 +1,12 @@
 package repository
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"strings"
 
@@ -140,7 +143,12 @@ func (r *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash) (
 
 func (r *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	r.logger.Debugf("[Repository] GetBlockByHeight: %d", height)
-	return nil, errors.New("not implemented")
+	block, err := r.BlockchainClient.GetBlockByHeight(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	return block, nil
 }
 
 func (r *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
@@ -174,6 +182,16 @@ func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, 
 	return blockHeaders, heights, nil
 }
 
+func (r *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	r.logger.Debugf("[Repository] GetBlockHeadersFromHeight: %d-%d", height, limit)
+	blockHeaders, metas, err := r.BlockchainClient.GetBlockHeadersFromHeight(ctx, height, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return blockHeaders, metas, nil
+}
+
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
@@ -200,6 +218,39 @@ func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*uti
 	}
 
 	return subtree, nil
+}
+
+// GetSubtreeHead returns the head of the subtree, which only includes the Fees and SizeInBytes
+func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
+	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
+	subtreeBytes, err := r.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error in GetSubtree GetHead method: %w", err)
+	}
+
+	if len(subtreeBytes) != 56 {
+		return nil, 0, ubsverrors.ErrNotFound
+	}
+
+	subtree := &util.Subtree{}
+	buf := bytes.NewBuffer(subtreeBytes)
+
+	// read root hash
+	_, err = chainhash.NewHash(buf.Next(32))
+	if err != nil {
+		return nil, 0, fmt.Errorf("unable to read root hash: %v", err)
+	}
+
+	// read fees
+	subtree.Fees = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read sizeInBytes
+	subtree.SizeInBytes = binary.LittleEndian.Uint64(buf.Next(8))
+
+	// read number of leaves
+	numNodes := binary.LittleEndian.Uint64(buf.Next(8))
+
+	return subtree, int(numNodes), nil
 }
 
 func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {

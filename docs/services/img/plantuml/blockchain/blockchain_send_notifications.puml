@@ -1,0 +1,41 @@
+
+@startuml
+participant "Block Assembly" as Assembly
+participant "Blockchain Client" as Client
+participant "Blockchain Server" as Server
+database "Subscription Store" as Store
+
+alt Notification from Blockchain Server
+
+    Server -> Server: AddBlock()
+    activate Server
+    Server -> Server: Create Notification (MiningOn/Block)
+    Server -> Server: SendNotification()
+    Server -> Store: Notify Subscribers
+    activate Store
+    loop Each Subscriber
+        Store --> Server: Send Notification
+    end
+    deactivate Store
+    deactivate Server
+
+end
+
+alt Notification from Block Assembly through Blockchain Client
+    Assembly -> Client: Request to Send Notification (Subtree)
+    activate Client
+    Client -> Server: SendNotification()
+    activate Server
+    Server -> Store: Notify Subscribers
+    activate Store
+    loop Each Subscriber
+        Store --> Server: Send Notification
+    end
+    deactivate Store
+    deactivate Server
+    deactivate Client
+end
+
+left footer Last Modified On: 24-Jan-2024
+
+@enduml

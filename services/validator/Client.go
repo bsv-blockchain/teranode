@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
@@ -19,8 +20,7 @@ import (
 
 type Client struct {
 	client       validator_api.ValidatorAPIClient
-	frpcClient   *validator_api.Client
-	running      bool
+	running      *atomic.Bool
 	conn         *grpc.ClientConn
 	logger       ulogger.Logger
 	batchCh      chan *validator_api.ValidateTransactionRequest
@@ -59,41 +59,23 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		logger.Fatalf("expecting validator_sendBatchWorkers > 0 when validator_sendBatchSize = %d", sendBatchSize)
 	}
 
+	running := atomic.Bool{}
+	running.Store(true)
+
 	client := &Client{
 		client:       grpcClient,
 		logger:       logger,
-		running:      true,
+		running:      &running,
 		conn:         conn,
 		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
 		batchSize:    sendBatchSize,
 		batchTimeout: sendBatchTimeout,
 	}
 
-	// Connect to experimental fRPC server if configured
-	// fRPC has only been implemented for AddTx / Store
-	client.connectFRPC()
-
 	if sendBatchSize > 0 {
 		for i := 0; i < sendBatchWorkers; i++ {
 			go client.batchWorker(ctx)
 		}
-	}
-
-	if client.frpcClient != nil {
-		/* listen for close channel and reconnect */
-		client.logger.Infof("Listening for close channel on fRPC client")
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					client.logger.Infof("fRPC client context done, closing channel")
-					return
-				case <-client.frpcClient.CloseChannel():
-					client.logger.Infof("fRPC client close channel received, reconnecting...")
-					client.connectFRPC()
-				}
-			}
-		}()
 	}
 
 	return client, nil
@@ -123,23 +105,13 @@ func (c *Client) GetBlockHeight() (uint32, error) {
 
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize == 0 {
-		if c.frpcClient != nil {
 
-			if _, err := c.frpcClient.ValidatorAPI.ValidateTransaction(ctx, &validator_api.ValidatorApiValidateTransactionRequest{
-				TransactionData: tx.ExtendedBytes(),
-			}); err != nil {
-				return err
-			}
-
-		} else {
-
-			if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-				TransactionData: tx.ExtendedBytes(),
-			}); err != nil {
-				return err
-			}
-
+		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
+			TransactionData: tx.ExtendedBytes(),
+		}); err != nil {
+			return err
 		}
+
 	} else {
 
 		/* batch mode */
@@ -175,84 +147,16 @@ func (c *Client) batchWorker(ctx context.Context) {
 }
 
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_api.ValidateTransactionRequest) {
-	if c.frpcClient != nil {
-
-		fBatch := make([]*validator_api.ValidatorApiValidateTransactionRequest, len(batch))
-		for i, req := range batch {
-			fBatch[i] = &validator_api.ValidatorApiValidateTransactionRequest{
-				TransactionData: req.GetTransactionData(),
-			}
-		}
-		txBatch := &validator_api.ValidatorApiValidateTransactionBatchRequest{
-			Transactions: fBatch,
-		}
-
-		resp, err := c.frpcClient.ValidatorAPI.ValidateTransactionBatch(ctx, txBatch)
-		if err != nil {
-			c.logger.Errorf("%v", err)
-			return
-		}
-		if len(resp.Reasons) > 0 {
-			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
-		}
-
-	} else {
-
-		txBatch := &validator_api.ValidateTransactionBatchRequest{
-			Transactions: batch,
-		}
-		resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
-		if err != nil {
-			c.logger.Errorf("%v", err)
-			return
-		}
-		if len(resp.Reasons) > 0 {
-			c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
-		}
-
+	txBatch := &validator_api.ValidateTransactionBatchRequest{
+		Transactions: batch,
 	}
-}
-
-func (c *Client) connectFRPC() {
-	func() {
-		err := recover()
-		if err != nil {
-			c.logger.Errorf("Error connecting to validator fRPC: %s", err)
-		}
-	}()
-
-	validatorFRPCAddress, ok := gocore.Config().Get("validator_frpcAddress")
-	if ok {
-		maxRetries := 5
-		retryInterval := 5 * time.Second
-
-		for i := 0; i < maxRetries; i++ {
-			c.logger.Infof("Attempting to create fRPC connection to validator, attempt %d", i+1)
-
-			client, err := validator_api.NewClient(nil, nil)
-			if err != nil {
-				c.logger.Fatalf("Error creating new fRPC client in validator: %s", err)
-			}
-
-			err = client.Connect(validatorFRPCAddress)
-			if err != nil {
-				c.logger.Infof("Error connecting to fRPC server in validator: %s", err)
-				if i+1 == maxRetries {
-					break
-				}
-				time.Sleep(retryInterval)
-				retryInterval *= 2
-			} else {
-				c.logger.Infof("Connected to validator fRPC server")
-				c.frpcClient = client
-				break
-			}
-		}
-
-		if c.frpcClient == nil {
-			c.logger.Fatalf("Failed to connect to validator fRPC server after %d attempts", maxRetries)
-		}
-
+	resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
+	if err != nil {
+		c.logger.Errorf("%v", err)
+		return
+	}
+	if len(resp.Reasons) > 0 {
+		c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
 	}
 }
 
@@ -262,7 +166,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
-		c.running = false
+		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[Asset] failed to close connection", err)
@@ -272,7 +176,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 	go func() {
 		defer close(ch)
 
-		for c.running {
+		for c.running.Load() {
 			stream, err := c.client.Subscribe(ctx, &validator_api.SubscribeRequest{
 				Source: source,
 			})
@@ -281,7 +185,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Reje
 				continue
 			}
 
-			for c.running {
+			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {

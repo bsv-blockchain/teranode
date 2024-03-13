@@ -8,6 +8,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,26 +30,29 @@ import (
 )
 
 var (
-	version                          string
-	commit                           string
-	counter                          atomic.Int64
-	prometheusUtxoStoreBlasterDelete prometheus.Histogram
-	prometheusUtxoStoreBlasterStore  prometheus.Histogram
-	prometheusUtxoStoreBlasterSpend  prometheus.Histogram
-	workerCount                      int
-	storeType                        string
-	storeFn                          func() (utxo.Interface, error)
+	version string
+	commit  string
+	counter atomic.Int64
+	// prometheusUtxoStoreBlasterDelete prometheus.Histogram
+	prometheusUtxoStoreBlasterStore prometheus.Histogram
+	prometheusUtxoStoreBlasterSpend prometheus.Histogram
+	workerCount                     int
+	storeSpendDelay                 time.Duration
+	storeType                       string
+
+	storeFn   func() (utxo.Interface, error)
+	storeOnce sync.Once
 )
 
 func Init() {
-	prometheusUtxoStoreBlasterDelete = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "utxostore_blaster",
-			Name:      "res_delete",
-			Help:      "Time to delete from utxostore",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
+	// prometheusUtxoStoreBlasterDelete = promauto.NewHistogram(
+	// 	prometheus.HistogramOpts{
+	// 		Namespace: "utxostore_blaster",
+	// 		Name:      "res_delete",
+	// 		Help:      "Time to delete from utxostore",
+	// 		Buckets:   util.MetricsBucketsMilliSeconds,
+	// 	},
+	// )
 	prometheusUtxoStoreBlasterStore = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "utxostore_blaster",
@@ -92,7 +96,18 @@ func Init() {
 
 func Start() {
 	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&storeType, "store", "null", "Set store type (redis|redis-ring|redis-cluster|memory|aerospike|null)")
+	flag.StringVar(&storeType, "store", "null", "Set store type (memory|aerospike|redis|redis-cluster|redis-ring|null)")
+
+	delay := flag.String("storeSpendDelay", "0s", "Set delay between store and spend")
+	if delay != nil {
+		d, err := time.ParseDuration(*delay)
+		if err != nil {
+			panic(err)
+		}
+
+		storeSpendDelay = d
+	}
+
 	flag.Parse()
 
 	logger := ulogger.New("utxostore_blaster")
@@ -100,43 +115,88 @@ func Start() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	password, _ := gocore.Config().Get("redis_password", "TfocK5PCg7")
-
 	switch storeType {
-	case "redis":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisClient(logger, u, password)
-		}
-		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-ring":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisRing(logger, u)
-		}
-		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
-	case "redis-cluster":
-		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return redis.NewRedisCluster(logger, u)
-		}
-		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
 	case "memory":
 		storeFn = func() (utxo.Interface, error) {
 			return memory.New(false), nil
 		}
 		log.Printf("Starting memory utxostore-blaster with %d worker(s)", workerCount)
+
 	case "null":
 		storeFn = func() (utxo.Interface, error) {
 			return nullstore.NewNullStore()
 		}
 		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
+
 	case "aerospike":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_aerospike")
+			store, err = aerospike.New(logger, u)
+		})
+
 		storeFn = func() (utxo.Interface, error) {
-			u, _, _ := gocore.Config().GetURL("utxostore")
-			return aerospike.New(logger, u)
+			<-done // Wait for initialization to complete
+			return store, err
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
+
+	case "redis":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisClient(logger, u)
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
+		}
+		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
+
+	case "redis-cluster":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisCluster(logger, u)
+
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
+		}
+		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
+
+	case "redis-ring":
+		var store utxo.Interface
+		var err error
+		done := make(chan struct{})
+
+		storeOnce.Do(func() {
+			defer close(done)
+			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
+			store, err = redis.NewRedisRing(logger, u)
+		})
+
+		storeFn = func() (utxo.Interface, error) {
+			<-done // Wait for initialization to complete
+			return store, err
+		}
+		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
+
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
 	}
@@ -167,17 +227,17 @@ func worker(logger ulogger.Logger) {
 
 	ctx := context.Background()
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		panic(err)
-	}
-
-	walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	if err != nil {
-		panic(fmt.Errorf("can't create coinbase address: %v", err))
-	}
-
 	for {
+		privateKey, err := bec.NewPrivateKey(bec.S256())
+		if err != nil {
+			panic(err)
+		}
+
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+		if err != nil {
+			panic(fmt.Errorf("can't create coinbase address: %v", err))
+		}
+
 		btTx := bt.NewTx()
 		_ = btTx.PayToAddress(walletAddress.AddressString, 10000)
 
@@ -194,18 +254,21 @@ func worker(logger ulogger.Logger) {
 		}
 
 		// Delete the txid
-		timeStart := time.Now()
-		if err = utxostore.Delete(ctx, btTx); err != nil {
-			logger.Fatalf("Failed to Delete %s: %v", btTx.TxIDChainHash().String(), err)
-		}
-		prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))
+		// timeStart := time.Now()
+		// if err = utxostore.Delete(ctx, btTx); err != nil {
+		// 	logger.Fatalf("Failed to Delete %s: %v", btTx.TxIDChainHash().String(), err)
+		// }
+		// prometheusUtxoStoreBlasterDelete.Observe(float64(time.Since(timeStart).Microseconds()))
 
 		// Store the txid
-		timeStart = time.Now()
+		timeStart := time.Now()
 		if err = utxostore.Store(ctx, btTx); err != nil {
 			logger.Fatalf("Failed to Store %s: %v", btTx.TxIDChainHash().String(), err)
 		}
 		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))
+
+		time.Sleep(storeSpendDelay)
+
 		// Spend the txid
 		timeStart = time.Now()
 		if err = utxostore.Spend(ctx, []*utxo.Spend{spend}); err != nil {

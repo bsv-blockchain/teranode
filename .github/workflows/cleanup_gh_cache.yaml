@@ -1,0 +1,30 @@
+name: cleanup-gh-cache
+on:
+  schedule:
+    - cron: '0 22 * * *'
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup
+        run: |
+          echo "Getting list of cache keys"
+          echo "---------------------------------------"
+          cachekeys=$(gh cache -R $REPO list -O asc -S created_at -L 100 --json id,createdAt)
+          oldkeys=$(echo $cachekeys | jq --arg DAYS "$DAYS" 'def daysAgo(days): (now | floor) - (days * 86400); .[] | select(.createdAt | .[0:19] +"Z" | fromdateiso8601 < daysAgo($DAYS | tonumber)).id')
+          echo "Removing expired caches"
+          echo "---------------------------------------"
+          set +e
+          COUNTER=0
+          for cachekey in `echo $oldkeys`
+          do
+            gh cache -R $REPO delete $cachekey
+            COUNTER=$((COUNTER + 1))
+          done
+          echo "Removed $COUNTER expired caches"
+          echo "---------------------------------------"
+          echo "Done"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DAYS: 7

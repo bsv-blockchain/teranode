@@ -3,26 +3,24 @@ package utxo
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/utxo/utxostore_api"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
 
-func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) utxostore_api.Status {
-	status := utxostore_api.Status_OK
+func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) Status {
+	status := Status_OK
 	if spendingTxId != nil {
-		status = utxostore_api.Status_SPENT
+		status = Status_SPENT
 	} else if lockTime > 0 {
 		if lockTime < 500000000 && lockTime > blockHeight {
-			status = utxostore_api.Status_LOCKED
+			status = Status_LOCKED
 		} else if lockTime >= 500000000 && lockTime > uint32(time.Now().Unix()) {
 			// TODO this should be a check for the median time past for the last 11 blocks
-			status = utxostore_api.Status_LOCKED
+			status = Status_LOCKED
 		}
 	}
 
@@ -67,12 +65,10 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 }
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
-func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
-	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
-	utxoHashesMu := sync.Mutex{}
+func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
+	utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
 
 	g := errgroup.Group{}
-
 	for i, output := range tx.Outputs {
 		if output.Satoshis > 0 {
 			i := i
@@ -83,10 +79,7 @@ func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
 					return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
 				}
 
-				utxoHashesMu.Lock()
-				utxoHashes = append(utxoHashes, utxoHash)
-				utxoHashesMu.Unlock()
-
+				utxoHashes[i] = *utxoHash
 				return nil
 			})
 		}

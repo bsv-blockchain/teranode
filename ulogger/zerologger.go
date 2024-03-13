@@ -13,6 +13,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
+	"golang.org/x/term"
 )
 
 type ZLoggerWrapper struct {
@@ -40,9 +41,8 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 		}
 
 		if err = sentry.Init(sentry.ClientOptions{
-			Dsn:        sentryDsn,
-			ServerName: serviceName,
-
+			Dsn:              sentryDsn,
+			ServerName:       serviceName,
 			TracesSampleRate: tracesSampleRate,
 		}); err != nil {
 			log.Fatalf("sentry.Init: %s", err)
@@ -70,11 +70,16 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 }
 
 func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
-	output := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+	output := zerolog.ConsoleWriter{
+		Out:        os.Stdout,
+		NoColor:    !isTerminal,
+		TimeFormat: time.RFC3339,
+	}
 
 	output.FormatTimestamp = func(i interface{}) string {
 		parse, _ := time.Parse(time.RFC3339, i.(string))
-		return parse.Format("15:04:05")
+		return parse.Format(time.RFC3339)
 	}
 
 	output.FormatLevel = func(i interface{}) string {
@@ -83,19 +88,19 @@ func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
 		// colorize the levels in same way as gocore
 		switch i {
 		case "debug":
-			l = colorize(l, colorBlue, false)
+			l = colorize(l, colorBlue, !isTerminal)
 		case "info":
-			l = colorize(l, colorGreen, false)
+			l = colorize(l, colorGreen, !isTerminal)
 		case "warn":
-			l = colorize(l, colorYellow, false)
+			l = colorize(l, colorYellow, !isTerminal)
 		case "error":
-			l = colorize(l, colorRed, false)
+			l = colorize(l, colorRed, !isTerminal)
 		case "fatal":
-			l = colorize(l, colorRed, false)
+			l = colorize(l, colorRed, !isTerminal)
 		case "panic":
-			l = colorize(l, colorRed, false)
+			l = colorize(l, colorRed, !isTerminal)
 		default:
-			l = colorize(l, colorWhite, false)
+			l = colorize(l, colorWhite, !isTerminal)
 		}
 
 		return fmt.Sprintf("| %s|", l)
@@ -141,7 +146,7 @@ func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
 				}
 			}
 
-			c = colorize(fmt.Sprintf("%-32s", c), colorBold, false)
+			c = colorize(fmt.Sprintf("%-32s", c), colorBold, !isTerminal)
 		}
 		return c
 	}

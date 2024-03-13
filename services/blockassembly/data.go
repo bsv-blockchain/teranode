@@ -3,16 +3,16 @@ package blockassembly
 import (
 	"encoding/binary"
 
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Data struct {
-	TxIDChainHash *chainhash.Hash
-	Fee           uint64
-	Size          uint64
-	LockTime      uint32
-	UtxoHashes    []*chainhash.Hash
+	TxIDChainHash  *chainhash.Hash
+	Fee            uint64
+	Size           uint64
+	LockTime       uint32
+	UtxoHashes     []chainhash.Hash
+	ParentTxHashes []chainhash.Hash
 }
 
 func NewFromBytes(bytes []byte) (*Data, error) {
@@ -32,21 +32,31 @@ func NewFromBytes(bytes []byte) (*Data, error) {
 	d.LockTime = binary.LittleEndian.Uint32(bytes[48:52])
 
 	// read varint as utxoHashes length
-	varint, bytesRead := bt.NewVarIntFromBytes(bytes[52:])
+	utxoLen := binary.LittleEndian.Uint32(bytes[52:56])
 
 	// read the utxoHashes
-	d.UtxoHashes = make([]*chainhash.Hash, varint)
-	for i := 0; i < int(varint); i++ {
-		h := &chainhash.Hash{}
-		copy(h[:], bytes[52+bytesRead+(i*32):])
-		d.UtxoHashes[i] = h
+	pos := 56
+	d.UtxoHashes = make([]chainhash.Hash, utxoLen)
+	for i := 0; i < int(utxoLen); i++ {
+		d.UtxoHashes[i] = chainhash.Hash(bytes[pos : pos+chainhash.HashSize])
+		pos += chainhash.HashSize
+	}
+
+	parenTxLen := binary.LittleEndian.Uint32(bytes[pos : pos+4])
+	pos += 4
+
+	// read the utxoHashes
+	d.ParentTxHashes = make([]chainhash.Hash, parenTxLen)
+	for i := 0; i < int(parenTxLen); i++ {
+		d.ParentTxHashes[i] = chainhash.Hash(bytes[pos : pos+chainhash.HashSize])
+		pos += chainhash.HashSize
 	}
 
 	return d, nil
 }
 
 func (d *Data) Bytes() []byte {
-	bytes := make([]byte, 0)
+	bytes := make([]byte, 0, 256)
 
 	// write txIDChainHash
 	bytes = append(bytes, d.TxIDChainHash[:]...)
@@ -65,11 +75,21 @@ func (d *Data) Bytes() []byte {
 	binary.LittleEndian.PutUint32(b32, d.LockTime)
 	bytes = append(bytes, b32...)
 
-	// write length in varint
-	bytes = append(bytes, bt.VarInt(uint64(len(d.UtxoHashes))).Bytes()...)
+	// write length of utxo hashes
+	binary.LittleEndian.PutUint32(b32, uint32(len(d.UtxoHashes)))
+	bytes = append(bytes, b32...)
 
 	// write utxoHashes
 	for _, h := range d.UtxoHashes {
+		bytes = append(bytes, h[:]...)
+	}
+
+	// write length of parent tx hashes
+	binary.LittleEndian.PutUint32(b32, uint32(len(d.ParentTxHashes)))
+	bytes = append(bytes, b32...)
+
+	// write parentTxHashes
+	for _, h := range d.ParentTxHashes {
 		bytes = append(bytes, h[:]...)
 	}
 

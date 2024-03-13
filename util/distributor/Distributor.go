@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -185,10 +186,12 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		stat.AddTime(start)
 		span.Finish()
 	}()
+
+	txBytes := tx.ExtendedBytes()
+
 	if d.useQuic {
 		var err error
 
-		txBytes := tx.ExtendedBytes()
 		// Write the length of the transaction to buffer
 		txLength := uint32(len(txBytes))
 		var buf bytes.Buffer
@@ -215,7 +218,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		}
 		time.Sleep(time.Duration(d.waitMsBetweenTxs) * time.Millisecond) //
 		return nil, nil
-	} else {
+
+	} else { // use grpc
+
 		var wg sync.WaitGroup
 
 		responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
@@ -238,9 +243,13 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				backoff := d.backoff
 
 				for {
-					ctx1, cancel := context.WithTimeout(ctx1, 5*time.Second)
-					_, err := p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
-						Tx: tx.ExtendedBytes(),
+					timeout, err, _ := gocore.Config().GetDuration("distributor_timeout", 30*time.Second)
+					if err != nil {
+						d.logger.Fatalf("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout : %v", err)
+					}
+					ctx1, cancel := context.WithTimeout(ctx1, timeout)
+					_, err = p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
+						Tx: txBytes,
 					})
 					cancel()
 
@@ -252,7 +261,18 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						}
 						break
 					} else {
-						d.logger.Debugf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
+						if errors.Is(err, propagation.ErrBadRequest) {
+							// There is no point retrying a bad transaction
+							responseWrapperCh <- &ResponseWrapper{
+								Addr:     a,
+								Retries:  0,
+								Duration: time.Since(start),
+								Error:    err,
+							}
+							break
+						}
+
+						d.logger.Errorf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
 						if retries < d.attempts {
 							retries++
 							time.Sleep(backoff)
@@ -297,7 +317,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 		if failurePercentage > float32(d.failureTolerance) {
-			return responses, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage)
+			return responses, errors.Join(propagation.ErrInternal, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage))
 		}
 
 		return responses, nil

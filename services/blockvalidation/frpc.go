@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -39,6 +38,11 @@ func (f *fRPC_BlockValidation) Get(ctx context.Context, request *blockvalidation
 	panic("implement me")
 }
 
+func (f *fRPC_BlockValidation) Exists(ctx context.Context, request *blockvalidation_api.BlockvalidationApiExistsSubtreeRequest) (*blockvalidation_api.BlockvalidationApiExistsSubtreeResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetTxMetaRequest) (*blockvalidation_api.BlockvalidationApiSetTxMetaResponse, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
 	defer func() {
@@ -47,7 +51,8 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 
 	prometheusBlockValidationSetTXMetaCacheFrpc.Inc()
 	go func(data [][]byte) {
-		hashes := make(map[chainhash.Hash]*txmeta_store.Data)
+		keys := make([][]byte, 0)
+		values := make([][]byte, 0)
 		for _, meta := range data {
 			if len(meta) < 32 {
 				f.logger.Errorf("meta data is too short: %v", meta)
@@ -56,18 +61,11 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
-
-			txMetaData, err := txmeta_store.NewMetaDataFromBytes(meta[32:])
-			if err != nil {
-				f.logger.Errorf("failed to create tx meta data from bytes: %v", err)
-				return
-			}
-
-			txMetaData.Tx = nil
-			hashes[hash] = txMetaData
+			keys = append(keys, hash[:])
+			values = append(values, meta[32:])
 		}
 
-		if err := f.blockValidation.SetTxMetaCacheMulti(ctx, hashes); err != nil {
+		if err := f.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
 			f.logger.Errorf("failed to set tx meta data: %v", err)
 		}
 	}(request.Data)

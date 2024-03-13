@@ -1,34 +1,20 @@
 import RenderLink from './renderers/render-link/index.svelte'
 import RenderSpan from './renderers/render-span/index.svelte'
-import RenderStatusText from './renderers/render-status-text/index.svelte'
-import {
-  dataSize,
-  formatFilename,
-  formatDate,
-  formatNum,
-  formatSatoshi,
-  getTransactionHashUrl,
-  formatTransactionHash,
-  getWalletUrl,
-} from '../../utils/format'
+import { dataSize, formatDate, formatNum, formatSatoshi } from '../../utils/format'
 import { valueSet } from '../../utils/types'
 
 export const ColType = {
   string: 'string',
   number: 'number',
   dateStr: 'dateStr',
-  wallet: 'wallet',
   boolean: 'boolean',
   phone: 'phone',
   email: 'email',
   url: 'url',
   satoshi: 'satoshi',
-  transactionhash: 'transactionhash',
   percent: 'percent',
   terraHash: 'terraHash',
-  apiKey: 'apiKey',
   dataSize: 'dataSize',
-  filename: 'filename',
 }
 
 export const FilterType = {
@@ -79,9 +65,6 @@ const defaultColTypeRenderers = {
   [ColType.string]: (idField, item, colId) => ({
     value: str(item[colId]),
   }),
-  [ColType.filename]: (idField, item, colId) => ({
-    value: formatFilename(item[colId]),
-  }),
   [ColType.dataSize]: (idField, item, colId) => ({
     component: RenderSpan,
     props: { value: str(dataSize(item[colId])), className: 'num' },
@@ -97,33 +80,8 @@ const defaultColTypeRenderers = {
       className: 'num',
     },
   }),
-  [ColType.transactionhash]: (idField, item, colId) => ({
-    component: item[colId] ? RenderLink : null,
-    props: {
-      href: getTransactionHashUrl(str(item[colId])),
-      text: str(formatTransactionHash(item[colId])),
-      className: 'transactionhash',
-    },
-    value: '',
-  }),
-  [ColType.apiKey]: (idField, item, colId) => ({
-    component: item[colId] ? RenderStatusText : null,
-    props: {
-      value: item[colId],
-    },
-    value: '',
-  }),
   [ColType.dateStr]: (idField, item, colId) => ({
     value: item[colId] ? formatDate(item[colId]) : '',
-  }),
-  [ColType.wallet]: (idField, item, colId) => ({
-    component: item[colId] ? RenderLink : null,
-    props: {
-      href: getWalletUrl(str(item[colId])),
-      text: str(item[colId]),
-      className: 'wallet',
-    },
-    value: '',
   }),
   [ColType.boolean]: (idField, item, colId) => ({
     component: RenderSpan,
@@ -182,7 +140,9 @@ export const getDisplay = (renderCells, renderTypes, colDef, idField, item) => {
     ? renderCells[colDef.id](idField, item, colDef.id)
     : renderTypes && renderTypes[colDef.type]
       ? renderTypes[colDef.type](idField, item, colDef.id)
-      : defaultColTypeRenderers[colDef.type]
-        ? defaultColTypeRenderers[colDef.type](idField, item, colDef.id)
-        : { value: item[colDef.id] }
+      : defaultColTypeRenderers[colDef.format]
+        ? defaultColTypeRenderers[colDef.format](idField, item, colDef.id)
+        : defaultColTypeRenderers[colDef.type]
+          ? defaultColTypeRenderers[colDef.type](idField, item, colDef.id)
+          : { value: item[colDef.id] }
 }

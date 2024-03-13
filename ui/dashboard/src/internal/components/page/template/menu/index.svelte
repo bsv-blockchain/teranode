@@ -7,20 +7,19 @@
   import Logo from '$lib/components/logo/index.svelte'
   import Menu from '$lib/components/navigation/menu/index.svelte'
   import Toolbar from '$internal/components/toolbar/index.svelte'
+  import Footer from '$internal/components/footer/index.svelte'
+  // import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
 
   export let testId: string | undefined | null = null
   export let showGlobalToolbar = true
+  export let showTools = true
+  export let showWarning = true
 
-  let links: { path: string; label: string; selected?: boolean }[] = []
+  import i18n from '$internal/i18n'
 
-  $: {
-    links = []
-    if ($pageLinks) {
-      links = $pageLinks.items
-    }
-  }
+  $: t = $i18n.t
 
   function onLogo() {
     goto('/')
@@ -33,6 +32,10 @@
       goto(item.path)
     } else {
       window.open(item.path, '_blank')
+    }
+
+    if (showMobileNavbar) {
+      showMenu = false
     }
   }
 
@@ -67,10 +70,12 @@
   function onDrawerClose(e) {
     showMenu = false
   }
+
+  $: menuKey = JSON.stringify($pageLinks.items)
 </script>
 
 {#if showMobileNavbar}
-  <MobileNavbar>
+  <MobileNavbar offsetTop={'var(--banner-height, 0px)'}>
     <div class="navbar-content">
       <div class="logo-container" on:click={onLogo}>
         <Logo name="teranode" height={28} />
@@ -83,18 +88,24 @@
   </MobileNavbar>
 {/if}
 
+<!-- <Banner text={t('global.warning')} /> -->
+
 <div
   class="content-container"
   data-test-id={testId}
-  style:--offset-top={showMobileNavbar ? `var(--header-height)` : '0'}
+  style:--offset-top={showMobileNavbar
+    ? `calc(var(--header-height) + var(--banner-height, 0px))`
+    : 'var(--banner-height, 0px)'}
   style:--offset-left={showMobileNavbar ? '0px' : `${$contentLeft}px`}
 >
   <ContentMenu>
     {#if showGlobalToolbar}
-      <Toolbar style="padding-bottom: 13px;" />
+      <Toolbar style="padding-bottom: 13px;" {showTools} {showWarning} />
     {/if}
     <slot />
   </ContentMenu>
+
+  <Footer />
 </div>
 
 {#if showDrawer}
@@ -103,6 +114,7 @@
     enableCollapse={!showMobileNavbar}
     minWidth={60}
     maxWidth={212}
+    offsetTop={'var(--banner-height, 0px)'}
     collapsed={!expanded}
     showCover={showMobileNavbar}
     showHeader={!showMobileNavbar}
@@ -117,12 +129,14 @@
         <Logo name="teranode-text" height={14} />
       {/if}
     </div>
-    <Menu
-      collapsed={!expanded}
-      idField="path"
-      data={links}
-      on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
-    />
+    {#key menuKey}
+      <Menu
+        collapsed={!expanded}
+        idField="path"
+        data={$pageLinks.items}
+        on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
+      />
+    {/key}
   </Drawer>
 {/if}
 
@@ -148,10 +162,7 @@
     width: calc(100% - var(--offset-left));
     overflow-x: hidden;
     overflow-y: auto;
-    transition:
-      top 0.2s linear,
-      left 0.2s linear,
-      width 0.2s linear;
+    transition: top var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
   }
 
   .logo-container {

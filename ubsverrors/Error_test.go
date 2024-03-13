@@ -1,42 +1,29 @@
 package ubsverrors_test
 
 import (
-	"io"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-var (
-	ErrOne   = ubsverrors.New("ErrorOne")
-	ErrTwo   = ubsverrors.New("ErrorTwo")
-	ErrThree = ubsverrors.New("ErrorThree")
-)
+func TestErr(t *testing.T) {
+	err := ubsverrors.New(0, "test")
+	t.Log(err)
 
-func One() error {
-	if err := Two(); err != nil {
-		return ubsverrors.Wrap(ErrOne, err)
-	}
-	return nil
 }
 
-func Two() error {
-	if err := Three(); err != nil {
-		return ubsverrors.Wrap(ErrTwo, err)
-	}
-	return nil
-}
+func TestErrorWrapping(t *testing.T) {
+	ErrConst := errors.New("const")
 
-func Three() error {
-	return ubsverrors.Wrap(ErrThree, ubsverrors.Wrap(io.EOF, io.ErrClosedPipe))
-}
+	err1 := fmt.Errorf("level 1: %w", ErrConst)
+	assert.Equal(t, "level 1: const", err1.Error())
+	assert.ErrorIs(t, err1, ErrConst)
 
-func TestWrap(t *testing.T) {
-	err := One()
-	require.Error(t, err)
+	err2 := ubsverrors.New(0, "test", ErrConst)
+	assert.Equal(t, "0: test: const", err2.Error())
+	assert.ErrorIs(t, err2, ErrConst)
 
-	assert.Equal(t, "ErrorOne: ErrorTwo: ErrorThree: EOF: io: read/write on closed pipe", err.Error())
-	assert.ErrorIs(t, err, ErrOne)
 }

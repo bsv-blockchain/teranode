@@ -2,6 +2,7 @@ package http_impl
 
 import (
 	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,8 +16,9 @@ import (
 )
 
 func (h *HTTP) GetTransactions() func(c echo.Context) error {
-	nrTxAdded := 0
 	return func(c echo.Context) error {
+		nrTxAdded := 0
+
 		start := gocore.CurrentTime()
 		defer func() {
 			AssetStat.NewStat("GetTransactions_http").AddTime(start)
@@ -51,7 +53,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			g.Go(func() error {
 				b, err := h.repository.GetTransaction(gCtx, &hash)
 				if err != nil {
-					if strings.HasSuffix(err.Error(), " not found") {
+					if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 						h.logger.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
 						return echo.NewHTTPError(http.StatusNotFound, err.Error())
 					} else {

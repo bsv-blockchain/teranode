@@ -3,18 +3,21 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Shopify/sarama"
-	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/p2p"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+
+	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/services/propagation"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	"github.com/libsv/go-bk/bec"
@@ -29,7 +32,9 @@ import (
 var (
 	prometheusWorkers               prometheus.Gauge
 	prometheusProcessedTransactions prometheus.Counter
+	prometheusTransactionsRetry     prometheus.Counter
 	prometheusInvalidTransactions   prometheus.Counter
+	prometheusInternalErrors        prometheus.Counter
 	prometheusTransactionDuration   prometheus.Histogram
 	prometheusTransactionSize       prometheus.Histogram
 	prometheusWorkerErrors          *prometheus.CounterVec
@@ -47,7 +52,15 @@ const (
 	ContextRetry
 )
 
-func init() {
+var (
+	prometheusMetricsInitOnce sync.Once
+)
+
+func initPrometheusMetrics() {
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
+
+func _initPrometheusMetrics() {
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "tx_blaster_workers",
@@ -60,10 +73,22 @@ func init() {
 			Help: "Number of transactions processed by the tx blaster",
 		},
 	)
+	prometheusTransactionsRetry = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_retry_transactions",
+			Help: "Number of transactions retried by the tx blaster",
+		},
+	)
 	prometheusInvalidTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "tx_blaster_invalid_transactions",
 			Help: "Number of transactions found invalid by the tx blaster",
+		},
+	)
+	prometheusInternalErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tx_blaster_internal_server_errors",
+			Help: "Number of transactions found failing at server end",
 		},
 	)
 	prometheusTransactionDuration = promauto.NewHistogram(
@@ -112,7 +137,7 @@ type Worker struct {
 	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributors      []*distributor.Distributor
-	kafkaProducer     sarama.SyncProducer
+	kafkaProducer     util.KafkaProducerI
 	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
 	ipv6MulticastChan chan Ipv6MulticastMsg
@@ -134,7 +159,7 @@ func NewWorker(
 	iterations int,
 	coinbaseClient *coinbase.Client,
 	txDistributors []*distributor.Distributor,
-	kafkaProducer sarama.SyncProducer,
+	kafkaProducer util.KafkaProducerI,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,
@@ -144,6 +169,7 @@ func NewWorker(
 	globalStartTime *time.Time,
 	topic *pubsub.Topic,
 ) (*Worker, error) {
+	initPrometheusMetrics()
 
 	// Generate a random private key
 	privateKey, err := bec.NewPrivateKey(bec.S256())
@@ -192,8 +218,7 @@ func NewWorker(
 }
 
 func (w *Worker) Init(ctx context.Context) (err error) {
-	timeStart := time.Now()
-	w.startTime = timeStart
+	w.startTime = time.Now()
 
 	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString, true)
 	if err != nil {
@@ -201,9 +226,30 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 	}
 
 	w.sentTxCache.Add(tx.TxIDChainHash().String())
-	_, err = w.distributors[0].SendTransaction(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
+
+	for outerRetry := 0; outerRetry < 3; outerRetry++ {
+		responses, err := w.distributors[rand.Intn(len(w.distributors))].SendTransaction(ctx, tx)
+		if err == nil {
+			break
+		}
+
+		if errors.Is(err, propagation.ErrBadRequest) {
+			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
+		}
+
+		// Go through each response and check for ErrBadRequest errors
+		for _, response := range responses {
+			if errors.Is(response.Error, propagation.ErrBadRequest) {
+				return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), response.Error)
+			}
+		}
+
+		if outerRetry == 2 { // Last retry
+			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
+		}
+
+		// Retry in 5 seconds
+		time.Sleep(5 * time.Second)
 	}
 
 	w.logger.Debugf(" \U0001fa99  Got tx from faucet txid:%s with %d outputs", tx.TxIDChainHash().String(), len(tx.Outputs))
@@ -234,8 +280,6 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 
 	var utxo *bt.UTXO
 	var tx *bt.Tx
-	var previousUtxo *bt.UTXO
-	var retries int
 	var counterLoad uint64
 	var txPs float64
 	var ts float64
@@ -265,7 +309,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
 				if w.sentTxCache.Contains(rejectedTxMsg.TxId) {
 					w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
-					// use error channel to kill worker
+					// TODO (I think) use error channel to kill worker
 					return
 				}
 			}
@@ -278,39 +322,30 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			return ctx.Err()
 
 		case utxo = <-w.utxoChan:
-			tx, err = w.sendTransactionFromUtxo(ctx, utxo)
-			if err != nil {
+
+			// Even though the sendTransactionFromUtxo function retries, we still want to retry
+			// this transaction a few times before giving up in case a subtree has been processed
+			// or a propagation error has been fixed.
+			for outerRetry := 0; outerRetry < 3; outerRetry++ {
+				tx, err = w.sendTransactionFromUtxo(ctx, utxo)
+				if err == nil {
+					break
+				}
+
 				w.logger.Errorf("error sending transaction: %v", err)
-				// resend parent and retry transaction
-				if previousUtxo != nil {
-					retries = 0
-					for {
-						w.logger.Infof("resending parent transaction: %s", previousUtxo.TxIDHash.String())
-						_, err = w.sendTransactionFromUtxo(ctx, previousUtxo)
-						if err == nil {
-							// parent was re-sent, re-send this transaction
-							_, err = w.sendTransactionFromUtxo(ctx, utxo)
-							if err != nil {
-								w.logger.Errorf("error resending parent transaction: %v", err)
-								if retries > 3 {
-									// return kills the worker
-									return err
-								}
-							}
-							break
-						} else {
-							w.logger.Errorf("error resending parent transaction: %v", err)
-							if retries > 3 {
-								// return kills the worker
-								return err
-							}
-						}
-						retries++
-						time.Sleep(1 * time.Second)
-					}
-				} else {
+
+				if errors.Is(err, propagation.ErrBadRequest) {
+					// There is no point retrying a bad transaction
 					return err
 				}
+
+				prometheusTransactionsRetry.Inc()
+				time.Sleep(5 * time.Second)
+			}
+
+			if err != nil {
+				// Even after retries, the transaction failed
+				return err
 			}
 
 			counterLoad = counter.Add(1)
@@ -337,17 +372,16 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			}
 
 			w.utxoChan <- btUtxo
-			previousUtxo = btUtxo
 
 			if w.rateLimiter != nil {
 				_ = w.rateLimiter.Wait(ctx)
 			}
+
 		}
 
 		if w.iterations >= 0 && i+1 >= w.iterations {
 			return nil // Return nil to exit the worker after the specified iterations
 		}
-
 	}
 }
 
@@ -374,10 +408,30 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 
 	// select 1 distributor at random
 	d := w.distributors[rand.Intn(len(w.distributors))]
-	if _, err = d.SendTransaction(ctx, tx); err != nil {
-		// return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
-		utxoHash, _ := util.UTXOHashFromInput(tx.Inputs[0])
-		w.logger.Fatalf("error sending transaction: #%d txId: %s parentTxId: %s vout: %s hash: %s", counter.Load(), tx.TxIDChainHash().String(), utxo.TxIDHash.String(), utxo.Vout, utxoHash.String())
+	if responses, err := d.SendTransaction(ctx, tx); err != nil {
+		if errors.Is(err, propagation.ErrBadRequest) {
+			prometheusInvalidTransactions.Inc()
+		} else {
+			// Go through each response and check for ErrBadRequest errors
+			for _, response := range responses {
+				if errors.Is(response.Error, propagation.ErrBadRequest) {
+					prometheusInvalidTransactions.Inc()
+				}
+			}
+		}
+
+		if errors.Is(err, propagation.ErrInternal) {
+			prometheusInternalErrors.Inc()
+		} else {
+			// Go through each response and check for ErrBadRequest errors
+			for _, response := range responses {
+				if errors.Is(response.Error, propagation.ErrInternal) {
+					prometheusInternalErrors.Inc()
+				}
+			}
+		}
+
+		return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
 	}
 
 	return tx, nil
