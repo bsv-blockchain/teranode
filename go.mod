@@ -268,7 +268,7 @@ require (
 )
 
 require (
-	github.com/getsentry/sentry-go v0.24.1
+	github.com/getsentry/sentry-go v0.27.0
 	github.com/go-zeromq/zmq4 v0.15.0 // indirect
 	github.com/labstack/echo/v4 v4.10.0
 	github.com/labstack/gommon v0.4.0
