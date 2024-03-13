@@ -588,8 +588,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			err = u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0)
-			if err != nil {
+			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0); err != nil {
 				return errors.Join(errors.New("failed to update subtree TTL"), err)
 			}
 			return nil

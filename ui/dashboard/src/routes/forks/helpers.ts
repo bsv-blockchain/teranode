@@ -4,10 +4,10 @@ import type {TreeLayout} from "d3-hierarchy";
 function treeBoxes(selector, jsonData)
 {
     const blue = '#337ab7',
-        green = '#5cb85c',
-        yellow = '#f0ad4e',
+        green = '#3b763b',
+        yellow = '#9d742e',
         // blueText = '#4ab1eb',
-        purple = '#9467bd';
+        purple = '#693c83';
 
     const margin = {
             top : 0,
@@ -61,20 +61,24 @@ function treeBoxes(selector, jsonData)
         //     return d.children;
         // });
 
+
+        const url = new URL(document.location.href);
+        const currentMiner = url.hostname.split('.')[0];
+
         // Dynamically set the height of the main svg container
         // breadthFirstTraversal returns the max number of node on a same level
         // and colors the nodes
         let maxDepth = 0;
-        const maxTreeWidth = breadthFirstTraversal(root.children, function(currentLevel) {
+        const maxTreeWidth = breadthFirstTraversal([root], function(currentLevel) {
             maxDepth++;
-            currentLevel.forEach(function(node) {
-                if (node.type == 'type1')
+            currentLevel.forEach(function(node: any) {
+                if (!node.data?.miner || node.data?.miner?.match(currentMiner))
                     node.color = blue;
-                if (node.type == 'type2')
-                    node.color = green;
-                if (node.type == 'type3')
+                if (node.data?.miner?.match("m1"))
                     node.color = yellow;
-                if (node.type == 'type4')
+                if (node.data?.miner?.match("m2"))
+                    node.color = green;
+                if (node.data?.miner?.match("m3"))
                     node.color = purple;
             });
         });
@@ -132,7 +136,7 @@ function treeBoxes(selector, jsonData)
         const links = tree(root).links();
 
         // Check if two nodes are in collision on the ordinates axe and move them
-        breadthFirstTraversal(root.children, collision);
+        breadthFirstTraversal([root], collision);
         // Normalize for fixed-depth
         nodes.forEach(function(d) {
             d.y = d.depth * (rectNode.width * 1.5);
@@ -183,12 +187,28 @@ function treeBoxes(selector, jsonData)
                     : (rectNode.height - rectNode.textMargin * 2)
             })
             .append('xhtml').html(function(d) {
+                // get the main domain from the url of the form http://m2.scaling.ubsv.dev/api/v1
+                let domain = d.data.miner
+                if (domain) {
+                    try {
+                        const url = new URL(d.data.miner);
+                        domain = url.hostname.split('.')[0];
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+                const date = new Date(d.data.timestamp * 1000);
+
+                // replace the hash in the url with the current hash
+                //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
+
                 return '<div style="width: '
                     + (rectNode.width - rectNode.textMargin * 2) + 'px; height: '
-                    + (rectNode.height - rectNode.textMargin * 2) + 'px;" class="node-text wordwrap">'
+                    + (rectNode.height - rectNode.textMargin * 2) + 'px;" class="node-text wordwrap" >'
                     + '<b>Height: </b>' + d.data.height + '<br>'
-                    + '<b>Miner: </b>' + (d.data.miner || 'local') + '<br>'
-                    + '<b>' + d.data.hash + '</b><br><br>'
+                    + '<b>Miner: </b>' + (domain || 'local') + ' (' + date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ')<br>'
+                    //+ '<b><a href="' + link + '">' + d.data.hash + '</a></b><br><br>'
+                    + d.data.hash + '<br><br>'
                     + '</div>';
             })
             .on('mouseover', function(d: any) {
@@ -200,6 +220,14 @@ function treeBoxes(selector, jsonData)
                 const node = d3.select('#nodeInfoID' + d.id)
                 node.style('visibility', 'hidden');
                 node.style('visibility', 'hidden');
+            })
+            .on('dblclick', function(e: any) {
+                const d = e.currentTarget?.__data__;
+                if (d) {
+                    const url = new URL(document.location.href);
+                    url.searchParams.set('hash', d.data.hash);
+                    window.open(url.toString(), "_self");
+                }
             });
 
         nodeEnterTooltip.append("rect")
@@ -467,6 +495,7 @@ function treeBoxes(selector, jsonData)
             func(currentLevel);
             return Math.max(max, currentLevel.length);
         }
+
         return 0;
     }
 

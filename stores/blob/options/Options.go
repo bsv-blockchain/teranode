@@ -8,6 +8,7 @@ type Options func(s *SetOptions)
 
 type SetOptions struct {
 	TTL             time.Duration
+	Filename        string
 	Extension       string
 	SubDirectory    string
 	PrefixDirectory int
@@ -44,5 +45,11 @@ func WithSubDirectory(subDirectory string) Options {
 func WithPrefixDirectory(numberOfCharsInPrefix int) Options {
 	return func(s *SetOptions) {
 		s.PrefixDirectory = numberOfCharsInPrefix
+	}
+}
+
+func WithFileName(name string) Options {
+	return func(s *SetOptions) {
+		s.Filename = name
 	}
 }

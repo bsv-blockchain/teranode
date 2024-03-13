@@ -278,6 +278,8 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 		TxCount:     resp.TxCount,
 		SizeInBytes: resp.SizeInBytes,
 		Miner:       resp.Miner,
+		BlockTime:   resp.BlockTime,
+		Timestamp:   resp.Timestamp,
 	}
 
 	return header, meta, nil
@@ -302,6 +304,8 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		TxCount:     resp.TxCount,
 		SizeInBytes: resp.SizeInBytes,
 		Miner:       resp.Miner,
+		BlockTime:   resp.BlockTime,
+		Timestamp:   resp.Timestamp,
 	}
 
 	return header, meta, nil

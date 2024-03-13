@@ -59,9 +59,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 		if err != nil {
 			return nil, err
 		}
-		if d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:]); err != nil {
-			return nil, err
-		}
+		d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:])
 	}
 
 	// read the tx

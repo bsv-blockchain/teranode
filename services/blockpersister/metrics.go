@@ -1,15 +1,16 @@
-package subtreeassembly
+package blockpersister
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
-	prometheusSubtreeAssemblyBlocks   prometheus.Histogram
-	prometheusSubtreeAssemblySubtrees prometheus.Histogram
+	prometheusBlockPersisterBlocks   prometheus.Histogram
+	prometheusBlockPersisterSubtrees prometheus.Histogram
 )
 
 var (
@@ -21,20 +22,20 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
-	prometheusSubtreeAssemblyBlocks = promauto.NewHistogram(
+	prometheusBlockPersisterBlocks = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "subtreeassembly",
+			Namespace: "blockpersister",
 			Name:      "blocks_duration_millis",
-			Help:      "Duration of block processing by the subtree assembly service",
+			Help:      "Duration of block processing by the block persister service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusSubtreeAssemblySubtrees = promauto.NewHistogram(
+	prometheusBlockPersisterSubtrees = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "subtreeassembly",
+			Namespace: "blockpersister",
 			Name:      "subtrees_duration_millis",
-			Help:      "Duration of subtree processing by the subtree assembly service",
+			Help:      "Duration of subtree processing by the block persister service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

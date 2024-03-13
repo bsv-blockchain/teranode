@@ -50,8 +50,9 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 	idleConnTimeout := time.Duration(getQueryParamInt(s3URL, "IdleConnTimeoutSeconds", 100)) * time.Second
 	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
 	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
+	region := s3URL.Query().Get("region")
 
-	config, _ := config.LoadDefaultConfig(context.Background())
+	config, _ := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	client := s3.NewFromConfig(config)
 
 	config.HTTPClient = &http.Client{
@@ -112,7 +113,16 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(key, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(key, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -144,7 +154,16 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(key, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(key, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
@@ -193,7 +212,16 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(key, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(key, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -223,7 +251,16 @@ func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]b
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(hash, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(hash, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -263,7 +300,16 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...op
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(hash, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(hash, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
@@ -308,7 +354,16 @@ func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(hash, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(hash, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -349,7 +404,16 @@ func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) erro
 
 	o := options.NewSetOptions(opts...)
 
-	objectKey := g.getObjectKey(hash, o.Extension)
+	var objectKey *string
+	if o.Filename != "" {
+		objectKey = &o.Filename
+	} else {
+		objectKey = g.getObjectKey(hash, o.Extension)
+	}
+
+	if o.SubDirectory != "" {
+		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
+	}
 
 	cache.Delete(*objectKey)
 

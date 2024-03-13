@@ -196,7 +196,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 				case msg := <-workerCh:
 					if err = workerFn(ctx, msg.Message.Key, msg.Message.Value); err != nil {
 						// TODO do we need to retry locally?
-						logger.Errorf("[%s] Failed to add tx to block assembly: %s", service, err)
+						logger.Errorf("[%s] Failed to process block final: %s", service, err)
 					} else {
 						// mark the message after no error
 						msg.Session.MarkMessage(msg.Message, "")

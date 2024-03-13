@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -52,6 +51,8 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			,b.tx_count
 			,b.size_in_bytes
 			,b.peer_id
+		    ,b.block_time
+		    ,b.inserted_at
 		FROM blocks b
 		WHERE height >= $1 AND height < $2
 		ORDER BY height DESC
@@ -68,6 +69,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
 	var nBits []byte
+	var insertedAt CustomTime
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}
 		blockHeaderMeta := &model.BlockHeaderMeta{}
@@ -84,10 +86,13 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			&blockHeaderMeta.TxCount,
 			&blockHeaderMeta.SizeInBytes,
 			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.BlockTime,
+			&insertedAt,
 		); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
+		blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
 		blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

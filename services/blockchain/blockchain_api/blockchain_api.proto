@@ -145,6 +145,8 @@ message GetBlockHeaderResponse {
   uint64 tx_count = 3;
   uint64 size_in_bytes = 4;
   string miner = 5;
+  uint32 block_time = 6;
+  uint32 timestamp = 7;
 }
 
 // swagger:model SubscribeRequest
