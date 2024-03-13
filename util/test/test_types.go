@@ -40,3 +40,8 @@ type FeeAndSize struct {
 type TestSubtreeStore struct {
 	Files map[chainhash.Hash]int
 }
+
+type TestSubtrees struct {
+	totalFees     uint64
+	subtreeHashes []*chainhash.Hash
+}

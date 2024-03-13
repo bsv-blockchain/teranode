@@ -21,12 +21,12 @@ func (l TestSubtreeStore) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (l TestSubtreeStore) Exists(_ context.Context, key []byte) (bool, error) {
+func (l TestSubtreeStore) Exists(_ context.Context, key []byte, _ ...options.Options) (bool, error) {
 	_, ok := l.Files[chainhash.Hash(key)]
 	return ok, nil
 }
 
-func (l TestSubtreeStore) Get(_ context.Context, key []byte) ([]byte, error) {
+func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.Options) ([]byte, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, fmt.Errorf("file not found")
@@ -40,7 +40,7 @@ func (l TestSubtreeStore) Get(_ context.Context, key []byte) ([]byte, error) {
 	return subtreeBytes, nil
 }
 
-func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte) (io.ReadCloser, error) {
+func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, fmt.Errorf("file not found")
@@ -54,6 +54,10 @@ func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte) (io.ReadClo
 	return subtreeFile, nil
 }
 
+func (l TestSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
+	panic("not implemented")
+}
+
 func (l TestSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) error {
 	panic("not implemented")
 }
@@ -62,11 +66,11 @@ func (l TestSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCl
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+func (l TestSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) Del(_ context.Context, _ []byte) error {
+func (l TestSubtreeStore) Del(_ context.Context, _ []byte, _ ...options.Options) error {
 	panic("not implemented")
 }
 

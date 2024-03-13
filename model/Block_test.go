@@ -208,8 +208,8 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	fileNameTemplateBlock = fileDir + "block.bin"
 	txMetafileNameTemplate = fileDir + "txMeta.bin"
 	subtreeStore := newLocalSubtreeStore()
-	txCount := uint64(8)
-	subtreeSize = 8
+	txCount := uint64(4 * 1024)
+	subtreeSize = 1024
 
 	block, err := generateTestBlock(txCount, subtreeStore, true)
 	require.NoError(t, err)
