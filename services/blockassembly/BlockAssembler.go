@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -51,6 +52,7 @@ type BlockAssembler struct {
 	currentDifficulty          *model.NBit
 	defaultMiningNBits         *model.NBit
 	resetCh                    chan struct{}
+	resetWaitCount             atomic.Int32
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
@@ -79,6 +81,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		difficultyAdjustment:       difficultyAdjustment,
 		defaultMiningNBits:         &defaultMiningBits,
 		resetCh:                    make(chan struct{}),
+		resetWaitCount:             atomic.Int32{},
 	}
 
 	return b
@@ -147,14 +150,21 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				}
 
 				b.subtreeProcessor.Reset(b.bestBlockHeader)
+				b.resetWaitCount.Add(2) // wait 2 blocks before starting to mine again
 
 			case responseCh := <-b.miningCandidateCh:
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
-				miningCandidate, subtrees, err := b.getMiningCandidate()
-				responseCh <- &miningCandidateResponse{
-					miningCandidate: miningCandidate,
-					subtrees:        subtrees,
-					err:             err,
+				if b.resetWaitCount.Load() > 0 {
+					responseCh <- &miningCandidateResponse{
+						err: fmt.Errorf("waiting for reset to complete"),
+					}
+				} else {
+					miningCandidate, subtrees, err := b.getMiningCandidate()
+					responseCh <- &miningCandidateResponse{
+						miningCandidate: miningCandidate,
+						subtrees:        subtrees,
+						err:             err,
+					}
 				}
 				// stat.AddTime(start)
 
@@ -195,6 +205,11 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.bestBlockHeader = bestBlockchainBlockHeader
 					b.bestBlockHeight = meta.Height
+
+					if b.resetWaitCount.Load() > 0 {
+						// decrement the reset wait count, we just found and processed a block
+						b.resetWaitCount.Add(-1)
+					}
 
 					err = b.SetState(ctx)
 					if err != nil {
@@ -442,6 +457,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
 	if err != nil {
 		return fmt.Errorf("error getting reorg blocks: %w", err)
+	}
+
+	if len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5 {
+		// large reorg, log it and Reset the block assembler
+		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
+		b.Reset()
+		return nil
 	}
 
 	// now do the reorg in the subtree processor
