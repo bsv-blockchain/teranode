@@ -308,3 +308,8 @@ func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
 	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
 	return err
 }
+
+func (s *Client) ResetBlockAssembly(_ context.Context) error {
+	_, err := s.client.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
+	return err
+}

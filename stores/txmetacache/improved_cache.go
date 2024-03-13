@@ -54,9 +54,10 @@ const chunksPerAlloc = 1024
 // Use Cache.UpdateStats for obtaining fresh stats from the cache.
 type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
-	EntriesCount uint64
-	TrimCount    uint64
-	TotalMapSize uint64
+	EntriesCount       uint64
+	TrimCount          uint64
+	TotalMapSize       uint64
+	TotalElementsAdded uint64
 }
 
 // Reset resets s, so it may be re-used again in Cache.UpdateStats.
@@ -304,8 +305,15 @@ type bucketTrimmed struct {
 	// gen is the generation of chunks.
 	gen uint64
 
-	// free chunks per bucket
+	// free chunks per bucket.
 	freeChunks []*[chunkSize]byte
+
+	elementsAdded int
+
+	// number of items in the bucket.
+	numberOfItems int
+
+	overWriting bool
 }
 
 func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
@@ -317,8 +325,8 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
-	//b.m = make(map[uint64]uint64)
 	b.m = util.NewSplitSwissMapKVUint64(1024)
+	b.overWriting = false
 	b.Reset()
 }
 
@@ -329,9 +337,10 @@ func (b *bucketTrimmed) Reset() {
 		b.putChunk(chunks[i])
 		chunks[i] = nil
 	}
-	b.m = util.NewSplitSwissMapKVUint64(1024) //make(map[uint64]uint64)
+	b.m = util.NewSplitSwissMapKVUint64(1024)
 	b.idx = 0
 	b.gen = 1
+	b.overWriting = false
 	b.mu.Unlock()
 }
 
@@ -349,7 +358,6 @@ func (b *bucketTrimmed) cleanLockedMap() {
 			if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
 				newItems++
 			}
-
 			return false // Continue iteration over all elements
 		})
 	}
@@ -358,14 +366,6 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
 		bmNew := util.NewSplitSwissMapKVUint64(1024)
-		// for k, v := range bm {
-		// 	gen := v >> bucketSizeBits
-		// 	idx := v & ((1 << bucketSizeBits) - 1)
-		// 	if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-		// 		bmNew[k] = v
-		// 	}
-		// }
-
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
 				gen := v >> bucketSizeBits
@@ -383,7 +383,8 @@ func (b *bucketTrimmed) cleanLockedMap() {
 
 func (b *bucketTrimmed) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(b.m.Length())
+	s.EntriesCount += uint64(b.numberOfItems)
+	s.TotalElementsAdded += uint64(b.elementsAdded)
 	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
@@ -440,6 +441,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
+
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
@@ -454,6 +456,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			if b.gen&((1<<genSizeBits)-1) == 0 {
 				b.gen++
 			}
+			b.overWriting = true
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
@@ -464,20 +467,27 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		chunks[chunkIdx] = chunks[chunkIdx][:0]
 	}
 	chunk := chunks[chunkIdx]
+
 	if chunk == nil {
 		chunk = b.getChunk()
 		chunk = chunk[:0]
 	}
+
 	chunk = append(chunk, kvLenBuf[:]...)
 	chunk = append(chunk, k...)
 	chunk = append(chunk, v...)
 	chunks[chunkIdx] = chunk
+
 	// TODO: consider handling error
 	_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
-	//b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 	if needClean {
 		b.cleanLockedMap()
+	}
+
+	b.elementsAdded++
+	if !b.overWriting {
+		b.numberOfItems++
 	}
 	return nil
 }
@@ -491,8 +501,8 @@ func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, ski
 		defer b.mu.RUnlock()
 	}
 
-	v, found := b.m.Get(h)
-	if !found {
+	v, foundInMap := b.m.Get(h)
+	if !foundInMap {
 		return found
 	}
 

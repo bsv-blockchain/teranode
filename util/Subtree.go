@@ -86,7 +86,7 @@ func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
 }
 
 func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err error) {
-	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	// root len(st.rootHash[:]) bytes
 	// first 8 bytes, fees
@@ -453,7 +453,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 		}
 	}()
 
-	buf := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	// read root hash
 	st.rootHash = new(chainhash.Hash)
@@ -487,19 +487,15 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 
 	// read leaves
 	st.Nodes = make([]SubtreeNode, numLeaves)
+	bytes48 := make([]byte, 48)
 	for i := uint64(0); i < numLeaves; i++ {
-		if _, err = io.ReadFull(buf, st.Nodes[i].Hash[:]); err != nil {
+		// read all the node data in 1 go
+		if _, err = io.ReadFull(buf, bytes48); err != nil {
 			return fmt.Errorf("unable to read node: %v", err)
 		}
-
-		if _, err = io.ReadFull(buf, bytes8); err != nil {
-			return fmt.Errorf("unable to read fees: %v", err)
-		}
-		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes8)
-		if _, err = io.ReadFull(buf, bytes8); err != nil {
-			return fmt.Errorf("unable to read SizeInBytes: %v", err)
-		}
-		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(bytes8)
+		st.Nodes[i].Hash = chainhash.Hash(bytes48[:32])
+		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes48[32:40])
+		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(bytes48[40:48])
 	}
 
 	// read number of conflicting nodes

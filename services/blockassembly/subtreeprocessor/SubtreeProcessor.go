@@ -227,6 +227,23 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 	return stp
 }
 
+// Reset resets the subtree processor, removing all subtrees and transactions
+// this will be called from the block assembler in a channel select, making sure no other operations are happening
+// the queue will still be ingesting transactions
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader) {
+	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
+
+	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+	stp.txCount.Store(0)
+
+	stp.currentBlockHeader = blockHeader
+
+	// we do not remove the queued elements or the removeMap, these will always be valid
+	// stp.queue = NewLockFreeQueue()
+	// stp.removeMap = util.NewSwissMap(0)
+}
+
 func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	// TODO should this also be in the channel select ?
 	stp.currentBlockHeader = blockHeader
@@ -351,8 +368,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 	}
 
 	for _, block := range moveUpBlocks {
-		// we skip the notifications for and do them all at the end
-		err := stp.moveUpBlock(ctx, block, false)
+		// we skip the notifications for now and do them all at the end
+		err := stp.moveUpBlock(ctx, block, true)
 		if err != nil {
 			return err
 		}
@@ -596,12 +613,14 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		// we only have to do this when we have a transaction map, because otherwise we would be processing our own block
 		dequeueStartTime := time.Now()
 		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock: %d", block.String(), stp.queue.length())
-		err = stp.moveUpBlockDeQueue(transactionMap)
+		err = stp.moveUpBlockDeQueue(transactionMap, skipNotification)
 		if err != nil {
 			return fmt.Errorf("[moveUpBlock][%s] error moving up block deQueue: %s", block.String(), err.Error())
 		}
 		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock DONE in %s", block.String(), time.Since(dequeueStartTime).String())
 	} else {
+		// TODO find a way to this in parallel
+
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
 		removeMapLength := stp.removeMap.Length()
@@ -647,7 +666,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	return nil
 }
 
-func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err error) {
+func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap, skipNotification bool) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrProcessed := int64(0)
@@ -660,7 +679,7 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap) (err 
 			}
 
 			if !transactionMap.Exists(item.node.Hash) {
-				_ = stp.addNode(item.node, false)
+				_ = stp.addNode(item.node, skipNotification)
 			}
 
 			nrProcessed++
@@ -791,6 +810,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	removeMapLength := stp.removeMap.Length()
 
+	// TODO find a way to this in parallel
 	// add all found tx hashes to the final list, in order
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
@@ -813,14 +833,15 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	startTime := time.Now()
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
+	concurrentSubtreeReads, _ := gocore.Config().GetInt("blockassembly_subtreeProcessorConcurrentReads", 4)
+
 	// TODO this bit is slow !
-	stp.logger.Infof("createTransactionMap with %d subtrees", len(blockSubtreesMap))
+	stp.logger.Infof("createTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)
 
 	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
 	g, ctx := errgroup.WithContext(ctx)
-	concurrentSubtreeReads, _ := gocore.Config().GetInt("blockassembly_subtreeProcessorConcurrentReads", 4)
 	g.SetLimit(concurrentSubtreeReads)
 
 	// get all the subtrees from the block that we have not yet cleaned out
@@ -875,7 +896,8 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 		}
 	}()
 
-	buf := bufio.NewReaderSize(reader, 1024*1024*4)
+	buf := bufio.NewReaderSize(reader, 1024*1024*16)
+
 	if _, err = buf.Discard(48); err != nil { // skip headers
 		return nil, fmt.Errorf("unable to read header: %v", err)
 	}
@@ -893,19 +915,15 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 		hashes[i] = make([][32]byte, 0, int(math.Ceil(float64(numLeaves/uint64(nBuckets))*1.1)))
 	}
 
-	hash := chainhash.Hash{}
 	var bucket uint16
+	bytes48 := make([]byte, 48)
 	for i := uint64(0); i < numLeaves; i++ {
-		if _, err = io.ReadFull(buf, hash[:]); err != nil {
+		// read all the node data in 1 go
+		if _, err = io.ReadFull(buf, bytes48); err != nil {
 			return nil, fmt.Errorf("unable to read node: %v", err)
 		}
-		bucket = util.Bytes2Uint16Buckets(hash, nBuckets)
-		hashes[bucket] = append(hashes[bucket], hash)
-
-		// read rest of the bytes
-		if _, err = buf.Discard(16); err != nil { // skip headers
-			return nil, fmt.Errorf("unable to read fees and size: %v", err)
-		}
+		bucket = util.Bytes2Uint16Buckets([32]byte(bytes48[:32]), nBuckets)
+		hashes[bucket] = append(hashes[bucket], [32]byte(bytes48[:32]))
 	}
 
 	return hashes, nil

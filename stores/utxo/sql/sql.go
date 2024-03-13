@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -106,7 +107,7 @@ type Store struct {
 	logger      ulogger.Logger
 	db          *usql.DB
 	engine      string
-	blockHeight uint32
+	blockHeight atomic.Uint32
 	dbTimeout   time.Duration
 }
 
@@ -136,22 +137,23 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
-		logger:    logger,
-		db:        db,
-		engine:    storeUrl.Scheme,
-		dbTimeout: time.Duration(dbTimeoutMillis) * time.Millisecond,
+		logger:      logger,
+		db:          db,
+		engine:      storeUrl.Scheme,
+		blockHeight: atomic.Uint32{},
+		dbTimeout:   time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
 	return s, nil
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	s.blockHeight = blockHeight
+	s.blockHeight.Store(blockHeight)
 	return nil
 }
 
 func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight, nil
+	return s.blockHeight.Load(), nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -191,7 +193,7 @@ func (s *Store) Get(cntxt context.Context, spend *utxostore.Spend) (*utxostore.R
 	}
 
 	return &utxostore.Response{
-		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight)),
+		Status:       int(utxostore.CalculateUtxoStatus(txHash, lockTime, s.blockHeight.Load())),
 		LockTime:     lockTime,
 		SpendingTxID: txHash,
 	}, nil
@@ -412,7 +414,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 			  AND (lock_time <= $3 OR (lock_time >= 500000000 AND lock_time <= $4))
 			  AND tx_id IS NULL
 		`
-		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight, time.Now().Unix())
+		result, err = s.db.ExecContext(ctx, q, spend.SpendingTxID[:], spend.Hash[:], s.blockHeight.Load(), time.Now().Unix())
 		if err != nil {
 			return fmt.Errorf("[Spend][%s] error spending utxo: %s", spend.Hash.String(), err.Error())
 		}
@@ -433,8 +435,8 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				} else {
 					return utxostore.NewErrSpent(utxo.SpendingTxID)
 				}
-			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight) {
-				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight)
+			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight.Load()) {
+				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight.Load())
 			}
 		}
 

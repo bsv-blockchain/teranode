@@ -56,7 +56,8 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
-	maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
+	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
+	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - rand.Intn(maxSubtreeCountVariance*2)
 
 	return &Miner{
 		logger:                        logger,
@@ -293,8 +294,9 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
+	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
 	// after mining a block, set it again to a new value -> vary the max subtree count by 10% to avoid all miners mining at the same time
-	m.maxSubtreeCount = maxSubtreeCount + (maxSubtreeCount / 10) - rand.Intn(maxSubtreeCount/5)
+	m.maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - rand.Intn(maxSubtreeCountVariance*2)
 
 	prometheusBlockMined.Inc()
 	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)

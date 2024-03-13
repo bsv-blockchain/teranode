@@ -327,7 +327,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
 
 		if attempt > maxRetries {
-			failFast = true
+			failFast = false
 			u.logger.Infof("[Init] [attempt #%d] final attempt to process subtree, this time with full checks enabled [%s]", attempt, v.SubtreeHash.String())
 		} else {
 			u.logger.Infof("[Init] [attempt #%d] (fail fast=%v) process %d txs from subtree begin [%s]", attempt, failFast, len(txHashes), v.SubtreeHash.String())
