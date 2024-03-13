@@ -34,6 +34,7 @@ coverage.out
 /model/test-generated_test_data/
 /model/big-test-generated_test_data/
 /services/validator/test-generated_test_data/
+/util/test/test-generated_test_data
 bins/
 
 .sentryclirc

@@ -1,9 +1,11 @@
 package test
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -116,4 +118,22 @@ func CalculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 	}
 
 	return calculatedMerkleRootHash, nil
+}
+
+func LoadTxMetaIntoMemory() error {
+	// create a reader from the txmetacache file
+	file, err := os.Open(TxMetafileNameTemplate)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// create a buffered reader for the file
+	bufReader := bufio.NewReaderSize(file, 55*1024*1024)
+
+	if err = ReadTxMeta(bufReader, CachedTxMetaStore.(*txmetacache.TxMetaCache)); err != nil {
+		return err
+	}
+
+	return err
 }

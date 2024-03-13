@@ -117,7 +117,5 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 		}
 	}
 
-	fmt.Println("subtree hashes: ", subtreeHashes)
-
 	return &TestSubtrees{totalFees: fees, subtreeHashes: subtreeHashes}, nil
 }

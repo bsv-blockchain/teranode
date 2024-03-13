@@ -177,9 +177,13 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	var subtreeBytes []byte
 	var merkleRootsubtreeHashes []*chainhash.Hash
 
+	subtreeFileMerkleHashes, err = os.Create(FileNameTemplateMerkleHashes)
+	if err != nil {
+		return nil, err
+	}
+
 	for i := 0; i < len(subtreeHashes); i++ {
 		subtreeStore.Files[*subtreeHashes[i]] = i
-		fmt.Println("subtreeHashes: ", subtreeHashes[i].String())
 
 		if i == 0 {
 			// read the first subtree into file, replace the coinbase placeholder with the coinbase txid and calculate the merkle root
@@ -211,13 +215,10 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 		} else {
 			merkleRootsubtreeHashes = append(merkleRootsubtreeHashes, subtreeHashes[i])
 		}
-		fmt.Println("merkleRootsubtreeHashes: ", merkleRootsubtreeHashes[i].String())
 	}
 
 	for _, hash := range merkleRootsubtreeHashes {
-		fmt.Println("hash: ", hash.String())
 		if _, err = subtreeFileMerkleHashes.Write(hash[:]); err != nil {
-			fmt.Println("err is here")
 			return nil, err
 		}
 	}
@@ -280,8 +281,6 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	if err = blockFile.Close(); err != nil {
 		return nil, err
 	}
-
-	fmt.Println("here 4")
 
 	return block, nil
 }
