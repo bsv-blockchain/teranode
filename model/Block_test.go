@@ -201,7 +201,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 }
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
-	//util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 	fileDir = "./test-generated_test_data/"
 	fileNameTemplate = fileDir + "subtree-%d.bin"
 	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
