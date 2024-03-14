@@ -239,8 +239,15 @@ func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader) {
 
 	stp.currentBlockHeader = blockHeader
 
-	// we do not remove the queued elements or the removeMap, these will always be valid
-	// stp.queue = NewLockFreeQueue()
+	// dequeue all transactions
+	for {
+		txReq := stp.queue.dequeue(0)
+		if txReq == nil {
+			break
+		}
+	}
+
+	// we do not clear the removeMap, this will always be valid
 	// stp.removeMap = util.NewSwissMap(0)
 }
 
