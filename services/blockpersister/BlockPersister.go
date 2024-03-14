@@ -130,6 +130,12 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 		bp.l.Infof("[BlockPersister] Wrote block %s to store", block.Header.Hash().String())
 
+		// Remove the file
+		if err := os.Remove(filename); err != nil {
+			return fmt.Errorf("[BlockPersister] error removing file %s: %w", filename, err)
+		}
+
+		bp.l.Infof("[BlockPersister] Removed file %s", filename)
 	}
 
 	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
@@ -143,6 +149,8 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		stat.AddTime(startTime)
 		prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
+
+	bp.l.Infof("[BlockPersister] Processing subtree %s", subtreeHash.String())
 
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := bp.r.GetIoReader(ctx, subtreeHash.CloneBytes())
@@ -188,7 +196,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 			end := util.Min(i+batchSize, len(txHashes))
 
-			bp.l.Infof("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
+			bp.l.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
 
 			if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
 				return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
@@ -221,6 +229,8 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 			return nil, fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
 	}
+
+	bp.l.Infof("[BlockPersister] Processed subtree %s successfully", subtreeHash.String())
 
 	return &buf, nil
 }
