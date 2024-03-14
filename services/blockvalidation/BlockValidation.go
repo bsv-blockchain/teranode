@@ -37,22 +37,23 @@ import (
 )
 
 type BlockValidation struct {
-	logger                  ulogger.Logger
-	blockchainClient        blockchain.ClientI
-	subtreeStore            blob.Store
-	subtreeTTL              time.Duration
-	txStore                 blob.Store
-	txMetaStore             txmeta.Store
-	minedBlockStore         *txmetacache.ImprovedCache
-	validatorClient         validator.Interface
-	subtreeValidationClient subtreevalidation.Interface
-	subtreeDeDuplicator     *deduplicator.DeDuplicator
-	optimisticMining        bool
-	localSetMined           bool
-	lastValidatedBlocks     *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
-	blockExists             *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeExists           *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeCount            atomic.Int32
+	logger                        ulogger.Logger
+	blockchainClient              blockchain.ClientI
+	subtreeStore                  blob.Store
+	subtreeTTL                    time.Duration
+	txStore                       blob.Store
+	txMetaStore                   txmeta.Store
+	minedBlockStore               *txmetacache.ImprovedCache
+	validatorClient               validator.Interface
+	subtreeValidationClient       subtreevalidation.Interface
+	subtreeDeDuplicator           *deduplicator.DeDuplicator
+	optimisticMining              bool
+	localSetMined                 bool
+	lastValidatedBlocks           *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
+	blockExists                   *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeExists                 *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeCount                  atomic.Int32
+	blockHashesCurrentlyValidated map[chainhash.Hash]bool
 }
 
 type missingTx struct {
@@ -72,22 +73,23 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
 
 	bv := &BlockValidation{
-		logger:                  logger,
-		blockchainClient:        blockchainClient,
-		subtreeStore:            subtreeStore,
-		subtreeTTL:              subtreeTTL,
-		txStore:                 txStore,
-		txMetaStore:             txMetaStore,
-		minedBlockStore:         txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, types.Unallocated), // new unallocated cache, it doesn't pre-allocate
-		validatorClient:         validatorClient,
-		subtreeValidationClient: subtreeValidationClient,
-		subtreeDeDuplicator:     deduplicator.New(subtreeTTL),
-		optimisticMining:        optimisticMining,
-		localSetMined:           gocore.Config().GetBool("blockvalidation_localSetMined", false),
-		lastValidatedBlocks:     expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blockExists:             expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
-		subtreeExists:           expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
-		subtreeCount:            atomic.Int32{},
+		logger:                        logger,
+		blockchainClient:              blockchainClient,
+		subtreeStore:                  subtreeStore,
+		subtreeTTL:                    subtreeTTL,
+		txStore:                       txStore,
+		txMetaStore:                   txMetaStore,
+		minedBlockStore:               txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, types.Unallocated), // new unallocated cache, it doesn't pre-allocate
+		validatorClient:               validatorClient,
+		subtreeValidationClient:       subtreeValidationClient,
+		subtreeDeDuplicator:           deduplicator.New(subtreeTTL),
+		optimisticMining:              optimisticMining,
+		localSetMined:                 gocore.Config().GetBool("blockvalidation_localSetMined", false),
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
+		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
+		subtreeCount:                  atomic.Int32{},
+		blockHashesCurrentlyValidated: make(map[chainhash.Hash]bool, 0),
 	}
 
 	go func() {
@@ -165,6 +167,7 @@ func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Ha
 
 	return exists, nil
 }
+
 func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 	u.subtreeExists.Set(*hash, true)
 	return nil
@@ -362,6 +365,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		prometheusBlockValidationValidateBlock.Inc()
 	}()
 
+	u.blockHashesCurrentlyValidated[*block.Hash()] = true
+
 	// first check if the block already exists in the blockchain
 	blockExists, err := u.GetBlockExists(spanCtx, block.Header.Hash())
 	if err == nil && blockExists {
@@ -481,6 +486,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		// this happens in the background, since we have already added the block to the blockchain
 		// TODO should we recover this somehow if it fails?
 		// what are the consequences of this failing?
+
 		err = u.finalizeBlockValidation(setCtx, block)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to finalize block validation [%v]", block.Hash().String(), err)
@@ -569,6 +575,8 @@ func (u *BlockValidation) finalizeBlockValidation(ctx context.Context, block *mo
 	if err = g.Wait(); err != nil {
 		return fmt.Errorf("[ValidateBlock][%s] failed to finalize block validation [%w]", block.Hash().String(), err)
 	}
+
+	delete(u.blockHashesCurrentlyValidated, *block.Hash())
 
 	return nil
 }

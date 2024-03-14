@@ -170,7 +170,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
-
 					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
@@ -443,7 +442,19 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		return err
 	}
 
-	// catchup if we are missing the parent block
+	// check if the parent block is being validated, then wait for it to finish.
+	if u.blockValidation.blockHashesCurrentlyValidated[*block.Header.HashPrevBlock] {
+		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish", hash.String(), block.Header.HashPrevBlock.String())
+		for {
+			if !u.blockValidation.blockHashesCurrentlyValidated[*block.Header.HashPrevBlock] {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		u.logger.Infof("[processBlockFound][%s] parent block is done being validated", hash.String())
+	}
+
+	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
