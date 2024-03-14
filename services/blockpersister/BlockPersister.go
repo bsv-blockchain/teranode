@@ -63,7 +63,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 	bp.l.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	dir, _ := gocore.Config().Get("blockPersister_tmp_folder", os.TempDir())
+	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
 
 	// Open file
 	filename := path.Join(dir, block.Header.Hash().String()+".dat")
