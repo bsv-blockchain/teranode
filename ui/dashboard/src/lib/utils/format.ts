@@ -115,26 +115,25 @@ export const dataSize = (val) => {
     return '-'
   }
 
-  if (val >= 1e15) {
-    val = val / 1e15
+  if (val >= 1024 ** 5) {
+    val = val / (1024 ** 5)
     unit = 'PB'
-  } else if (val >= 1e12) {
-    val = val / 1e12
+  } else if (val >= 1024 ** 4) {
+    val = val / (1024 ** 4)
     unit = 'TB'
-  } else if (val >= 1e9) {
-    val = val / 1e9
+  } else if (val >= 1024 ** 3) {
+    val = val / (1024 ** 3)
     unit = 'GB'
-  } else if (val >= 1e6) {
-    val = val / 1e6
+  } else if (val >= 1024 ** 2) {
+    val = val / (1024 ** 2)
     unit = 'MB'
-  } else if (val >= 1000) {
-    val = val / 1000
+  } else if (val >= 1024) {
+    val = val / 1024
     unit = 'kB'
   }
 
   return addNumCommas(val, 2) + ' ' + unit
 }
-
 export const link = (
   href,
   text: string | null = null,
