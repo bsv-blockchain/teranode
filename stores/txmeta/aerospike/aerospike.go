@@ -217,10 +217,6 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
 	for idx, item := range items {
-		if model.CoinbasePlaceholderHash.IsEqual(item.Hash) {
-			continue
-		}
-
 		key, err := aerospike.NewKey(s.namespace, "txmeta", item.Hash[:])
 		if err != nil {
 			return err

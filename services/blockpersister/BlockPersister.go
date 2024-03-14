@@ -62,7 +62,6 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	bp.l.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
-	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
 	dir, _ := gocore.Config().Get("blockPersister_tmp_folder", os.TempDir())
 
