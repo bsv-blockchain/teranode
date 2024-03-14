@@ -95,6 +95,8 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	for i, subtreeHash := range block.Subtrees {
+		bp.l.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
+
 		buf, err := bp.processSubtree(ctx, *subtreeHash)
 		if err != nil {
 			return fmt.Errorf("[BlockPersister] error processing subtree %d [%s]: %w", i, subtreeHash.String(), err)
@@ -149,8 +151,6 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		stat.AddTime(startTime)
 		prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
-
-	bp.l.Infof("[BlockPersister] Processing subtree %s", subtreeHash.String())
 
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := bp.r.GetIoReader(ctx, subtreeHash.CloneBytes())
@@ -229,8 +229,6 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 			return nil, fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
 	}
-
-	bp.l.Infof("[BlockPersister] Processed subtree %s successfully", subtreeHash.String())
 
 	return &buf, nil
 }
