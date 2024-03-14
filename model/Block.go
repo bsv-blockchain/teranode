@@ -342,7 +342,10 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	subtreeFees := uint64(0)
-	for _, subtree := range b.SubtreeSlices {
+	for idx, subtree := range b.SubtreeSlices {
+		if subtree == nil {
+			return fmt.Errorf("subtree %d is not loaded for block validation: %s", idx, b.hash.String())
+		}
 		subtreeFees += subtree.Fees
 	}
 
