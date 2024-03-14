@@ -574,10 +574,23 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
+			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
+			if u.blockValidation.blockHashesCurrentlyValidated[*blockHeader.HashPrevBlock] {
+				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String())
+				for {
+					if !u.blockValidation.blockHashesCurrentlyValidated[*blockHeader.HashPrevBlock] {
+						break
+					}
+					time.Sleep(1 * time.Second)
+				}
+				u.logger.Infof("[catchup][%s] parent block is done being validated", fromBlock.Hash().String())
+			}
+
 			exists, err = u.blockValidation.GetBlockExists(spanCtx, blockHeader.Hash())
 			if err != nil {
-				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
+				return fmt.Errorf("[catchup][%s] failed to check if parent block exists [%w]", fromBlock.Hash().String(), err)
 			}
+
 			if exists {
 				break LOOP
 			}
