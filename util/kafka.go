@@ -238,7 +238,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 				logger.Fatalf("[%s] unable to create topic: %s", service, err)
 			}
 		}
-		logger.Infof("[Kafka] starting group listener for topic %s on address: %\n", topic, kafkaURL.String())
+		logger.Infof("[Kafka] starting group listener for topic %s on address: %s", topic, kafkaURL.String())
 
 		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
 		if err != nil {
