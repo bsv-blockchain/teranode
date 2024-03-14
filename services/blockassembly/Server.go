@@ -61,7 +61,7 @@ type BlockAssembly struct {
 	blockSubmissionChan       chan *BlockSubmissionRequest
 	blockAssemblyDisabled     bool
 	blockAssemblyCreatesUTXOs bool
-	localSetMined             bool
+	//localSetMined             bool
 }
 
 type subtreeRetrySend struct {
@@ -99,7 +99,7 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		blockSubmissionChan:       make(chan *BlockSubmissionRequest),
 		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
 		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
-		localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
+		//localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
 	}
 
 	go ba.jobStore.Start()
@@ -814,16 +814,6 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
 
-	ids, err := ba.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
-	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to get block header ids: %w", jobID, block.Hash().String(), err)
-	}
-
-	var blockID uint32
-	if len(ids) > 0 {
-		blockID = ids[0]
-	}
-
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -845,23 +835,6 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 
 			return nil
 		})
-
-		if !ba.localSetMined {
-			g.Go(func() error {
-				timeStart := time.Now()
-				// add the transactions in this block to the txMeta block hashes
-				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
-
-				if err := model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
-					// TODO retry
-					ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
-				}
-
-				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
-
-				return nil
-			})
-		}
 
 		if err = g.Wait(); err != nil {
 			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {

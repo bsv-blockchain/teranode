@@ -118,7 +118,12 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 			return fmt.Errorf("[%s] unable to stat file, %v", persistedFilename, err)
 		}
 
-		// the file should be persisted
+		// the file is already persisted
+		if err == nil {
+			return nil
+		}
+
+		// the err is ErrNotExist, so the file should be persisted
 		return os.Rename(fileName, persistedFilename)
 	}
 

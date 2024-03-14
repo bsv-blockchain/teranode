@@ -443,10 +443,10 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	// check if the parent block is being validated, then wait for it to finish.
-	if u.blockValidation.blockHashesCurrentlyValidated[*block.Header.HashPrevBlock] {
+	if u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) {
 		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish", hash.String(), block.Header.HashPrevBlock.String())
 		for {
-			if !u.blockValidation.blockHashesCurrentlyValidated[*block.Header.HashPrevBlock] {
+			if !u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) {
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -575,10 +575,10 @@ LOOP:
 
 		for _, blockHeader := range blockHeaders {
 			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
-			if u.blockValidation.blockHashesCurrentlyValidated[*blockHeader.HashPrevBlock] {
+			if u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) {
 				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String())
 				for {
-					if !u.blockValidation.blockHashesCurrentlyValidated[*blockHeader.HashPrevBlock] {
+					if !u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) {
 						break
 					}
 					time.Sleep(1 * time.Second)
@@ -599,6 +599,7 @@ LOOP:
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 
 			fromBlockHeaderHash = blockHeader.HashPrevBlock
+			// TODO: check if its only useful for a chain with different genesis block?
 			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
 				return fmt.Errorf("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
 			}

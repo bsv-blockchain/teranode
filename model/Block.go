@@ -6,13 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"io"
 	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 
 	"github.com/ordishs/gocore"
 
@@ -359,8 +360,6 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	span, _ := opentracing.StartSpanFromContext(ctx, "Block:checkDuplicateTransactions")
 	defer span.Finish()
 
-	duplicateCheckLogger := gocore.Log("duplicateTransactions")
-
 	concurrency, _ := gocore.Config().GetInt("block_checkDuplicateTransactionsConcurrency", -1)
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()/2)
@@ -370,7 +369,6 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	g.SetLimit(concurrency)
 
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
-	//b.txMap = util.NewSplit2SwissMapUint64(int(b.TransactionCount))
 	for subIdx, subtree := range b.SubtreeSlices {
 		subIdx := subIdx
 		subtree := subtree
@@ -379,10 +377,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 				// in a tx map, Put is mutually exclusive, can only be called once per key
 				err = b.txMap.Put(subtreeNode.Hash, uint64((subIdx*len(subtree.Nodes))+txIdx))
 				if err != nil {
-					// TODO TEMP TEMP TEMP turn duplicate check back on
-					// this is only temporary to allow us to test the inter node communication without a valid utxo store
-					duplicateCheckLogger.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
-					//return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
+					return fmt.Errorf("error adding transaction %s to txMap: %v", subtreeNode.Hash.String(), err)
 				}
 			}
 
@@ -411,7 +406,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()) // block validation runs on its own box, so we can use all cores
 	}
-	throwErrors := gocore.Config().GetBool("block_validOrderAndBlessed_throw_errors", true)
+	//throwErrors := gocore.Config().GetBool("block_validOrderAndBlessed_throw_errors", true)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -463,11 +458,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						for i := 0; i < len(blockIDBytes); i += 4 {
 							blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
 							if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
-								if throwErrors {
-									return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
-								}
-								logger.Warnf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
-								return nil
+								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
 							}
 						}
 					}
@@ -478,11 +469,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					if foundInSameBlock {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
-							if throwErrors {
-								return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
-							}
-							logger.Warnf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
-							return nil
+							return fmt.Errorf("transaction %s comes before parent transaction %s in block", subtreeNode.Hash.String(), parentTxHash.String())
 						}
 
 						// if the parent is in the same block, we have already checked whether it is on the same chain
@@ -492,13 +479,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 					// check whether the parent transaction has already been mined in a block on our chain
 					// we need to get back to the txMetaStore for this, to make sure we have the latest data
+					// two options: 1- parent is currently under validation, 2- parent is from forked chain.
+					// for the first situation we don't start validating the current block until the parent is validated.
 					parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
 					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-						if throwErrors {
-							return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
-						}
-						logger.Warnf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
-						return nil
+						return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 					}
 					// parent tx meta was not found, must be old, ignore
 					if parentTxMeta == nil {
@@ -513,10 +498,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						}
 					}
 					if foundInPreviousBlocks != 1 {
-						if throwErrors {
-							return fmt.Errorf("parent transaction %s of %s is not valid on our current chain", parentTxHash.String(), subtreeNode.Hash.String())
-						}
-						logger.Warnf("parent transaction %s of %s is not valid on our current chain", parentTxHash.String(), subtreeNode.Hash.String())
+						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain", parentTxHash.String(), subtreeNode.Hash.String())
 					}
 				}
 			}

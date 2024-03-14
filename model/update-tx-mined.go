@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -54,9 +55,21 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 				hashes = append(hashes, &node.Hash)
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Infof("[UpdateTxMinedStatus] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockID)
-					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
-						return fmt.Errorf("[UpdateTxMinedStatus] error setting mined tx: %v", err)
+					retryCount := 0
+					for {
+						if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
+							retryCount++
+							if retryCount >= 3 {
+								return fmt.Errorf("[UpdateTxMinedStatus] error setting mined tx: %v", err)
+							} else {
+								logger.Warnf("[UpdateTxMinedStatus] error setting mined tx, retrying: %v", err)
+								time.Sleep(100 * time.Duration(retryCount) * time.Millisecond)
+							}
+						} else {
+							break
+						}
 					}
+
 					hashes = make([]*chainhash.Hash, 0, maxMinedBatchSize)
 				}
 			}
