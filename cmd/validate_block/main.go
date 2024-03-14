@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -34,7 +35,7 @@ func main() {
 		logger.Infof("Time taken: %s", time.Since(start))
 	}()
 
-	var r io.ReadCloser
+	var r io.Reader
 	var err error
 
 	if hash, err := chainhash.NewHashFromStr(filename); err == nil {
@@ -50,20 +51,28 @@ func main() {
 			return
 		}
 
-		r, err = store.GetIoReader(context.Background(), nil, options.WithFileName(hash.String()), options.WithSubDirectory("blocks"))
+		rc, err := store.GetIoReader(context.Background(), nil, options.WithFileName(hash.String()), options.WithSubDirectory("blocks"))
 		if err != nil {
 			logger.Errorf("error getting reader from store: %s", err)
 			return
 		}
+
+		r = rc
+		defer rc.Close()
+
 	} else {
-		r, err = os.Open(filename)
+		f, err := os.Open(filename)
 		if err != nil {
 			logger.Errorf("%s", err)
 			return
 		}
+
+		r = f
+		defer f.Close()
 	}
 
-	defer r.Close()
+	// Wrap the reader with a buffered reader
+	r = bufio.NewReaderSize(r, 1024*1024)
 
 	logger.Infof("Validating block %s", filename)
 
@@ -98,7 +107,11 @@ func main() {
 
 	txIDs := make([]string, 0, txCount)
 
+	percent := 0
+	percentStep := txCount / 100
+
 	for {
+		// Read the next transaction
 		tx := bt.NewTx()
 		if _, err := tx.ReadFrom(r); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -110,6 +123,12 @@ func main() {
 		}
 
 		txIDs = append(txIDs, tx.TxIDChainHash().String())
+
+		percent++
+
+		if percent%int(percentStep) == 0 {
+			fmt.Printf("\r%d%%", percent/int(percentStep))
+		}
 	}
 
 	logger.Infof("TXID count:                %d", len(txIDs))
