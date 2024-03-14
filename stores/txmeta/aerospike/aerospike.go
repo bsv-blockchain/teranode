@@ -14,6 +14,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -240,7 +241,9 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 		err = batchRecord.BatchRec().Err
 		if err != nil {
 			items[idx].Data = nil
-			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
+			if !model.CoinbasePlaceholderHash.IsEqual(items[idx].Hash) {
+				s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
+			}
 		} else {
 			bins := batchRecord.BatchRec().Record.Bins
 
