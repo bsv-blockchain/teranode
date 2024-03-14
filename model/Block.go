@@ -343,7 +343,10 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	subtreeFees := uint64(0)
-	for _, subtree := range b.SubtreeSlices {
+	for idx, subtree := range b.SubtreeSlices {
+		if subtree == nil {
+			return fmt.Errorf("subtree %d is not loaded for block validation: %s", idx, b.hash.String())
+		}
 		subtreeFees += subtree.Fees
 	}
 
@@ -562,24 +565,40 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		if b.SubtreeSlices[i] == nil {
 			subtreeHash := subtreeHash
 			g.Go(func() error {
-				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-				if err != nil {
-					return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
-				}
-				defer func() {
-					_ = subtreeReader.Close()
-				}()
-
+				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
+				// probably when being moved to permanent storage in another service
+				retries := 0
 				subtree := &util.Subtree{}
-				err = subtree.DeserializeFromReader(subtreeReader)
-				if err != nil {
-					return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+				for {
+					subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+					if err != nil {
+						if retries < 3 {
+							retries++
+							logger.Warnf("failed to get subtree %s, retrying %d", subtreeHash.String(), retries)
+							continue
+						}
+						return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
+					}
+
+					err = subtree.DeserializeFromReader(subtreeReader)
+					if err != nil {
+						_ = subtreeReader.Close()
+						if retries < 3 {
+							retries++
+							logger.Warnf("failed to deserialize subtree %s, retrying %d", subtreeHash.String(), retries)
+							continue
+						}
+						return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+					}
+
+					b.SubtreeSlices[i] = subtree
+
+					sizeInBytes.Add(subtree.SizeInBytes)
+					txCount.Add(uint64(subtree.Length()))
+
+					_ = subtreeReader.Close()
+					break
 				}
-
-				b.SubtreeSlices[i] = subtree
-
-				sizeInBytes.Add(subtree.SizeInBytes)
-				txCount.Add(uint64(subtree.Length()))
 
 				// get subtree meta
 				subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))

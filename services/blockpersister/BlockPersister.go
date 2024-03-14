@@ -62,9 +62,8 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	bp.l.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
-	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
-	dir, _ := gocore.Config().Get("blockPersister_tmp_folder", os.TempDir())
+	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
 
 	// Open file
 	filename := path.Join(dir, block.Header.Hash().String()+".dat")
@@ -96,6 +95,8 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	for i, subtreeHash := range block.Subtrees {
+		bp.l.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
+
 		buf, err := bp.processSubtree(ctx, *subtreeHash)
 		if err != nil {
 			return fmt.Errorf("[BlockPersister] error processing subtree %d [%s]: %w", i, subtreeHash.String(), err)
@@ -131,6 +132,12 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 		bp.l.Infof("[BlockPersister] Wrote block %s to store", block.Header.Hash().String())
 
+		// Remove the file
+		if err := os.Remove(filename); err != nil {
+			return fmt.Errorf("[BlockPersister] error removing file %s: %w", filename, err)
+		}
+
+		bp.l.Infof("[BlockPersister] Removed file %s", filename)
 	}
 
 	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
@@ -189,7 +196,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 			end := util.Min(i+batchSize, len(txHashes))
 
-			bp.l.Infof("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
+			bp.l.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
 
 			if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
 				return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
