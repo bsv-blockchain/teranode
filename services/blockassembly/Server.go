@@ -61,7 +61,6 @@ type BlockAssembly struct {
 	blockSubmissionChan       chan *BlockSubmissionRequest
 	blockAssemblyDisabled     bool
 	blockAssemblyCreatesUTXOs bool
-	//localSetMined             bool
 }
 
 type subtreeRetrySend struct {
@@ -99,7 +98,6 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		blockSubmissionChan:       make(chan *BlockSubmissionRequest),
 		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
 		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
-		//localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
 	}
 
 	go ba.jobStore.Start()

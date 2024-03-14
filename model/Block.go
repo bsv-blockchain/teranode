@@ -409,7 +409,6 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()) // block validation runs on its own box, so we can use all cores
 	}
-	//throwErrors := gocore.Config().GetBool("block_validOrderAndBlessed_throw_errors", true)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -453,9 +452,18 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					return fmt.Errorf("transaction %s could not be found in tx meta data", subtreeNode.Hash.String())
 				}
 
+				// we need to somehow bring localSetMined back
+				// it will only hold few blocks, so we will assume there is a magic number of blocks that is "enough" to say transaction is not duplicate. But it is not true.
+				// we can't make 600M calls to aerospike.
+				// how can we go around? offload more to aerospike? bloom filter?
+				// if the answer is no, we are already certain, we are good to go.
+				// if the answer is yes, we are not sure yet, so we make a call to aerospike and we will be sure.
+				// 1 block = 1 bloom filter DS. Size issue, much less calls to aerospike, but bloom implementation must be very efficient -> 600M calls to it per block. 5GB per filter.
+				// 100 block 500 GB. 30 Blocks 150 GB.
 				var blockIDBytes []byte
 				if minedBlockStore != nil {
 					// check whether the transaction has recently been mined in a block on our chain
+					// improved cache with append.
 					_ = minedBlockStore.Get(&blockIDBytes, subtreeNode.Hash[:])
 					if len(blockIDBytes) > 0 {
 						for i := 0; i < len(blockIDBytes); i += 4 {
