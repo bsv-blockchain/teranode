@@ -28,7 +28,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmeta.Stor
 
 	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
 	if err != nil || !ok {
-		logger.Fatalf("Error getting blockpersister_store URL: %v", err)
+		logger.Fatalf("Error getting blockPersister_persistURL URL: %v", err)
 	}
 
 	bp := newBlockPersister(logger, persistURL, subtreeStore, txMetaStore)
