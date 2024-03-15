@@ -57,10 +57,6 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 		maxMB = options[0]
 	}
 
-	if maxMB < 256 {
-		maxMB = 256
-	}
-
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
 		cache:       NewImprovedCache(maxMB*1024*1024, types.Trimmed),
