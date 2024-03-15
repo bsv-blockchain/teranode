@@ -154,6 +154,9 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 }
 
 func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	startTime, stat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats)
 	defer func() {
 		stat.AddTime(startTime)
@@ -193,24 +196,30 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 	g.SetLimit(limit)
 
 	for i := 0; i < len(txHashes); i += batchSize {
-		i := i // capture the value of i
+		i := i                  // capture the value of i
+		var startTime time.Time // declare here so it can be reused saving garbage collection
 
 		g.Go(func() error {
-			startTime := gocore.CurrentTime()
-			defer func() {
-				stats.NewStat("MetaBatchDecorate").AddTime(startTime)
-				prometheusBlockPersisterSubtreeBatch.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-			}()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Proceed with the operation if not cancelled.
+				startTime = gocore.CurrentTime()
+				defer func() {
+					stats.NewStat("MetaBatchDecorate").AddTime(startTime)
+					prometheusBlockPersisterSubtreeBatch.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+				}()
 
-			end := util.Min(i+batchSize, len(txHashes))
+				end := util.Min(i+batchSize, len(txHashes))
+				bp.l.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
 
-			bp.l.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
+				if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
+					return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
+				}
 
-			if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
-				return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
+				return nil
 			}
-
-			return nil
 		})
 	}
 
