@@ -131,7 +131,7 @@ func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error)
 	itemCount := binary.LittleEndian.Uint64(b)
 
 	return &SubtreeNodesReader{
-		reader:    bufio.NewReaderSize(subtreeReader, 1024*1024*4),
+		reader:    bufio.NewReaderSize(subtreeReader, 1024*1024*4), // 4MB buffer
 		itemCount: int(itemCount),
 		extraBuf:  make([]byte, 16),
 	}, nil

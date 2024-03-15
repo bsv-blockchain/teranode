@@ -845,7 +845,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	// TODO this bit is slow !
 	stp.logger.Infof("createTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)
 
-	mapSize := len(blockSubtreesMap) * 1024 * 1024 // TODO fix this assumption, should be gleaned from the block
+	mapSize := len(blockSubtreesMap) * stp.currentItemsPerFile // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -903,7 +903,7 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 		}
 	}()
 
-	buf := bufio.NewReaderSize(reader, 1024*1024*16)
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	if _, err = buf.Discard(48); err != nil { // skip headers
 		return nil, fmt.Errorf("unable to read header: %v", err)
