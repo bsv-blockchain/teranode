@@ -490,9 +490,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 
 	start = gocore.CurrentTime()
-	txHashes := make([]chainhash.Hash, 0, 1024*1024)
+	txHashes := make([]chainhash.Hash, 0, u.maxMerkleItemsPerSubtree)
 	buffer := make([]byte, chainhash.HashSize)
-	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4)
+	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
 
 	u.logger.Infof("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 	for {
