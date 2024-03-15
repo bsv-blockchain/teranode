@@ -431,11 +431,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			defer optimisticMiningWg.Done()
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
+
 			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
-				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
+				u.logger.Warnf("[ValidateBlock][%s][InvalidateBlock] block is not valid: %v", block.String(), err)
 
 				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-					u.logger.Errorf("[ValidateBlock][%s] failed to invalidate block in background: %s", block.String(), err)
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), err)
 				}
 			}
 		}()

@@ -864,10 +864,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		}
 
 		if err = g.Wait(); err != nil {
+			ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] block is not valid: %v", block.String(), err)
+
 			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
-				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to invalidate block: %s", jobID, block.Header.Hash(), err)
+				ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] failed to invalidate block: %s", block.Header.Hash(), err)
 			}
-			ba.logger.Errorf("[BlockAssembly][%s][%s] error updating status: %s", jobID, block.Header.Hash(), err)
 		}
 	}()
 
