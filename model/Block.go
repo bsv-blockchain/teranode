@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/greatroar/blobloom"
 
 	"github.com/ordishs/gocore"
 
@@ -21,6 +22,7 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	bloom "github.com/bitcoin-sv/ubsv/util/bloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
@@ -221,7 +223,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*blobloom.Filter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -324,7 +326,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, minedBlockStore, currentBlockHeaderIDs)
+		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs)
 		if err != nil {
 			return false, err
 		}
@@ -395,7 +397,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, minedBlockStore MinedBlockStore, currentBlockHeaderIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*blobloom.Filter, currentBlockHeaderIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
@@ -460,20 +462,24 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				// if the answer is yes, we are not sure yet, so we make a call to aerospike and we will be sure.
 				// 1 block = 1 bloom filter DS. Size issue, much less calls to aerospike, but bloom implementation must be very efficient -> 600M calls to it per block. 5GB per filter.
 				// 100 block 500 GB. 30 Blocks 150 GB.
-				var blockIDBytes []byte
-				if minedBlockStore != nil {
-					// check whether the transaction has recently been mined in a block on our chain
-					// improved cache with append.
-					_ = minedBlockStore.Get(&blockIDBytes, subtreeNode.Hash[:])
-					if len(blockIDBytes) > 0 {
-						for i := 0; i < len(blockIDBytes); i += 4 {
-							blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
-							if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
-								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+				// time encompassing blocks, e.g. 10 blocks, must be longer than txmeta TTL.
+				/*
+					var blockIDBytes []byte
+					if minedBlockStore != nil {
+						// check whether the transaction has recently been mined in a block on our chain
+						// improved cache with append.
+						_ = minedBlockStore.Get(&blockIDBytes, subtreeNode.Hash[:])
+						if len(blockIDBytes) > 0 {
+							for i := 0; i < len(blockIDBytes); i += 4 {
+								blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
+								if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
+									return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
+								}
 							}
 						}
-					}
-				}
+					}*/
+
+				// make bloomfilter check for every transaction
 
 				for _, parentTxHash := range parentTxHashes {
 					parentTxIdx, foundInSameBlock := b.txMap.Get(parentTxHash)
@@ -806,6 +812,59 @@ func (b *Block) Bytes() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func (b *Block) NewOptimizedBloomFilter() *blobloom.Filter {
+	filter := blobloom.NewOptimized(blobloom.Config{
+		Capacity: b.TransactionCount, // Expected number of keys.
+		FPRate:   1e-5,               // Accept one false positive per 100,000 lookups.
+	})
+
+	var n64 uint64
+
+	g := errgroup.Group{}
+	g.SetLimit(16)
+
+	// insert all transaction ids first 8 bytes to the filter
+	for _, subtree := range b.SubtreeSlices {
+		subtree := subtree
+		g.Go(func() error {
+			for _, node := range subtree.Nodes {
+				binary.BigEndian.PutUint64(node.Hash[:], n64)
+				filter.Add(n64)
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil
+	}
+
+	return filter
+}
+
+func (b *Block) NewBloomFilter() *bloom.ShardedBloomFilter {
+	g := errgroup.Group{}
+	g.SetLimit(16)
+
+	filter := bloom.NewShardedBloomFilter()
+
+	for _, subtree := range b.SubtreeSlices {
+		subtree := subtree
+		g.Go(func() error {
+			for _, node := range subtree.Nodes {
+				filter.Add(node.Hash[:])
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil
+	}
+
+	return filter
 }
 
 func medianTimestamp(timestamps []time.Time) (*time.Time, error) {

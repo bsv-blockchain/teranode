@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"github.com/greatroar/blobloom"
 
 	"github.com/ordishs/go-utils/expiringmap"
 
@@ -27,7 +28,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
-	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
@@ -36,13 +36,14 @@ import (
 )
 
 type BlockValidation struct {
-	logger                        ulogger.Logger
-	blockchainClient              blockchain.ClientI
-	subtreeStore                  blob.Store
-	subtreeTTL                    time.Duration
-	txStore                       blob.Store
-	txMetaStore                   txmeta.Store
-	minedBlockStore               *txmetacache.ImprovedCache
+	logger           ulogger.Logger
+	blockchainClient blockchain.ClientI
+	subtreeStore     blob.Store
+	subtreeTTL       time.Duration
+	txStore          blob.Store
+	txMetaStore      txmeta.Store
+	//minedBlockStore               *txmetacache.ImprovedCache
+	recentBlocksBloomFilters      []*blobloom.Filter
 	validatorClient               validator.Interface
 	subtreeValidationClient       subtreevalidation.Interface
 	subtreeDeDuplicator           *deduplicator.DeDuplicator
@@ -69,16 +70,17 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 	logger.Infof("optimisticMining = %s", optimisticMining)
 
-	blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
+	//blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
 
 	bv := &BlockValidation{
-		logger:                        logger,
-		blockchainClient:              blockchainClient,
-		subtreeStore:                  subtreeStore,
-		subtreeTTL:                    subtreeTTL,
-		txStore:                       txStore,
-		txMetaStore:                   txMetaStore,
-		minedBlockStore:               txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, types.Unallocated), // new unallocated cache, it doesn't pre-allocate
+		logger:           logger,
+		blockchainClient: blockchainClient,
+		subtreeStore:     subtreeStore,
+		subtreeTTL:       subtreeTTL,
+		txStore:          txStore,
+		txMetaStore:      txMetaStore,
+		//minedBlockStore:               txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, types.Unallocated), // new unallocated cache, it doesn't pre-allocate
+		recentBlocksBloomFilters:      make([]*blobloom.Filter, 0),
 		validatorClient:               validatorClient,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           deduplicator.New(subtreeTTL),
@@ -383,7 +385,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			defer optimisticMiningWg.Done()
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
-			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
+			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs); !ok {
 				u.logger.Warnf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
 				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
@@ -394,7 +396,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	} else {
 		// validate the block
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, u.minedBlockStore, blockHeaders, blockHeaderIDs); !ok {
+		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs); !ok {
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
@@ -437,11 +439,31 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 	}()
 
+	/// create bloom filter for the block and store
+	u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
+	u.createAppendBloomFilter(block)
+	u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	u.logger.Infof("[ValidateBlock][%s] DONE but finalizeBlockValidation will continue in the background", block.Hash().String())
+	u.logger.Infof("[ValidateBlock][%s] DONE but updateSubtreesTTL will continue in the background", block.Hash().String())
 
 	return nil
+}
+
+func (u *BlockValidation) createAppendBloomFilter(block *model.Block) {
+	// create a bloom filter for the block
+	filter := block.NewOptimizedBloomFilter()
+
+	if len(u.recentBlocksBloomFilters) > 5 {
+		// remove the oldest one
+		u.recentBlocksBloomFilters = u.recentBlocksBloomFilters[1:]
+	}
+
+	// append the most recently validated bloom filter
+	u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters, filter)
+
+	return
 }
 
 // storeCoinbaseTx
